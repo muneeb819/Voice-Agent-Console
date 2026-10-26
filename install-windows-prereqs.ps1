@@ -9,7 +9,7 @@
 #   5. TypeScript build (dist/), .env check, and Windows Firewall port allowance
 # ==============================================================================
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 function Write-Step($msg) {
     Write-Host "`n============================================================" -ForegroundColor Cyan
@@ -165,10 +165,10 @@ if (Test-Path (Join-Path $ScriptDir "package.json")) {
         }
     }
 
-    # Verify better-sqlite3 loads cleanly in Node
-    & node -e "const DB=require('better-sqlite3'); const d=new DB(':memory:'); d.prepare('SELECT 1 AS ok').get(); d.close(); console.log('  [OK] better-sqlite3 native engine verified!');"
+    # Verify SQLite engine (either better-sqlite3 OR Node 22.5+/24+ built-in node:sqlite)
+    & node -e "try { const DB=require('better-sqlite3'); const d=new DB(':memory:'); d.prepare('SELECT 1 AS ok').get(); d.close(); console.log('  [OK] better-sqlite3 native engine verified!'); } catch { const { DatabaseSync } = require('node:sqlite'); const d=new DatabaseSync(':memory:'); d.prepare('SELECT 1 AS ok').get(); d.close(); console.log('  [OK] Built-in node:sqlite engine verified!'); }"
     if ($LASTEXITCODE -ne 0) {
-        Write-Err "better-sqlite3 failed runtime check."
+        Write-Err "SQLite runtime check failed."
         exit 1
     }
 

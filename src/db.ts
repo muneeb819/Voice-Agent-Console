@@ -1,10 +1,77 @@
 import fs from 'fs';
 import path from 'path';
-import Database from 'better-sqlite3';
 import { clearAllRecordings } from './call-recorder';
 import { ConsoleState } from './types';
 import { createDefaultState, normalizeState } from './defaults';
 import { diffStates } from './settings-builder';
+
+interface SqliteStatementLike {
+  get: (...params: any[]) => any;
+  all: (...params: any[]) => any[];
+  run: (...params: any[]) => { lastInsertRowid: number | bigint; changes?: number };
+}
+
+interface SqliteDbLike {
+  exec: (sql: string) => void;
+  prepare: (sql: string) => SqliteStatementLike;
+  transaction: <T>(fn: () => T) => () => T;
+}
+
+function openSqliteEngine(dbPath: string): SqliteDbLike {
+  const normArgs = (args: any[]) => args.map((v) => (v === undefined ? null : v));
+
+  // 1) Primary engine: better-sqlite3 (fast C++ native binding with prebuilds for Node 20..25)
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const BetterSqlite3 = require('better-sqlite3');
+    const raw = new BetterSqlite3(dbPath);
+    raw.pragma('journal_mode = WAL');
+    return {
+      exec: (sql: string) => raw.exec(sql),
+      prepare: (sql: string) => {
+        const stmt = raw.prepare(sql);
+        return {
+          get: (...p: any[]) => stmt.get(...normArgs(p)),
+          all: (...p: any[]) => stmt.all(...normArgs(p)),
+          run: (...p: any[]) => stmt.run(...normArgs(p)),
+        };
+      },
+      transaction: <T>(fn: () => T) => raw.transaction(fn),
+    };
+  } catch {
+    // 2) Built-in fallback for Node 22.5+ / 23 / 24 / 25+ when native C++ addon isn't built
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { DatabaseSync } = require('node:sqlite');
+    const raw = new DatabaseSync(dbPath);
+    raw.exec('PRAGMA journal_mode = WAL');
+    return {
+      exec: (sql: string) => raw.exec(sql),
+      prepare: (sql: string) => {
+        const stmt = raw.prepare(sql);
+        return {
+          get: (...p: any[]) => stmt.get(...normArgs(p)),
+          all: (...p: any[]) => stmt.all(...normArgs(p)),
+          run: (...p: any[]) => stmt.run(...normArgs(p)),
+        };
+      },
+      transaction: <T>(fn: () => T) => () => {
+        raw.exec('BEGIN IMMEDIATE');
+        try {
+          const out = fn();
+          raw.exec('COMMIT');
+          return out;
+        } catch (err) {
+          try {
+            raw.exec('ROLLBACK');
+          } catch {
+            // ignore rollback error
+          }
+          throw err;
+        }
+      },
+    };
+  }
+}
 
 const DATA_DIR = path.resolve(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'console.sqlite');
@@ -77,13 +144,12 @@ export interface BridgeCallLogRecord {
   }>;
 }
 
-let db: Database.Database | null = null;
+let db: SqliteDbLike | null = null;
 
-function getDb(): Database.Database {
+function getDb(): SqliteDbLike {
   if (db) return db;
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  db = new Database(DB_PATH);
-  db.pragma('journal_mode = WAL');
+  db = openSqliteEngine(DB_PATH);
   db.exec(`
     CREATE TABLE IF NOT EXISTS console_store (
       key TEXT PRIMARY KEY,
@@ -143,7 +209,7 @@ function getDb(): Database.Database {
   `);
 
   // Safe Step 4 schema migration for existing SQLite databases
-  const bridgeCols = db.pragma('table_info(bridge_calls)') as Array<{ name: string }>;
+  const bridgeCols = db.prepare('PRAGMA table_info(bridge_calls)').all() as Array<{ name: string }>;
   const colNames = new Set(bridgeCols.map((c) => c.name));
   if (!colNames.has('recording_file')) {
     db.exec('ALTER TABLE bridge_calls ADD COLUMN recording_file TEXT');

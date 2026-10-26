@@ -15,10 +15,12 @@
     "test": "tsx tests/step1-verify.ts && tsx tests/step2-verify.ts && tsx tests/step3-verify.ts && tsx tests/step4-verify.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.6.2"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

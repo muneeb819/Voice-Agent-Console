@@ -1,6 +1,5 @@
-# Dependencies & build output
+# Dependencies (dist/ is committed pre-built so 'npm start' works out of the box!)
 node_modules/
-dist/
 
 # Server secrets (never commit live API keys!)
 .env
