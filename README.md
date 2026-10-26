@@ -41,14 +41,27 @@ voice-agent-console/
 │   ├── step1-verify.ts           # 11 automated checks (Catalog, TTS, Schema & UI bug regressions, SQLite)
 │   ├── step2-verify.ts           # 7 automated checks (Live Simulator WS, Comfort Silence, Live Deepgram E2E)
 │   ├── step3-verify.ts           # 9 automated checks (G.711/RTP, AudioSocket, Live 8kHz SIP+RTP, AMI, Vici APIs)
-│   └── step4-verify.ts           # 8 automated checks (Auth, IP/Capacity guards, Stereo WAV, Webhooks, CSV, Bundle)
+│   └── step4-verify.ts           # 9 automated checks (Auth, IP/Capacity guards, Stereo WAV, Webhooks, CSV, Medicare E2E)
 ├── docs/
-│   └── AUDIT-REPORT.md           # Original architectural & protocol audit report
+│   ├── AUDIT-REPORT.md           # Original architectural & protocol audit report
+│   └── MEDICARE-BOT-TRAINING-BLUEPRINT.md # Full Medicare Food & OTC Lead Qualification Bot script & gate rules
 ├── VICIBOX-PRODUCTION-RUNBOOK.md # Step-by-step ViciBox CLI & VICIdial Admin Go-Live Runbook
+├── start.sh / start.bat          # One-command local Linux/macOS & Windows launchers
 ├── .env.example                  # Template server environment configuration
 ├── package.json
 └── tsconfig.json
 ```
+
+---
+
+## 🤖 Built-In Outbound Qualification Agents & Multi-Campaign Routing
+
+Out of the box, the Console ships with two production-ready outbound voice qualification bots mapped to dedicated VICIdial extensions & Remote Agents:
+
+| Slot | Agent | VICIdial Campaign | Dialplan Exten / Remote Agent | Closer In-Group | Key Gate & Compliance Rules |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **#1** | `Final Expense — Warm Intro` (`a1`) | `FETEST` (`c1`) | `88001` / `RA 9001` | `FE_CLOSERS` | Senior burial/final-expense screen (`50–85`), warm closer handoff, DNC compliance |
+| **#2** | `Medicare — Food & OTC Advisor` (`a_medicare`) | `MEDICARE` (`c_medicare`) | `88002` / `RA 9002` | `MED_CLOSERS` | Food & OTC Card hook, strict **Part A/B + Age `65–85`** hard-stop gate, `flux-general-multi` (`en,es`) instant Spanish `LANG` exit, verbatim `DNC` & scam-reassurance scripts, structured closer screen-pop metadata (`Name`, `Age`, `Medicare`, `Hook`) |
 
 ---
 
@@ -61,11 +74,12 @@ cp .env.example .env
 
 npm run build
 npm start
+# Or simply run ./start.sh (Linux/macOS) or start.bat (Windows)
 ```
 
 Open **`http://localhost:3000`**.
 
-Run all **35 end-to-end verification checks** across Steps 1–4:
+Run all **36 end-to-end verification checks** across Steps 1–4:
 
 ```bash
 npm test

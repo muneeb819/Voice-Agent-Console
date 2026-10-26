@@ -6,7 +6,9 @@ import net from 'net';
 import path from 'path';
 import WebSocket, { WebSocketServer } from 'ws';
 import { getConsoleState, saveConsoleState } from '../src/db';
+import { createDefaultState } from '../src/defaults';
 import { createServerWithSimulator } from '../src/server';
+import { buildDeepgramSettings, validateAgent } from '../src/settings-builder';
 import { canonicalUuidToBytes } from '../src/vici-bridge';
 
 function assert(cond: unknown, msg: string): void {
@@ -360,10 +362,106 @@ async function run() {
       'Release tarball missing vicibox-install.sh, dist/server.js, or VICIBOX-PRODUCTION-RUNBOOK.md'
     );
     console.log(
-      `✓ [8/8] Turnkey ViciBox Release Bundle verified (${Math.round(bundleBytes.length / 1024)} KB -> /home/user/voice-agent-vicibox-release.tar.gz)`
+      `✓ [8/9] Turnkey ViciBox Release Bundle verified (${Math.round(bundleBytes.length / 1024)} KB -> /home/user/voice-agent-vicibox-release.tar.gz)`
     );
 
-    console.log('\nALL 8 STEP 4 CHECKS PASSED SUCCESSFULLY!');
+    // 9. Verify Medicare Outbound Qualification Agent (a_medicare) & Campaign (c_medicare / MEDICARE)
+    const freshDefaults = createDefaultState();
+    const medAgent = freshDefaults.agents.find((a) => a.id === 'a_medicare');
+    const medCamp = freshDefaults.campaigns.find((c) => c.id === 'c_medicare');
+    assert(medAgent && medCamp, 'Expected a_medicare agent & c_medicare campaign in defaults');
+
+    // Sync Medicare agent/campaign/fn_xfer into persisted SQLite state if not yet present
+    const curDbState = getConsoleState();
+    const mergedState = JSON.parse(JSON.stringify(curDbState));
+    const xferIdx = mergedState.functions.findIndex((f: any) => f.id === 'fn_xfer');
+    if (xferIdx >= 0) mergedState.functions[xferIdx] = freshDefaults.functions.find((f) => f.id === 'fn_xfer');
+    if (!mergedState.agents.some((a: any) => a.id === 'a_medicare')) mergedState.agents.push(medAgent);
+    else mergedState.agents[mergedState.agents.findIndex((a: any) => a.id === 'a_medicare')] = medAgent;
+    if (!mergedState.campaigns.some((c: any) => c.id === 'c_medicare')) mergedState.campaigns.push(medCamp);
+    else mergedState.campaigns[mergedState.campaigns.findIndex((c: any) => c.id === 'c_medicare')] = medCamp;
+    mergedState.tests.a_medicare = freshDefaults.tests.a_medicare;
+    saveConsoleState(mergedState, 'Integrated Medicare Food & OTC Agent + MEDICARE Campaign');
+
+    const medChecks = validateAgent(mergedState, medAgent);
+    assert(
+      medChecks.filter((c) => c.level === 'er').length === 0,
+      `Expected 0 pre-flight errors on Medicare agent, got: ${JSON.stringify(medChecks.filter((c) => c.level === 'er'))}`
+    );
+    const medSettings = buildDeepgramSettings(mergedState, medAgent, medCamp);
+    assert(
+      medSettings.agent.listen.provider.model === 'flux-general-multi' &&
+        Array.isArray(medSettings.agent.listen.provider.language_hints) &&
+        medSettings.agent.listen.provider.language_hints.includes('es'),
+      'Expected flux-general-multi with Spanish language_hints for Scenario A Language Barrier detection'
+    );
+    const medDispoFn = medSettings.agent.think.functions.find((f: any) => f.name === 'set_disposition');
+    assert(
+      medDispoFn?.parameters?.properties?.code?.enum?.includes('LANG') &&
+        medDispoFn?.parameters?.properties?.code?.enum?.includes('DQ'),
+      'Expected Medicare campaign dispos (LANG, DQ, XFER, DNC) wired into set_disposition enum'
+    );
+
+    // Test Medicare Qualified Transfer (Age 71 + Part A&B -> MED_CLOSERS + structured metadata in update_lead)
+    const medXferRes = await fetch(`${httpBase}/api/vici/simulate-call`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transport: 'sip_rtp',
+        scenario: 'medicare_qualified_xfer',
+        upstream: 'mock_ai',
+        callerCode: 'V1027153012000104892',
+        phone: '3055550192',
+      }),
+    });
+    const medXfer = (await medXferRes.json()) as any;
+    assert(
+      medXfer.ok &&
+        medXfer.cdr?.viciCampaign === 'MEDICARE' &&
+        medXfer.cdr?.remoteAgentUser === '9002' &&
+        medXfer.cdr?.transferredTo === 'ingroup:MED_CLOSERS',
+      `Expected MEDICARE routing (RA 9002 -> ingroup:MED_CLOSERS), got ${JSON.stringify(medXfer.cdr)}`
+    );
+    const medUpdateLeadReqs = (medXfer.viciRequestsReceived as any[]).filter((r) => r.query.function === 'update_lead');
+    const medUpdateLeadReq = medUpdateLeadReqs[medUpdateLeadReqs.length - 1];
+    assert(
+      medUpdateLeadReq?.query.comments?.includes('Name:Robert') &&
+        medUpdateLeadReq?.query.comments?.includes('Age:71') &&
+        medUpdateLeadReq?.query.comments?.includes('Medicare:') &&
+        medUpdateLeadReq?.query.comments?.includes('Hook:Food'),
+      `Expected structured metadata (Name, Age, Medicare Status, Hook Type) in VICIdial update_lead comments, got: ${medUpdateLeadReq?.query.comments}`
+    );
+
+    // Test Medicare Spanish Language Barrier (LANG) & Underage 61 Hard Stop (DQ)
+    const medLangRes = await fetch(`${httpBase}/api/vici/simulate-call`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transport: 'audiosocket',
+        scenario: 'medicare_spanish_lang',
+        upstream: 'mock_ai',
+      }),
+    });
+    const medLang = (await medLangRes.json()) as any;
+    assert(medLang.ok && medLang.cdr?.disposition === 'LANG', `Expected LANG disposition, got ${medLang.cdr?.disposition}`);
+
+    const medDqRes = await fetch(`${httpBase}/api/vici/simulate-call`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        transport: 'sip_rtp',
+        scenario: 'medicare_underage_dq',
+        upstream: 'mock_ai',
+      }),
+    });
+    const medDq = (await medDqRes.json()) as any;
+    assert(medDq.ok && medDq.cdr?.disposition === 'DQ', `Expected DQ disposition for age 61, got ${medDq.cdr?.disposition}`);
+
+    console.log(
+      '✓ [9/9] Medicare Agent (a_medicare) & MEDICARE Campaign (88002 / RA 9002 -> MED_CLOSERS, LANG Spanish barrier, DQ <65 hard-stop & metadata handoff) verified'
+    );
+
+    console.log('\nALL 9 STEP 4 CHECKS PASSED SUCCESSFULLY!');
   } finally {
     if (prevAdminPass === undefined) delete process.env.ADMIN_PASSWORD;
     else process.env.ADMIN_PASSWORD = prevAdminPass;

@@ -285,7 +285,15 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     }
     try {
       const transport = req.body?.transport === 'audiosocket' ? 'audiosocket' : 'sip_rtp';
-      const scenario = ['qualified_xfer', 'dnc_request', 'not_interested'].includes(req.body?.scenario)
+      const validScenarios = [
+        'qualified_xfer',
+        'dnc_request',
+        'not_interested',
+        'medicare_qualified_xfer',
+        'medicare_underage_dq',
+        'medicare_spanish_lang',
+      ];
+      const scenario = validScenarios.includes(req.body?.scenario)
         ? req.body.scenario
         : 'qualified_xfer';
       const upstream = req.body?.upstream === 'mock_ai' ? 'mock_ai' : 'deepgram';

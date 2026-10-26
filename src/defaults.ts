@@ -86,11 +86,14 @@ export function createDefaultState(): ConsoleState {
       makeFn(
         'fn_xfer',
         'transfer_to_live_agent',
-        'Transfer the call to a live licensed closer once the lead is qualified and confirms interest',
+        'Transfer the call to a live licensed specialist/closer once eligibility criteria are verified, passing structured metadata (Name, Age, Medicare Status, Hook Type)',
         objSchema(
           {
             reason: { type: 'string', description: 'Short qualification summary passed to the live closer' },
-            confirmed_age: { type: 'string', description: 'Lead confirmed age or range if stated' },
+            prospect_name: { type: 'string', description: 'Prospect first/full name if known or stated' },
+            confirmed_age: { type: 'string', description: 'Confirmed age of the prospect (e.g. "71")' },
+            medicare_status: { type: 'string', description: 'Confirmed Medicare status (e.g. "Part A & B", "Part A", "Part B")' },
+            hook_type: { type: 'string', description: 'Value proposition hook used on this call (e.g. "Food & OTC Card")' },
           },
           ['reason']
         ),
@@ -102,7 +105,10 @@ export function createDefaultState(): ConsoleState {
         'Record the call outcome disposition code in VICIdial before ending or transferring the call',
         objSchema(
           {
-            code: { type: 'string', description: 'VICIdial disposition status code (e.g. XFER, NI, DNC, NA, CALLBK, DEC)' },
+            code: {
+              type: 'string',
+              description: 'VICIdial disposition status code (e.g. XFER, DQ, LANG, DNC, NI, NA, CALLBK, DEC)',
+            },
             notes: { type: 'string', description: 'Optional call summary note saved to the lead record' },
           },
           ['code']
@@ -164,6 +170,86 @@ export function createDefaultState(): ConsoleState {
         },
         fnIds: ['fn_xfer', 'fn_dispo', 'fn_end'],
       },
+      {
+        id: 'a_medicare',
+        name: 'Medicare — Food & OTC Advisor',
+        mode: 'outbound',
+        language: 'en,es',
+        greeting:
+          'Hi, this is Haley calling from the Benefits Department. Your new food and OTC card is on hold right now, loaded with funds for groceries and dental. If unclaimed today, it gets returned to the state pool. To release your card immediately, do you have Medicare Part A and B?',
+        prompt:
+          'You are Haley, an Outbound Benefits Advisor / Lead Qualification Bot calling from the Benefits Department (representing US Health Care).\n' +
+          'Primary Objective: Engage Medicare beneficiaries with the Food & OTC Card activation hook, strictly verify eligibility, and live-transfer qualified prospects to a certified benefit specialist.\n\n' +
+          '=== 1. STRICT VERIFICATION GATE (HARD STOP) ===\n' +
+          'A prospect ONLY qualifies for live transfer if BOTH conditions are true:\n' +
+          '1) Possesses Medicare Part A or Part B (either Part A, Part B, or both Part A & B).\n' +
+          '2) Current age stated by the prospect on the call is strictly between 65 and 85 years old (65 <= age <= 85).\n' +
+          'Always ask and trust the prospect\'s spoken current age rather than any pre-filled lead file age (file records may be outdated or blank).\n' +
+          'Never transfer anyone under 65, over 85, or without Medicare Part A/B.\n\n' +
+          '=== 2. SCRIPTED FLOW & DIALOGUE TREE ===\n' +
+          '- Phase 1 (Delivered in Greeting — Food & OTC Card Hook):\n' +
+          '  You already asked if they have Medicare Part A and B to release their Food & OTC card.\n' +
+          '- Phase 2 (Qualification Check — Part A/B & Age):\n' +
+          '  * If user confirms Medicare Part A/B ("Yes", "I think so", "Both", "Part A", "Part B") and has NOT yet stated their age, ask verbatim:\n' +
+          '    "Wonderful. Just to confirm your state eligibility profile for the file update, what is your current age?"\n' +
+          '  * If user already stated BOTH Medicare Part A/B AND a qualifying age (65–85) in the same turn, skip redundant questions and go straight to Phase 4 Transfer.\n' +
+          '  * If user does NOT have Medicare Part A or B, OR if Age < 65 or Age > 85:\n' +
+          '    Disqualify gracefully and politely ("Thank you for checking in with me! Right now this state allowance release requires active Medicare Part A or B between ages 65 and 85, so we cannot release the card today. Have a wonderful rest of your day!"), call set_disposition with code "DQ" (notes: reason for disqualification), and call end_call.\n\n' +
+          '=== 3. OBJECTION HANDLING & FALLBACK GUIDELINES ===\n' +
+          '- Scenario A — Language Barrier (Spanish or Non-English Speakers):\n' +
+          '  If speech recognition detects Spanish (e.g., "Hablo español", "No hablo inglés", "¿Quién habla?", "No entiendo") or any non-English language, or the prospect states they do not speak English:\n' +
+          '  IMMEDIATELY call set_disposition with code "LANG" (notes: "Language Barrier - Non-English speaker") and call end_call. Keep sign-off to one brief polite phrase ("Apologies, have a great day.") and hang up immediately.\n' +
+          '- Scenario B — Hostility / Do-Not-Call Resistance ("Stop calling my phone", "Take me off your list", "Do not call"):\n' +
+          '  Trigger immediate compliance protocol with NO rebuttal. Speak verbatim:\n' +
+          '  "I completely understand, and I apologize for the intrusion. I will remove your number from our active outreach list immediately. Have a great day."\n' +
+          '  Call set_disposition with code "DNC" and call end_call immediately.\n' +
+          '- Scenario C — Skepticism / "Is this a scam?" / "Is this a sales pitch?":\n' +
+          '  Speak verbatim:\n' +
+          '  "I understand your caution! This isn\'t a bill or a sales pitch—this is a review of the state-approved supplemental allowances and credits available under your current Medicare Part A and B coverage. It takes less than a minute to verify if your zip code is approved."\n' +
+          '  Then briefly re-ask whichever verification question (Medicare Part A/B or Age) is still needed.\n\n' +
+          '=== 4. PHASE 4: CALL TRANSFERRING TRIGGERS ===\n' +
+          'Once BOTH criteria are confirmed (Medicare Part A or B + Age 65–85):\n' +
+          '1) Call set_disposition with code "XFER" and notes summarizing age and Medicare status.\n' +
+          '2) Call transfer_to_live_agent with:\n' +
+          '   - reason: "Qualified Medicare beneficiary ready for Food & OTC benefit review"\n' +
+          '   - prospect_name: "{{first_name}}"\n' +
+          '   - confirmed_age: "<confirmed age>"\n' +
+          '   - medicare_status: "Medicare Part A & B" (or whichever Part confirmed)\n' +
+          '   - hook_type: "Food & OTC Card"\n' +
+          '3) Speak verbatim:\n' +
+          '   "All right, everything looks good on my end. Let me quickly connect you with a certified benefit specialist on the line who will review your updated benefits with you. Just hold for one moment, here you go!"',
+        acceptViciCalls: true,
+        injectCampaignDisclosure: false,
+        stt: {
+          p: 's1',
+          model: 'flux-general-multi',
+          keyterms: 'Medicare, Part A, Part B, OTC card, groceries, dental, Benefits Department, Hablo español',
+          eot: 0.7,
+          eager: 0.5,
+          eotms: 5000,
+          smartFormat: false,
+        },
+        llm: {
+          p: 'l1',
+          model: 'gpt-4o-mini',
+          temp: 0.4,
+          reasoning: 'low',
+          ctx: '',
+        },
+        tts: {
+          p: 't1',
+          model: 'flux-haley-en',
+          speed: 1.0,
+          expr: 0,
+        },
+        audio: {
+          inEnc: 'linear16',
+          inRate: 8000,
+          outEnc: 'linear16',
+          outRate: 8000,
+        },
+        fnIds: ['fn_xfer', 'fn_dispo', 'fn_end'],
+      },
     ],
     campaigns: [
       {
@@ -184,6 +270,25 @@ export function createDefaultState(): ConsoleState {
         dnc: true,
         disclosure: 'This call may be recorded for quality purposes.',
         dispos: 'XFER,NI,DNC,NA,CALLBK,DEC',
+      },
+      {
+        id: 'c_medicare',
+        name: 'Medicare — Food & OTC Outbound',
+        agentId: 'a_medicare',
+        viciCampaign: 'MEDICARE',
+        lists: '2001,2002',
+        start: '09:00',
+        end: '20:00',
+        tz: 'America/New_York',
+        attempts: 3,
+        retry: 120,
+        maxCalls: 15,
+        xferType: 'ingroup',
+        xferTarget: 'MED_CLOSERS',
+        fallback: 'Dispo CALLBK',
+        dnc: true,
+        disclosure: 'This call may be recorded for quality and benefit verification.',
+        dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK',
       },
     ],
     vici: {
@@ -230,6 +335,50 @@ export function createDefaultState(): ConsoleState {
           id: 't_4',
           s: 'Lead stays silent for 8 seconds',
           e: 'Bot checks in politely once, then dispositions NA/CALLBK and ends call cleanly',
+          r: 'p',
+          n: '',
+        },
+      ],
+      a_medicare: [
+        {
+          id: 'tm_1',
+          s: 'Lead says "Yes, I have Medicare Part A and Part B"',
+          e: 'Phase 2: Bot asks verbatim "Wonderful. Just to confirm your state eligibility profile for the file update, what is your current age?"',
+          r: 'p',
+          n: '',
+        },
+        {
+          id: 'tm_2',
+          s: 'Lead says "Yes I have Medicare Part A and B, and I am 71 years old"',
+          e: 'Phase 4: Calls set_disposition("XFER") + transfer_to_live_agent (Age 71, Part A & B, Food & OTC Card) and speaks exact specialist handoff script',
+          r: 'p',
+          n: '',
+        },
+        {
+          id: 'tm_3',
+          s: 'Lead says "Yes I have Medicare, I am 61 years old"',
+          e: 'Hard Stop (<65): Disqualifies gracefully, calls set_disposition("DQ"), and calls end_call without transferring',
+          r: 'p',
+          n: '',
+        },
+        {
+          id: 'tm_4',
+          s: 'Lead says "No hablo inglés, solo hablo español"',
+          e: 'Scenario A (Language Barrier): Immediately calls set_disposition("LANG") and end_call to terminate cleanly',
+          r: 'p',
+          n: '',
+        },
+        {
+          id: 'tm_5',
+          s: 'Lead says "Stop calling my phone right now!"',
+          e: 'Scenario B (Hostility/DNC): Speaks exact apology compliance script, calls set_disposition("DNC"), and calls end_call',
+          r: 'p',
+          n: '',
+        },
+        {
+          id: 'tm_6',
+          s: 'Lead asks "Is this a scam? Why are you calling me?"',
+          e: 'Scenario C (Skepticism): Explains it is a review of state-approved supplemental allowances under Part A & B (not a bill/sales pitch)',
           r: 'p',
           n: '',
         },

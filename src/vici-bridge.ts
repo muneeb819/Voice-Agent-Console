@@ -945,7 +945,13 @@ export class VicidialBridgeService {
     let transferredTo: string | null = null;
     let dncAdded = false;
     let transferExecuted = false;
-    let pendingTransferArgs: { reason: string; confirmed_age?: string } | null = null;
+    let pendingTransferArgs: {
+      reason: string;
+      prospect_name?: string;
+      confirmed_age?: string;
+      medicare_status?: string;
+      hook_type?: string;
+    } | null = null;
     let awaitingHangupAfterSpeech = false;
 
     const cancelledFnIds = new Set<string>();
@@ -1387,9 +1393,15 @@ export class VicidialBridgeService {
               } else if (fnItem.name === 'transfer_to_live_agent') {
                 if (!disposition) disposition = 'XFER';
                 const reason = String(args.reason || 'Qualified & interested lead');
-                const noteSummary = `[AI Qualified${args.confirmed_age ? ' Age ' + args.confirmed_age : ''}] ${reason}`;
+                const metaParts = [
+                  args.prospect_name ? `Name:${args.prospect_name}` : hydratedLead.first_name ? `Name:${hydratedLead.first_name}` : '',
+                  args.confirmed_age ? `Age:${args.confirmed_age}` : '',
+                  args.medicare_status ? `Medicare:${args.medicare_status}` : '',
+                  args.hook_type ? `Hook:${args.hook_type}` : '',
+                ].filter(Boolean);
+                const noteSummary = `[AI Qualified${metaParts.length ? ' | ' + metaParts.join(' | ') : ''}] ${reason}`;
 
-                // Push notes into vicidial_list BEFORE transfer so closer screen-pop shows AI notes immediately!
+                // Push structured metadata into vicidial_list BEFORE transfer so closer screen-pop shows Name, Age, Medicare Status & Hook Type!
                 await viciClient.updateLeadDisposition({
                   leadId: summary.leadId,
                   phone: summary.phone,
@@ -1397,7 +1409,13 @@ export class VicidialBridgeService {
                   notes: noteSummary,
                 });
 
-                pendingTransferArgs = { reason, confirmed_age: args.confirmed_age };
+                pendingTransferArgs = {
+                  reason,
+                  prospect_name: args.prospect_name || hydratedLead.first_name || undefined,
+                  confirmed_age: args.confirmed_age,
+                  medicare_status: args.medicare_status,
+                  hook_type: args.hook_type,
+                };
                 if (deferredActionTimer) clearTimeout(deferredActionTimer);
                 deferredActionTimer = setTimeout(() => {
                   if (pendingTransferArgs) {
@@ -1405,19 +1423,25 @@ export class VicidialBridgeService {
                     pendingTransferArgs = null;
                     executeTransferAction(p).catch(() => {});
                   }
-                }, 2400);
+                }, 9000);
 
                 resultPayload = {
                   ok: true,
                   transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
                   closer_screen_pop_notes_saved: true,
+                  metadata_passed: {
+                    prospect_name: args.prospect_name || hydratedLead.first_name || null,
+                    confirmed_age: args.confirmed_age || null,
+                    medicare_status: args.medicare_status || null,
+                    hook_type: args.hook_type || null,
+                  },
                 };
               } else if (fnItem.name === 'end_call') {
                 awaitingHangupAfterSpeech = true;
                 if (deferredActionTimer) clearTimeout(deferredActionTimer);
                 deferredActionTimer = setTimeout(() => {
                   finalizeSession('bot_end_call').catch(() => {});
-                }, 2400);
+                }, 9000);
                 resultPayload = { ok: true, action: 'hangup_after_speech' };
               } else {
                 const fnConfig = state.functions.find((f) => f.name === fnItem.name);

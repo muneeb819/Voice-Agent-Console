@@ -260,6 +260,12 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           transferred_to: target,
           screen_pop_lead_preserved: true,
           reason: parsedArgs.reason || 'Qualified & interested lead',
+          metadata_passed: {
+            prospect_name: parsedArgs.prospect_name || null,
+            confirmed_age: parsedArgs.confirmed_age || null,
+            medicare_status: parsedArgs.medicare_status || null,
+            hook_type: parsedArgs.hook_type || null,
+          },
         };
       } else if (fnReq.name === 'end_call') {
         awaitingHangupAudioDone = true;
@@ -327,6 +333,8 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
       }
     };
 
+    let sandboxMedicareConfirmed = false;
+
     const handleSandboxUtterance = (userText: string) => {
       const clean = userText.trim();
       if (!clean || closed) return;
@@ -345,9 +353,195 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         setTimeout(() => {
           if (closed) return;
           const lower = clean.toLowerCase();
+          const isMedicareBot =
+            activeAgent?.id === 'a_medicare' || /medicare/i.test(activeAgent?.name || '');
           const enabledFnNames = (activeAgent?.fnIds || [])
             .map((id) => activeState?.functions.find((f) => f.id === id)?.name)
             .filter(Boolean);
+
+          // Medicare-specific Sandbox Dialogue Tree (mirrors exact 4-phase Training Blueprint)
+          if (isMedicareBot) {
+            // Scenario A: Language Barrier (Spanish / Non-English)
+            if (/(hablo espa|español|espanol|no hablo ingl|no speak english|spanish only)/i.test(lower)) {
+              if (enabledFnNames.includes('set_disposition')) {
+                executeClientFunction({
+                  id: `fc_sbx_${Date.now()}_lang`,
+                  name: 'set_disposition',
+                  arguments: JSON.stringify({
+                    code: 'LANG',
+                    notes: `Language Barrier - Non-English speaker ("${clean}")`,
+                  }),
+                  client_side: true,
+                });
+              }
+              const langReply = 'Apologies, have a great day.';
+              sendClientJson({ type: 'agent_state', state: 'speaking' });
+              recordTranscript('assistant', langReply);
+              sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 280, 392));
+              if (enabledFnNames.includes('end_call')) {
+                executeClientFunction({
+                  id: `fc_sbx_${Date.now()}_end`,
+                  name: 'end_call',
+                  arguments: '{}',
+                  client_side: true,
+                });
+              }
+              sendClientJson({ type: 'agent_state', state: 'listening' });
+              return;
+            }
+
+            // Scenario B: Hostility / Do-Not-Call Resistance
+            if (/(take me off|do not call|dnc|stop calling|don't call)/i.test(lower)) {
+              if (enabledFnNames.includes('set_disposition')) {
+                executeClientFunction({
+                  id: `fc_sbx_${Date.now()}_dnc`,
+                  name: 'set_disposition',
+                  arguments: JSON.stringify({ code: 'DNC', notes: `Caller requested DNC: "${clean}"` }),
+                  client_side: true,
+                });
+              }
+              const dncReply =
+                'I completely understand, and I apologize for the intrusion. I will remove your number from our active outreach list immediately. Have a great day.';
+              sendClientJson({ type: 'agent_state', state: 'speaking' });
+              recordTranscript('assistant', dncReply);
+              sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 360, 392));
+              if (enabledFnNames.includes('end_call')) {
+                executeClientFunction({
+                  id: `fc_sbx_${Date.now()}_end`,
+                  name: 'end_call',
+                  arguments: '{}',
+                  client_side: true,
+                });
+              }
+              sendClientJson({ type: 'agent_state', state: 'listening' });
+              return;
+            }
+
+            // Scenario C: Skepticism / "Is this a scam?"
+            if (/(scam|sales pitch|bill|who are you|legit|real)/i.test(lower)) {
+              const scamReply =
+                "I understand your caution! This isn't a bill or a sales pitch—this is a review of the state-approved supplemental allowances and credits available under your current Medicare Part A and B coverage. It takes less than a minute to verify if your zip code is approved. Do you currently have Medicare Part A and B?";
+              sendClientJson({ type: 'agent_state', state: 'speaking' });
+              recordTranscript('assistant', scamReply);
+              sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 440, 493.88));
+              setTimeout(() => {
+                if (!closed) sendClientJson({ type: 'agent_state', state: 'listening' });
+              }, 300);
+              return;
+            }
+
+            // Explicit No Medicare
+            if (/\b(no medicare|don't have medicare|do not have medicare|medicaid only)\b/i.test(lower)) {
+              if (enabledFnNames.includes('set_disposition')) {
+                executeClientFunction({
+                  id: `fc_sbx_${Date.now()}_dq`,
+                  name: 'set_disposition',
+                  arguments: JSON.stringify({ code: 'DQ', notes: 'Disqualified: No Medicare Part A or B' }),
+                  client_side: true,
+                });
+              }
+              const dqReply =
+                'Thank you for letting me know! Right now this state allowance release requires active Medicare Part A or B, so we cannot release the card today. Have a wonderful rest of your day!';
+              sendClientJson({ type: 'agent_state', state: 'speaking' });
+              recordTranscript('assistant', dqReply);
+              sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 360, 392));
+              if (enabledFnNames.includes('end_call')) {
+                executeClientFunction({
+                  id: `fc_sbx_${Date.now()}_end`,
+                  name: 'end_call',
+                  arguments: '{}',
+                  client_side: true,
+                });
+              }
+              sendClientJson({ type: 'agent_state', state: 'listening' });
+              return;
+            }
+
+            if (/(yes|yeah|i think so|part a|part b|both|i have medicare)/i.test(lower)) {
+              sandboxMedicareConfirmed = true;
+            }
+
+            const ageMatch = /\b(\d{2,3})\b/.exec(lower);
+            if (ageMatch) {
+              const ageNum = Number(ageMatch[1]);
+              if (ageNum < 65 || ageNum > 85) {
+                if (enabledFnNames.includes('set_disposition')) {
+                  executeClientFunction({
+                    id: `fc_sbx_${Date.now()}_dq_age`,
+                    name: 'set_disposition',
+                    arguments: JSON.stringify({
+                      code: 'DQ',
+                      notes: `Disqualified: Age ${ageNum} outside strict 65-85 gate`,
+                    }),
+                    client_side: true,
+                  });
+                }
+                const ageDqReply =
+                  'Thank you for confirming! Right now this state allowance update is strictly for beneficiaries between ages 65 and 85, so we cannot activate the card today. Have a wonderful day!';
+                sendClientJson({ type: 'agent_state', state: 'speaking' });
+                recordTranscript('assistant', ageDqReply);
+                sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 360, 392));
+                if (enabledFnNames.includes('end_call')) {
+                  executeClientFunction({
+                    id: `fc_sbx_${Date.now()}_end`,
+                    name: 'end_call',
+                    arguments: '{}',
+                    client_side: true,
+                  });
+                }
+                sendClientJson({ type: 'agent_state', state: 'listening' });
+                return;
+              }
+
+              // Age is strictly 65-85!
+              sandboxMedicareConfirmed = true;
+              if (enabledFnNames.includes('set_disposition')) {
+                executeClientFunction({
+                  id: `fc_sbx_${Date.now()}_xfer_d`,
+                  name: 'set_disposition',
+                  arguments: JSON.stringify({
+                    code: 'XFER',
+                    notes: `Qualified Medicare Part A & B, Age ${ageNum}, Hook: Food & OTC Card`,
+                  }),
+                  client_side: true,
+                });
+              }
+              if (enabledFnNames.includes('transfer_to_live_agent')) {
+                executeClientFunction({
+                  id: `fc_sbx_${Date.now()}_xfer`,
+                  name: 'transfer_to_live_agent',
+                  arguments: JSON.stringify({
+                    reason: 'Qualified Medicare beneficiary ready for Food & OTC benefit review',
+                    prospect_name: 'Robert',
+                    confirmed_age: String(ageNum),
+                    medicare_status: 'Medicare Part A & B',
+                    hook_type: 'Food & OTC Card',
+                  }),
+                  client_side: true,
+                });
+              }
+              const xferReply =
+                'All right, everything looks good on my end. Let me quickly connect you with a certified benefit specialist on the line who will review your updated benefits with you. Just hold for one moment, here you go!';
+              sendClientJson({ type: 'agent_state', state: 'speaking' });
+              recordTranscript('assistant', xferReply);
+              sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 440, 523.25));
+              setTimeout(() => {
+                if (!closed) sendClientJson({ type: 'agent_state', state: 'listening' });
+              }, 300);
+              return;
+            }
+
+            const phase2Reply = sandboxMedicareConfirmed
+              ? 'Wonderful. Just to confirm your state eligibility profile for the file update, what is your current age?'
+              : 'To release your Food and OTC card immediately, could you confirm if you currently have Medicare Part A or Part B?';
+            sendClientJson({ type: 'agent_state', state: 'speaking' });
+            recordTranscript('assistant', phase2Reply);
+            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 420, 466.16));
+            setTimeout(() => {
+              if (!closed) sendClientJson({ type: 'agent_state', state: 'listening' });
+            }, 300);
+            return;
+          }
 
           let reply =
             "That's great to hear! Just to confirm before I bring on our licensed specialist, are you between 50 and 85 and looking for coverage options today?";

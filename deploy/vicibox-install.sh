@@ -29,18 +29,27 @@ cp -r "${SRC_DIR}/package.json" "${SRC_DIR}/package-lock.json" "${SRC_DIR}/tscon
 [ -f "${SRC_DIR}/VICIBOX-PRODUCTION-RUNBOOK.md" ] && cp "${SRC_DIR}/VICIBOX-PRODUCTION-RUNBOOK.md" "${INSTALL_DIR}/" || true
 
 mkdir -p "${INSTALL_DIR}/data/recordings"
+if [ -f "${SRC_DIR}/data/console.sqlite" ] && [ ! -f "${INSTALL_DIR}/data/console.sqlite" ]; then
+  cp "${SRC_DIR}/data/console.sqlite" "${INSTALL_DIR}/data/"
+fi
 if [ -f "${SRC_DIR}/data/console-state.json" ] && [ ! -f "${INSTALL_DIR}/data/console-state.json" ]; then
   cp "${SRC_DIR}/data/console-state.json" "${INSTALL_DIR}/data/"
 fi
 
 GENERATED_PASS=""
 if [ ! -f "${INSTALL_DIR}/.env" ]; then
-  cp "${SRC_DIR}/.env.example" "${INSTALL_DIR}/.env"
-  GENERATED_PASS="$(openssl rand -hex 12 2>/dev/null || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-  sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=${GENERATED_PASS}/" "${INSTALL_DIR}/.env"
-  sed -i "s/^BRIDGE_ALLOWED_IPS=.*/BRIDGE_ALLOWED_IPS=127.0.0.1,::1/" "${INSTALL_DIR}/.env"
-  chmod 600 "${INSTALL_DIR}/.env"
-  echo "Created hardened ${INSTALL_DIR}/.env (chmod 600, BRIDGE_ALLOWED_IPS=127.0.0.1,::1)."
+  if [ -f "${SRC_DIR}/.env" ]; then
+    cp "${SRC_DIR}/.env" "${INSTALL_DIR}/.env"
+    chmod 600 "${INSTALL_DIR}/.env"
+    echo "Copied pre-configured .env (including DEEPGRAM_API_KEY) to ${INSTALL_DIR}/.env."
+  else
+    cp "${SRC_DIR}/.env.example" "${INSTALL_DIR}/.env"
+    GENERATED_PASS="$(openssl rand -hex 12 2>/dev/null || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=${GENERATED_PASS}/" "${INSTALL_DIR}/.env"
+    sed -i "s/^BRIDGE_ALLOWED_IPS=.*/BRIDGE_ALLOWED_IPS=127.0.0.1,::1/" "${INSTALL_DIR}/.env"
+    chmod 600 "${INSTALL_DIR}/.env"
+    echo "Created hardened ${INSTALL_DIR}/.env (chmod 600, BRIDGE_ALLOWED_IPS=127.0.0.1,::1)."
+  fi
 fi
 
 echo "=== [3/5] Installing dependencies & building TypeScript ==="

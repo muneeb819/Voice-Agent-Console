@@ -8,7 +8,7 @@
   let latestRevisionId = null;
 
   let tab = 'agents';
-  let cur = { a: 'a1', c: 'c1' };
+  let cur = { a: 'a_medicare', c: 'c_medicare' };
 
   // Voice catalog state (Step 1)
   let voiceCatalog = {
@@ -92,7 +92,7 @@
     verifyResult: null,
     simRunning: false,
     simTransport: 'sip_rtp',
-    simScenario: 'qualified_xfer',
+    simScenario: 'medicare_qualified_xfer',
     simUpstream: 'deepgram',
     simError: null,
     webhookTests: {},
@@ -1199,6 +1199,9 @@
     viciMon.simError = null;
     render();
     try {
+      const isMed = String(viciMon.simScenario || '').startsWith('medicare_');
+      const medIdx = S.campaigns.findIndex((c) => c.id === 'c_medicare' || /medicare/i.test(c.viciCampaign || c.name));
+      const targetExten = isMed && medIdx >= 0 ? `${S.vici.aiExten}${medIdx + 1}` : `${S.vici.aiExten}1`;
       const res = await fetch('/api/vici/simulate-call', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1208,7 +1211,7 @@
           upstream: viciMon.simUpstream,
           callerCode: 'V1027153012000104892',
           phone: '3055550192',
-          exten: `${S.vici.aiExten}1`,
+          exten: targetExten,
         }),
       });
       const data = await res.json();
@@ -1919,11 +1922,14 @@
                 </select>
               </div>
               <div>
-                <label>Caller Scenario</label>
+                <label>Caller Scenario &amp; Campaign</label>
                 <select id="vsim-scenario" ${viciMon.simRunning ? 'disabled' : ''}>
-                  <option value="qualified_xfer" ${viciMon.simScenario === 'qualified_xfer' ? 'selected' : ''}>Qualified Lead -> Closer Transfer (XFER)</option>
-                  <option value="dnc_request" ${viciMon.simScenario === 'dnc_request' ? 'selected' : ''}>Do Not Call -> add_dnc_phone + Hangup (DNC)</option>
-                  <option value="not_interested" ${viciMon.simScenario === 'not_interested' ? 'selected' : ''}>Not Interested -> NI Dispo + Hangup (NI)</option>
+                  <option value="medicare_qualified_xfer" ${viciMon.simScenario === 'medicare_qualified_xfer' ? 'selected' : ''}>[MEDICARE] Part A&amp;B + Age 71 -> MED_CLOSERS Xfer (XFER)</option>
+                  <option value="medicare_underage_dq" ${viciMon.simScenario === 'medicare_underage_dq' ? 'selected' : ''}>[MEDICARE] Underage 61 -> Hard Stop Disqualify (DQ)</option>
+                  <option value="medicare_spanish_lang" ${viciMon.simScenario === 'medicare_spanish_lang' ? 'selected' : ''}>[MEDICARE] "Hablo español" -> Language Barrier (LANG)</option>
+                  <option value="dnc_request" ${viciMon.simScenario === 'dnc_request' ? 'selected' : ''}>[ALL] Hostile / Stop Calling -> add_dnc_phone + Hangup (DNC)</option>
+                  <option value="qualified_xfer" ${viciMon.simScenario === 'qualified_xfer' ? 'selected' : ''}>[FINAL EXPENSE] Qualified Age 64 -> FE_CLOSERS Xfer (XFER)</option>
+                  <option value="not_interested" ${viciMon.simScenario === 'not_interested' ? 'selected' : ''}>[ALL] Not Interested -> NI Dispo + Hangup (NI)</option>
                 </select>
               </div>
               <div>

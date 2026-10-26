@@ -3,27 +3,36 @@ import dgram from 'dgram';
 import http from 'http';
 import net from 'net';
 import WebSocket, { WebSocketServer } from 'ws';
-import { listBridgeCallLogs } from './db';
+import { getConsoleState, listBridgeCallLogs } from './db';
 import { getSecret } from './env-store';
 import { buildRtpPacket, linear16ToUlaw, parseRtpPacket } from './g711';
 import { canonicalUuidToBytes, VicidialBridgeService } from './vici-bridge';
 
+export type LoopbackScenario =
+  | 'qualified_xfer'
+  | 'dnc_request'
+  | 'not_interested'
+  | 'medicare_qualified_xfer'
+  | 'medicare_underage_dq'
+  | 'medicare_spanish_lang';
+
 export interface LoopbackTestOptions {
   transport: 'audiosocket' | 'sip_rtp';
-  scenario: 'qualified_xfer' | 'dnc_request' | 'not_interested';
+  scenario: LoopbackScenario;
   upstream: 'deepgram' | 'mock_ai';
   callerCode?: string;
   phone?: string;
   exten?: string;
 }
 
-async function synthesizeCallerVoice8kPcm(text: string): Promise<Buffer> {
+async function synthesizeCallerVoice8kPcm(text: string, isSpanish = false): Promise<Buffer> {
   const apiKey = getSecret('DEEPGRAM_API_KEY');
   if (!apiKey) {
     throw new Error('DEEPGRAM_API_KEY required to synthesize live 8kHz caller audio');
   }
-  const url =
-    'https://api.deepgram.com/v2/speak?model=flux-cole-en&encoding=linear16&sample_rate=8000&container=none';
+  const url = isSpanish
+    ? 'https://api.deepgram.com/v1/speak?model=aura-2-celeste-es&encoding=linear16&sample_rate=8000&container=none'
+    : 'https://api.deepgram.com/v2/speak?model=flux-cole-en&encoding=linear16&sample_rate=8000&container=none';
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -45,12 +54,24 @@ export async function runSimulatedViciBridgeCall(
 ) {
   const callerCode = opts.callerCode || 'V1027153012000104892';
   const phone = opts.phone || '3055550192';
-  const exten = opts.exten || '88001';
+  const isMedicareScenario = opts.scenario.startsWith('medicare_');
+  const stForExten = getConsoleState();
+  const medCampIdx = stForExten.campaigns.findIndex(
+    (c) => c.id === 'c_medicare' || /medicare/i.test(c.viciCampaign || c.name)
+  );
+  const defaultExten =
+    isMedicareScenario && medCampIdx >= 0
+      ? `${stForExten.vici.aiExten}${medCampIdx + 1}`
+      : `${stForExten.vici.aiExten}1`;
+  const exten = opts.exten || defaultExten;
 
-  const scenarioUtterances: Record<LoopbackTestOptions['scenario'], string> = {
+  const scenarioUtterances: Record<LoopbackScenario, string> = {
     qualified_xfer: 'Yes, I am 64 in Florida, I need final expense coverage, please connect me to your specialist now.',
-    dnc_request: 'Stop calling me, put me on your do not call list immediately and hang up.',
+    dnc_request: 'Stop calling my phone right now, put me on your do not call list immediately.',
     not_interested: 'No thank you, I am not interested at all, goodbye.',
+    medicare_qualified_xfer: 'Yes, I have both Medicare Part A and Part B, and my current age is 71.',
+    medicare_underage_dq: 'Yes I have Medicare, and my current age is 61 years old.',
+    medicare_spanish_lang: 'Hola, disculpe, no hablo inglés, yo solo hablo español.',
   };
   const callerSpeechText = scenarioUtterances[opts.scenario] || scenarioUtterances.qualified_xfer;
 
@@ -70,10 +91,14 @@ export async function runSimulatedViciBridgeCall(
         return;
       }
       if (fn === 'lead_all_info') {
+        const mockDob = isMedicareScenario ? '1955-04-10' : '1962-04-10';
+        const mockAge = isMedicareScenario ? '71' : '64';
+        const mockList = isMedicareScenario ? '2001' : '1001';
+        const mockComment = isMedicareScenario ? 'Medicare OTC benefit file review' : 'Requested FE info online';
         res.end(
           [
             'lead_id|status|user|vendor_lead_code|list_id|phone_number|first_name|last_name|city|state|postal_code|date_of_birth|comments|age',
-            `${q.lead_id || '104892'}|NEW|6666|VLC-991|1001|${phone}|Robert|Carter|Miami|FL|33101|1962-04-10|Requested FE info online|64`,
+            `${q.lead_id || '104892'}|NEW|6666|VLC-991|${mockList}|${phone}|Robert|Carter|Miami|FL|33101|${mockDob}|${mockComment}|${mockAge}`,
           ].join('\n')
         );
         return;
@@ -139,7 +164,8 @@ export async function runSimulatedViciBridgeCall(
             ws.send(JSON.stringify({ type: 'ConversationText', role: 'user', content: callerSpeechText }));
             ws.send(JSON.stringify({ type: 'AgentThinking' }));
 
-            if (opts.scenario === 'qualified_xfer') {
+            if (opts.scenario === 'qualified_xfer' || opts.scenario === 'medicare_qualified_xfer') {
+              const isMed = opts.scenario === 'medicare_qualified_xfer';
               ws.send(
                 JSON.stringify({
                   type: 'FunctionCallRequest',
@@ -147,20 +173,42 @@ export async function runSimulatedViciBridgeCall(
                     {
                       id: 'fc_1',
                       name: 'set_disposition',
-                      arguments: JSON.stringify({ code: 'XFER', notes: 'Robert age 64 FL qualified' }),
+                      arguments: JSON.stringify({
+                        code: 'XFER',
+                        notes: isMed
+                          ? 'Qualified Medicare Part A & B, Age 71, Hook: Food & OTC Card'
+                          : 'Robert age 64 FL qualified',
+                      }),
                       client_side: true,
                     },
                     {
                       id: 'fc_2',
                       name: 'transfer_to_live_agent',
-                      arguments: JSON.stringify({ reason: 'Robert age 64 in FL wants FE quote', confirmed_age: '64' }),
+                      arguments: JSON.stringify(
+                        isMed
+                          ? {
+                              reason: 'Qualified Medicare beneficiary ready for Food & OTC benefit review',
+                              prospect_name: 'Robert',
+                              confirmed_age: '71',
+                              medicare_status: 'Medicare Part A & B',
+                              hook_type: 'Food & OTC Card',
+                            }
+                          : { reason: 'Robert age 64 in FL wants FE quote', confirmed_age: '64' }
+                      ),
                       client_side: true,
                     },
                   ],
                 })
               );
             } else {
-              const code = opts.scenario === 'dnc_request' ? 'DNC' : 'NI';
+              const code =
+                opts.scenario === 'dnc_request'
+                  ? 'DNC'
+                  : opts.scenario === 'medicare_spanish_lang'
+                  ? 'LANG'
+                  : opts.scenario === 'medicare_underage_dq'
+                  ? 'DQ'
+                  : 'NI';
               ws.send(
                 JSON.stringify({
                   type: 'FunctionCallRequest',
@@ -239,7 +287,7 @@ export async function runSimulatedViciBridgeCall(
   // Prepare caller 8kHz PCM16 speech frames
   let callerPcm8k: Buffer;
   if (opts.upstream === 'deepgram') {
-    const speech = await synthesizeCallerVoice8kPcm(callerSpeechText);
+    const speech = await synthesizeCallerVoice8kPcm(callerSpeechText, opts.scenario === 'medicare_spanish_lang');
     // Append 1.4 seconds of trailing silence so Flux v2 EOT detects end-of-turn cleanly!
     callerPcm8k = Buffer.concat([speech, Buffer.alloc(8000 * 2 * 1.4, 0)]);
   } else {
@@ -272,7 +320,7 @@ export async function runSimulatedViciBridgeCall(
           if (speechTimer) clearInterval(speechTimer);
           sock.destroy();
           resolve();
-        }, opts.upstream === 'deepgram' ? 24000 : 5000);
+        }, opts.upstream === 'deepgram' ? 35000 : 5000);
 
         sock.on('connect', () => {
           // Send 0x01 16-byte UUID frame
@@ -309,14 +357,12 @@ export async function runSimulatedViciBridgeCall(
             if (kind === 0x10) {
               rxAudioFramesFromBot += 1;
               rxAudioBytesFromBot += len;
-              // Wait until greeting audio arrives (or ~4.8s on live Deepgram) before caller replies
+              // Trigger caller speech 420ms after bot greeting frames finish arriving!
               if (!speechSent) {
-                const waitMs = opts.upstream === 'deepgram' ? 5200 : 120;
-                speechSent = true;
-                setTimeout(() => {
-                  speechSent = false;
+                if ((sock as any)._greetSilenceTimer) clearTimeout((sock as any)._greetSilenceTimer);
+                (sock as any)._greetSilenceTimer = setTimeout(() => {
                   startStreamingCallerPcm();
-                }, waitMs);
+                }, opts.upstream === 'deepgram' ? 420 : 120);
               }
             } else if (kind === 0x00) {
               clearTimeout(maxWait);
@@ -369,7 +415,7 @@ export async function runSimulatedViciBridgeCall(
         const maxWait = setTimeout(() => {
           cleanup();
           resolve();
-        }, opts.upstream === 'deepgram' ? 24000 : 5000);
+        }, opts.upstream === 'deepgram' ? 35000 : 5000);
 
         const startCallerRtp = () => {
           if (speechStarted || !remoteRtpPort) return;
@@ -408,12 +454,10 @@ export async function runSimulatedViciBridgeCall(
             rxAudioFramesFromBot += 1;
             rxAudioBytesFromBot += parsed.payload.length;
             if (!speechStarted && remoteRtpPort) {
-              speechStarted = true;
-              const waitMs = opts.upstream === 'deepgram' ? 5200 : 120;
-              setTimeout(() => {
-                speechStarted = false;
+              if ((rtpClient as any)._greetSilenceTimer) clearTimeout((rtpClient as any)._greetSilenceTimer);
+              (rtpClient as any)._greetSilenceTimer = setTimeout(() => {
                 startCallerRtp();
-              }, waitMs);
+              }, opts.upstream === 'deepgram' ? 420 : 120);
             }
           }
         });
