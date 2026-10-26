@@ -178,9 +178,9 @@ function createDefaultState() {
                     p: 's1',
                     model: 'flux-general-multi',
                     keyterms: 'Medicare, Part A, Part B, OTC card, groceries, dental, Benefits Department, Hablo español',
-                    eot: 0.7,
-                    eager: 0.5,
-                    eotms: 5000,
+                    eot: 0.65,
+                    eager: 0.45,
+                    eotms: 2000,
                     smartFormat: false,
                 },
                 llm: {

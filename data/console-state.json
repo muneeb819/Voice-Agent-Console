@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updatedAt": "2026-10-26T22:29:29.371Z",
+  "updatedAt": "2026-10-26T23:32:46.604Z",
   "providers": [
     {
       "id": "s1",
@@ -117,7 +117,7 @@
       "id": "fn_dispo",
       "name": "set_disposition",
       "description": "Record the call outcome disposition code in VICIdial before ending or transferring the call",
-      "params": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"code\": {\n      \"type\": \"string\",\n      \"description\": \"VICIdial disposition status code (e.g. XFER, NI, DNC, NA, CALLBK, DEC)\"\n    },\n    \"notes\": {\n      \"type\": \"string\",\n      \"description\": \"Optional call summary note saved to the lead record\"\n    }\n  },\n  \"required\": [\n    \"code\"\n  ]\n}",
+      "params": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"code\": {\n      \"type\": \"string\",\n      \"description\": \"VICIdial disposition status code (e.g. XFER, DQ, LANG, DNC, NI, NA, CALLBK, DEC)\"\n    },\n    \"notes\": {\n      \"type\": \"string\",\n      \"description\": \"Optional call summary note saved to the lead record\"\n    }\n  },\n  \"required\": [\n    \"code\"\n  ]\n}",
       "defer": false,
       "url": "",
       "method": "post",

@@ -71,6 +71,14 @@
     micStream: null,
     captureCtx: null,
     captureProcessor: null,
+    micNodes: null,
+    micWatchdog: null,
+    micDevices: [],
+    micDeviceId: '',
+    micGain: 2.0,
+    micActiveLabel: '',
+    micTxBytes: 0,
+    micPeakPct: 0,
     playCtx: null,
     scheduledSources: [],
     nextPlayTime: 0,
@@ -605,11 +613,11 @@
 
   // ==================== STEP 2: WEBAUDIO + WEBSOCKET LIVE SIMULATOR ====================
 
-  function downsampleFloat32ToInt16(floatBuf, inRate, outRate) {
+  function downsampleFloat32ToInt16(floatBuf, inRate, outRate, gain = 1.0) {
     if (outRate === inRate) {
       const out = new Int16Array(floatBuf.length);
       for (let i = 0; i < floatBuf.length; i++) {
-        const s = Math.max(-1, Math.min(1, floatBuf[i]));
+        const s = Math.max(-1, Math.min(1, floatBuf[i] * gain));
         out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
       }
       return out.buffer;
@@ -627,7 +635,7 @@
         accum += floatBuf[i];
         count++;
       }
-      const avg = count > 0 ? accum / count : 0;
+      const avg = count > 0 ? (accum / count) * gain : 0;
       const clamped = Math.max(-1, Math.min(1, avg));
       out[offsetResult] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
       offsetResult++;
@@ -678,54 +686,213 @@
     };
   }
 
+  async function refreshMicDevices() {
+    if (!navigator.mediaDevices?.enumerateDevices) return;
+    try {
+      const all = await navigator.mediaDevices.enumerateDevices();
+      sim.micDevices = all
+        .filter((d) => d.kind === 'audioinput')
+        .map((d, idx) => ({
+          deviceId: d.deviceId,
+          label: d.label || `Microphone Input #${idx + 1}`,
+        }));
+      const sel = document.getElementById('sim-mic-device');
+      if (sel) {
+        sel.innerHTML =
+          `<option value="">System Default Microphone</option>` +
+          sim.micDevices
+            .filter((d) => d.deviceId && d.deviceId !== 'default')
+            .map(
+              (d) =>
+                `<option value="${esc(d.deviceId)}" ${sim.micDeviceId === d.deviceId ? 'selected' : ''}>${esc(d.label)}</option>`
+            )
+            .join('');
+      }
+    } catch {}
+  }
+
+  function stopMicCaptureOnly() {
+    if (sim.micWatchdog) {
+      clearInterval(sim.micWatchdog);
+      sim.micWatchdog = null;
+    }
+    if (sim.micNodes) {
+      try { sim.micNodes.source?.disconnect(); } catch {}
+      try { sim.micNodes.proc?.disconnect(); } catch {}
+      try { sim.micNodes.zeroGain?.disconnect(); } catch {}
+      sim.micNodes = null;
+    }
+    sim.captureProcessor = null;
+    if (sim.micStream) {
+      sim.micStream.getTracks().forEach((tr) => tr.stop());
+      sim.micStream = null;
+    }
+  }
+
+  function handleMicFloatSamples(ch, inSampleRate) {
+    if ((!sim.active && !sim.connecting) || sim.muted) {
+      const meter = document.getElementById('sim-mic-bar');
+      if (meter) meter.style.width = '0%';
+      return;
+    }
+    const gain = Number(sim.micGain) || 1.0;
+    let sum = 0;
+    for (let i = 0; i < ch.length; i++) {
+      const v = ch[i] * gain;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / ch.length);
+    const pct = Math.min(100, Math.round(rms * 420));
+    if (pct > sim.micPeakPct) sim.micPeakPct = pct;
+
+    const meter = document.getElementById('sim-mic-bar');
+    if (meter) meter.style.width = `${pct}%`;
+
+    if (sim.ws && sim.ws.readyState === WebSocket.OPEN) {
+      const pcmBuf = downsampleFloat32ToInt16(ch, inSampleRate, sim.sampleRateIn, gain);
+      sim.ws.send(pcmBuf);
+      sim.micTxBytes += pcmBuf.byteLength;
+    }
+  }
+
   async function startMicCapture() {
     if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('Browser mediaDevices.getUserMedia is not available in this context');
+      throw new Error('Browser mediaDevices.getUserMedia is not available — open http://localhost (not LAN IP)');
     }
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1,
-      },
-    });
-    sim.micStream = stream;
 
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    const ctx = new AudioCtx();
-    sim.captureCtx = ctx;
+    stopMicCaptureOnly();
 
-    const source = ctx.createMediaStreamSource(stream);
-    const processor = ctx.createScriptProcessor(2048, 1, 1);
-    sim.captureProcessor = processor;
-
-    processor.onaudioprocess = (ev) => {
-      if (!sim.active || sim.muted) {
-        const meter = document.getElementById('sim-mic-bar');
-        if (meter) meter.style.width = '0%';
-        return;
-      }
-      const ch = ev.inputBuffer.getChannelData(0);
-      let sum = 0;
-      for (let i = 0; i < ch.length; i++) sum += ch[i] * ch[i];
-      const rms = Math.sqrt(sum / ch.length);
-      const pct = Math.min(100, Math.round(rms * 380));
-      const meter = document.getElementById('sim-mic-bar');
-      if (meter) meter.style.width = `${pct}%`;
-
-      if (sim.ws && sim.ws.readyState === WebSocket.OPEN) {
-        const pcmBuf = downsampleFloat32ToInt16(ch, ctx.sampleRate, sim.sampleRateIn);
-        sim.ws.send(pcmBuf);
-      }
+    const baseAudioConstraints = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1,
     };
 
-    source.connect(processor);
-    // Connect through silent gain so ScriptProcessor ticks without echoing mic to speaker
+    let stream;
+    if (sim.micDeviceId) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { ...baseAudioConstraints, deviceId: { exact: sim.micDeviceId } },
+        });
+      } catch {
+        // Selected device unplugged/unavailable — fallback cleanly to default mic
+        sim.micDeviceId = '';
+        stream = await navigator.mediaDevices.getUserMedia({ audio: baseAudioConstraints });
+      }
+    } else {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: baseAudioConstraints });
+    }
+
+    sim.micStream = stream;
+    const track = stream.getAudioTracks()[0];
+    sim.micActiveLabel = track?.label || 'Default Windows Microphone';
+    sim.micPeakPct = 0;
+
+    // Refresh device labels now that mic permission is granted
+    refreshMicDevices().catch(() => {});
+
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!sim.captureCtx || sim.captureCtx.state === 'closed') {
+      sim.captureCtx = new AudioCtx();
+    }
+    const ctx = sim.captureCtx;
+    // CRITICAL on Windows Chrome/Edge: explicitly resume captureCtx after async getUserMedia!
+    if (ctx.state === 'suspended') {
+      try {
+        await ctx.resume();
+      } catch {}
+    }
+
+    const source = ctx.createMediaStreamSource(stream);
     const zeroGain = ctx.createGain();
     zeroGain.gain.value = 0;
-    processor.connect(zeroGain);
     zeroGain.connect(ctx.destination);
+
+    let procNode = null;
+
+    // Prefer dedicated-thread AudioWorklet so V8 GC or tab throttling never drops mic frames
+    if (ctx.audioWorklet && typeof AudioWorkletNode !== 'undefined') {
+      try {
+        if (!ctx.__vacMicWorkletLoaded) {
+          const workletCode = `
+            class VacMicCaptureProcessor extends AudioWorkletProcessor {
+              constructor() {
+                super();
+                this._buf = new Float32Array(1024);
+                this._pos = 0;
+              }
+              process(inputs) {
+                const input = inputs[0];
+                if (input && input[0]) {
+                  const ch = input[0];
+                  for (let i = 0; i < ch.length; i++) {
+                    this._buf[this._pos++] = ch[i];
+                    if (this._pos >= 1024) {
+                      this.port.postMessage(this._buf.slice(0));
+                      this._pos = 0;
+                    }
+                  }
+                }
+                return true;
+              }
+            }
+            registerProcessor('vac-mic-capture', VacMicCaptureProcessor);
+          `;
+          const blob = new Blob([workletCode], { type: 'application/javascript' });
+          const url = URL.createObjectURL(blob);
+          try {
+            await ctx.audioWorklet.addModule(url);
+            ctx.__vacMicWorkletLoaded = true;
+          } finally {
+            URL.revokeObjectURL(url);
+          }
+        }
+        const workletNode = new AudioWorkletNode(ctx, 'vac-mic-capture');
+        workletNode.port.onmessage = (ev) => {
+          if (ev.data instanceof Float32Array) {
+            handleMicFloatSamples(ev.data, ctx.sampleRate);
+          }
+        };
+        source.connect(workletNode);
+        workletNode.connect(zeroGain);
+        procNode = workletNode;
+      } catch {
+        procNode = null;
+      }
+    }
+
+    // Fallback to ScriptProcessorNode if AudioWorklet unavailable
+    if (!procNode) {
+      const processor = ctx.createScriptProcessor(2048, 1, 1);
+      processor.onaudioprocess = (ev) => {
+        handleMicFloatSamples(ev.inputBuffer.getChannelData(0), ctx.sampleRate);
+      };
+      source.connect(processor);
+      processor.connect(zeroGain);
+      procNode = processor;
+    }
+
+    // Keep strong references on sim so Chromium V8 never garbage-collects active mic nodes
+    sim.captureProcessor = procNode;
+    sim.micNodes = { source, proc: procNode, zeroGain };
+
+    const captureStartedAt = Date.now();
+    sim.micWatchdog = setInterval(() => {
+      if (sim.captureCtx && sim.captureCtx.state === 'suspended') {
+        sim.captureCtx.resume().catch(() => {});
+      }
+      const tel = document.getElementById('sim-mic-telemetry');
+      if (tel) {
+        const kb = (sim.micTxBytes / 1024).toFixed(1);
+        const stateStr = sim.captureCtx ? sim.captureCtx.state : 'none';
+        const silentTooLong =
+          !sim.muted && Date.now() - captureStartedAt > 4000 && sim.micPeakPct < 1;
+        tel.innerHTML = silentTooLong
+          ? `<span class="wn">⚠ 0% audio coming from <b>${esc(sim.micActiveLabel)}</b> (${kb} KB sent) — check Windows hardware mute button or select a different microphone in the dropdown above!</span>`
+          : `🎙️ <b>${esc(sim.micActiveLabel)}</b> &bull; AudioCtx: <code>${esc(stateStr)}</code> &bull; Streamed to STT: <b>${kb} KB</b> &bull; Peak level: <b>${sim.micPeakPct}%</b>`;
+      }
+    }, 450);
   }
 
   function cleanupSimulatorMedia() {
@@ -733,19 +900,10 @@
       clearInterval(sim.durationTimer);
       sim.durationTimer = null;
     }
-    if (sim.captureProcessor) {
-      try {
-        sim.captureProcessor.disconnect();
-      } catch {}
-      sim.captureProcessor = null;
-    }
+    stopMicCaptureOnly();
     if (sim.captureCtx) {
       sim.captureCtx.close().catch(() => {});
       sim.captureCtx = null;
-    }
-    if (sim.micStream) {
-      sim.micStream.getTracks().forEach((tr) => tr.stop());
-      sim.micStream = null;
     }
     flushSimulatorSpeakerQueue();
     if (sim.playCtx) {
@@ -774,6 +932,8 @@
     sim.transferredTo = null;
     sim.events = [];
     sim.elapsedSec = 0;
+    sim.micTxBytes = 0;
+    sim.micPeakPct = 0;
     sim.statusText = 'Connecting WebSocket…';
     sim.agentState = 'connecting';
 
@@ -781,14 +941,18 @@
     sim.sampleRateIn = sim.bandwidth === 'telephony' ? 8000 : 16000;
     sim.sampleRateOut = sim.bandwidth === 'telephony' ? 8000 : 24000;
 
-    // Unlock WebAudio synchronously inside click gesture using native OS sample rate
-    // (createBuffer resamples 8k/24k cleanly on all OS audio drivers)
+    // Unlock BOTH Speaker AND Microphone WebAudio contexts synchronously inside click gesture!
+    // (In Chrome/Edge on Windows, creating captureCtx after async getUserMedia leaves it 'suspended'!)
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (AudioCtx) {
       try {
         sim.playCtx = new AudioCtx();
         sim.nextPlayTime = 0;
         sim.playCtx.resume().catch(() => {});
+        if (withMic) {
+          sim.captureCtx = new AudioCtx();
+          sim.captureCtx.resume().catch(() => {});
+        }
       } catch (audioErr) {
         sim.events.push({
           kind: 'msg',
@@ -1672,6 +1836,7 @@
       if (sim.logsLoadedForAgent !== a.id) {
         loadCallLogsForCurrentAgent();
       }
+      refreshMicDevices().catch(() => {});
 
       m.innerHTML = `
         <div class="card">
@@ -1769,6 +1934,30 @@
             </div>
           </div>
 
+          <div class="row" style="margin-top:8px">
+            <div>
+              <label>🎙️ Microphone Input Device <button class="g" id="btn-refresh-mics" style="font-size:10.5px;padding:1px 6px;margin-left:6px;text-transform:none">↻ Refresh Mics</button></label>
+              <select id="sim-mic-device">
+                <option value="">System Default Microphone</option>
+                ${sim.micDevices
+                  .filter((d) => d.deviceId && d.deviceId !== 'default')
+                  .map(
+                    (d) =>
+                      `<option value="${esc(d.deviceId)}" ${sim.micDeviceId === d.deviceId ? 'selected' : ''}>${esc(d.label)}</option>`
+                  )
+                  .join('')}
+              </select>
+            </div>
+            <div>
+              <label>🎚️ Mic Input Volume Boost (Helps Quiet Laptop Mics)</label>
+              <select id="sim-mic-gain">
+                <option value="1" ${Number(sim.micGain) === 1 ? 'selected' : ''}>1.0x — Normal Studio / Headset Mic</option>
+                <option value="2" ${Number(sim.micGain) === 2 ? 'selected' : ''}>2.0x — Laptop / PC Mic Boost (Recommended)</option>
+                <option value="3.5" ${Number(sim.micGain) === 3.5 ? 'selected' : ''}>3.5x — High Boost (Quiet Mic)</option>
+              </select>
+            </div>
+          </div>
+
           <div class="t" style="margin-top:10px">
             <label style="margin-top:0">Simulated VICIdial Lead Record (Hydrated by Bridge on Connect)</label>
             <div class="row r3">
@@ -1797,6 +1986,13 @@
                 `
             }
           </div>
+          ${
+            (sim.active || sim.connecting) && sim.micEnabled
+              ? `<div class="note" id="sim-mic-telemetry" style="margin-top:4px;margin-bottom:6px">
+                  🎙️ Initializing microphone stream (${esc(sim.micActiveLabel || 'requesting permission…')})…
+                </div>`
+              : ''
+          }
 
           <div class="sim-kpis">
             <div class="kpi"><div class="kpi-lbl">Duration</div><div class="kpi-val" id="sim-kpi-dur">${formatDuration(sim.elapsedSec)}</div></div>
@@ -1813,11 +2009,20 @@
             <button class="b" id="btn-sim-inject" ${sim.active ? '' : 'disabled'}>Send Utterance</button>
           </div>
           <div class="chip-row">
-            ${[
-              "Yes, I'm 64 and looking for final expense coverage.",
-              'How much does it cost per month?',
-              'Take me off your calling list please.',
-            ]
+            ${(
+              a.id === 'a_medicare' || /medicare/i.test(a.name)
+                ? [
+                    'Yes, I have Medicare Part A and Part B, and I am 71.',
+                    'Is this a scam or a sales pitch?',
+                    'Hablo español, no hablo inglés.',
+                    'Stop calling my phone please.',
+                  ]
+                : [
+                    "Yes, I'm 64 and looking for final expense coverage.",
+                    'How much does it cost per month?',
+                    'Take me off your calling list please.',
+                  ]
+            )
               .map(
                 (q) =>
                   `<button class="chip" data-inject="${esc(q)}" ${sim.active ? '' : 'disabled title="Start call first"'}>💬 "${esc(q)}"</button>`
@@ -2691,6 +2896,15 @@
     }
 
     // Step 2 Simulator buttons
+    if (b.id === 'btn-refresh-mics') {
+      try {
+        // Quick permission probe so Chrome reveals hardware microphone labels
+        const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+        tmp.getTracks().forEach((tr) => tr.stop());
+      } catch {}
+      await refreshMicDevices();
+      return;
+    }
     if (b.id === 'btn-call-mic') {
       await startLiveCall(true);
       return;
@@ -3130,6 +3344,20 @@
     }
     if (t.id === 'sim-bw') {
       sim.bandwidth = t.value;
+      return;
+    }
+    if (t.id === 'sim-mic-gain') {
+      sim.micGain = Number(t.value) || 2.0;
+      return;
+    }
+    if (t.id === 'sim-mic-device') {
+      sim.micDeviceId = t.value;
+      if ((sim.active || sim.connecting) && sim.micEnabled) {
+        startMicCapture().catch((err) => {
+          sim.lastError = `Mic switch error: ${err.message}`;
+          renderSimulatorDomOnly();
+        });
+      }
       return;
     }
     if (t.id === 'vsim-transport') {
