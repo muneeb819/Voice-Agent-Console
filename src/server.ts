@@ -650,7 +650,7 @@ export function createServerWithSimulator(bridgeOpts?: ViciBridgeOptions & { ena
 }
 
 if (require.main === module) {
-  const port = Number(process.env.PORT || 3000);
+  const initialPort = Number(process.env.PORT || 3000);
   const host = process.env.HOST || '0.0.0.0';
   const { server, viciBridge } = createServerWithSimulator({ enableBridge: true });
 
@@ -663,10 +663,32 @@ if (require.main === module) {
       );
     }
 
-    server.listen(port, host, () => {
-      console.log(`[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://${host}:${port}`);
-      fetchDeepgramVoiceCatalog().catch(() => {});
-    });
+    const listenWithFallback = (candidatePort: number, retriesLeft: number) => {
+      const onError = (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
+          const nextPort = candidatePort === 3000 ? 3850 : candidatePort + 1;
+          console.warn(
+            `[VoiceAgentConsole] Port ${candidatePort} is busy (EADDRINUSE) — switching automatically to port ${nextPort}...`
+          );
+          server.removeListener('error', onError);
+          listenWithFallback(nextPort, retriesLeft - 1);
+          return;
+        }
+        console.error('[VoiceAgentConsole] HTTP listen error:', err);
+        process.exit(1);
+      };
+      server.once('error', onError);
+      server.listen(candidatePort, host, () => {
+        server.removeListener('error', onError);
+        process.env.PORT = String(candidatePort);
+        console.log(
+          `[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://localhost:${candidatePort} (bound ${host}:${candidatePort})`
+        );
+        fetchDeepgramVoiceCatalog().catch(() => {});
+      });
+    };
+
+    listenWithFallback(initialPort, 15);
   })().catch((err) => {
     console.error('[VoiceAgentConsole] Startup fatal error:', err);
     process.exit(1);
