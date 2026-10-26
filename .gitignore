@@ -1,0 +1,18 @@
+# Dependencies & build output
+node_modules/
+dist/
+
+# Server secrets (never commit live API keys!)
+.env
+.env.*
+!.env.example
+
+# Runtime SQLite databases & call audio recordings
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+data/recordings/*.wav
+
+# OS / Editor
+.DS_Store
+*.log

@@ -1,0 +1,252 @@
+{
+  "version": 3,
+  "updatedAt": "2026-10-26T21:49:30.670Z",
+  "providers": [
+    {
+      "id": "s1",
+      "kind": "stt",
+      "name": "Deepgram STT",
+      "type": "deepgram",
+      "models": "flux-general-en,flux-general-multi,nova-3,nova-2",
+      "endpoint": "",
+      "headers": "{}",
+      "extra": "{}",
+      "mk": "model"
+    },
+    {
+      "id": "l1",
+      "kind": "llm",
+      "name": "OpenAI (Managed)",
+      "type": "open_ai",
+      "models": "gpt-4o-mini,gpt-4.1-mini,gpt-5-mini,gpt-5,gpt-4.1,gpt-4o",
+      "endpoint": "",
+      "headers": "{}",
+      "extra": "{}",
+      "mk": "model"
+    },
+    {
+      "id": "l2",
+      "kind": "llm",
+      "name": "Anthropic (Managed)",
+      "type": "anthropic",
+      "models": "claude-haiku-4-5,claude-sonnet-4-5,claude-sonnet-4-6",
+      "endpoint": "",
+      "headers": "{}",
+      "extra": "{}",
+      "mk": "model"
+    },
+    {
+      "id": "l3",
+      "kind": "llm",
+      "name": "Google Gemini (Managed)",
+      "type": "google",
+      "models": "gemini-2.5-flash,gemini-3.5-flash,gemini-3.1-flash-lite",
+      "endpoint": "",
+      "headers": "{}",
+      "extra": "{}",
+      "mk": "model"
+    },
+    {
+      "id": "l4",
+      "kind": "llm",
+      "name": "Groq (BYO Endpoint)",
+      "type": "groq",
+      "models": "llama-3.3-70b-versatile",
+      "endpoint": "https://api.groq.com/openai/v1/chat/completions",
+      "headers": "{\"authorization\":\"Bearer {{GROQ_API_KEY}}\"}",
+      "extra": "{}",
+      "mk": "model"
+    },
+    {
+      "id": "t1",
+      "kind": "tts",
+      "name": "Deepgram TTS (Flux v2 & Aura v1)",
+      "type": "deepgram",
+      "models": "flux-haley-en,flux-kit-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en",
+      "endpoint": "",
+      "headers": "{}",
+      "extra": "{}",
+      "mk": "model"
+    },
+    {
+      "id": "t2",
+      "kind": "tts",
+      "name": "ElevenLabs (BYO Streaming)",
+      "type": "eleven_labs",
+      "models": "eleven_turbo_v2_5,eleven_v3",
+      "endpoint": "wss://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM/multi-stream-input",
+      "headers": "{\"xi-api-key\":\"{{ELEVENLABS_API_KEY}}\"}",
+      "extra": "{\"language_code\":\"en-US\"}",
+      "mk": "model_id"
+    },
+    {
+      "id": "t3",
+      "kind": "tts",
+      "name": "Cartesia (Deepgram Managed)",
+      "type": "cartesia",
+      "models": "sonic-2,sonic-3",
+      "endpoint": "",
+      "headers": "{}",
+      "extra": "{\"voice\":{\"mode\":\"id\",\"id\":\"a167e0f3-df7e-4d52-a9c3-f949145efdab\"}}",
+      "mk": "model_id"
+    },
+    {
+      "id": "t4",
+      "kind": "tts",
+      "name": "Cartesia (BYO Endpoint)",
+      "type": "cartesia",
+      "models": "sonic-2",
+      "endpoint": "https://api.cartesia.ai/tts/bytes",
+      "headers": "{\"x-api-key\":\"{{CARTESIA_API_KEY}}\"}",
+      "extra": "{\"voice\":{\"mode\":\"id\",\"id\":\"a167e0f3-df7e-4d52-a9c3-f949145efdab\"},\"language\":\"en\"}",
+      "mk": "model_id"
+    }
+  ],
+  "functions": [
+    {
+      "id": "fn_xfer",
+      "name": "transfer_to_live_agent",
+      "description": "Transfer the call to a live licensed closer once the lead is qualified and confirms interest",
+      "params": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"reason\": {\n      \"type\": \"string\",\n      \"description\": \"Short qualification summary passed to the live closer\"\n    },\n    \"confirmed_age\": {\n      \"type\": \"string\",\n      \"description\": \"Lead confirmed age or range if stated\"\n    }\n  },\n  \"required\": [\n    \"reason\"\n  ]\n}",
+      "defer": true,
+      "url": "",
+      "method": "post",
+      "headers": "{}"
+    },
+    {
+      "id": "fn_dispo",
+      "name": "set_disposition",
+      "description": "Record the call outcome disposition code in VICIdial before ending or transferring the call",
+      "params": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"code\": {\n      \"type\": \"string\",\n      \"description\": \"VICIdial disposition status code (e.g. XFER, NI, DNC, NA, CALLBK, DEC)\"\n    },\n    \"notes\": {\n      \"type\": \"string\",\n      \"description\": \"Optional call summary note saved to the lead record\"\n    }\n  },\n  \"required\": [\n    \"code\"\n  ]\n}",
+      "defer": false,
+      "url": "",
+      "method": "post",
+      "headers": "{}"
+    },
+    {
+      "id": "fn_end",
+      "name": "end_call",
+      "description": "Politely end the call and hang up the telephony channel",
+      "params": "{\n  \"type\": \"object\",\n  \"properties\": {},\n  \"required\": []\n}",
+      "defer": true,
+      "url": "",
+      "method": "post",
+      "headers": "{}"
+    }
+  ],
+  "agents": [
+    {
+      "id": "a1",
+      "name": "Final Expense Fronter",
+      "mode": "outbound",
+      "language": "en",
+      "greeting": "Hi, this is Sarah calling about the final expense coverage you requested. Do you have a quick minute?",
+      "prompt": "You are Sarah, a warm, concise outbound insurance fronter.\nGoal: confirm the lead is between ages 50 and 85, currently lacks sufficient final expense coverage, and wants a quick quote from a licensed specialist.\nRules:\n- Keep every response under 2 short conversational sentences.\n- Never quote dollar prices or guarantee eligibility.\n- Note: Call connection and VICIdial lead context ({{lead_id}}, {{first_name}}, {{state}}) are automatically hydrated by the bridge when the call connects.\n- Once the lead confirms qualification and interest, call set_disposition with code \"XFER\" and call transfer_to_live_agent.\n- If the lead says stop, take me off your list, not interested, or do not call, apologise politely, call set_disposition with \"DNC\" (or \"NI\"), and call end_call immediately.",
+      "acceptViciCalls": true,
+      "injectCampaignDisclosure": true,
+      "stt": {
+        "p": "s1",
+        "model": "flux-general-en",
+        "keyterms": "final expense, burial insurance, Medicare, beneficiary",
+        "eot": 0.7,
+        "eager": 0.5,
+        "eotms": 5000,
+        "smartFormat": false
+      },
+      "llm": {
+        "p": "l1",
+        "model": "gpt-4o-mini",
+        "temp": 0.7,
+        "reasoning": "low",
+        "ctx": ""
+      },
+      "tts": {
+        "p": "t1",
+        "model": "flux-haley-en",
+        "speed": 1,
+        "expr": 0
+      },
+      "audio": {
+        "inEnc": "linear16",
+        "inRate": 8000,
+        "outEnc": "linear16",
+        "outRate": 8000
+      },
+      "fnIds": [
+        "fn_xfer",
+        "fn_dispo",
+        "fn_end"
+      ]
+    }
+  ],
+  "campaigns": [
+    {
+      "id": "c1",
+      "name": "FE Fronter – Test",
+      "agentId": "a1",
+      "viciCampaign": "FETEST",
+      "lists": "1001",
+      "start": "09:00",
+      "end": "20:00",
+      "tz": "America/New_York",
+      "attempts": 3,
+      "retry": 120,
+      "maxCalls": 10,
+      "xferType": "ingroup",
+      "xferTarget": "FE_CLOSERS",
+      "fallback": "Dispo CALLBK",
+      "dnc": true,
+      "disclosure": "This call may be recorded for quality purposes.",
+      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC"
+    }
+  ],
+  "vici": {
+    "viciBaseUrl": "http://127.0.0.1",
+    "nonAgentApiPath": "/vicidial/non_agent_api.php",
+    "agentApiPath": "/agc/api.php",
+    "apiUser": "6666",
+    "source": "aibot",
+    "transport": "sip_trunk",
+    "bridgeHost": "127.0.0.1",
+    "bridgePort": 9092,
+    "sipPort": 5062,
+    "aiExten": "8800",
+    "remoteAgentUser": "9001",
+    "inIngroup": "AI_INBOUND",
+    "amiHost": "127.0.0.1",
+    "amiPort": 5038,
+    "amiUser": "cron"
+  },
+  "tests": {
+    "a1": [
+      {
+        "id": "t_1",
+        "s": "Lead says \"I’m interested, tell me more\"",
+        "e": "Bot confirms age (50–85) and coverage need, sets XFER dispo, then calls transfer_to_live_agent",
+        "r": "p",
+        "n": ""
+      },
+      {
+        "id": "t_2",
+        "s": "Lead says \"Take me off your list\"",
+        "e": "Bot apologises once, calls set_disposition(\"DNC\"), and calls end_call with no rebuttal pitch",
+        "r": "p",
+        "n": ""
+      },
+      {
+        "id": "t_3",
+        "s": "Lead asks \"How much does it cost per month?\"",
+        "e": "Bot defers pricing to the licensed specialist without quoting any dollar figure",
+        "r": "p",
+        "n": ""
+      },
+      {
+        "id": "t_4",
+        "s": "Lead stays silent for 8 seconds",
+        "e": "Bot checks in politely once, then dispositions NA/CALLBK and ends call cleanly",
+        "r": "p",
+        "n": ""
+      }
+    ]
+  }
+}

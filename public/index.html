@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Voice Agent Console — Deepgram + VICIdial</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>🎙️ Voice Agent Console</h1>
+      <span class="pill" id="db-pill" title="Backed by server SQLite + JSON mirror">SQLite Ready</span>
+    </div>
+    <nav id="nav"></nav>
+    <span id="st">Loading…</span>
+    <a class="g" id="btn-newtab" href="/" target="_blank" rel="noopener" style="text-decoration:none;padding:7px 11px;border-radius:8px;border:1px solid var(--bd);font-size:12.5px;color:var(--tx);display:none" title="Open console in a dedicated browser tab for unrestricted microphone access">↗ Open in Tab</a>
+    <button class="g" id="btn-logout" style="display:none" title="Sign out of Admin Console">🔒 Sign Out</button>
+    <button class="g" id="btn-keys" title="Configure server-side .env API keys &amp; security">🔑 API Keys</button>
+    <button class="g" id="dc" disabled>Discard</button>
+    <button class="b" id="sv" disabled>Save &amp; verify</button>
+  </header>
+
+  <div id="vr"></div>
+  <main id="m"></main>
+
+  <!-- Step 4: Admin Password Sign-In Modal (shown when ADMIN_PASSWORD is enabled in .env) -->
+  <div class="modal-backdrop" id="auth-modal" hidden>
+    <div class="modal" style="max-width:420px">
+      <h3>🔒 Console Protected</h3>
+      <div class="note" style="margin-bottom:10px">
+        Enter the <code>ADMIN_PASSWORD</code> configured in your ViciBox server <code>.env</code> to unlock the Voice Agent Console.
+      </div>
+      <label>Admin Password</label>
+      <input type="password" id="auth-pass-input" placeholder="Enter ADMIN_PASSWORD…" autocomplete="current-password" />
+      <div class="note er" id="auth-err-msg" style="margin-top:8px"></div>
+      <div class="bar" style="margin-top:14px;justify-content:flex-end">
+        <button class="b" id="btn-auth-login">Unlock Console</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Server-side .env API Keys Modal -->
+  <div class="modal-backdrop" id="keys-modal" hidden>
+    <div class="modal">
+      <h3>🔑 Server Environment Keys (<code>.env</code>)</h3>
+      <div class="note" style="margin-bottom: 10px;">
+        Keys are saved on the backend server (<code>.env</code>), automatically stripped of accidental quotes or <code>Token</code>/<code>Bearer</code> prefixes, and verified directly against Deepgram's authenticated REST &amp; Voice Agent WebSocket endpoints.
+      </div>
+      <div id="keys-form"></div>
+      <div class="note" id="keys-msg" style="white-space:pre-line"></div>
+      <div class="bar" style="margin-top: 14px; justify-content: flex-end;">
+        <button class="g danger" id="keys-clear" style="margin-right:auto">Clear Keys</button>
+        <button class="g" id="keys-test">🔌 Test Deepgram</button>
+        <button class="g" id="keys-close">Close</button>
+        <button class="b" id="keys-save">Save &amp; Verify Keys</button>
+      </div>
+    </div>
+  </div>
+
+  <input type="file" id="import-file" accept="application/json,.json" hidden />
+  <script src="/app.js"></script>
+</body>
+</html>

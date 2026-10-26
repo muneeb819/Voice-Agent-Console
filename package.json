@@ -1,0 +1,31 @@
+{
+  "name": "voice-agent-console",
+  "version": "1.0.0",
+  "description": "Unified Voice Agent Console, Deepgram Voice Catalog, Live Simulator & VICIdial Bridge",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "start": "node dist/server.js",
+    "build": "tsc",
+    "test:step1": "tsx tests/step1-verify.ts",
+    "test:step2": "tsx tests/step2-verify.ts",
+    "test:step3": "tsx tests/step3-verify.ts",
+    "test:step4": "tsx tests/step4-verify.ts",
+    "test": "tsx tests/step1-verify.ts && tsx tests/step2-verify.ts && tsx tests/step3-verify.ts && tsx tests/step4-verify.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^5.0.0",
+    "@types/node": "^20.17.16",
+    "@types/ws": "^8.5.14",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

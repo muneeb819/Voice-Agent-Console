@@ -1,0 +1,18 @@
+[Unit]
+Description=Deepgram + VICIdial AI Voice Agent Console & Telephony Bridge
+After=network-online.target asterisk.service apache2.service httpd.service mariadb.service mysql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/voice-agent-console
+EnvironmentFile=/opt/voice-agent-console/.env
+ExecStart=/usr/bin/node /opt/voice-agent-console/dist/server.js
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
