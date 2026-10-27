@@ -38,7 +38,126 @@
   const SESSION_SECRETS_KEY = 'vac_tab_secrets_v1';
   const CLOUD_SECRETS_KEY = 'vac_cloud_secrets_v1';
   const CLOUD_STATE_KEY = 'vac_cloud_state_v1';
+  const APPEARANCE_STORAGE_KEY = 'vac_appearance_v2';
   let serverlessCloudMode = false;
+
+  // ==================== ELITE MULTI-THEME & APPEARANCE ENGINE ====================
+  const APPEARANCE_THEMES = [
+    {
+      id: 'obsidian',
+      name: 'Obsidian Nebula',
+      short: 'Obsidian',
+      sub: 'Deep Space Indigo & Violet Studio',
+      bg: 'linear-gradient(135deg, #060913 0%, #151d36 100%)',
+      bar: 'linear-gradient(90deg, #4f46e5, #a855f7, #0ea5e9)',
+      dots: ['#6366f1', '#a855f7', '#34d399'],
+    },
+    {
+      id: 'emerald',
+      name: 'Cyber Emerald',
+      short: 'Emerald',
+      sub: 'Carbon Matrix & Neon Mint Ops',
+      bg: 'linear-gradient(135deg, #040b09 0%, #0e261f 100%)',
+      bar: 'linear-gradient(90deg, #10b981, #06b6d4)',
+      dots: ['#10b981', '#06b6d4', '#4ade80'],
+    },
+    {
+      id: 'aurora',
+      name: 'Arctic Aurora',
+      short: 'Aurora',
+      sub: 'Midnight Ocean & Glacial Cyan',
+      bg: 'linear-gradient(135deg, #030b17 0%, #0f2948 100%)',
+      bar: 'linear-gradient(90deg, #0284c7, #0ea5e9, #2dd4bf)',
+      dots: ['#0ea5e9', '#2dd4bf', '#818cf8'],
+    },
+    {
+      id: 'crimson',
+      name: 'Crimson Gold Luxe',
+      short: 'Crimson',
+      sub: 'Espresso Onyx, Molten Gold & Rose',
+      bg: 'linear-gradient(135deg, #0c0807 0%, #2a1815 100%)',
+      bar: 'linear-gradient(90deg, #f59e0b, #ea580c, #e11d48)',
+      dots: ['#f59e0b', '#f43f5e', '#34d399'],
+    },
+    {
+      id: 'pearl',
+      name: 'Pearl Daylight',
+      short: 'Daylight',
+      sub: 'Pure Alabaster & Royal Sapphire (Light)',
+      bg: 'linear-gradient(135deg, #ffffff 0%, #e8eef9 100%)',
+      bar: 'linear-gradient(90deg, #4f46e5, #2563eb, #0284c7)',
+      dots: ['#4f46e5', '#0284c7', '#059669'],
+    },
+    {
+      id: 'sakura',
+      name: 'Sakura Ivory',
+      short: 'Sakura',
+      sub: 'Warm Cream & Rose-Quartz (Light)',
+      bg: 'linear-gradient(135deg, #ffffff 0%, #fce8ef 100%)',
+      bar: 'linear-gradient(90deg, #e11d48, #db2777, #9333ea)',
+      dots: ['#e11d48', '#9333ea', '#059669'],
+    },
+  ];
+
+  let appearance = (() => {
+    try {
+      const saved = JSON.parse(window.localStorage?.getItem(APPEARANCE_STORAGE_KEY) || '{}');
+      return {
+        theme: APPEARANCE_THEMES.some((t) => t.id === saved.theme) ? saved.theme : 'obsidian',
+        exposure: ['minimal', 'studio', 'cinema'].includes(saved.exposure) ? saved.exposure : 'studio',
+        glass: ['solid', 'frosted', 'crystal'].includes(saved.glass) ? saved.glass : 'frosted',
+      };
+    } catch {
+      return { theme: 'obsidian', exposure: 'studio', glass: 'frosted' };
+    }
+  })();
+
+  function applyAppearance(save = true) {
+    const root = document.documentElement;
+    root.dataset.theme = appearance.theme;
+    root.dataset.exposure = appearance.exposure;
+    root.dataset.glass = appearance.glass;
+    if (save) {
+      try {
+        window.localStorage?.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(appearance));
+      } catch {}
+    }
+    const meta = APPEARANCE_THEMES.find((t) => t.id === appearance.theme) || APPEARANCE_THEMES[0];
+    const lbl = document.getElementById('theme-active-lbl');
+    if (lbl) lbl.textContent = meta.short;
+    renderThemeStudioControls();
+  }
+
+  function renderThemeStudioControls() {
+    const grid = document.getElementById('theme-swatch-grid');
+    if (grid) {
+      grid.innerHTML = APPEARANCE_THEMES.map(
+        (t) => `
+          <button type="button" class="theme-card ${appearance.theme === t.id ? 'on' : ''}" data-pick-theme="${t.id}">
+            <div class="theme-preview" style="background:${t.bg}">
+              <div class="theme-preview-dots">
+                ${t.dots.map((c) => `<span style="background:${c}"></span>`).join('')}
+              </div>
+              <div class="theme-preview-bar" style="background:${t.bar}"></div>
+            </div>
+            <div class="theme-name">
+              <span>${esc(t.name)}</span>
+              ${appearance.theme === t.id ? '<span class="pill ok" style="font-size:10px;padding:1px 6px">Active</span>' : ''}
+            </div>
+            <div class="theme-sub">${esc(t.sub)}</div>
+          </button>
+        `
+      ).join('');
+    }
+    document.querySelectorAll('#exposure-seg button').forEach((btn) => {
+      btn.classList.toggle('on', btn.dataset.exp === appearance.exposure);
+    });
+    document.querySelectorAll('#glass-seg button').forEach((btn) => {
+      btn.classList.toggle('on', btn.dataset.gls === appearance.glass);
+    });
+  }
+
+  applyAppearance(false);
 
   function readCloudSecrets() {
     try {
@@ -1869,14 +1988,14 @@
   function render() {
     if (!S) return;
     const tabs = [
-      ['agents', 'Agents'],
-      ['plugins', 'Plug-ins'],
-      ['campaigns', 'Campaigns'],
-      ['voice', 'Voice Lab'],
-      ['test', 'Testing (Live Bot)'],
-      ['vici', 'Dialer / Vici (Bridge)'],
-      ['wallboard', 'Wallboard & QA'],
-      ['export', 'Export & DB'],
+      ['agents', '🤖 Agents'],
+      ['plugins', '🧩 Plug-ins'],
+      ['campaigns', '📢 Campaigns'],
+      ['voice', '🎧 Voice Lab'],
+      ['test', '📞 Live Bot'],
+      ['vici', '☎️ Vici Bridge'],
+      ['wallboard', '📊 Wallboard'],
+      ['export', '💾 Export'],
     ];
     document.getElementById('nav').innerHTML = tabs
       .map(([k, lbl]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${lbl}</button>`)
@@ -3261,6 +3380,37 @@
       return;
     }
 
+    if (b.id === 'btn-theme') {
+      if (e.shiftKey) {
+        const idx = APPEARANCE_THEMES.findIndex((t) => t.id === appearance.theme);
+        appearance.theme = APPEARANCE_THEMES[(idx + 1) % APPEARANCE_THEMES.length].id;
+        applyAppearance(true);
+        return;
+      }
+      renderThemeStudioControls();
+      document.getElementById('theme-modal').hidden = false;
+      return;
+    }
+    if (b.id === 'theme-close') {
+      document.getElementById('theme-modal').hidden = true;
+      return;
+    }
+    if (d.pickTheme) {
+      appearance.theme = d.pickTheme;
+      applyAppearance(true);
+      return;
+    }
+    if (d.exp) {
+      appearance.exposure = d.exp;
+      applyAppearance(true);
+      return;
+    }
+    if (d.gls) {
+      appearance.glass = d.gls;
+      applyAppearance(true);
+      return;
+    }
+
     if (b.id === 'btn-keys') {
       openKeysModal();
       return;
@@ -3685,8 +3835,21 @@
     }
   });
 
-  // Enter key on live simulator utterance input & auth login input
+  // Backdrop click closes Theme Studio or API Keys modal smoothly
+  document.addEventListener('mousedown', (e) => {
+    if (e.target?.id === 'theme-modal') e.target.hidden = true;
+    else if (e.target?.id === 'keys-modal') e.target.hidden = true;
+  });
+
+  // Enter key on live simulator utterance input, auth login input, and Escape for modals
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const tm = document.getElementById('theme-modal');
+      const km = document.getElementById('keys-modal');
+      if (tm && !tm.hidden) tm.hidden = true;
+      else if (km && !km.hidden) km.hidden = true;
+      return;
+    }
     if (e.key === 'Enter' && e.target?.id === 'sim-inject-input') {
       e.preventDefault();
       const inp = e.target;

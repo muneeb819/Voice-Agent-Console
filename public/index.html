@@ -1,28 +1,91 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="obsidian" data-exposure="studio" data-glass="frosted">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Voice Agent Console — Deepgram + VICIdial</title>
+  <title>Voice Agent Console — AI Telephony &amp; VICIdial Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <!-- GPU-Composited Ambient Light Exposure & Architectural Grid Canvas -->
+  <div class="ambient-canvas" aria-hidden="true">
+    <div class="ambient-orb orb-1"></div>
+    <div class="ambient-orb orb-2"></div>
+    <div class="ambient-orb orb-3"></div>
+    <div class="ambient-grid"></div>
+  </div>
+
   <header>
     <div class="brand">
-      <h1>🎙️ Voice Agent Console</h1>
-      <span class="pill" id="db-pill" title="Backed by server SQLite + JSON mirror">SQLite Ready</span>
+      <div class="brand-mark" aria-hidden="true">
+        <span class="brand-glyph">🎙️</span>
+        <span class="brand-pulse"></span>
+      </div>
+      <div class="brand-copy">
+        <div class="brand-row">
+          <h1>Voice Agent Console</h1>
+          <span class="pill" id="db-pill" title="Backed by server SQLite + JSON mirror">SQLite Ready</span>
+        </div>
+        <span class="brand-sub">Deepgram Flux &bull; Universal VICIdial AI Studio</span>
+      </div>
     </div>
-    <nav id="nav"></nav>
-    <span id="st">Loading…</span>
-    <a class="g" id="btn-newtab" href="./" target="_blank" rel="noopener" style="text-decoration:none;padding:7px 11px;border-radius:8px;border:1px solid var(--bd);font-size:12.5px;color:var(--tx);display:none" title="Open console in a dedicated browser tab for unrestricted microphone access">↗ Open in Tab</a>
-    <button class="g" id="btn-logout" style="display:none" title="Sign out of Admin Console">🔒 Sign Out</button>
-    <button class="g" id="btn-keys" title="Configure server-side .env API keys &amp; security">🔑 API Keys</button>
-    <button class="g" id="dc" disabled>Discard</button>
-    <button class="b" id="sv" disabled>Save &amp; verify</button>
+
+    <nav id="nav" aria-label="Console Workspace Navigation"></nav>
+
+    <div class="header-actions">
+      <span id="st">Loading…</span>
+      <a class="g" id="btn-newtab" href="./" target="_blank" rel="noopener" style="text-decoration:none;display:none" title="Open console in a dedicated browser tab for unrestricted microphone access">↗ Open Tab</a>
+      <button class="g theme-trigger" id="btn-theme" title="Open Appearance &amp; Theme Studio (6 Elite Themes + Exposure &amp; Glass Controls)">
+        <span class="theme-dot" id="theme-active-dot"></span>
+        <span id="theme-active-lbl">Theme</span>
+      </button>
+      <button class="g" id="btn-logout" style="display:none" title="Sign out of Admin Console">🔒 Sign Out</button>
+      <button class="g" id="btn-keys" title="Configure server-side .env API keys &amp; security">🔑 API Keys</button>
+      <button class="g" id="dc" disabled>Discard</button>
+      <button class="b" id="sv" disabled>Save &amp; verify</button>
+    </div>
   </header>
 
   <div id="vr"></div>
   <main id="m"></main>
+
+  <!-- Elite Appearance & Theme Studio Modal -->
+  <div class="modal-backdrop" id="theme-modal" hidden>
+    <div class="modal theme-studio-modal">
+      <div class="modal-head">
+        <div>
+          <h3>🎨 Appearance &amp; Theme Studio</h3>
+          <div class="note" style="margin-top:2px">Choose from 6 signature color worlds and tune ambient light exposure &amp; glass depth in real time.</div>
+        </div>
+        <button class="g" id="theme-close">✕ Done</button>
+      </div>
+
+      <h2 class="studio-sec-title">Signature Color Worlds</h2>
+      <div class="theme-grid" id="theme-swatch-grid"></div>
+
+      <div class="row" style="margin-top:16px">
+        <div>
+          <label>✨ Ambient Light Exposure</label>
+          <div class="seg-group" id="exposure-seg">
+            <button type="button" data-exp="minimal">Matte Off</button>
+            <button type="button" data-exp="studio">Studio Glow</button>
+            <button type="button" data-exp="cinema">Vivid Cinema</button>
+          </div>
+        </div>
+        <div>
+          <label>💎 Surface Glass &amp; Specular Depth</label>
+          <div class="seg-group" id="glass-seg">
+            <button type="button" data-gls="solid">Crisp Solid</button>
+            <button type="button" data-gls="frosted">Frosted Glass</button>
+            <button type="button" data-gls="crystal">Ultra Crystal</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Step 4: Admin Password Sign-In Modal (shown when ADMIN_PASSWORD is enabled in .env) -->
   <div class="modal-backdrop" id="auth-modal" hidden>
@@ -43,9 +106,12 @@
   <!-- Server-side .env API Keys Modal -->
   <div class="modal-backdrop" id="keys-modal" hidden>
     <div class="modal">
-      <h3>🔑 Server Environment Keys (<code>.env</code>)</h3>
+      <div class="modal-head">
+        <h3>🔑 Environment &amp; Cloud API Keys</h3>
+        <button class="g" id="keys-close-x" onclick="document.getElementById('keys-modal').hidden=true">✕</button>
+      </div>
       <div class="note" style="margin-bottom: 10px;">
-        Keys are saved on the backend server (<code>.env</code>), automatically stripped of accidental quotes or <code>Token</code>/<code>Bearer</code> prefixes, and verified directly against Deepgram's authenticated REST &amp; Voice Agent WebSocket endpoints.
+        Keys are automatically stripped of accidental quotes or <code>Token</code>/<code>Bearer</code> prefixes and verified live against Deepgram's authenticated REST &amp; Voice Agent WebSocket endpoints.
       </div>
       <div id="keys-form"></div>
       <div class="note" id="keys-msg" style="white-space:pre-line"></div>
