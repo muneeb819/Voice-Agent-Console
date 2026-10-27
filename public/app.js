@@ -1,6 +1,22 @@
 (() => {
   'use strict';
 
+  function esc(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function uid(prefix = 'id') {
+    return `${prefix}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function isPlainObject(v) {
+    return typeof v === 'object' && v !== null && !Array.isArray(v);
+  }
+
   let S = null;
   let snap = '';
   let revisions = [];
@@ -289,17 +305,6 @@
     simError: null,
     webhookTests: {},
   };
-
-  const esc = (s) =>
-    String(s ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
-
-  const uid = (prefix = 'id') => `${prefix}_${Math.random().toString(36).slice(2, 8)}`;
-
-  const isPlainObject = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 
   const parseJsonObject = (raw) => {
     const t = String(raw ?? '').trim();
