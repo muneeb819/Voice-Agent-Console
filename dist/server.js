@@ -571,9 +571,14 @@ if (require.main === module) {
     const { server, viciBridge } = createServerWithSimulator({ enableBridge: true });
     (async () => {
         if (viciBridge) {
-            await viciBridge.start();
-            const st = viciBridge.getStatus();
-            console.log(`[ViciBridge] AudioSocket TCP listening on ${host}:${st.audioSocketPort} | SIP+RTP (PCMU) UDP listening on ${host}:${st.sipPort}`);
+            try {
+                await viciBridge.start();
+                const st = viciBridge.getStatus();
+                console.log(`[ViciBridge] AudioSocket TCP listening on ${host}:${st.audioSocketPort} | SIP+RTP (PCMU) UDP listening on ${host}:${st.sipPort}`);
+            }
+            catch (bridgeErr) {
+                console.warn(`[ViciBridge] Telephony UDP/TCP listener skipped on cloud host (${bridgeErr?.message || bridgeErr}) — Web Console & Live WebSocket Simulator remain active.`);
+            }
         }
         const listenWithFallback = (candidatePort, retriesLeft) => {
             const onError = (err) => {
