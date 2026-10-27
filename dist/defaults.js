@@ -1,5 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = void 0;
+exports.deepgramModelsForProviderType = deepgramModelsForProviderType;
 exports.createDefaultState = createDefaultState;
 exports.normalizeState = normalizeState;
 const makeProvider = (id, kind, name, type, models, overrides = {}) => ({
@@ -30,19 +32,55 @@ const objSchema = (properties, required = []) => ({
     properties,
     required,
 });
+exports.DEEPGRAM_MANAGED_LLM_CATALOG = [
+    { id: 'gpt-4o-mini', name: 'GPT-4o mini', provider: 'open_ai' },
+    { id: 'gpt-4.1-mini', name: 'GPT-4.1 mini', provider: 'open_ai' },
+    { id: 'gpt-4.1-nano', name: 'GPT-4.1 nano', provider: 'open_ai' },
+    { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'open_ai' },
+    { id: 'gpt-4o', name: 'GPT-4o', provider: 'open_ai' },
+    { id: 'gpt-5-mini', name: 'GPT-5 mini', provider: 'open_ai' },
+    { id: 'gpt-5-nano', name: 'GPT-5 nano', provider: 'open_ai' },
+    { id: 'gpt-5', name: 'GPT-5', provider: 'open_ai' },
+    { id: 'gpt-5.1', name: 'GPT-5.1 Thinking', provider: 'open_ai' },
+    { id: 'gpt-5.2', name: 'GPT 5.2', provider: 'open_ai' },
+    { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini', provider: 'open_ai' },
+    { id: 'gpt-5.4-nano', name: 'GPT-5.4 nano', provider: 'open_ai' },
+    { id: 'gpt-5.4', name: 'GPT 5.4', provider: 'open_ai' },
+    { id: 'gpt-5.5', name: 'GPT-5.5', provider: 'open_ai' },
+    { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', provider: 'open_ai' },
+    { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', provider: 'open_ai' },
+    { id: 'gpt-6-luna', name: 'GPT-6 Luna', provider: 'open_ai' },
+    { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', provider: 'anthropic' },
+    { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', provider: 'anthropic' },
+    { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', provider: 'anthropic' },
+    { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic' },
+    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', provider: 'anthropic' },
+    { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', provider: 'anthropic' },
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google' },
+    { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', provider: 'google' },
+    { id: 'gemini-3-flash-preview', name: 'Gemini 3.0 Flash Preview', provider: 'google' },
+    { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', provider: 'google' },
+    { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview', provider: 'google' },
+    { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', provider: 'google' },
+    { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', provider: 'google' },
+    { id: 'openai/gpt-oss-20b', name: 'GPT OSS 20B', provider: 'groq' },
+    { id: 'nvidia/nemotron-3.5-lightning-30b-a3b', name: 'Nemotron 3.5 Lightning 30B A3B', provider: 'nvidia' },
+];
+exports.DEEPGRAM_LLM_PROVIDERS = ['open_ai', 'anthropic', 'google', 'groq', 'nvidia'];
+function deepgramModelsForProviderType(providerType) {
+    return exports.DEEPGRAM_MANAGED_LLM_CATALOG.filter((m) => m.provider === providerType).map((m) => m.id);
+}
 function createDefaultState() {
     return {
         version: 3,
         updatedAt: new Date().toISOString(),
         providers: [
             makeProvider('s1', 'stt', 'Deepgram STT', 'deepgram', 'flux-general-en,flux-general-multi,nova-3,nova-2'),
-            makeProvider('l1', 'llm', 'OpenAI (Managed)', 'open_ai', 'gpt-4o-mini,gpt-4.1-mini,gpt-5-mini,gpt-5,gpt-4.1,gpt-4o'),
-            makeProvider('l2', 'llm', 'Anthropic (Managed)', 'anthropic', 'claude-haiku-4-5,claude-sonnet-4-5,claude-sonnet-4-6'),
-            makeProvider('l3', 'llm', 'Google Gemini (Managed)', 'google', 'gemini-2.5-flash,gemini-3.5-flash,gemini-3.1-flash-lite'),
-            makeProvider('l4', 'llm', 'Groq (BYO Endpoint)', 'groq', 'llama-3.3-70b-versatile', {
-                endpoint: 'https://api.groq.com/openai/v1/chat/completions',
-                headers: '{"authorization":"Bearer {{GROQ_API_KEY}}"}',
-            }),
+            makeProvider('l1', 'llm', 'OpenAI (Deepgram Managed)', 'open_ai', 'gpt-4o-mini,gpt-4.1-mini,gpt-4.1-nano,gpt-4.1,gpt-4o,gpt-5-mini,gpt-5-nano,gpt-5,gpt-5.1,gpt-5.2,gpt-5.4-mini,gpt-5.4-nano,gpt-5.4,gpt-5.5,gpt-5.6-luna,gpt-5.6-terra,gpt-6-luna'),
+            makeProvider('l2', 'llm', 'Anthropic Claude (Deepgram Managed)', 'anthropic', 'claude-haiku-4-5,claude-haiku-5-5,claude-sonnet-4-5,claude-sonnet-4-6,claude-sonnet-5,claude-sonnet-5-5'),
+            makeProvider('l3', 'llm', 'Google Gemini (Deepgram Managed)', 'google', 'gemini-2.5-flash,gemini-2.5-flash-lite,gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.1-pro-preview,gemini-3.5-flash,gemini-3.8-flash'),
+            makeProvider('l4', 'llm', 'Groq OSS (Deepgram Managed)', 'groq', 'openai/gpt-oss-20b'),
+            makeProvider('l5', 'llm', 'NVIDIA Nemotron (Deepgram Managed)', 'nvidia', 'nvidia/nemotron-3.5-lightning-30b-a3b'),
             makeProvider('t1', 'tts', 'Deepgram TTS (Flux v2 & Aura v1)', 'deepgram', 'flux-haley-en,flux-kit-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en'),
             makeProvider('t2', 'tts', 'ElevenLabs (BYO Streaming)', 'eleven_labs', 'eleven_turbo_v2_5,eleven_v3', {
                 mk: 'model_id',
@@ -376,11 +414,36 @@ function normalizeState(raw) {
     const providers = Array.isArray(src.providers) && src.providers.length
         ? src.providers.map((p, idx) => {
             const kind = ['stt', 'llm', 'tts'].includes(p.kind) ? p.kind : 'llm';
+            if (kind === 'llm') {
+                const llmType = exports.DEEPGRAM_LLM_PROVIDERS.includes(p.type) ? String(p.type) : 'open_ai';
+                const allowedModels = deepgramModelsForProviderType(llmType);
+                const allowedSet = new Set(allowedModels);
+                const existingValid = String(p.models || '')
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter((m) => allowedSet.has(m));
+                const mergedModels = Array.from(new Set([...existingValid, ...allowedModels])).join(',');
+                const canonical = base.providers.find((bp) => bp.kind === 'llm' && bp.type === llmType);
+                const cleanName = String(p.name || '').includes('BYO') || !String(p.name || '').trim()
+                    ? canonical?.name || `${llmType} (Deepgram Managed)`
+                    : String(p.name);
+                return {
+                    id: String(p.id || canonical?.id || `p_llm_${idx + 1}`),
+                    kind: 'llm',
+                    name: cleanName,
+                    type: llmType,
+                    models: mergedModels,
+                    endpoint: '',
+                    headers: '{}',
+                    extra: '{}',
+                    mk: 'model',
+                };
+            }
             return {
                 id: String(p.id || `p_${kind}_${idx + 1}`),
                 kind,
                 name: String(p.name || `Provider ${idx + 1}`),
-                type: kind === 'stt' ? 'deepgram' : String(p.type || 'open_ai'),
+                type: kind === 'stt' ? 'deepgram' : String(p.type || 'deepgram'),
                 models: String(p.models || ''),
                 endpoint: String(p.endpoint || ''),
                 headers: typeof p.headers === 'string' ? p.headers : JSON.stringify(p.headers || {}),
@@ -388,7 +451,17 @@ function normalizeState(raw) {
                 mk: p.mk === 'model_id' ? 'model_id' : 'model',
             };
         })
-        : base.providers;
+        : base.providers.map((p) => ({ ...p }));
+    // Ensure all 5 canonical Deepgram-Managed LLM providers (open_ai, anthropic, google, groq, nvidia) exist
+    for (const baseLlm of base.providers.filter((p) => p.kind === 'llm')) {
+        if (!providers.some((p) => p.kind === 'llm' && p.type === baseLlm.type)) {
+            const insertIdx = providers.findIndex((p) => p.kind === 'tts');
+            if (insertIdx >= 0)
+                providers.splice(insertIdx, 0, { ...baseLlm });
+            else
+                providers.push({ ...baseLlm });
+        }
+    }
     // Ensure at least one provider per kind exists
     for (const kind of ['stt', 'llm', 'tts']) {
         if (!providers.some((p) => p.kind === kind)) {
@@ -431,13 +504,24 @@ function normalizeState(raw) {
                     eotms: Math.round(num(a.stt?.eotms, 5000)),
                     smartFormat: Boolean(a.stt?.smartFormat),
                 },
-                llm: {
-                    p: String(a.llm?.p || providers.find((p) => p.kind === 'llm').id),
-                    model: String(a.llm?.model || 'gpt-5-mini'),
-                    temp: num(a.llm?.temp, 0.7),
-                    reasoning: ['low', 'medium', 'high'].includes(a.llm?.reasoning) ? a.llm.reasoning : 'low',
-                    ctx: String(a.llm?.ctx ?? ''),
-                },
+                llm: (() => {
+                    const firstLlm = providers.find((p) => p.kind === 'llm');
+                    const chosenProv = providers.find((p) => p.kind === 'llm' && p.id === String(a.llm?.p || '')) || firstLlm;
+                    const allowedModels = deepgramModelsForProviderType(chosenProv.type);
+                    const rawModel = String(a.llm?.model || '').trim();
+                    const safeModel = allowedModels.includes(rawModel)
+                        ? rawModel
+                        : chosenProv.type === 'open_ai' && allowedModels.includes('gpt-5-mini')
+                            ? 'gpt-5-mini'
+                            : allowedModels[0] || 'gpt-5-mini';
+                    return {
+                        p: chosenProv.id,
+                        model: safeModel,
+                        temp: num(a.llm?.temp, 0.7),
+                        reasoning: (['low', 'medium', 'high'].includes(a.llm?.reasoning) ? a.llm.reasoning : 'low'),
+                        ctx: '',
+                    };
+                })(),
                 tts: {
                     p: String(a.tts?.p || providers.find((p) => p.kind === 'tts').id),
                     model: String(a.tts?.model || 'flux-haley-en'),

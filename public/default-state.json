@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updatedAt": "2026-10-26T23:32:46.604Z",
+  "updatedAt": "2026-10-27T23:13:39.775Z",
   "providers": [
     {
       "id": "s1",
@@ -16,9 +16,9 @@
     {
       "id": "l1",
       "kind": "llm",
-      "name": "OpenAI (Managed)",
+      "name": "OpenAI (Deepgram Managed)",
       "type": "open_ai",
-      "models": "gpt-4o-mini,gpt-4.1-mini,gpt-5-mini,gpt-5,gpt-4.1,gpt-4o",
+      "models": "gpt-4o-mini,gpt-4.1-mini,gpt-4.1-nano,gpt-4.1,gpt-4o,gpt-5-mini,gpt-5-nano,gpt-5,gpt-5.1,gpt-5.2,gpt-5.4-mini,gpt-5.4-nano,gpt-5.4,gpt-5.5,gpt-5.6-luna,gpt-5.6-terra,gpt-6-luna",
       "endpoint": "",
       "headers": "{}",
       "extra": "{}",
@@ -27,9 +27,9 @@
     {
       "id": "l2",
       "kind": "llm",
-      "name": "Anthropic (Managed)",
+      "name": "Anthropic Claude (Deepgram Managed)",
       "type": "anthropic",
-      "models": "claude-haiku-4-5,claude-sonnet-4-5,claude-sonnet-4-6",
+      "models": "claude-haiku-4-5,claude-haiku-5-5,claude-sonnet-4-5,claude-sonnet-4-6,claude-sonnet-5,claude-sonnet-5-5",
       "endpoint": "",
       "headers": "{}",
       "extra": "{}",
@@ -38,9 +38,9 @@
     {
       "id": "l3",
       "kind": "llm",
-      "name": "Google Gemini (Managed)",
+      "name": "Google Gemini (Deepgram Managed)",
       "type": "google",
-      "models": "gemini-2.5-flash,gemini-3.5-flash,gemini-3.1-flash-lite",
+      "models": "gemini-2.5-flash,gemini-2.5-flash-lite,gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.1-pro-preview,gemini-3.5-flash,gemini-3.8-flash",
       "endpoint": "",
       "headers": "{}",
       "extra": "{}",
@@ -49,11 +49,22 @@
     {
       "id": "l4",
       "kind": "llm",
-      "name": "Groq (BYO Endpoint)",
+      "name": "Groq OSS (Deepgram Managed)",
       "type": "groq",
-      "models": "llama-3.3-70b-versatile",
-      "endpoint": "https://api.groq.com/openai/v1/chat/completions",
-      "headers": "{\"authorization\":\"Bearer {{GROQ_API_KEY}}\"}",
+      "models": "openai/gpt-oss-20b",
+      "endpoint": "",
+      "headers": "{}",
+      "extra": "{}",
+      "mk": "model"
+    },
+    {
+      "id": "l5",
+      "kind": "llm",
+      "name": "NVIDIA Nemotron (Deepgram Managed)",
+      "type": "nvidia",
+      "models": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "endpoint": "",
+      "headers": "{}",
       "extra": "{}",
       "mk": "model"
     },
@@ -191,9 +202,9 @@
         "p": "s1",
         "model": "flux-general-multi",
         "keyterms": "Medicare, Part A, Part B, OTC card, groceries, dental, Benefits Department, Hablo español",
-        "eot": 0.7,
-        "eager": 0.5,
-        "eotms": 5000,
+        "eot": 0.65,
+        "eager": 0.45,
+        "eotms": 2000,
         "smartFormat": false
       },
       "llm": {

@@ -286,6 +286,8 @@ export async function fetchDeepgramVoiceCatalog(forceRefresh = false): Promise<V
   return inflightCatalog;
 }
 
+import { DEEPGRAM_MANAGED_LLM_CATALOG } from './defaults';
+
 export async function fetchDeepgramLlmModels() {
   try {
     const res = await fetch('https://agent.deepgram.com/v1/agent/settings/think/models', {
@@ -294,9 +296,9 @@ export async function fetchDeepgramLlmModels() {
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data: any = await res.json();
-    return Array.isArray(data?.models) ? data.models : [];
+    return Array.isArray(data?.models) && data.models.length > 0 ? data.models : DEEPGRAM_MANAGED_LLM_CATALOG;
   } catch {
-    return [];
+    return DEEPGRAM_MANAGED_LLM_CATALOG;
   }
 }
 

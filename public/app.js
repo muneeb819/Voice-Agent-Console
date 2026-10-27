@@ -57,6 +57,197 @@
   const APPEARANCE_STORAGE_KEY = 'vac_appearance_v2';
   let serverlessCloudMode = false;
 
+  // ==================== DEEPGRAM-MANAGED LLM CATALOG (STRICTLY DEEPGRAM-PROVIDED ONLY) ====================
+  let deepgramManagedLlms = [
+    { id: 'gpt-4o-mini', name: 'GPT-4o mini', provider: 'open_ai' },
+    { id: 'gpt-4.1-mini', name: 'GPT-4.1 mini', provider: 'open_ai' },
+    { id: 'gpt-4.1-nano', name: 'GPT-4.1 nano', provider: 'open_ai' },
+    { id: 'gpt-4.1', name: 'GPT-4.1', provider: 'open_ai' },
+    { id: 'gpt-4o', name: 'GPT-4o', provider: 'open_ai' },
+    { id: 'gpt-5-mini', name: 'GPT-5 mini', provider: 'open_ai' },
+    { id: 'gpt-5-nano', name: 'GPT-5 nano', provider: 'open_ai' },
+    { id: 'gpt-5', name: 'GPT-5', provider: 'open_ai' },
+    { id: 'gpt-5.1', name: 'GPT-5.1 Thinking', provider: 'open_ai' },
+    { id: 'gpt-5.2', name: 'GPT 5.2', provider: 'open_ai' },
+    { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini', provider: 'open_ai' },
+    { id: 'gpt-5.4-nano', name: 'GPT-5.4 nano', provider: 'open_ai' },
+    { id: 'gpt-5.4', name: 'GPT 5.4', provider: 'open_ai' },
+    { id: 'gpt-5.5', name: 'GPT-5.5', provider: 'open_ai' },
+    { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', provider: 'open_ai' },
+    { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', provider: 'open_ai' },
+    { id: 'gpt-6-luna', name: 'GPT-6 Luna', provider: 'open_ai' },
+    { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', provider: 'anthropic' },
+    { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', provider: 'anthropic' },
+    { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', provider: 'anthropic' },
+    { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'anthropic' },
+    { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', provider: 'anthropic' },
+    { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', provider: 'anthropic' },
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'google' },
+    { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', provider: 'google' },
+    { id: 'gemini-3-flash-preview', name: 'Gemini 3.0 Flash Preview', provider: 'google' },
+    { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', provider: 'google' },
+    { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview', provider: 'google' },
+    { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', provider: 'google' },
+    { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash', provider: 'google' },
+    { id: 'openai/gpt-oss-20b', name: 'GPT OSS 20B', provider: 'groq' },
+    { id: 'nvidia/nemotron-3.5-lightning-30b-a3b', name: 'Nemotron 3.5 Lightning 30B A3B', provider: 'nvidia' },
+  ];
+  let llmSyncNotice = '';
+
+  const CANONICAL_DG_LLM_PROVIDERS = [
+    { id: 'l1', type: 'open_ai', name: 'OpenAI (Deepgram Managed)' },
+    { id: 'l2', type: 'anthropic', name: 'Anthropic Claude (Deepgram Managed)' },
+    { id: 'l3', type: 'google', name: 'Google Gemini (Deepgram Managed)' },
+    { id: 'l4', type: 'groq', name: 'Groq OSS (Deepgram Managed)' },
+    { id: 'l5', type: 'nvidia', name: 'NVIDIA Nemotron (Deepgram Managed)' },
+  ];
+  const DG_LLM_PROVIDER_TYPES = CANONICAL_DG_LLM_PROVIDERS.map((p) => p.type);
+
+  function dgLlmEntriesForType(providerType) {
+    return deepgramManagedLlms.filter((m) => m.provider === providerType);
+  }
+
+  function dgLlmModelIdsForType(providerType) {
+    return dgLlmEntriesForType(providerType).map((m) => m.id);
+  }
+
+  function enforceDeepgramOnlyLlms(state) {
+    if (!state || !Array.isArray(state.providers)) return false;
+    let mutated = false;
+
+    for (const p of state.providers) {
+      if (p.kind !== 'llm') continue;
+      if (!DG_LLM_PROVIDER_TYPES.includes(p.type)) {
+        p.type = 'open_ai';
+        mutated = true;
+      }
+      const canonical = CANONICAL_DG_LLM_PROVIDERS.find((c) => c.type === p.type);
+      if ((p.name || '').includes('BYO') || !(p.name || '').trim()) {
+        p.name = canonical ? canonical.name : `${p.type} (Deepgram Managed)`;
+        mutated = true;
+      }
+      if ((p.endpoint || '').trim() !== '') {
+        p.endpoint = '';
+        mutated = true;
+      }
+      if ((p.headers || '{}').trim() !== '{}') {
+        p.headers = '{}';
+        mutated = true;
+      }
+      if ((p.extra || '{}').trim() !== '{}') {
+        p.extra = '{}';
+        mutated = true;
+      }
+      const officialIds = dgLlmModelIdsForType(p.type);
+      const officialSet = new Set(officialIds);
+      const curList = (p.models || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter((m) => officialSet.has(m));
+      const merged = Array.from(new Set([...curList, ...officialIds])).join(',');
+      if (p.models !== merged) {
+        p.models = merged;
+        mutated = true;
+      }
+    }
+
+    for (const canon of CANONICAL_DG_LLM_PROVIDERS) {
+      if (!state.providers.some((p) => p.kind === 'llm' && p.type === canon.type)) {
+        const entry = {
+          id: state.providers.some((p) => p.id === canon.id) ? uid('llm') : canon.id,
+          kind: 'llm',
+          name: canon.name,
+          type: canon.type,
+          models: dgLlmModelIdsForType(canon.type).join(','),
+          endpoint: '',
+          headers: '{}',
+          extra: '{}',
+          mk: 'model',
+        };
+        const ttsIdx = state.providers.findIndex((p) => p.kind === 'tts');
+        if (ttsIdx >= 0) state.providers.splice(ttsIdx, 0, entry);
+        else state.providers.push(entry);
+        mutated = true;
+      }
+    }
+
+    const llmProvs = state.providers.filter((p) => p.kind === 'llm');
+    if (Array.isArray(state.agents) && llmProvs.length > 0) {
+      for (const ag of state.agents) {
+        if (!ag.llm) ag.llm = { p: llmProvs[0].id, model: 'gpt-5-mini', temp: 0.7, reasoning: 'low', ctx: '' };
+        let chosen = llmProvs.find((p) => p.id === ag.llm.p);
+        if (!chosen) {
+          chosen = llmProvs[0];
+          ag.llm.p = chosen.id;
+          mutated = true;
+        }
+        const allowed = dgLlmModelIdsForType(chosen.type);
+        if (!allowed.includes(ag.llm.model)) {
+          ag.llm.model =
+            chosen.type === 'open_ai' && allowed.includes('gpt-5-mini')
+              ? 'gpt-5-mini'
+              : allowed[0] || 'gpt-5-mini';
+          mutated = true;
+        }
+        if ((ag.llm.ctx || '').trim() !== '') {
+          ag.llm.ctx = '';
+          mutated = true;
+        }
+      }
+    }
+
+    return mutated;
+  }
+
+  async function syncDeepgramManagedLlms(silent = false) {
+    try {
+      let models = null;
+      if (!serverlessCloudMode) {
+        try {
+          const r = await fetch('/api/deepgram/llm-models');
+          if (r.ok && (r.headers.get('content-type') || '').includes('application/json')) {
+            const j = await r.json();
+            if (j?.ok && Array.isArray(j.models) && j.models.length > 0) models = j.models;
+          }
+        } catch {}
+      }
+      if (!models) {
+        const directRes = await fetch('https://agent.deepgram.com/v1/agent/settings/think/models', {
+          headers: { Accept: 'application/json' },
+        });
+        if (directRes.ok) {
+          const dj = await directRes.json();
+          if (Array.isArray(dj?.models) && dj.models.length > 0) models = dj.models;
+        }
+      }
+      if (Array.isArray(models) && models.length > 0) {
+        deepgramManagedLlms = models
+          .filter((m) => m && m.id && m.provider)
+          .map((m) => ({ id: String(m.id), name: String(m.name || m.id), provider: String(m.provider) }));
+        if (S) {
+          const wasDirty = isDirty();
+          const changed = enforceDeepgramOnlyLlms(S);
+          if (changed && !wasDirty) {
+            snap = comparableSnapshot(S);
+            if (serverlessCloudMode) {
+              try {
+                window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
+              } catch {}
+            }
+          }
+        }
+        if (!silent) {
+          llmSyncNotice = `✓ Live synced ${deepgramManagedLlms.length} official Deepgram-Managed LLM models`;
+        }
+        return true;
+      }
+    } catch {}
+    if (!silent) {
+      llmSyncNotice = `✓ Using ${deepgramManagedLlms.length} verified Deepgram-Managed LLM models`;
+    }
+    return false;
+  }
+
   // ==================== ELITE MULTI-THEME & APPEARANCE ENGINE ====================
   const APPEARANCE_THEMES = [
     {
@@ -453,14 +644,6 @@
       });
 
     const think = { provider: thinkProvider, prompt: agent.prompt, functions: fns };
-    if ((lp.endpoint || '').trim()) {
-      const lh = parseJsonObject(lp.headers);
-      think.endpoint = { url: lp.endpoint.trim(), headers: lh.ok ? lh.value : {} };
-      if (String(agent.llm.ctx || '').trim()) {
-        const raw = String(agent.llm.ctx).trim();
-        think.context_length = raw === 'max' || Number.isNaN(Number(raw)) ? raw : Number(raw);
-      }
-    }
 
     const speakProvider = { type: tp.type || 'deepgram' };
     const mk = tp.type === 'deepgram' || tp.type === 'open_ai' ? 'model' : tp.mk || 'model_id';
@@ -539,9 +722,14 @@
       push(!agent.stt.smartFormat, 'smart_format disabled on Flux v2 STT');
     }
 
-    const llmNeedsEp = ['groq', 'aws_bedrock'].includes(lp.type);
-    push(!llmNeedsEp || Boolean((lp.endpoint || '').trim()), `LLM endpoint configured where required (${lp.type})`);
-    push(!(agent.llm.ctx || '').trim() || Boolean((lp.endpoint || '').trim()), 'context_length only set with BYO LLM endpoint', true);
+    push(
+      DG_LLM_PROVIDER_TYPES.includes(lp.type) && !(lp.endpoint || '').trim(),
+      `LLM provider (${lp.type}) is natively managed by Deepgram (no BYO endpoint)`
+    );
+    push(
+      dgLlmModelIdsForType(lp.type).includes(agent.llm.model),
+      `LLM model "${agent.llm.model}" is officially provided by Deepgram`
+    );
 
     const ttsNeedsEp = !['deepgram', 'cartesia'].includes(tp.type);
     push(!ttsNeedsEp || Boolean((tp.endpoint || '').trim()), `TTS endpoint configured where required (${tp.type})`);
@@ -721,11 +909,22 @@
   };
 
   const providersByKind = (kind) => S.providers.filter((p) => p.kind === kind).map((p) => [p.id, p.name]);
-  const modelsForProvider = (id) =>
-    (prov(id)?.models || '')
+  const modelsForProvider = (id) => {
+    const p = prov(id);
+    if (!p) return [];
+    if (p.kind === 'llm') {
+      return dgLlmModelIdsForType(p.type);
+    }
+    return (p.models || '')
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
+  };
+  const llmSelectOptionsForProvider = (id) => {
+    const p = prov(id);
+    if (!p) return [];
+    return dgLlmEntriesForType(p.type).map((m) => [m.id, `${m.name} (${m.id})`]);
+  };
 
   const renderSelectorBar = (kind) => {
     const arr = kind === 'a' ? S.agents : S.campaigns;
@@ -743,14 +942,35 @@
     const p = S.providers[idx];
     const sameKindCount = S.providers.filter((x) => x.kind === p.kind).length;
     const isStt = p.kind === 'stt';
+    const isLlm = p.kind === 'llm';
+    if (isLlm) {
+      const dgModels = dgLlmEntriesForType(p.type);
+      return `<div class="t">
+        <div class="row">
+          ${F('Display name', `p.${idx}.name`)}
+          ${F('Deepgram Managed LLM Provider', `p.${idx}.type`, 'sel', DG_LLM_PROVIDER_TYPES)}
+        </div>
+        <label>Deepgram-Provided Models (${dgModels.length} managed via <code>DEEPGRAM_API_KEY</code>)</label>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px">
+          ${dgModels
+            .map(
+              (m) =>
+                `<span class="pill" title="${esc(m.name)}" style="font-size:11px;padding:3px 8px"><b>${esc(m.name)}</b> <span style="opacity:.7">(${esc(m.id)})</span></span>`
+            )
+            .join('')}
+        </div>
+        <div class="note ok" style="margin:4px 0 8px">✓ Natively hosted &amp; billed through Deepgram Voice Agent API — no third-party LLM endpoint or separate API key needed.</div>
+        <div class="bar" style="margin-top:8px;margin-bottom:0">
+          <button class="g danger" data-del="p:${idx}" ${sameKindCount <= 1 ? 'disabled title="At least one provider of each type is required"' : ''}>Remove</button>
+        </div>
+      </div>`;
+    }
     return `<div class="t">
       <div class="row">
         ${F('Display name', `p.${idx}.name`)}
         ${
           isStt
             ? F('Provider type (Voice Agent API supports deepgram only)', `p.${idx}.type`, 'sel', [['deepgram', 'deepgram']])
-            : p.kind === 'llm'
-            ? F('Provider type', `p.${idx}.type`, 'sel', ['open_ai', 'anthropic', 'google', 'groq', 'aws_bedrock', 'nvidia'])
             : F('Provider type', `p.${idx}.type`, 'sel', ['deepgram', 'eleven_labs', 'cartesia', 'open_ai', 'aws_polly'])
         }
       </div>
@@ -2163,15 +2383,19 @@
               : F('Enable smart_format (Nova v1 models only)', 'a.stt.smartFormat', 'chk')
           }
 
-          <h2>Language Model (Think) <button class="g" id="sync-llm" style="font-size:11px;padding:3px 8px;text-transform:none">↻ Sync Deepgram Models</button></h2>
+          <h2>Language Model (Think — Deepgram Managed Only) <button class="g" id="sync-llm" style="font-size:11px;padding:3px 8px;text-transform:none">↻ Sync Deepgram Models (${deepgramManagedLlms.length})</button></h2>
+          ${llmSyncNotice ? `<div class="note ok" style="margin:2px 0 8px">${esc(llmSyncNotice)}</div>` : ''}
           <div class="row">
-            ${F('LLM Plug-in', 'a.llm.p', 'sel', providersByKind('llm'))}
-            ${F('LLM Model', 'a.llm.model', 'dl', modelsForProvider(a.llm.p))}
+            ${F('Deepgram LLM Provider', 'a.llm.p', 'sel', providersByKind('llm'))}
+            ${F('Deepgram-Provided LLM Model', 'a.llm.model', 'sel', llmSelectOptionsForProvider(a.llm.p))}
           </div>
           <div class="row r3">
             ${F('Temperature (0–2)', 'a.llm.temp', 'number', [], 'min="0" max="2" step="0.05"')}
             ${F('Reasoning (gpt-5*)', 'a.llm.reasoning', 'sel', ['low', 'medium', 'high'])}
-            ${F('Context length (BYO only)', 'a.llm.ctx')}
+            <div>
+              <label>LLM Routing &amp; Key</label>
+              <div class="note ok" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2,rgba(255,255,255,.03));margin:0">✓ Deepgram Managed (<code>DEEPGRAM_API_KEY</code>)</div>
+            </div>
           </div>
 
           <h2>Text-to-Speech (Speak) <button class="g" data-t="voice" style="font-size:11px;padding:3px 8px;text-transform:none">🎧 Open Real Voice Lab →</button></h2>
@@ -3043,6 +3267,11 @@
         loadedState = await staticRes.json();
       }
       S = loadedState;
+      if (enforceDeepgramOnlyLlms(S)) {
+        try {
+          window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
+        } catch {}
+      }
       snap = comparableSnapshot(S);
       revisions = [{ id: 1, saved_at: S.updatedAt || new Date().toISOString(), summary: 'Cloud Direct Browser Session' }];
       secretsStatus = buildCloudSecretsStatus();
@@ -3052,6 +3281,9 @@
       if (!S.agents.some((x) => x.id === cur.a)) cur.a = S.agents[0].id;
       if (!S.campaigns.some((x) => x.id === cur.c)) cur.c = S.campaigns[0].id;
       render();
+      syncDeepgramManagedLlms(true).then((ok) => {
+        if (ok) render();
+      });
       return;
     }
     if (res.status === 401) {
@@ -3061,6 +3293,7 @@
     }
     const data = await res.json();
     S = data.state;
+    enforceDeepgramOnlyLlms(S);
     snap = comparableSnapshot(S);
     revisions = data.revisions || [];
     secretsStatus = data.secrets || {};
@@ -3305,10 +3538,9 @@
     msg.textContent = '';
 
     const keySpecs = [
-      ['DEEPGRAM_API_KEY', 'Deepgram API Key (enables live custom TTS synthesis & live Voice Agent)'],
+      ['DEEPGRAM_API_KEY', 'Deepgram Universal API Key (powers Deepgram STT, all Deepgram-Managed LLMs, TTS & Voice Agent)'],
       ['ELEVENLABS_API_KEY', 'ElevenLabs API Key (optional — for BYO ElevenLabs TTS)'],
       ['CARTESIA_API_KEY', 'Cartesia API Key (optional — for BYO Cartesia TTS)'],
-      ['GROQ_API_KEY', 'Groq API Key (optional — for BYO Groq LLM)'],
       ['VICI_API_PASS', 'VICIdial API Password (User 6666 pass on ViciBox)'],
       ['AMI_SECRET', 'Asterisk AMI Secret (cron pass in /etc/asterisk/manager.conf)'],
       ['CUSTOM_WEBHOOK_SECRET', 'Custom CRM / Webhook Secret (usable as {{CUSTOM_WEBHOOK_SECRET}} in Function headers)'],
@@ -3843,22 +4075,11 @@
     }
 
     if (b.id === 'sync-llm') {
-      if (serverlessCloudMode) {
-        render();
-        return;
-      }
       b.disabled = true;
-      b.textContent = 'Syncing…';
+      b.textContent = 'Syncing Deepgram LLMs…';
       try {
-        const res = await fetch('/api/deepgram/llm-models');
-        const data = await res.json();
-        if (data.ok && Array.isArray(data.models)) {
-          for (const p of S.providers.filter((x) => x.kind === 'llm' && !x.endpoint.trim())) {
-            const matched = data.models.filter((m) => m.provider === p.type).map((m) => m.id);
-            if (matched.length) p.models = Array.from(new Set(matched)).join(',');
-          }
-          render();
-        }
+        await syncDeepgramManagedLlms(false);
+        render();
       } finally {
         b.disabled = false;
       }
@@ -3989,11 +4210,15 @@
         const kind = d.add;
         const defaultType = kind === 'stt' ? 'deepgram' : kind === 'llm' ? 'open_ai' : 'deepgram';
         const defaultModel =
-          kind === 'stt' ? 'flux-general-en' : kind === 'llm' ? 'gpt-5-mini' : 'flux-haley-en';
+          kind === 'stt'
+            ? 'flux-general-en'
+            : kind === 'llm'
+            ? dgLlmModelIdsForType('open_ai').join(',')
+            : 'flux-haley-en';
         S.providers.push({
           id: uid(kind),
           kind,
-          name: `New ${kind.toUpperCase()} Plug-in`,
+          name: kind === 'llm' ? 'OpenAI (Deepgram Managed)' : `New ${kind.toUpperCase()} Plug-in`,
           type: defaultType,
           models: defaultModel,
           endpoint: '',
@@ -4140,14 +4365,28 @@
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
+      const nextState = parsed.console || parsed;
+      if (serverlessCloudMode) {
+        S = nextState;
+        enforceDeepgramOnlyLlms(S);
+        S.updatedAt = new Date().toISOString();
+        try {
+          window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
+        } catch {}
+        snap = comparableSnapshot(S);
+        cur = { a: S.agents[0].id, c: S.campaigns[0].id };
+        render();
+        return;
+      }
       const res = await fetch('/api/state', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state: parsed.console || parsed }),
+        body: JSON.stringify({ state: nextState }),
       });
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Import failed');
       S = data.state;
+      enforceDeepgramOnlyLlms(S);
       snap = comparableSnapshot(S);
       revisions = data.revisions || [];
       latestRevisionId = data.revisionId;
@@ -4236,7 +4475,21 @@
 
       const slotMatch = /^a\.(stt|llm|tts)\.p$/.exec(t.dataset.p);
       if (slotMatch) {
-        A()[slotMatch[1]].model = modelsForProvider(t.value)[0] || '';
+        const slot = slotMatch[1];
+        const list = modelsForProvider(t.value);
+        A()[slot].model =
+          slot === 'llm' && list.includes('gpt-5-mini') ? 'gpt-5-mini' : list[0] || '';
+      }
+      const provTypeMatch = /^p\.(\d+)\.type$/.exec(t.dataset.p);
+      if (provTypeMatch) {
+        const pObj = S.providers[Number(provTypeMatch[1])];
+        if (pObj && pObj.kind === 'llm') {
+          pObj.models = dgLlmModelIdsForType(pObj.type).join(',');
+          pObj.endpoint = '';
+          pObj.headers = '{}';
+          pObj.extra = '{}';
+          enforceDeepgramOnlyLlms(S);
+        }
       }
       render();
       return;

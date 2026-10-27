@@ -265,6 +265,7 @@ async function fetchDeepgramVoiceCatalog(forceRefresh = false) {
     inflightCatalog = runFetch();
     return inflightCatalog;
 }
+const defaults_1 = require("./defaults");
 async function fetchDeepgramLlmModels() {
     try {
         const res = await fetch('https://agent.deepgram.com/v1/agent/settings/think/models', {
@@ -274,10 +275,10 @@ async function fetchDeepgramLlmModels() {
         if (!res.ok)
             throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        return Array.isArray(data?.models) ? data.models : [];
+        return Array.isArray(data?.models) && data.models.length > 0 ? data.models : defaults_1.DEEPGRAM_MANAGED_LLM_CATALOG;
     }
     catch {
-        return [];
+        return defaults_1.DEEPGRAM_MANAGED_LLM_CATALOG;
     }
 }
 const ALLOWED_SAMPLE_HOSTS = new Set(['cdn.sanity.io', 'static.deepgram.com']);

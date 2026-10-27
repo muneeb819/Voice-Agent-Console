@@ -269,10 +269,14 @@ function validateAgent(state, agent) {
         push(Number.isInteger(eotms) && eotms >= 500, `eot_timeout_ms (${eotms} ms) is a valid integer ≥ 500`);
         push(!agent.stt.smartFormat, 'smart_format is disabled (not supported with Flux v2 STT)');
     }
-    // LLM validations (Google is managed by Deepgram; only groq and aws_bedrock require BYO endpoint)
-    const llmNeedsEndpoint = ['groq', 'aws_bedrock'].includes(lp.type);
-    push(!llmNeedsEndpoint || Boolean(lp.endpoint.trim()), `LLM endpoint configured where required (${lp.type})`);
-    push(!agent.llm.ctx.trim() || Boolean(lp.endpoint.trim()), 'Custom context_length only set when BYO LLM endpoint is configured', true);
+    // LLM validations (strictly Deepgram-managed LLM providers & models)
+    const dgManagedProviders = ['open_ai', 'anthropic', 'google', 'groq', 'nvidia'];
+    push(dgManagedProviders.includes(lp.type) && !lp.endpoint.trim(), `LLM provider (${lp.type}) is natively managed by Deepgram (no BYO endpoint)`);
+    const allowedModels = lp.models
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    push(allowedModels.includes(agent.llm.model), `LLM model "${agent.llm.model}" is an official Deepgram-provided model`);
     // TTS validations
     const ttsNeedsEndpoint = !['deepgram', 'cartesia'].includes(tp.type);
     push(!ttsNeedsEndpoint || Boolean(tp.endpoint.trim()), `TTS endpoint configured where required (${tp.type})`);
