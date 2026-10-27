@@ -36,6 +36,71 @@
   })();
 
   const SESSION_SECRETS_KEY = 'vac_tab_secrets_v1';
+  const CLOUD_SECRETS_KEY = 'vac_cloud_secrets_v1';
+  const CLOUD_STATE_KEY = 'vac_cloud_state_v1';
+  let serverlessCloudMode = false;
+
+  function readCloudSecrets() {
+    try {
+      const raw = window.localStorage?.getItem(CLOUD_SECRETS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return isPlainObject(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeCloudSecrets(patch, replaceAll = false) {
+    try {
+      const curSec = replaceAll ? {} : readCloudSecrets();
+      for (const [k, v] of Object.entries(patch)) {
+        const clean = String(v ?? '').trim().replace(/^(Token|Bearer)\s+/i, '');
+        if (clean) curSec[k] = clean;
+        else delete curSec[k];
+      }
+      window.localStorage?.setItem(CLOUD_SECRETS_KEY, JSON.stringify(curSec));
+    } catch {}
+  }
+
+  function buildCloudSecretsStatus() {
+    const sec = readCloudSecrets();
+    const keys = [
+      'DEEPGRAM_API_KEY',
+      'ELEVENLABS_API_KEY',
+      'CARTESIA_API_KEY',
+      'OPENAI_API_KEY',
+      'GROQ_API_KEY',
+      'VICI_API_PASS',
+      'AMI_SECRET',
+      'CUSTOM_WEBHOOK_SECRET',
+      'ADMIN_PASSWORD',
+      'BRIDGE_ALLOWED_IPS',
+    ];
+    const out = {};
+    for (const k of keys) {
+      const v = String(sec[k] || '');
+      out[k] = {
+        configured: v.length > 0,
+        masked: v.length > 8 ? `${v.slice(0, 4)}••••${v.slice(-4)}` : v ? '••••••••' : '',
+      };
+    }
+    return out;
+  }
+
+  // Bootstrap #dgkey=... URL hash privately into localStorage (never sent over HTTP)
+  (() => {
+    try {
+      const h = String(window.location.hash || '');
+      if (h.includes('dgkey=')) {
+        const params = new URLSearchParams(h.replace(/^#/, ''));
+        const k = params.get('dgkey');
+        if (k && k.trim().length > 10) {
+          writeCloudSecrets({ DEEPGRAM_API_KEY: k.trim() });
+          window.history?.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+      }
+    } catch {}
+  })();
 
   // Live Call Simulator state (Step 2)
   let sim = {
@@ -984,13 +1049,20 @@
 
     renderSimulatorDomOnly();
 
+    const linkedCamp = S.campaigns.find((c) => c.agentId === A().id) || C();
+
+    // ---- SERVERLESS CLOUD DIRECT MODE (GitHub Pages / Vercel / Static Host) ----
+    if (serverlessCloudMode) {
+      startDirectBrowserSimulatorSession(mode, A(), linkedCamp);
+      return;
+    }
+
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${wsProto}//${window.location.host}/ws/simulator`;
+
     const ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
     sim.ws = ws;
-
-    const linkedCamp = S.campaigns.find((c) => c.agentId === A().id) || C();
 
     ws.onopen = () => {
       ws.send(
@@ -1137,7 +1209,244 @@
     };
   }
 
+  function startDirectBrowserSimulatorSession(mode, agent, camp) {
+    const dgKey = readCloudSecrets().DEEPGRAM_API_KEY || '';
+    if (mode === 'deepgram' && !dgKey) {
+      sim.connecting = false;
+      sim.lastError = 'Click "🔑 API Keys" in the top bar and paste your DEEPGRAM_API_KEY to talk live with Deepgram STT + TTS.';
+      cleanupSimulatorMedia();
+      if (tab === 'test') render();
+      return;
+    }
+
+    const settings = buildSettings(agent);
+    settings.audio = {
+      input: { encoding: 'linear16', sample_rate: sim.sampleRateIn },
+      output: { encoding: 'linear16', sample_rate: sim.sampleRateOut, container: 'none' },
+    };
+    if (Array.isArray(settings.agent?.think?.functions)) {
+      settings.agent.think.functions = settings.agent.think.functions.map((f) => {
+        const clone = { ...f };
+        delete clone.endpoint;
+        return clone;
+      });
+    }
+    const leadLines = [
+      sim.lead?.lead_id ? `- lead_id: ${sim.lead.lead_id}` : '',
+      sim.lead?.first_name ? `- first_name: ${sim.lead.first_name}` : '',
+      sim.lead?.state ? `- state: ${sim.lead.state}` : '',
+      sim.lead?.age ? `- listed_age: ${sim.lead.age}` : '',
+    ].filter(Boolean);
+    if (leadLines.length && settings.agent?.think?.prompt) {
+      settings.agent.think.prompt += `\n\n=== HYDRATED VICIDIAL LEAD ===\n${leadLines.join('\n')}`;
+    }
+
+    if (mode === 'sandbox') {
+      sim.connecting = false;
+      sim.active = true;
+      sim.startedAtMs = Date.now();
+      sim.statusText = 'Live in Browser Sandbox Dry-Run';
+      sim.events.push({ kind: 'msg', role: 'assistant', content: settings.agent.greeting || agent.greeting });
+      sim.ws = {
+        readyState: WebSocket.OPEN,
+        _isSandbox: true,
+        send: () => {},
+        close: () => {
+          sim.active = false;
+          cleanupSimulatorMedia();
+          if (tab === 'test') render();
+        },
+      };
+      if (tab === 'test') render();
+      return;
+    }
+
+    const dgWs = new WebSocket('wss://agent.deepgram.com/v1/agent/converse', ['token', dgKey]);
+    dgWs.binaryType = 'arraybuffer';
+    let settingsApplied = false;
+    let lastMicSendAt = 0;
+    let lastUserTurnAt = 0;
+    let awaitingFirstAudio = false;
+    const ttfbArr = [];
+    let silenceTimer = null;
+    let keepAliveTimer = null;
+
+    // Wrap dgWs so startMicCapture's sim.ws.send(pcmBuf) only transmits after SettingsApplied
+    sim.ws = {
+      get readyState() {
+        return dgWs.readyState;
+      },
+      _directDg: true,
+      send(payload) {
+        if (dgWs.readyState !== WebSocket.OPEN) return;
+        if (typeof payload === 'string') {
+          dgWs.send(payload);
+        } else if (settingsApplied) {
+          lastMicSendAt = Date.now();
+          dgWs.send(payload);
+        }
+      },
+      injectText(text) {
+        if (dgWs.readyState === WebSocket.OPEN && settingsApplied) {
+          lastUserTurnAt = Date.now();
+          awaitingFirstAudio = true;
+          dgWs.send(JSON.stringify({ type: 'InjectUserMessage', content: text }));
+        }
+      },
+      close() {
+        if (silenceTimer) clearInterval(silenceTimer);
+        if (keepAliveTimer) clearInterval(keepAliveTimer);
+        try { dgWs.close(1000, 'Hangup'); } catch {}
+      },
+    };
+
+    const endDirect = (reason) => {
+      if (silenceTimer) { clearInterval(silenceTimer); silenceTimer = null; }
+      if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
+      try { if (dgWs.readyState === WebSocket.OPEN) dgWs.close(1000, reason); } catch {}
+      sim.active = false;
+      sim.connecting = false;
+      sim.statusText = sim.lastError ? `Call Failed (${reason})` : `Call Ended (${reason})`;
+      cleanupSimulatorMedia();
+      if (tab === 'test') render();
+    };
+
+    dgWs.onmessage = (ev) => {
+      if (ev.data instanceof ArrayBuffer) {
+        if (awaitingFirstAudio && lastUserTurnAt > 0) {
+          awaitingFirstAudio = false;
+          const ttfb = Date.now() - lastUserTurnAt;
+          ttfbArr.push(ttfb);
+          sim.lastTtfbMs = ttfb;
+          sim.avgTtfbMs = Math.round(ttfbArr.reduce((a, b) => a + b, 0) / ttfbArr.length);
+          updateSimKpisDom();
+        }
+        enqueuePcm16Playback(ev.data);
+        return;
+      }
+
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+
+      if (msg.type === 'Welcome') {
+        sim.statusText = 'Sending Agent Settings to Deepgram…';
+        updateSimStatusDom();
+        dgWs.send(JSON.stringify(settings));
+      } else if (msg.type === 'SettingsApplied') {
+        settingsApplied = true;
+        sim.connecting = false;
+        sim.active = true;
+        sim.startedAtMs = Date.now();
+        sim.statusText = 'Live on Deepgram Voice Agent API (Direct Browser WSS)';
+        if (sim.durationTimer) clearInterval(sim.durationTimer);
+        sim.durationTimer = setInterval(() => {
+          sim.elapsedSec = Math.floor((Date.now() - sim.startedAtMs) / 1000);
+          const durEl = document.getElementById('sim-kpi-dur');
+          if (durEl) durEl.textContent = formatDuration(sim.elapsedSec);
+        }, 500);
+        const zeroFrame = new ArrayBuffer(Math.floor(sim.sampleRateIn * 0.02) * 2);
+        silenceTimer = setInterval(() => {
+          if (dgWs.readyState === WebSocket.OPEN && Date.now() - lastMicSendAt > 120) {
+            dgWs.send(zeroFrame);
+          }
+        }, 40);
+        keepAliveTimer = setInterval(() => {
+          if (dgWs.readyState === WebSocket.OPEN) {
+            dgWs.send(JSON.stringify({ type: 'KeepAlive' }));
+          }
+        }, 5000);
+        if (tab === 'test') render();
+      } else if (msg.type === 'UserStartedSpeaking') {
+        flushSimulatorSpeakerQueue();
+        sim.agentState = 'user_speaking';
+        sim.statusText = 'Caller Speaking…';
+        updateSimStatusDom();
+      } else if (msg.type === 'AgentThinking') {
+        sim.agentState = 'thinking';
+        sim.statusText = 'LLM Thinking…';
+        updateSimStatusDom();
+      } else if (msg.type === 'AgentStartedSpeaking') {
+        sim.agentState = 'speaking';
+        sim.statusText = 'Bot Speaking…';
+        updateSimStatusDom();
+      } else if (msg.type === 'AgentAudioDone') {
+        sim.agentState = 'listening';
+        sim.statusText = 'Listening for Caller…';
+        updateSimStatusDom();
+      } else if (msg.type === 'ConversationText') {
+        if (msg.role === 'user') {
+          sim.turns += 1;
+          lastUserTurnAt = Date.now();
+          awaitingFirstAudio = true;
+        }
+        sim.events.push({ kind: 'msg', role: msg.role, content: msg.content });
+        renderSimFeedDom();
+        updateSimKpisDom();
+      } else if (msg.type === 'FunctionCallRequest') {
+        const list = Array.isArray(msg.functions) ? msg.functions : [msg];
+        for (const fn of list) {
+          let args = {};
+          try { args = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments || '{}') : fn.arguments || {}; } catch {}
+          let resp = { ok: true };
+          if (fn.name === 'set_disposition') {
+            sim.disposition = String(args.code || 'DONE');
+            resp = { ok: true, disposition_code: sim.disposition };
+          } else if (fn.name === 'transfer_to_live_agent') {
+            const xTarget = camp ? `${camp.xferType}:${camp.xferTarget}` : 'ingroup:MED_CLOSERS';
+            sim.transferredTo = xTarget;
+            if (!sim.disposition) sim.disposition = 'XFER';
+            resp = {
+              ok: true,
+              transfer_scheduled: xTarget,
+              metadata_passed: {
+                prospect_name: args.prospect_name || sim.lead?.first_name || '',
+                confirmed_age: args.confirmed_age || '',
+                medicare_status: args.medicare_status || '',
+                hook_type: args.hook_type || 'Food & OTC Card',
+              },
+            };
+          } else if (fn.name === 'end_call') {
+            resp = { ok: true, hangup_scheduled: true };
+            setTimeout(() => endDirect('bot_end_call'), 5500);
+          }
+          sim.events.push({ kind: 'fn', id: fn.id, name: fn.name, args, status: 'completed', response: resp });
+          renderSimFeedDom();
+          updateSimKpisDom();
+          if (dgWs.readyState === WebSocket.OPEN) {
+            dgWs.send(
+              JSON.stringify({
+                type: 'FunctionCallResponse',
+                id: fn.id,
+                name: fn.name,
+                content: JSON.stringify(resp),
+              })
+            );
+          }
+        }
+      } else if (msg.type === 'Error') {
+        sim.lastError = `[${msg.code || 'DG_ERR'}] ${msg.description || msg.message || 'Deepgram error'}`;
+        endDirect('deepgram_error');
+      }
+    };
+
+    dgWs.onerror = () => {
+      if (!sim.lastError) sim.lastError = 'Direct WebSocket connection to wss://agent.deepgram.com failed — verify DEEPGRAM_API_KEY in 🔑 API Keys.';
+      endDirect('ws_error');
+    };
+    dgWs.onclose = () => {
+      if (sim.active || sim.connecting) endDirect('disconnected');
+    };
+  }
+
   function hangupLiveCall() {
+    if (sim.ws && sim.ws._directDg) {
+      sim.ws.close();
+      sim.active = false;
+      sim.connecting = false;
+      cleanupSimulatorMedia();
+      if (tab === 'test') render();
+      return;
+    }
     if (sim.ws && sim.ws.readyState === WebSocket.OPEN) {
       sim.ws.send(JSON.stringify({ type: 'stop' }));
     } else {
@@ -1150,8 +1459,17 @@
 
   function injectCallerUtterance(text) {
     const clean = String(text || '').trim();
-    if (!clean || !sim.ws || sim.ws.readyState !== WebSocket.OPEN) return;
+    if (!clean || !sim.ws) return;
     flushSimulatorSpeakerQueue();
+    if (sim.ws._directDg) {
+      sim.turns += 1;
+      sim.events.push({ kind: 'msg', role: 'user', content: clean });
+      renderSimFeedDom();
+      updateSimKpisDom();
+      sim.ws.injectText(clean);
+      return;
+    }
+    if (sim.ws.readyState !== WebSocket.OPEN) return;
     sim.ws.send(JSON.stringify({ type: 'inject_user_message', content: clean }));
   }
 
@@ -1441,14 +1759,20 @@
     voiceCatalog.error = '';
     if (tab === 'voice') renderVoiceCatalogSection();
     try {
-      const url = force ? '/api/deepgram/voices?refresh=1' : '/api/deepgram/voices';
+      const url = serverlessCloudMode
+        ? './voices-static.json'
+        : force
+        ? '/api/deepgram/voices?refresh=1'
+        : '/api/deepgram/voices';
       const res = await fetch(url);
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Failed to load voices');
       voiceCatalog.voices = data.voices || [];
       voiceCatalog.facets = data.facets || { families: [], languages: [], accents: [] };
-      voiceCatalog.source = data.source;
-      voiceCatalog.authenticated = Boolean(data.authenticated);
+      voiceCatalog.source = data.source || (serverlessCloudMode ? 'static-catalog' : 'api');
+      voiceCatalog.authenticated = serverlessCloudMode
+        ? Boolean(secretsStatus?.DEEPGRAM_API_KEY?.configured)
+        : Boolean(data.authenticated);
       voiceCatalog.loaded = true;
     } catch (err) {
       voiceCatalog.error = err.message || 'Unable to fetch Deepgram voice catalog';
@@ -2455,7 +2779,7 @@
 
   async function loadFromServer() {
     const authRes = await fetch('/api/auth/status').catch(() => null);
-    if (authRes) {
+    if (authRes && authRes.ok) {
       const authJson = await authRes.json().catch(() => ({}));
       const logoutBtn = document.getElementById('btn-logout');
       if (logoutBtn) logoutBtn.style.display = authJson.authEnabled && authJson.authenticated ? 'inline-block' : 'none';
@@ -2466,7 +2790,31 @@
       }
     }
 
-    const res = await fetch('/api/state');
+    const res = await fetch('/api/state').catch(() => null);
+    if (!res || res.status === 404 || res.status === 405) {
+      // Activate Serverless Cloud Direct Mode (GitHub Pages / Vercel / Static Host)
+      serverlessCloudMode = true;
+      let loadedState = null;
+      try {
+        const localRaw = window.localStorage?.getItem(CLOUD_STATE_KEY);
+        if (localRaw) loadedState = JSON.parse(localRaw);
+      } catch {}
+      if (!loadedState) {
+        const staticRes = await fetch('./default-state.json');
+        loadedState = await staticRes.json();
+      }
+      S = loadedState;
+      snap = comparableSnapshot(S);
+      revisions = [{ id: 1, saved_at: S.updatedAt || new Date().toISOString(), summary: 'Cloud Direct Browser Session' }];
+      secretsStatus = buildCloudSecretsStatus();
+      if (secretsStatus?.DEEPGRAM_API_KEY?.configured) {
+        sim.upstreamMode = 'deepgram';
+      }
+      if (!S.agents.some((x) => x.id === cur.a)) cur.a = S.agents[0].id;
+      if (!S.campaigns.some((x) => x.id === cur.c)) cur.c = S.campaigns[0].id;
+      render();
+      return;
+    }
     if (res.status === 401) {
       document.getElementById('auth-modal').hidden = false;
       document.getElementById('st').textContent = '🔒 Locked — Sign in required';
@@ -2513,6 +2861,30 @@
     const btn = document.getElementById('sv');
     btn.disabled = true;
     btn.textContent = 'Saving…';
+    if (serverlessCloudMode) {
+      try {
+        S.updatedAt = new Date().toISOString();
+        window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
+        snap = comparableSnapshot(S);
+        const agChecks = S.agents.flatMap((ag) => validateAgentLocal(ag));
+        const cpChecks = S.campaigns.flatMap((cp) => validateCampaignLocal(cp));
+        const all = [...agChecks, ...cpChecks];
+        const ok = all.filter((x) => x.level === 'ok').length;
+        const wn = all.filter((x) => x.level === 'wn').length;
+        const er = all.filter((x) => x.level === 'er').length;
+        document.getElementById('vr').innerHTML = `
+          <div class="card" style="border-left-color:${er ? 'var(--er)' : wn ? 'var(--wn)' : 'var(--ok)'}">
+            <b>Saved in Browser Cloud Storage — Verification Report:</b>
+            <span class="ok">${ok} passed</span> · <span class="wn">${wn} warnings</span> · <span class="er">${er} errors</span>
+            <button class="g" style="margin-top:8px;margin-left:10px" onclick="this.parentNode.remove()">Dismiss</button>
+          </div>`;
+        render();
+      } finally {
+        btn.textContent = 'Save & verify';
+        updateHeaderStatus();
+      }
+      return;
+    }
     try {
       const res = await fetch('/api/state', {
         method: 'PUT',
@@ -2567,7 +2939,9 @@
     stopAllAudio();
     const vs = document.getElementById('vs');
     const audioEl = document.getElementById('voice-audio');
-    const proxied = `/api/deepgram/sample?url=${encodeURIComponent(sampleUrl)}`;
+    const proxied = serverlessCloudMode
+      ? sampleUrl
+      : `/api/deepgram/sample?url=${encodeURIComponent(sampleUrl)}`;
     voiceCatalog.previewAudioUrl = proxied;
     voiceCatalog.playingLabel = `▶ Playing studio sample: ${label}`;
     if (vs) vs.textContent = voiceCatalog.playingLabel;
@@ -2723,6 +3097,24 @@
       ? '⏳ Saving to server .env & running live 3-step Deepgram Auth + TTS + Voice Agent WS verification…'
       : '⏳ Saving to server .env…';
 
+    if (serverlessCloudMode) {
+      writeCloudSecrets(payload);
+      secretsStatus = buildCloudSecretsStatus();
+      if (payload.DEEPGRAM_API_KEY || secretsStatus?.DEEPGRAM_API_KEY?.configured) {
+        sim.upstreamMode = 'deepgram';
+        sim.lastError = null;
+      }
+      msg.className = 'note ok';
+      msg.textContent = '✓ Saved in Browser Cloud Storage! Ready for Direct Live Deepgram WSS Calls.';
+      updateHeaderStatus();
+      if (tab === 'voice') renderVoiceCatalogSection();
+      if (tab === 'test' && !sim.active) render();
+      setTimeout(() => {
+        document.getElementById('keys-modal').hidden = true;
+      }, 900);
+      return;
+    }
+
     try {
       const res = await fetch('/api/secrets', {
         method: 'POST',
@@ -2815,6 +3207,15 @@
     try {
       window.sessionStorage?.removeItem(SESSION_SECRETS_KEY);
     } catch {}
+    if (serverlessCloudMode) {
+      writeCloudSecrets({}, true);
+      secretsStatus = buildCloudSecretsStatus();
+      sim.diagResult = null;
+      openKeysModal();
+      updateHeaderStatus();
+      if (tab === 'test' && !sim.active) render();
+      return;
+    }
     const res = await fetch('/api/secrets', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
