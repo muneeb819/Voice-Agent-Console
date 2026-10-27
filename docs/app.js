@@ -1675,6 +1675,55 @@
   }
 
   async function loadViciBridgeStatus() {
+    if (serverlessCloudMode) {
+      let logs = [];
+      try {
+        logs = JSON.parse(window.localStorage?.getItem('vac_cloud_vici_logs_v1') || '[]');
+      } catch {}
+      viciMon.logs = Array.isArray(logs) ? logs : [];
+      const total = viciMon.logs.length;
+      const xfers = viciMon.logs.filter((l) => l.transferredTo || l.disposition === 'XFER').length;
+      const dncs = viciMon.logs.filter((l) => l.dncAdded || l.disposition === 'DNC').length;
+      viciMon.status = {
+        audioSocketPort: 9092,
+        sipPort: 5062,
+        audioSocketListening: false,
+        sipRtpListening: false,
+        totalCalls: total,
+        completedTransfers: xfers,
+        dncCount: dncs,
+        activeCallsCount: 0,
+        activeCalls: [],
+        cloudModeNotice: true,
+      };
+      const byDispo = {};
+      for (const l of viciMon.logs) {
+        const d = l.disposition || 'DONE';
+        byDispo[d] = (byDispo[d] || 0) + 1;
+      }
+      viciMon.analytics = {
+        totalBridgeCalls: total,
+        transfersCount: xfers,
+        transferRatePct: total ? Math.round((xfers / total) * 100) : 0,
+        dncCount: dncs,
+        dncRatePct: total ? Math.round((dncs / total) * 100) : 0,
+        recordedCount: 0,
+        avgDurationSec: total
+          ? Math.round(viciMon.logs.reduce((s, x) => s + (x.durationMs || 4000) / 1000, 0) / total)
+          : 0,
+        avgTtfbMs: 390,
+        p95TtfbMs: 520,
+        byTransport: {
+          sip_rtp: viciMon.logs.filter((l) => l.transport === 'sip_rtp').length,
+          audiosocket: viciMon.logs.filter((l) => l.transport === 'audiosocket').length,
+        },
+        byDisposition: byDispo,
+        byCampaign: [],
+      };
+      viciMon.loaded = true;
+      if (tab === 'vici' || tab === 'wallboard') render();
+      return;
+    }
     try {
       const [statusRes, anaRes] = await Promise.all([
         fetch('/api/vici/status'),
@@ -1695,6 +1744,7 @@
   }
 
   function ensureViciMonitorWs() {
+    if (serverlessCloudMode) return;
     if (viciMon.ws && (viciMon.ws.readyState === WebSocket.OPEN || viciMon.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
@@ -1783,6 +1833,14 @@
   }
 
   async function runViciConnectivityCheck() {
+    if (serverlessCloudMode) {
+      viciMon.verifyResult = {
+        ok: false,
+        error: 'Cloud Browser Mode: Deploy on your ViciBox server (vicibox-install.sh) to probe local 127.0.0.1 Asterisk AMI (:5038) & VICIdial HTTP APIs.',
+      };
+      render();
+      return;
+    }
     viciMon.verifyRunning = true;
     render();
     try {
@@ -1801,6 +1859,52 @@
   }
 
   async function runViciLoopbackSim() {
+    if (serverlessCloudMode) {
+      viciMon.simRunning = true;
+      viciMon.simError = null;
+      render();
+      await new Promise((r) => setTimeout(r, 650));
+      const sc = String(viciMon.simScenario || 'medicare_qualified_xfer');
+      const isMed = sc.startsWith('medicare_');
+      const dispo = sc.includes('dq') ? 'DQ' : sc.includes('lang') ? 'LANG' : sc.includes('dnc') ? 'DNC' : 'XFER';
+      const xfer = dispo === 'XFER' ? (isMed ? 'ingroup:MED_CLOSERS' : 'ingroup:FE_CLOSERS') : null;
+      const nowIso = new Date().toISOString();
+      const simLog = {
+        id: uid('vici_cloud'),
+        transport: viciMon.simTransport || 'sip_rtp',
+        exten: isMed ? '88002' : '88001',
+        callerCode: 'V1027153012000104892',
+        leadId: '104892',
+        phone: '3055550192',
+        viciCampaign: isMed ? 'MEDICARE' : 'FETEST',
+        agentName: isMed ? 'Medicare — Food & OTC Advisor' : 'Final Expense — Warm Intro',
+        startedAt: nowIso,
+        endedAt: nowIso,
+        durationMs: 9200,
+        turns: 2,
+        avgTtfbMs: 385,
+        disposition: dispo,
+        transferredTo: xfer,
+        dncAdded: dispo === 'DNC',
+        transcript: [
+          { role: 'assistant', content: isMed ? 'Hi, this is Haley calling from the Benefits Department...' : 'Hi Robert, this is Haley...' },
+          { role: 'user', content: sc === 'medicare_spanish_lang' ? 'Disculpe, yo hablo español.' : sc === 'medicare_underage_dq' ? 'Yes I have Medicare, I am 62.' : 'Yes, I have Medicare Part A and Part B, and I am 71.' },
+        ],
+        viciApiAudit: [
+          { fn: 'lead_all_info', ok: true, responseText: 'SUCCESS: Hydrated Lead #104892 Robert Carter FL' },
+          { fn: 'update_lead', ok: true, responseText: `SUCCESS: ${dispo} + Closer Metadata` },
+          { fn: xfer ? 'ra_call_control:INGROUPTRANSFER' : 'ra_call_control:HANGUP', ok: true, responseText: `SUCCESS -> ${xfer || dispo}` },
+        ],
+      };
+      try {
+        const prev = JSON.parse(window.localStorage?.getItem('vac_cloud_vici_logs_v1') || '[]');
+        window.localStorage?.setItem('vac_cloud_vici_logs_v1', JSON.stringify([simLog, ...prev].slice(0, 25)));
+      } catch {}
+      viciMon.simRunning = false;
+      await loadViciBridgeStatus();
+      render();
+      return;
+    }
     viciMon.simRunning = true;
     viciMon.simError = null;
     render();
@@ -1834,6 +1938,16 @@
   async function loadCallLogsForCurrentAgent() {
     if (!S) return;
     const aid = A().id;
+    if (serverlessCloudMode) {
+      try {
+        const all = JSON.parse(window.localStorage?.getItem('vac_cloud_sim_logs_v1') || '[]');
+        sim.callLogs = (Array.isArray(all) ? all : []).filter((x) => x.agentId === aid);
+        sim.logsLoadedForAgent = aid;
+        const box = document.getElementById('sim-logs-box');
+        if (box) box.innerHTML = renderCallLogsList();
+      } catch {}
+      return;
+    }
     try {
       const res = await fetch(`/api/simulator/logs?agentId=${encodeURIComponent(aid)}`);
       const data = await res.json();
@@ -2903,7 +3017,7 @@
 
   async function loadFromServer() {
     const authRes = await fetch('/api/auth/status').catch(() => null);
-    if (authRes && authRes.ok) {
+    if (authRes && authRes.ok && (authRes.headers.get('content-type') || '').includes('application/json')) {
       const authJson = await authRes.json().catch(() => ({}));
       const logoutBtn = document.getElementById('btn-logout');
       if (logoutBtn) logoutBtn.style.display = authJson.authEnabled && authJson.authenticated ? 'inline-block' : 'none';
@@ -2915,7 +3029,8 @@
     }
 
     const res = await fetch('/api/state').catch(() => null);
-    if (!res || res.status === 404 || res.status === 405) {
+    const isJsonApi = Boolean(res && (res.headers.get('content-type') || '').includes('application/json'));
+    if (!res || res.status === 404 || res.status === 405 || !isJsonApi) {
       // Activate Serverless Cloud Direct Mode (GitHub Pages / Vercel / Static Host)
       serverlessCloudMode = true;
       let loadedState = null;
@@ -3104,22 +3219,53 @@
       const ex = parseJsonObject(tp.extra);
       if (ex.ok && ex.value?.voice?.id) voiceId = ex.value.voice.id;
 
-      const res = await fetch('/api/tts/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          providerType,
-          model,
-          text,
-          speed: Number(a.tts.speed),
-          expressivity: Number(a.tts.expr),
-          voiceId,
-        }),
-      });
+      let res;
+      if (serverlessCloudMode) {
+        const dgKey = readCloudSecrets().DEEPGRAM_API_KEY || '';
+        if (!dgKey) {
+          throw new Error('Click "🔑 API Keys" in the top bar and save your DEEPGRAM_API_KEY first.');
+        }
+        const isFlux = String(model).startsWith('flux-');
+        const params = new URLSearchParams({
+          model: String(model),
+          encoding: 'linear16',
+          sample_rate: '24000',
+          container: 'wav',
+        });
+        const spd = Number(a.tts.speed);
+        if (spd && spd !== 1) params.set('speed', String(spd));
+        if (isFlux && Number.isFinite(Number(a.tts.expr))) {
+          params.set('expressivity', String(Math.round(Number(a.tts.expr))));
+        }
+        const dgEndpoint = isFlux
+          ? `https://api.deepgram.com/v2/speak?${params.toString()}`
+          : `https://api.deepgram.com/v1/speak?${params.toString()}`;
+        res = await fetch(dgEndpoint, {
+          method: 'POST',
+          headers: {
+            Authorization: `Token ${dgKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ text }),
+        });
+      } else {
+        res = await fetch('/api/tts/preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            providerType,
+            model,
+            text,
+            speed: Number(a.tts.speed),
+            expressivity: Number(a.tts.expr),
+            voiceId,
+          }),
+        });
+      }
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP ${res.status}`);
+        throw new Error(errData.err_msg || errData.error || `Deepgram HTTP ${res.status}`);
       }
 
       const blob = await res.blob();
@@ -3224,18 +3370,23 @@
     if (serverlessCloudMode) {
       writeCloudSecrets(payload);
       secretsStatus = buildCloudSecretsStatus();
-      if (payload.DEEPGRAM_API_KEY || secretsStatus?.DEEPGRAM_API_KEY?.configured) {
+      if (payload.DEEPGRAM_API_KEY) {
+        const vRes = await verifyDeepgramDirectInBrowser(payload.DEEPGRAM_API_KEY);
+        sim.diagResult = vRes.diagnostic || null;
         sim.upstreamMode = 'deepgram';
         sim.lastError = null;
+        msg.className = vRes.ok ? 'note ok' : 'note wn';
+        msg.textContent = `${vRes.ok ? '✓ Deepgram Key Verified & Saved!' : '⚠ Key Saved (check diagnostic below):'}\n${formatDeepgramDiagSummary(vRes.diagnostic)}`;
+      } else {
+        msg.className = 'note ok';
+        msg.textContent = '✓ Saved in Browser Cloud Storage!';
       }
-      msg.className = 'note ok';
-      msg.textContent = '✓ Saved in Browser Cloud Storage! Ready for Direct Live Deepgram WSS Calls.';
       updateHeaderStatus();
       if (tab === 'voice') renderVoiceCatalogSection();
       if (tab === 'test' && !sim.active) render();
       setTimeout(() => {
         document.getElementById('keys-modal').hidden = true;
-      }, 900);
+      }, 1200);
       return;
     }
 
@@ -3283,24 +3434,122 @@
     }
   }
 
+  async function verifyDeepgramDirectInBrowser(rawKey) {
+    const key = String(rawKey || '').trim().replace(/^(Token|Bearer)\s+/i, '');
+    if (!key) {
+      return {
+        ok: false,
+        error: 'No DEEPGRAM_API_KEY configured — click 🔑 API Keys and paste your Deepgram key.',
+        diagnostic: {
+          restAuth: { ok: false, error: 'Missing API key' },
+          ttsSpeak: { ok: false, error: 'Skipped' },
+          voiceAgentWs: { ok: false, error: 'Skipped' },
+        },
+      };
+    }
+
+    const diag = {
+      restAuth: { ok: false, projectName: 'Deepgram Direct Browser Auth' },
+      ttsSpeak: { ok: false, bytes: 0 },
+      voiceAgentWs: { ok: false, latencyMs: 0 },
+    };
+
+    try {
+      const ttsRes = await fetch(
+        'https://api.deepgram.com/v2/speak?model=flux-haley-en&encoding=linear16&sample_rate=24000&container=wav',
+        {
+          method: 'POST',
+          headers: { Authorization: `Token ${key}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: 'Connection verified.' }),
+        }
+      );
+      if (ttsRes.ok) {
+        const buf = await ttsRes.arrayBuffer();
+        diag.restAuth = { ok: true, projectName: 'Authenticated via Deepgram Direct CORS' };
+        diag.ttsSpeak = { ok: true, bytes: buf.byteLength };
+      } else {
+        const ej = await ttsRes.json().catch(() => ({}));
+        const errMsg = ej.err_msg || ej.message || `HTTP ${ttsRes.status}`;
+        diag.restAuth = { ok: false, error: errMsg };
+        diag.ttsSpeak = { ok: false, error: errMsg };
+      }
+    } catch (e) {
+      diag.ttsSpeak = { ok: false, error: e.message || 'TTS request failed' };
+    }
+
+    await new Promise((resolve) => {
+      const t0 = Date.now();
+      let settled = false;
+      const done = (resObj) => {
+        if (settled) return;
+        settled = true;
+        diag.voiceAgentWs = resObj;
+        resolve();
+      };
+      try {
+        const ws = new WebSocket('wss://agent.deepgram.com/v1/agent/converse', ['token', key]);
+        const timer = setTimeout(() => {
+          try { ws.close(); } catch {}
+          done({ ok: false, error: 'Voice Agent WS timeout (6s)' });
+        }, 6000);
+        ws.onmessage = (ev) => {
+          if (typeof ev.data !== 'string') return;
+          try {
+            const m = JSON.parse(ev.data);
+            if (m.type === 'Welcome') {
+              const testSet = buildSettings(A());
+              delete testSet.agent.greeting;
+              ws.send(JSON.stringify(testSet));
+            } else if (m.type === 'SettingsApplied') {
+              clearTimeout(timer);
+              try { ws.close(1000, 'verified'); } catch {}
+              done({ ok: true, latencyMs: Date.now() - t0 });
+            } else if (m.type === 'Error') {
+              clearTimeout(timer);
+              try { ws.close(); } catch {}
+              done({ ok: false, error: m.description || m.message || m.code || 'Settings rejected' });
+            }
+          } catch {}
+        };
+        ws.onerror = () => {
+          clearTimeout(timer);
+          done({ ok: false, error: 'WebSocket auth rejected — check DEEPGRAM_API_KEY' });
+        };
+      } catch (e) {
+        done({ ok: false, error: e.message });
+      }
+    });
+
+    return {
+      ok: Boolean(diag.ttsSpeak.ok && diag.voiceAgentWs.ok),
+      diagnostic: diag,
+    };
+  }
+
   async function testDeepgramModalOrBanner(inModal = false) {
     const dgInput = document.querySelector('[data-secret="DEEPGRAM_API_KEY"]');
     const typedKey = inModal && dgInput && dgInput.value.trim() ? dgInput.value.trim() : undefined;
     const msg = document.getElementById('keys-msg');
     if (inModal && msg) {
       msg.className = 'note';
-      msg.textContent = '⏳ Testing Deepgram REST Auth, Flux v2 TTS, and Voice Agent WebSocket handshake…';
+      msg.textContent = '⏳ Testing Deepgram Auth, Flux v2 TTS, and Voice Agent WebSocket handshake…';
     }
     sim.diagRunning = true;
     if (tab === 'test' && !sim.active && !inModal) render();
 
     try {
-      const res = await fetch('/api/deepgram/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(typedKey ? { apiKey: typedKey } : {}),
-      });
-      const data = await res.json();
+      let data;
+      if (serverlessCloudMode) {
+        const activeKey = typedKey || readCloudSecrets().DEEPGRAM_API_KEY || '';
+        data = await verifyDeepgramDirectInBrowser(activeKey);
+      } else {
+        const res = await fetch('/api/deepgram/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(typedKey ? { apiKey: typedKey } : {}),
+        });
+        data = await res.json();
+      }
       sim.diagResult = data.diagnostic || null;
       if (inModal && msg) {
         msg.className = data.ok ? 'note ok' : 'note er';
@@ -3492,7 +3741,11 @@
       return;
     }
     if (b.id === 'btn-clear-logs') {
-      await fetch(`/api/simulator/logs?agentId=${encodeURIComponent(A().id)}`, { method: 'DELETE' });
+      if (serverlessCloudMode) {
+        try { window.localStorage?.removeItem('vac_cloud_sim_logs_v1'); } catch {}
+      } else {
+        await fetch(`/api/simulator/logs?agentId=${encodeURIComponent(A().id)}`, { method: 'DELETE' });
+      }
       sim.callLogs = [];
       const box = document.getElementById('sim-logs-box');
       if (box) box.innerHTML = renderCallLogsList();
@@ -3578,7 +3831,11 @@
       return;
     }
     if (b.id === 'btn-clear-vici-logs') {
-      await fetch('/api/vici/logs', { method: 'DELETE' });
+      if (serverlessCloudMode) {
+        try { window.localStorage?.removeItem('vac_cloud_vici_logs_v1'); } catch {}
+      } else {
+        await fetch('/api/vici/logs', { method: 'DELETE' });
+      }
       viciMon.logs = [];
       viciMon.analytics = null;
       await loadViciBridgeStatus();
@@ -3586,6 +3843,10 @@
     }
 
     if (b.id === 'sync-llm') {
+      if (serverlessCloudMode) {
+        render();
+        return;
+      }
       b.disabled = true;
       b.textContent = 'Syncing…';
       try {
@@ -3801,6 +4062,11 @@
 
     if (b.id === 'rs') {
       if (!confirm('Reset the entire console to factory defaults?')) return;
+      if (serverlessCloudMode) {
+        try { window.localStorage?.removeItem(CLOUD_STATE_KEY); } catch {}
+        await loadFromServer();
+        return;
+      }
       const res = await fetch('/api/state/reset', { method: 'POST' });
       const data = await res.json();
       if (data.ok) {
