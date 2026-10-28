@@ -406,8 +406,10 @@
   function applySidebarState(save = false) {
     const shell = document.getElementById('app-shell');
     const backdrop = document.getElementById('rail-backdrop');
-    const topArrow = document.getElementById('btn-rail-collapse');
-    const footIco = document.getElementById('rail-foot-ico');
+    const toggleBtn = document.getElementById('btn-sidebar-toggle');
+    const chevron = document.getElementById('sidebar-toggle-chevron');
+    const isMobile = Boolean(window.matchMedia && window.matchMedia('(max-width: 860px)').matches);
+    const isExpanded = isMobile ? mobileRailOpen : !sidebarCollapsed;
     if (shell) {
       shell.classList.toggle('rail-collapsed', sidebarCollapsed);
       shell.classList.toggle('mobile-rail-open', mobileRailOpen);
@@ -415,18 +417,13 @@
     if (backdrop) {
       backdrop.hidden = !mobileRailOpen;
     }
-    const arrowGlyph = sidebarCollapsed ? '»' : '«';
-    const actionHint = sidebarCollapsed ? 'Expand Side Menu (Ctrl+B)' : 'Collapse Side Menu (Ctrl+B)';
-    if (topArrow) {
-      topArrow.textContent = arrowGlyph;
-      topArrow.title = actionHint;
+    if (toggleBtn) {
+      toggleBtn.classList.toggle('is-collapsed', !isMobile && sidebarCollapsed);
+      toggleBtn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+      toggleBtn.title = isExpanded ? 'Collapse Side Menu (Ctrl+B)' : 'Expand Side Menu (Ctrl+B)';
     }
-    if (footIco) {
-      footIco.textContent = arrowGlyph;
-    }
-    const footBtn = document.getElementById('btn-rail-foot-toggle');
-    if (footBtn) {
-      footBtn.title = actionHint;
+    if (chevron) {
+      chevron.setAttribute('points', isExpanded ? '16 9 13 12 16 15' : '14 9 17 12 14 15');
     }
     hideRailTooltip();
     if (save) {
@@ -4656,7 +4653,7 @@
     if (!b) return;
     const d = b.dataset;
 
-    if (b.id === 'btn-sidebar-toggle' || b.id === 'btn-rail-collapse' || b.id === 'btn-rail-foot-toggle') {
+    if (b.id === 'btn-sidebar-toggle') {
       toggleSidebar();
       return;
     }

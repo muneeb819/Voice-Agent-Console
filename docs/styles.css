@@ -483,6 +483,18 @@ header::after {
   justify-content: center;
   border-radius: 10px;
   flex-shrink: 0;
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+}
+
+.rail-toggle-btn.is-collapsed {
+  border-color: var(--bd-strong);
+  background: var(--ac-soft);
+  color: var(--ac-hv);
+}
+
+:root[data-theme="pearl"] .rail-toggle-btn.is-collapsed,
+:root[data-theme="sakura"] .rail-toggle-btn.is-collapsed {
+  color: var(--ac);
 }
 
 .nav-crumb {
@@ -524,58 +536,11 @@ header::after {
   z-index: 30;
 }
 
-.rail-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 11px 12px 9px 14px;
-  border-bottom: 1px solid var(--bd);
-}
-
-.rail-head-lbl {
-  font-family: "Space Grotesk", "Plus Jakarta Sans", sans-serif;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
-  color: var(--mu);
-  opacity: 0.82;
-  white-space: nowrap;
-  overflow: hidden;
-  transition: opacity 0.16s ease;
-}
-
-.rail-collapse-btn {
-  width: 26px;
-  height: 26px;
-  border-radius: 7.5px;
-  border: 1px solid var(--bd);
-  background: var(--sf2);
-  color: var(--mu);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 700;
-  line-height: 1;
-  flex-shrink: 0;
-  transition: all 0.18s ease;
-}
-
-.rail-collapse-btn:hover {
-  color: var(--tx);
-  border-color: var(--bd-strong);
-  background: var(--ac-soft);
-}
-
 nav.side-nav {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 8px 10px 12px;
+  padding: 12px 10px 14px;
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -710,69 +675,14 @@ nav.side-nav button.nav-item.on .nav-live-dot {
   box-shadow: 0 0 9px rgba(255, 255, 255, 0.95);
 }
 
-.rail-foot {
-  padding: 9px 10px;
-  border-top: 1px solid var(--bd);
-}
-
-.rail-foot-btn {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 7px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--bd);
-  background: var(--sf2);
-  color: var(--mu);
-  cursor: pointer;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  transition: all 0.18s ease;
-}
-
-.rail-foot-btn:hover {
-  color: var(--tx);
-  border-color: var(--bd-strong);
-  background: var(--ac-soft);
-}
-
-.rail-foot-ico {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 800;
-  font-size: 13px;
-  background: var(--input-bg);
-  border: 1px solid var(--bd);
-  flex-shrink: 0;
-}
-
-.rail-foot-txt {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* Desktop Collapsed Rail Mode (70px Compact Icon Rail) */
+/* Desktop Collapsed Rail Mode (72px Compact Icon Rail) */
 @media (min-width: 861px) {
   .app-shell.rail-collapsed .side-rail {
     width: 72px;
   }
 
-  .app-shell.rail-collapsed .rail-head {
-    justify-content: center;
-    padding: 11px 8px 9px;
-  }
-
-  .app-shell.rail-collapsed .rail-head-lbl,
   .app-shell.rail-collapsed .nav-group-lbl,
-  .app-shell.rail-collapsed .nav-txt,
-  .app-shell.rail-collapsed .rail-foot-txt {
+  .app-shell.rail-collapsed .nav-txt {
     display: none;
   }
 
@@ -781,7 +691,7 @@ nav.side-nav button.nav-item.on .nav-live-dot {
   }
 
   .app-shell.rail-collapsed nav.side-nav {
-    padding: 8px 10px 12px;
+    padding: 12px 10px 14px;
     align-items: center;
   }
 
@@ -800,11 +710,6 @@ nav.side-nav button.nav-item.on .nav-live-dot {
     position: absolute;
     top: 6px;
     right: 6px;
-  }
-
-  .app-shell.rail-collapsed .rail-foot-btn {
-    justify-content: center;
-    padding: 7px;
   }
 }
 
@@ -849,8 +754,11 @@ nav.side-nav button.nav-item.on .nav-live-dot {
 
 .rail-backdrop {
   position: fixed;
-  inset: 0;
-  z-index: 54;
+  top: 58px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 35;
   background: rgba(5, 8, 18, 0.52);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
@@ -869,12 +777,12 @@ nav.side-nav button.nav-item.on .nav-live-dot {
 
   .side-rail {
     position: fixed;
-    top: 0;
+    top: 58px;
     left: 0;
     bottom: 0;
-    height: 100vh;
+    height: calc(100vh - 58px);
     width: 268px;
-    z-index: 58;
+    z-index: 38;
     transform: translateX(-104%);
     box-shadow: 16px 0 44px rgba(0, 0, 0, 0.48);
   }
