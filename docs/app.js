@@ -923,6 +923,10 @@
     if (!Number.isFinite(spd) || spd < 0.5 || spd > 1.5) return false;
     return Math.abs(spd * 20 - Math.round(spd * 20)) < 1e-6;
   };
+  const normalizeFluxSpeed = (spd) => {
+    const safe = Number.isFinite(Number(spd)) ? Number(spd) : 1;
+    return Math.round(Math.min(1.5, Math.max(0.5, safe)) * 20) / 20;
+  };
 
   const A = () => S.agents.find((x) => x.id === cur.a) || S.agents[0];
   const C = () => S.campaigns.find((x) => x.id === cur.c) || S.campaigns[0];
@@ -1043,7 +1047,7 @@
     if (tp.type === 'deepgram') {
       const isFlux = agent.tts.model.startsWith('flux');
       speakProvider.version = isFlux ? 'v2' : 'v1';
-      speakProvider.speed = Number(agent.tts.speed);
+      speakProvider.speed = isFlux ? normalizeFluxSpeed(agent.tts.speed) : Number(agent.tts.speed);
       if (isFlux && Number(agent.tts.expr) !== 0) speakProvider.expressivity = Math.round(Number(agent.tts.expr));
     } else if (tp.type === 'cartesia') {
       speakProvider.speed = Number(agent.tts.speed);
