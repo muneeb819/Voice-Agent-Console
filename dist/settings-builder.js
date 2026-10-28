@@ -4,6 +4,7 @@ exports.isPlainObject = isPlainObject;
 exports.parseJsonObject = parseJsonObject;
 exports.parseJsonSchema = parseJsonSchema;
 exports.isValidFluxSpeed = isValidFluxSpeed;
+exports.normalizeFluxSpeed = normalizeFluxSpeed;
 exports.composeBehavioralPrompt = composeBehavioralPrompt;
 exports.buildDeepgramSettings = buildDeepgramSettings;
 exports.validateAgent = validateAgent;
@@ -59,6 +60,14 @@ function isValidFluxSpeed(speed) {
         return false;
     const scaled = Math.round(speed * 20);
     return Math.abs(speed * 20 - scaled) < 1e-6;
+}
+// Flux TTS accepts speed only in 0.05 increments. Settings can also arrive
+// from imported or older browser state, so normalize before sending them to
+// Deepgram instead of allowing a speak failure to terminate the greeting.
+function normalizeFluxSpeed(speed) {
+    const safeSpeed = Number.isFinite(speed) ? speed : 1;
+    const clamped = Math.min(1.5, Math.max(0.5, safeSpeed));
+    return Math.round(clamped * 20) / 20;
 }
 function composeBehavioralPrompt(agent) {
     const basePrompt = (agent.prompt || '').trim();
@@ -221,7 +230,10 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
     if (tp.type === 'deepgram') {
         const isFluxTts = agent.tts.model.startsWith('flux');
         speakProvider.version = isFluxTts ? 'v2' : 'v1';
-        speakProvider.speed = Number(agent.tts.speed);
+        const configuredSpeed = Number(agent.tts.speed);
+        speakProvider.speed = isFluxTts
+            ? normalizeFluxSpeed(configuredSpeed)
+            : configuredSpeed;
         if (isFluxTts && Number(agent.tts.expr) !== 0) {
             speakProvider.expressivity = Math.round(Number(agent.tts.expr));
         }
