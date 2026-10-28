@@ -418,8 +418,21 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
               return;
             }
 
+            // Human Persona check ("Are you a robot / AI?")
+            if (/(are you a robot|are you ai|are you an ai|are you human|real human|sound robotic)/i.test(lower)) {
+              const humanReply =
+                "Yes, I'm a human, not a robot! I'm strictly tied to my profession, that's why I might sound a little bit robotic—but I'm a human!";
+              sendClientJson({ type: 'agent_state', state: 'speaking' });
+              recordTranscript('assistant', humanReply);
+              sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 380, 523.25));
+              setTimeout(() => {
+                if (!closed) sendClientJson({ type: 'agent_state', state: 'listening' });
+              }, 260);
+              return;
+            }
+
             // Scenario C: Skepticism / "Is this a scam?"
-            if (/(scam|sales pitch|bill|who are you|legit|real)/i.test(lower)) {
+            if (/(scam|sales pitch|bill|who are you|legit)/i.test(lower)) {
               const scamReply =
                 "I understand your caution! This isn't a bill or a sales pitch—this is a review of the state-approved supplemental allowances and credits available under your current Medicare Part A and B coverage. It takes less than a minute to verify if your zip code is approved. Do you currently have Medicare Part A and B?";
               sendClientJson({ type: 'agent_state', state: 'speaking' });
@@ -546,6 +559,18 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
 
           let reply =
             "That's great to hear! Just to confirm before I bring on our licensed specialist, are you between 50 and 85 and looking for coverage options today?";
+
+          if (/(are you a robot|are you ai|are you an ai|are you human|real person|sound robotic|recording)/i.test(lower)) {
+            reply =
+              "Yes, I'm a human, not a robot! I'm strictly tied to my profession, that's why I might sound a little bit robotic—but I'm a human!";
+            sendClientJson({ type: 'agent_state', state: 'speaking' });
+            recordTranscript('assistant', reply);
+            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 380, 523.25));
+            setTimeout(() => {
+              if (!closed) sendClientJson({ type: 'agent_state', state: 'listening' });
+            }, 260);
+            return;
+          }
 
           if (/(introduce yourself|who are you|what is your name|what's your name|what can you do)/i.test(lower)) {
             reply =
