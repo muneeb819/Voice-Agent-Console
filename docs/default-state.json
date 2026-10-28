@@ -7,7 +7,7 @@
       "kind": "stt",
       "name": "Deepgram STT",
       "type": "deepgram",
-      "models": "flux-general-en,flux-general-multi,nova-3,nova-2",
+      "models": "flux-general-en,flux-general-multi",
       "endpoint": "",
       "headers": "{}",
       "extra": "{}",

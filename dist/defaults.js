@@ -1,10 +1,29 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = void 0;
+exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.VOICE_AGENT_STT_MODELS = void 0;
+exports.defaultVoiceAgentSttModel = defaultVoiceAgentSttModel;
+exports.normalizeVoiceAgentSttModel = normalizeVoiceAgentSttModel;
 exports.defaultSelfIntroForAgent = defaultSelfIntroForAgent;
 exports.deepgramModelsForProviderType = deepgramModelsForProviderType;
 exports.createDefaultState = createDefaultState;
 exports.normalizeState = normalizeState;
+exports.VOICE_AGENT_STT_MODELS = ['flux-general-en', 'flux-general-multi'];
+function defaultVoiceAgentSttModel(language) {
+    const languages = String(language || 'en')
+        .toLowerCase()
+        .split(/[\s,]+/)
+        .map((entry) => entry.split(/[-_]/)[0])
+        .filter(Boolean);
+    return languages.some((entry) => entry !== 'en') || languages.length > 1
+        ? 'flux-general-multi'
+        : 'flux-general-en';
+}
+function normalizeVoiceAgentSttModel(model, language) {
+    const value = String(model || '').trim();
+    return exports.VOICE_AGENT_STT_MODELS.includes(value)
+        ? value
+        : defaultVoiceAgentSttModel(language);
+}
 function defaultSelfIntroForAgent(id, name) {
     if (id === 'a_nova' || /nova|concierge|general/i.test(name)) {
         return "Hi there! I'm Nova, a live Customer Support & Concierge Specialist here on the line. I'm happy to chat naturally and help answer any general knowledge, everyday, or support question you have!";
@@ -88,7 +107,7 @@ function createDefaultState() {
         version: 3,
         updatedAt: new Date().toISOString(),
         providers: [
-            makeProvider('s1', 'stt', 'Deepgram STT', 'deepgram', 'flux-general-en,flux-general-multi,nova-3,nova-2'),
+            makeProvider('s1', 'stt', 'Deepgram STT', 'deepgram', exports.VOICE_AGENT_STT_MODELS.join(',')),
             makeProvider('l1', 'llm', 'OpenAI (Deepgram Managed)', 'open_ai', 'gpt-4o-mini,gpt-4.1-mini,gpt-4.1-nano,gpt-4.1,gpt-4o,gpt-5-mini,gpt-5-nano,gpt-5,gpt-5.1,gpt-5.2,gpt-5.4-mini,gpt-5.4-nano,gpt-5.4,gpt-5.5,gpt-5.6-luna,gpt-5.6-terra,gpt-6-luna'),
             makeProvider('l2', 'llm', 'Anthropic Claude (Deepgram Managed)', 'anthropic', 'claude-haiku-4-5,claude-haiku-5-5,claude-sonnet-4-5,claude-sonnet-4-6,claude-sonnet-5,claude-sonnet-5-5'),
             makeProvider('l3', 'llm', 'Google Gemini (Deepgram Managed)', 'google', 'gemini-2.5-flash,gemini-2.5-flash-lite,gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.1-pro-preview,gemini-3.5-flash,gemini-3.8-flash'),
@@ -561,7 +580,7 @@ function normalizeState(raw) {
                 kind,
                 name: String(p.name || `Provider ${idx + 1}`),
                 type: kind === 'stt' ? 'deepgram' : String(p.type || 'deepgram'),
-                models: String(p.models || ''),
+                models: kind === 'stt' ? exports.VOICE_AGENT_STT_MODELS.join(',') : String(p.models || ''),
                 endpoint: String(p.endpoint || ''),
                 headers: typeof p.headers === 'string' ? p.headers : JSON.stringify(p.headers || {}),
                 extra: typeof p.extra === 'string' ? p.extra : JSON.stringify(p.extra || {}),
@@ -642,7 +661,7 @@ function normalizeState(raw) {
                 behavior,
                 stt: {
                     p: String(a.stt?.p || providers.find((p) => p.kind === 'stt').id),
-                    model: String(a.stt?.model || 'flux-general-en'),
+                    model: normalizeVoiceAgentSttModel(a.stt?.model, String(a.language || 'en')),
                     keyterms: String(a.stt?.keyterms ?? ''),
                     eot: num(a.stt?.eot, 0.55),
                     eager: num(a.stt?.eager, 0.35),

@@ -1,4 +1,5 @@
 import { Agent, Campaign, ConsoleState, Provider, ValidationItem } from './types';
+import { normalizeVoiceAgentSttModel, VOICE_AGENT_STT_MODELS } from './defaults';
 
 export function isPlainObject(val: unknown): val is Record<string, any> {
   return typeof val === 'object' && val !== null && !Array.isArray(val);
@@ -132,42 +133,38 @@ export function buildDeepgramSettings(
 
   const linkedCampaign = explicitCampaign || state.campaigns.find((c) => c.agentId === agent.id);
 
-  // 1. Listen (STT)
+  // 1. Listen (STT) — Voice Agent currently accepts Flux v2 models only.
+  const sttModel = normalizeVoiceAgentSttModel(agent.stt.model, agent.language);
   const listenProvider: Record<string, any> = {
-    type: sp.type || 'deepgram',
-    model: agent.stt.model,
+    type: 'deepgram',
+    version: 'v2',
+    model: sttModel,
+    eot_threshold: Number(agent.stt.eot),
+    eager_eot_threshold: Number(agent.stt.eager),
+    eot_timeout_ms: Math.round(Number(agent.stt.eotms)),
   };
-
-  if (listenProvider.type === 'deepgram') {
-    const isFluxStt = agent.stt.model.startsWith('flux');
-    if (isFluxStt) {
-      listenProvider.version = 'v2';
-      listenProvider.eot_threshold = Number(agent.stt.eot);
-      listenProvider.eager_eot_threshold = Number(agent.stt.eager);
-      listenProvider.eot_timeout_ms = Math.round(Number(agent.stt.eotms));
-      if (agent.stt.model === 'flux-general-multi' && agent.language) {
-        listenProvider.language_hints = agent.language
-          .split(',')
-          .map((s) => s.trim())
-          .filter(Boolean);
-      }
-    } else {
-      listenProvider.version = 'v1';
-      if (agent.language) listenProvider.language = agent.language;
-      if (agent.stt.smartFormat) listenProvider.smart_format = true;
-    }
-
-    const keyterms = (agent.stt.keyterms || '')
+  if (sttModel === 'flux-general-multi' && agent.language) {
+    listenProvider.language_hints = agent.language
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
-    if (keyterms.length > 0) {
-      listenProvider.keyterms = keyterms;
-    }
   }
+  const keyterms = (agent.stt.keyterms || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (keyterms.length > 0) listenProvider.keyterms = keyterms;
 
   const spExtra = parseJsonObject(sp.extra || '{}');
   if (spExtra.ok) Object.assign(listenProvider, spExtra.value);
+  // Custom provider extras may configure additional Flux options, but never override
+  // the Voice Agent's supported provider/model/version or Nova-only parameters.
+  listenProvider.type = 'deepgram';
+  listenProvider.version = 'v2';
+  listenProvider.model = sttModel;
+  delete listenProvider.language;
+  delete listenProvider.smart_format;
+  if (sttModel !== 'flux-general-multi') delete listenProvider.language_hints;
 
   // 2. Think (LLM)
   const isGoogleByo = lp.type === 'google' && Boolean(lp.endpoint?.trim());
@@ -340,6 +337,10 @@ export function validateAgent(state: ConsoleState, agent: Agent): ValidationItem
 
   // STT validations
   push(sp.type === 'deepgram', 'STT provider type is "deepgram" (only Deepgram is supported by Voice Agent API)');
+  push(
+    VOICE_AGENT_STT_MODELS.includes(agent.stt.model as (typeof VOICE_AGENT_STT_MODELS)[number]),
+    `STT model "${agent.stt.model}" is supported by Voice Agent (Flux v2 only)`
+  );
   push(agent.greeting.trim().length > 10, 'Greeting is set (> 10 chars)');
   const maxPromptOk = lp.endpoint.trim()
     ? agent.prompt.trim().length > 0

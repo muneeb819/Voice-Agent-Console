@@ -119,7 +119,29 @@ async function run() {
     assert.ok(checks.some((c) => c.level === 'er' && c.message.includes('JSON')));
   });
 
-  await check('8. Bug Fix Regression: Managed Google Gemini passes & BYO Google omits model', () => {
+  await check('8. Voice Agent STT: migrate legacy Nova models and lock Settings payload to Flux v2', () => {
+    const legacy: any = createDefaultState();
+    legacy.agents[0].language = 'en,es';
+    legacy.agents[0].stt.model = 'nova-3';
+    legacy.providers.find((p: any) => p.kind === 'stt').models = 'nova-3,nova-2';
+    legacy.providers.find((p: any) => p.kind === 'stt').extra = '{"model":"nova-3","version":"v1","smart_format":true}';
+
+    const migrated = normalizeState(legacy);
+    assert.strictEqual(migrated.agents[0].stt.model, 'flux-general-multi');
+    assert.strictEqual(migrated.providers.find((p) => p.kind === 'stt')?.models, 'flux-general-en,flux-general-multi');
+
+    // Defense in depth: even an unnormalized/hand-edited state and extras cannot emit Nova.
+    legacy.agents[0].stt.model = 'nova-3';
+    const settings = buildDeepgramSettings(legacy, legacy.agents[0]);
+    const listen = settings.agent.listen.provider;
+    assert.strictEqual(listen.type, 'deepgram');
+    assert.strictEqual(listen.version, 'v2');
+    assert.strictEqual(listen.model, 'flux-general-multi');
+    assert.strictEqual('smart_format' in listen, false);
+    assert.ok(validateAgent(legacy, legacy.agents[0]).some((item) => item.level === 'er' && item.message.includes('Flux v2 only')));
+  });
+
+  await check('9. Bug Fix Regression: Managed Google Gemini passes & BYO Google omits model', () => {
     const st = createDefaultState();
     const gemini = st.providers.find((p) => p.type === 'google')!;
     st.agents[0].llm.p = gemini.id;
@@ -137,7 +159,7 @@ async function run() {
     assert.strictEqual('model' in builtByo.agent.think.provider, false, 'BYO Google must omit provider.model');
   });
 
-  await check('9. Bug Fix Regression: Flux TTS speed 0.05 step, integer expressivity & Aura speed range', () => {
+  await check('10. Bug Fix Regression: Flux TTS speed 0.05 step, integer expressivity & Aura speed range', () => {
     const st = createDefaultState();
     st.agents[0].tts.model = 'flux-haley-en';
     st.agents[0].tts.speed = 1.03; // Invalid (not 0.05 increment)
@@ -151,7 +173,7 @@ async function run() {
     assert.ok(validateAgent(st, st.agents[0]).some((c) => c.level === 'er' && c.message.includes('0.7–1.5')));
   });
 
-  await check('10. Bug Fix Regression: Campaign disclosure + dispo enum + multi-campaign Vici config + legacy vac-v2 migration', () => {
+  await check('11. Bug Fix Regression: Campaign disclosure + dispo enum + multi-campaign Vici config + legacy vac-v2 migration', () => {
     const st = createDefaultState();
     const settings = buildDeepgramSettings(st, st.agents[0]);
     assert.ok(
@@ -189,7 +211,7 @@ async function run() {
     assert.ok(!migrated.functions.some((f) => f.name === 'accept_vicidial_call'));
   });
 
-  await check('11. SQLite + JSON persistence & duplicate-named agent export preservation', async () => {
+  await check('12. SQLite + JSON persistence & duplicate-named agent export preservation', async () => {
     const get1: any = await (await fetch(`${BASE}/api/state`)).json();
     const state = get1.state;
 

@@ -592,6 +592,22 @@
     } catch {}
   })();
 
+  const VOICE_AGENT_STT_MODELS = ['flux-general-en', 'flux-general-multi'];
+  const defaultVoiceAgentSttModel = (language) => {
+    const languages = String(language || 'en')
+      .toLowerCase()
+      .split(/[\s,]+/)
+      .map((entry) => entry.split(/[-_]/)[0])
+      .filter(Boolean);
+    return languages.some((entry) => entry !== 'en') || languages.length > 1
+      ? 'flux-general-multi'
+      : 'flux-general-en';
+  };
+  const normalizeVoiceAgentSttModel = (model, language) =>
+    VOICE_AGENT_STT_MODELS.includes(String(model || '').trim())
+      ? String(model).trim()
+      : defaultVoiceAgentSttModel(language);
+
   function defaultSelfIntroForClient(id, name) {
     if (id === 'a_nova' || /nova|concierge|general/i.test(name || '')) {
       return "Hi there! I'm Nova, a live Customer Support & Concierge Specialist here on the line. I'm happy to chat naturally and help answer any general knowledge, everyday, or support question you have!";
@@ -613,6 +629,35 @@
     const firstLlm = state.providers?.find((p) => p.kind === 'llm' && p.type === 'open_ai')?.id || state.providers?.find((p) => p.kind === 'llm')?.id || 'l1';
     const firstTts = state.providers?.find((p) => p.kind === 'tts' && p.type === 'deepgram')?.id || state.providers?.find((p) => p.kind === 'tts')?.id || 't1';
     const endFn = state.functions?.find((f) => f.name === 'end_call')?.id;
+
+    // Migrate legacy Nova STT selections: Voice Agent Settings currently accepts Flux v2 only.
+    const sttProviders = (state.providers || []).filter((p) => p.kind === 'stt');
+    for (const provider of sttProviders) {
+      if (provider.type !== 'deepgram') {
+        provider.type = 'deepgram';
+        mutated = true;
+      }
+      const allowed = VOICE_AGENT_STT_MODELS.join(',');
+      if (provider.models !== allowed) {
+        provider.models = allowed;
+        mutated = true;
+      }
+    }
+    for (const agent of state.agents) {
+      if (!agent.stt || typeof agent.stt !== 'object') {
+        agent.stt = { p: firstStt, model: 'flux-general-en', keyterms: '', eot: 0.55, eager: 0.35, eotms: 2000, smartFormat: false };
+        mutated = true;
+      }
+      if (!sttProviders.some((provider) => provider.id === agent.stt.p) && sttProviders.length) {
+        agent.stt.p = sttProviders[0].id;
+        mutated = true;
+      }
+      const supportedModel = normalizeVoiceAgentSttModel(agent.stt.model, agent.language);
+      if (agent.stt.model !== supportedModel) {
+        agent.stt.model = supportedModel;
+        mutated = true;
+      }
+    }
 
     // Ensure built-in Nova Live Concierge exists for existing localStorage users (one-time seed)
     if (!state._novaSeededV26 && !state.agents.some((a) => a.id === 'a_nova')) {
@@ -998,26 +1043,28 @@
     const tp = prov(agent.tts.p) || {};
     const linkedCampaign = S.campaigns.find((c) => c.agentId === agent.id);
 
-    const listenProvider = { type: sp.type || 'deepgram', model: agent.stt.model };
-    if (listenProvider.type === 'deepgram') {
-      if (agent.stt.model.startsWith('flux')) {
-        listenProvider.version = 'v2';
-        listenProvider.eot_threshold = Number(agent.stt.eot);
-        listenProvider.eager_eot_threshold = Number(agent.stt.eager);
-        listenProvider.eot_timeout_ms = Math.round(Number(agent.stt.eotms));
-        if (agent.stt.model === 'flux-general-multi' && agent.language) {
-          listenProvider.language_hints = agent.language.split(',').map((s) => s.trim()).filter(Boolean);
-        }
-      } else {
-        listenProvider.version = 'v1';
-        if (agent.language) listenProvider.language = agent.language;
-        if (agent.stt.smartFormat) listenProvider.smart_format = true;
-      }
-      const kt = (agent.stt.keyterms || '').split(',').map((s) => s.trim()).filter(Boolean);
-      if (kt.length) listenProvider.keyterms = kt;
+    const sttModel = normalizeVoiceAgentSttModel(agent.stt.model, agent.language);
+    const listenProvider = {
+      type: 'deepgram',
+      version: 'v2',
+      model: sttModel,
+      eot_threshold: Number(agent.stt.eot),
+      eager_eot_threshold: Number(agent.stt.eager),
+      eot_timeout_ms: Math.round(Number(agent.stt.eotms)),
+    };
+    if (sttModel === 'flux-general-multi' && agent.language) {
+      listenProvider.language_hints = agent.language.split(',').map((s) => s.trim()).filter(Boolean);
     }
+    const kt = (agent.stt.keyterms || '').split(',').map((s) => s.trim()).filter(Boolean);
+    if (kt.length) listenProvider.keyterms = kt;
     const spEx = parseJsonObject(sp.extra);
     if (spEx.ok) Object.assign(listenProvider, spEx.value);
+    listenProvider.type = 'deepgram';
+    listenProvider.version = 'v2';
+    listenProvider.model = sttModel;
+    delete listenProvider.language;
+    delete listenProvider.smart_format;
+    if (sttModel !== 'flux-general-multi') delete listenProvider.language_hints;
 
     const isGoogleByo = lp.type === 'google' && Boolean((lp.endpoint || '').trim());
     const thinkProvider = { type: lp.type || 'open_ai' };
@@ -1111,6 +1158,10 @@
     if (!sp || !lp || !tp) return items;
 
     push(sp.type === 'deepgram', 'STT provider type is "deepgram" (required by Deepgram Voice Agent API)');
+    push(
+      VOICE_AGENT_STT_MODELS.includes(agent.stt.model),
+      `STT model "${agent.stt.model}" is supported by Voice Agent (Flux v2 only)`
+    );
     push((agent.greeting || '').trim().length > 10, 'Greeting is set (> 10 chars)');
     const promptOk = (lp.endpoint || '').trim()
       ? (agent.prompt || '').trim().length > 0
@@ -1321,6 +1372,7 @@
     if (p.kind === 'llm') {
       return dgLlmModelIdsForType(p.type);
     }
+    if (p.kind === 'stt') return VOICE_AGENT_STT_MODELS;
     return (p.models || '')
       .split(',')
       .map((s) => s.trim())
@@ -1380,7 +1432,11 @@
             : F('Provider type', `p.${idx}.type`, 'sel', ['deepgram', 'eleven_labs', 'cartesia', 'open_ai', 'aws_polly'])
         }
       </div>
-      ${F('Models (comma-separated)', `p.${idx}.models`)}
+      ${
+        isStt
+          ? '<div class="note">Voice Agent STT models are restricted to <code>flux-general-en</code> and <code>flux-general-multi</code> (Flux v2). Legacy Nova selections are automatically migrated.</div>'
+          : F('Models (comma-separated)', `p.${idx}.models`)
+      }
       ${p.kind === 'tts' ? F('Model field key sent to API', `p.${idx}.mk`, 'sel', ['model', 'model_id']) : ''}
       ${F('Custom / BYO Endpoint URL (leave blank for Deepgram-managed)', `p.${idx}.endpoint`)}
       ${F('Headers JSON object (use {{ENV_VAR}} placeholders — keep real keys in server .env)', `p.${idx}.headers`)}
@@ -3101,7 +3157,6 @@
     const a = A();
 
     if (tab === 'agents') {
-      const isFluxStt = a.stt.model.startsWith('flux');
       const tp = prov(a.tts.p) || {};
       const isFluxTts = tp.type === 'deepgram' && a.tts.model.startsWith('flux');
 
@@ -3174,21 +3229,18 @@
           <h2>Speech-to-Text (Listen)</h2>
           <div class="row">
             ${F('STT Plug-in', 'a.stt.p', 'sel', providersByKind('stt'))}
-            ${F('STT Model', 'a.stt.model', 'dl', modelsForProvider(a.stt.p))}
+            ${F('STT Model', 'a.stt.model', 'sel', modelsForProvider(a.stt.p))}
           </div>
+          <div class="note">Deepgram Voice Agent currently accepts only <code>flux-general-en</code> and <code>flux-general-multi</code>. Older Nova selections are automatically migrated before connecting.</div>
           <div class="row">
             ${F('Language / BCP-47 hints', 'a.language')}
             ${F('Keyterms (comma-separated phrases)', 'a.stt.keyterms')}
           </div>
-          ${
-            isFluxStt
-              ? `<div class="row r3">
-                  ${F('eot_threshold (0.5–1.0)', 'a.stt.eot', 'number', [], 'min="0.5" max="1.0" step="0.05"')}
-                  ${F('eager_eot (0.3–0.9)', 'a.stt.eager', 'number', [], 'min="0.3" max="0.9" step="0.05"')}
-                  ${F('eot_timeout_ms', 'a.stt.eotms', 'number', [], 'min="500" max="15000" step="100"')}
-                </div>`
-              : F('Enable smart_format (Nova v1 models only)', 'a.stt.smartFormat', 'chk')
-          }
+          <div class="row r3">
+            ${F('eot_threshold (0.5–1.0)', 'a.stt.eot', 'number', [], 'min="0.5" max="1.0" step="0.05"')}
+            ${F('eager_eot (0.3–0.9)', 'a.stt.eager', 'number', [], 'min="0.3" max="0.9" step="0.05"')}
+            ${F('eot_timeout_ms', 'a.stt.eotms', 'number', [], 'min="500" max="15000" step="100"')}
+          </div>
 
           <h2>Language Model (Think — Deepgram Managed Only) <button class="g" id="sync-llm" style="font-size:11px;padding:3px 8px;text-transform:none">↻ Sync Deepgram Models (${deepgramManagedLlms.length})</button></h2>
           ${llmSyncNotice ? `<div class="note ok" style="margin:2px 0 8px">${esc(llmSyncNotice)}</div>` : ''}
@@ -5371,7 +5423,11 @@
         const slot = slotMatch[1];
         const list = modelsForProvider(t.value);
         A()[slot].model =
-          slot === 'llm' && list.includes('gpt-5-mini') ? 'gpt-5-mini' : list[0] || '';
+          slot === 'stt'
+            ? defaultVoiceAgentSttModel(A().language)
+            : slot === 'llm' && list.includes('gpt-5-mini')
+            ? 'gpt-5-mini'
+            : list[0] || '';
       }
       const provTypeMatch = /^p\.(\d+)\.type$/.exec(t.dataset.p);
       if (provTypeMatch) {

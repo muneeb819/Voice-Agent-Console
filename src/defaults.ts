@@ -1,5 +1,26 @@
 import { AgentBehavior, AgentFunction, ConsoleState, Provider } from './types';
 
+export const VOICE_AGENT_STT_MODELS = ['flux-general-en', 'flux-general-multi'] as const;
+export type VoiceAgentSttModel = (typeof VOICE_AGENT_STT_MODELS)[number];
+
+export function defaultVoiceAgentSttModel(language?: string): VoiceAgentSttModel {
+  const languages = String(language || 'en')
+    .toLowerCase()
+    .split(/[\s,]+/)
+    .map((entry) => entry.split(/[-_]/)[0])
+    .filter(Boolean);
+  return languages.some((entry) => entry !== 'en') || languages.length > 1
+    ? 'flux-general-multi'
+    : 'flux-general-en';
+}
+
+export function normalizeVoiceAgentSttModel(model: unknown, language?: string): VoiceAgentSttModel {
+  const value = String(model || '').trim();
+  return VOICE_AGENT_STT_MODELS.includes(value as VoiceAgentSttModel)
+    ? (value as VoiceAgentSttModel)
+    : defaultVoiceAgentSttModel(language);
+}
+
 export function defaultSelfIntroForAgent(id: string, name: string): string {
   if (id === 'a_nova' || /nova|concierge|general/i.test(name)) {
     return "Hi there! I'm Nova, a live Customer Support & Concierge Specialist here on the line. I'm happy to chat naturally and help answer any general knowledge, everyday, or support question you have!";
@@ -103,7 +124,7 @@ export function createDefaultState(): ConsoleState {
     version: 3,
     updatedAt: new Date().toISOString(),
     providers: [
-      makeProvider('s1', 'stt', 'Deepgram STT', 'deepgram', 'flux-general-en,flux-general-multi,nova-3,nova-2'),
+      makeProvider('s1', 'stt', 'Deepgram STT', 'deepgram', VOICE_AGENT_STT_MODELS.join(',')),
       makeProvider(
         'l1',
         'llm',
@@ -639,7 +660,7 @@ export function normalizeState(raw: any): ConsoleState {
           kind,
           name: String(p.name || `Provider ${idx + 1}`),
           type: kind === 'stt' ? 'deepgram' : String(p.type || 'deepgram'),
-          models: String(p.models || ''),
+          models: kind === 'stt' ? VOICE_AGENT_STT_MODELS.join(',') : String(p.models || ''),
           endpoint: String(p.endpoint || ''),
           headers: typeof p.headers === 'string' ? p.headers : JSON.stringify(p.headers || {}),
           extra: typeof p.extra === 'string' ? p.extra : JSON.stringify(p.extra || {}),
@@ -725,7 +746,7 @@ export function normalizeState(raw: any): ConsoleState {
           behavior,
           stt: {
             p: String(a.stt?.p || providers.find((p) => p.kind === 'stt')!.id),
-            model: String(a.stt?.model || 'flux-general-en'),
+            model: normalizeVoiceAgentSttModel(a.stt?.model, String(a.language || 'en')),
             keyterms: String(a.stt?.keyterms ?? ''),
             eot: num(a.stt?.eot, 0.55),
             eager: num(a.stt?.eager, 0.35),
