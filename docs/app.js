@@ -368,15 +368,25 @@
 
   // ==================== SIDE COLLAPSIBLE CONTROL PANEL ====================
   const SIDEBAR_STORAGE_KEY = 'vac_sidebar_collapsed_v1';
+  const NAV_ICONS = {
+    agents: '<svg viewBox="0 0 24 24" focusable="false"><path d="M16 20v-1.5a3.5 3.5 0 0 0-3.5-3.5h-7A3.5 3.5 0 0 0 2 18.5V20"/><circle cx="9" cy="7.5" r="3.5"/><path d="M16 4.4a3.5 3.5 0 0 1 0 6.8M17 15h1.5a3.5 3.5 0 0 1 3.5 3.5V20"/></svg>',
+    plugins: '<svg viewBox="0 0 24 24" focusable="false"><path d="M8 3.5a2.5 2.5 0 1 1 5 0V6h3.5A1.5 1.5 0 0 1 18 7.5V11h2.5a2.5 2.5 0 1 1 0 5H18v3.5a1.5 1.5 0 0 1-1.5 1.5H13v-2.5a2.5 2.5 0 1 0-5 0V21H4.5A1.5 1.5 0 0 1 3 19.5V16h2.5a2.5 2.5 0 1 0 0-5H3V7.5A1.5 1.5 0 0 1 4.5 6H8z"/></svg>',
+    campaigns: '<svg viewBox="0 0 24 24" focusable="false"><path d="M3 11v2a2 2 0 0 0 2 2h2l8 4V5l-8 4H5a2 2 0 0 0-2 2z"/><path d="M7 15l1.5 5h3L10 16M18 9.5a4 4 0 0 1 0 5M20 7a7.5 7.5 0 0 1 0 10"/></svg>',
+    voice: '<svg viewBox="0 0 24 24" focusable="false"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5.5 10.5v1a6.5 6.5 0 0 0 13 0v-1M12 18v3.5M8.5 21.5h7M3 8v5M21 8v5"/></svg>',
+    test: '<svg viewBox="0 0 24 24" focusable="false"><path d="M20.5 11.5a8.5 8.5 0 0 1-12.7 7.4L3 20l1.1-4.4A8.5 8.5 0 1 1 20.5 11.5z"/><path d="m10 8.5 5 3-5 3z"/></svg>',
+    vici: '<svg viewBox="0 0 24 24" focusable="false"><path d="M4 13v-1a8 8 0 0 1 16 0v1M4 13H3a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h3v-7H4zM20 13h1a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-3v-7h2z"/><path d="M17 19a5 5 0 0 1-5 3h-2"/></svg>',
+    wallboard: '<svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M7 16v-4M12 16V8M17 16v-6M6 18h12"/><path d="m6.5 9 4-2 3 2 4-3"/></svg>',
+    export: '<svg viewBox="0 0 24 24" focusable="false"><path d="M12 3v11M8 10l4 4 4-4"/><path d="M4 16.5v3A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5v-3"/><path d="M7 7V4.5A1.5 1.5 0 0 1 8.5 3H15l5 5v1"/></svg>',
+  };
   const NAV_ITEMS = [
-    { key: 'agents', ico: '🤖', label: 'Agents', sub: 'Personas, Speed & Barge-In', group: 'Studio Builder' },
-    { key: 'plugins', ico: '🧩', label: 'Plug-ins', sub: 'STT, Deepgram LLMs & TTS', group: 'Studio Builder' },
-    { key: 'campaigns', ico: '📢', label: 'Campaigns', sub: 'Dialer Rules & Transfers', group: 'Studio Builder' },
-    { key: 'voice', ico: '🎧', label: 'Voice Lab', sub: '139 Flux v2 & Aura Voices', group: 'Studio Builder' },
-    { key: 'test', ico: '📞', label: 'Live Bot', sub: 'Talk, Gestures & Simulator', group: 'Live & Operations' },
-    { key: 'vici', ico: '☎️', label: 'Vici Bridge', sub: 'SIP :5062 & AudioSocket', group: 'Live & Operations' },
-    { key: 'wallboard', ico: '📊', label: 'Wallboard', sub: 'KPIs & Stereo Recordings', group: 'Live & Operations' },
-    { key: 'export', ico: '💾', label: 'Export', sub: 'Settings JSON & Backup', group: 'Live & Operations' },
+    { key: 'agents', icon: 'agents', label: 'Agents', sub: 'Personas, Speed & Barge-In', group: 'Studio Builder' },
+    { key: 'plugins', icon: 'plugins', label: 'Plug-ins', sub: 'STT, Deepgram LLMs & TTS', group: 'Studio Builder' },
+    { key: 'campaigns', icon: 'campaigns', label: 'Campaigns', sub: 'Dialer Rules & Transfers', group: 'Studio Builder' },
+    { key: 'voice', icon: 'voice', label: 'Voice Lab', sub: '139 Flux v2 & Aura Voices', group: 'Studio Builder' },
+    { key: 'test', icon: 'test', label: 'Live Bot', sub: 'Talk, Gestures & Simulator', group: 'Live & Operations' },
+    { key: 'vici', icon: 'vici', label: 'Vici Bridge', sub: 'SIP :5062 & AudioSocket', group: 'Live & Operations' },
+    { key: 'wallboard', icon: 'wallboard', label: 'Wallboard', sub: 'KPIs & Stereo Recordings', group: 'Live & Operations' },
+    { key: 'export', icon: 'export', label: 'Export', sub: 'Settings JSON & Backup', group: 'Live & Operations' },
   ];
 
   let sidebarCollapsed = (() => {
@@ -461,8 +471,8 @@
       const isOn = tab === item.key;
       const showDot = item.key === 'test' && isLiveCall;
       html.push(`
-        <button type="button" data-t="${item.key}" class="nav-item ${isOn ? 'on' : ''}" data-tip-title="${esc(item.ico + ' ' + item.label)}" data-tip-sub="${esc(item.sub)}" aria-current="${isOn ? 'page' : 'false'}">
-          <span class="nav-ico" aria-hidden="true">${item.ico}</span>
+        <button type="button" data-t="${item.key}" class="nav-item ${isOn ? 'on' : ''}" data-tip-title="${esc(item.label)}" data-tip-sub="${esc(item.sub)}" aria-current="${isOn ? 'page' : 'false'}">
+          <span class="nav-ico" aria-hidden="true">${NAV_ICONS[item.icon] || NAV_ICONS.agents}</span>
           <span class="nav-txt">
             <span class="nav-lbl">${esc(item.label)}</span>
             <span class="nav-sub">${esc(item.sub)}</span>
@@ -476,7 +486,7 @@
     const activeItem = NAV_ITEMS.find((i) => i.key === tab) || NAV_ITEMS[0];
     const crumbEl = document.getElementById('active-nav-crumb');
     if (crumbEl && activeItem) {
-      crumbEl.textContent = `${activeItem.ico} ${activeItem.label}`;
+      crumbEl.textContent = activeItem.label;
     }
   }
 
