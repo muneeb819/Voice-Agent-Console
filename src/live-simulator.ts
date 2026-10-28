@@ -141,6 +141,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
     let transferredTo: string | null = null;
     let awaitingHangupAudioDone = false;
     let fatalErrorMessage: string | null = null;
+    let suppressStaleAgentAudio = false;
 
     const cancelledFnIds = new Set<string>();
     const pendingPreSettingsAudio: Buffer[] = [];
@@ -546,6 +547,34 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           let reply =
             "That's great to hear! Just to confirm before I bring on our licensed specialist, are you between 50 and 85 and looking for coverage options today?";
 
+          if (/(introduce yourself|who are you|what is your name|what's your name|what can you do)/i.test(lower)) {
+            reply =
+              activeAgent?.behavior?.selfIntro ||
+              `Hi there! I'm ${activeAgent?.name || 'Nova'}, your expressive, ultra-fast AI voice assistant. I can chat naturally with instant barge-in and answer any general or specialist questions you have!`;
+            sendClientJson({ type: 'agent_state', state: 'speaking' });
+            recordTranscript('assistant', reply);
+            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 360, 523.25));
+            setTimeout(() => {
+              if (!closed) sendClientJson({ type: 'agent_state', state: 'listening' });
+            }, 260);
+            return;
+          }
+
+          if (/(capital of|speed of light|sky blue|times|plus|weather|joke|how far|moon)/i.test(lower)) {
+            reply = /capital of japan/i.test(lower)
+              ? 'Oh, great question! The capital of Japan is Tokyo — a vibrant metropolis of nearly 14 million people.'
+              : /sky blue/i.test(lower)
+              ? 'Oh, I love that question! Sunlight scatters off tiny nitrogen and oxygen molecules in our atmosphere, and blue wavelengths scatter the most — painting the sky bright blue!'
+              : "Great question! In live Deepgram mode I answer any general knowledge, science, or math question in under half a second — add your DEEPGRAM_API_KEY in API Keys to hear full live neural answers!";
+            sendClientJson({ type: 'agent_state', state: 'speaking' });
+            recordTranscript('assistant', reply);
+            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 340, 493.88));
+            setTimeout(() => {
+              if (!closed) sendClientJson({ type: 'agent_state', state: 'listening' });
+            }, 260);
+            return;
+          }
+
           if (/(take me off|do not call|dnc|stop calling|not interested)/i.test(lower)) {
             if (enabledFnNames.includes('set_disposition')) {
               const code = /not interested/i.test(lower) ? 'NI' : 'DNC';
@@ -741,9 +770,38 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         return;
       }
 
+      if (msg.type === 'client_barge_in') {
+        if (activeAgent?.behavior?.bargeIn !== 'off') {
+          suppressStaleAgentAudio = true;
+          sendClientJson({ type: 'barge_in', source: 'client_vad' });
+          sendClientJson({ type: 'agent_state', state: 'user_speaking' });
+        }
+        return;
+      }
+
+      if (msg.type === 'inject_agent_message') {
+        const content = String(msg.content || '').trim();
+        if (!content) return;
+        suppressStaleAgentAudio = false;
+        if (upstreamMode === 'sandbox') {
+          sendClientJson({ type: 'agent_state', state: 'speaking' });
+          recordTranscript('assistant', content);
+          sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 320, 523.25));
+          setTimeout(() => {
+            if (!closed) sendClientJson({ type: 'agent_state', state: 'listening' });
+          }, 260);
+          return;
+        }
+        if (dgWs && dgWs.readyState === WebSocket.OPEN && settingsApplied) {
+          dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', content }));
+        }
+        return;
+      }
+
       if (msg.type === 'inject_user_message') {
         const content = String(msg.content || '').trim();
         if (!content) return;
+        suppressStaleAgentAudio = false;
 
         if (upstreamMode === 'sandbox') {
           handleSandboxUtterance(content);
@@ -889,6 +947,9 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           if (closed) return;
 
           if (dgBinary) {
+            if (suppressStaleAgentAudio) {
+              return;
+            }
             const audioBuf = Buffer.isBuffer(dgRaw) ? dgRaw : Buffer.from(dgRaw as ArrayBuffer);
             sendClientAudio(audioBuf);
             return;
@@ -957,8 +1018,11 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             }
 
             case 'UserStartedSpeaking': {
-              sendClientJson({ type: 'barge_in' });
-              sendClientJson({ type: 'agent_state', state: 'user_speaking' });
+              if (activeAgent?.behavior?.bargeIn !== 'off') {
+                suppressStaleAgentAudio = true;
+                sendClientJson({ type: 'barge_in', source: 'deepgram_server' });
+                sendClientJson({ type: 'agent_state', state: 'user_speaking' });
+              }
               break;
             }
 
@@ -968,6 +1032,9 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
                 turns += 1;
                 lastUserTurnTs = Date.now();
                 awaitingFirstAudioForTurn = true;
+                suppressStaleAgentAudio = false;
+              } else {
+                suppressStaleAgentAudio = false;
               }
               recordTranscript(role, String(evt.content || ''), {
                 languages: evt.languages,
@@ -977,11 +1044,13 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
 
             case 'AgentThinking': {
               lastThinkingTs = Date.now();
+              suppressStaleAgentAudio = false;
               sendClientJson({ type: 'agent_state', state: 'thinking' });
               break;
             }
 
             case 'AgentStartedSpeaking': {
+              suppressStaleAgentAudio = false;
               sendClientJson({ type: 'agent_state', state: 'speaking' });
               break;
             }

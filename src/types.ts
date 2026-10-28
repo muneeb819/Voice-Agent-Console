@@ -23,6 +23,16 @@ export interface AgentFunction {
   headers: string; // JSON object string
 }
 
+export interface AgentBehavior {
+  bargeIn: 'instant' | 'server' | 'off';
+  bargeInSensitivity: 'high' | 'balanced' | 'low';
+  latencyProfile: 'ultra' | 'balanced' | 'quality';
+  expressionStyle: 'warm_empathetic' | 'energetic_upbeat' | 'charismatic_closer' | 'calm_concierge';
+  vocalGestures: boolean;
+  allowGeneralQa: boolean;
+  selfIntro: string;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -32,6 +42,7 @@ export interface Agent {
   prompt: string;
   acceptViciCalls: boolean; // Bridge lifecycle flag (hydrates lead before Deepgram session)
   injectCampaignDisclosure: boolean; // Prepends campaign disclosure to greeting when linked
+  behavior: AgentBehavior;
   stt: {
     p: string;
     model: string;

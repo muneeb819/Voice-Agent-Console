@@ -1059,10 +1059,14 @@ class VicidialBridgeService {
                     }
                 }, 6000);
             });
+            let suppressStaleBotAudio = false;
             dgWs.on('message', async (raw, isBinary) => {
                 if (closed)
                     return;
                 if (isBinary) {
+                    if (suppressStaleBotAudio) {
+                        return;
+                    }
                     const pcm8k = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
                     if (awaitingFirstAudioForTurn && lastUserTurnTs !== null) {
                         ttfbSamples.push(Math.max(1, Date.now() - lastUserTurnTs));
@@ -1107,10 +1111,13 @@ class VicidialBridgeService {
                         break;
                     }
                     case 'UserStartedSpeaking': {
-                        // Instant <20ms barge-in flush on Asterisk AudioSocket / RTP queue!
-                        recorder.onBargeIn();
-                        opts.hooks.bargeInFlush();
-                        updateState('caller_speaking');
+                        if (agent.behavior?.bargeIn !== 'off') {
+                            // Instant <20ms barge-in flush on Asterisk AudioSocket / RTP queue + gate trailing TTS chunks!
+                            suppressStaleBotAudio = true;
+                            recorder.onBargeIn();
+                            opts.hooks.bargeInFlush();
+                            updateState('caller_speaking');
+                        }
                         break;
                     }
                     case 'ConversationText': {
@@ -1120,14 +1127,17 @@ class VicidialBridgeService {
                             lastUserTurnTs = Date.now();
                             awaitingFirstAudioForTurn = true;
                         }
+                        suppressStaleBotAudio = false;
                         addTranscript(role, String(evt.content || ''));
                         break;
                     }
                     case 'AgentThinking': {
+                        suppressStaleBotAudio = false;
                         updateState('thinking');
                         break;
                     }
                     case 'AgentStartedSpeaking': {
+                        suppressStaleBotAudio = false;
                         updateState('bot_speaking');
                         break;
                     }

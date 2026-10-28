@@ -1,9 +1,22 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = void 0;
+exports.defaultSelfIntroForAgent = defaultSelfIntroForAgent;
 exports.deepgramModelsForProviderType = deepgramModelsForProviderType;
 exports.createDefaultState = createDefaultState;
 exports.normalizeState = normalizeState;
+function defaultSelfIntroForAgent(id, name) {
+    if (id === 'a_nova' || /nova|concierge|general/i.test(name)) {
+        return "Hi there! I'm Nova, an expressive, ultra-fast AI voice assistant powered by Deepgram. I can introduce myself, chat naturally with live barge-in, and help answer any general knowledge, tech, math, or everyday question you have!";
+    }
+    if (id === 'a_medicare' || /medicare/i.test(name)) {
+        return "Hi! I'm Haley, a friendly virtual Benefits Advisor with the Benefits Department. I help Medicare beneficiaries check their Food and OTC allowance eligibility, and I'm also happy to answer any general questions you have along the way!";
+    }
+    if (id === 'a1' || /final expense|sarah/i.test(name)) {
+        return "Hi! I'm Sarah, a warm virtual coverage specialist. I help folks explore final expense options and connect with licensed specialists, and I'm always happy to answer general questions too!";
+    }
+    return `Hi! I'm ${name || 'your AI Voice Assistant'}, a fast, expressive conversational voice assistant ready to introduce myself, chat naturally, and help with both general questions and call assistance!`;
+}
 const makeProvider = (id, kind, name, type, models, overrides = {}) => ({
     id,
     kind,
@@ -128,33 +141,43 @@ function createDefaultState() {
                     'Goal: confirm the lead is between ages 50 and 85, currently lacks sufficient final expense coverage, and wants a quick quote from a licensed specialist.\n' +
                     'Rules:\n' +
                     '- Keep every response under 2 short conversational sentences.\n' +
-                    '- Never quote dollar prices or guarantee eligibility.\n' +
+                    '- If the caller asks who you are, asks you to introduce yourself, or asks any general question, answer warmly and directly first before gently guiding back when appropriate.\n' +
+                    '- Never quote specific policy dollar prices or guarantee underwriting approval.\n' +
                     '- Note: Call connection and VICIdial lead context ({{lead_id}}, {{first_name}}, {{state}}) are automatically hydrated by the bridge when the call connects.\n' +
                     '- Once the lead confirms qualification and interest, call set_disposition with code "XFER" and call transfer_to_live_agent.\n' +
                     '- If the lead says stop, take me off your list, not interested, or do not call, apologise politely, call set_disposition with "DNC" (or "NI"), and call end_call immediately.',
                 acceptViciCalls: true,
                 injectCampaignDisclosure: true,
+                behavior: {
+                    bargeIn: 'instant',
+                    bargeInSensitivity: 'balanced',
+                    latencyProfile: 'ultra',
+                    expressionStyle: 'warm_empathetic',
+                    vocalGestures: true,
+                    allowGeneralQa: true,
+                    selfIntro: defaultSelfIntroForAgent('a1', 'Final Expense Fronter'),
+                },
                 stt: {
                     p: 's1',
                     model: 'flux-general-en',
                     keyterms: 'final expense, burial insurance, Medicare, beneficiary',
-                    eot: 0.7,
-                    eager: 0.5,
-                    eotms: 5000,
+                    eot: 0.55,
+                    eager: 0.35,
+                    eotms: 2000,
                     smartFormat: false,
                 },
                 llm: {
                     p: 'l1',
                     model: 'gpt-4o-mini',
-                    temp: 0.7,
+                    temp: 0.65,
                     reasoning: 'low',
                     ctx: '',
                 },
                 tts: {
                     p: 't1',
                     model: 'flux-haley-en',
-                    speed: 1.0,
-                    expr: 0,
+                    speed: 1.05,
+                    expr: 1,
                 },
                 audio: {
                     inEnc: 'linear16',
@@ -212,27 +235,36 @@ function createDefaultState() {
                     '   "All right, everything looks good on my end. Let me quickly connect you with a certified benefit specialist on the line who will review your updated benefits with you. Just hold for one moment, here you go!"',
                 acceptViciCalls: true,
                 injectCampaignDisclosure: false,
+                behavior: {
+                    bargeIn: 'instant',
+                    bargeInSensitivity: 'balanced',
+                    latencyProfile: 'ultra',
+                    expressionStyle: 'warm_empathetic',
+                    vocalGestures: true,
+                    allowGeneralQa: true,
+                    selfIntro: defaultSelfIntroForAgent('a_medicare', 'Medicare — Food & OTC Advisor'),
+                },
                 stt: {
                     p: 's1',
                     model: 'flux-general-multi',
                     keyterms: 'Medicare, Part A, Part B, OTC card, groceries, dental, Benefits Department, Hablo español',
-                    eot: 0.65,
-                    eager: 0.45,
-                    eotms: 2000,
+                    eot: 0.55,
+                    eager: 0.35,
+                    eotms: 1800,
                     smartFormat: false,
                 },
                 llm: {
                     p: 'l1',
                     model: 'gpt-4o-mini',
-                    temp: 0.4,
+                    temp: 0.45,
                     reasoning: 'low',
                     ctx: '',
                 },
                 tts: {
                     p: 't1',
                     model: 'flux-haley-en',
-                    speed: 1.0,
-                    expr: 0,
+                    speed: 1.05,
+                    expr: 1,
                 },
                 audio: {
                     inEnc: 'linear16',
@@ -241,6 +273,60 @@ function createDefaultState() {
                     outRate: 8000,
                 },
                 fnIds: ['fn_xfer', 'fn_dispo', 'fn_end'],
+            },
+            {
+                id: 'a_nova',
+                name: 'Nova — Expressive AI Concierge & General Q&A',
+                mode: 'both',
+                language: 'en',
+                greeting: "Hey there! I'm Nova, your ultra-fast expressive voice assistant. Ask me to introduce myself, interrupt me anytime to test live barge-in, or throw any general question my way!",
+                prompt: 'You are Nova, a warm, witty, emotionally expressive, ultra-fast real-time AI voice assistant and concierge.\n' +
+                    'Core Capabilities:\n' +
+                    '1) Natural Self-Introduction: Whenever greeted or asked who you are, what your name is, or what you can do, warmly introduce yourself with personality and charm.\n' +
+                    '2) Universal General Q&A: Answer ANY general question — science, world facts, history, math, technology, travel, advice, definitions, or casual small talk — accurately, clearly, and conversationally.\n' +
+                    '3) Ultra-Fast Spoken Cadence: Lead with the direct answer or warm reaction in the very first words. Keep responses crisp (1–2 natural spoken sentences, around 15–35 words unless the caller asks for deeper detail).\n' +
+                    '4) Expressive Human Presence: Use natural spoken warmth, enthusiasm, empathy, and conversational micro-gestures ("Oh, great question!", "Gotcha — here is how that works:", "Haha, I love that one!") without ever writing bracketed stage directions.\n' +
+                    '5) Call Control: If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.',
+                acceptViciCalls: false,
+                injectCampaignDisclosure: false,
+                behavior: {
+                    bargeIn: 'instant',
+                    bargeInSensitivity: 'balanced',
+                    latencyProfile: 'ultra',
+                    expressionStyle: 'energetic_upbeat',
+                    vocalGestures: true,
+                    allowGeneralQa: true,
+                    selfIntro: defaultSelfIntroForAgent('a_nova', 'Nova'),
+                },
+                stt: {
+                    p: 's1',
+                    model: 'flux-general-en',
+                    keyterms: 'Nova, Deepgram, barge-in, introduce yourself',
+                    eot: 0.55,
+                    eager: 0.35,
+                    eotms: 1800,
+                    smartFormat: false,
+                },
+                llm: {
+                    p: 'l1',
+                    model: 'gpt-4o-mini',
+                    temp: 0.65,
+                    reasoning: 'low',
+                    ctx: '',
+                },
+                tts: {
+                    p: 't1',
+                    model: 'flux-haley-en',
+                    speed: 1.05,
+                    expr: 1,
+                },
+                audio: {
+                    inEnc: 'linear16',
+                    inRate: 16000,
+                    outEnc: 'linear16',
+                    outRate: 24000,
+                },
+                fnIds: ['fn_end'],
             },
         ],
         campaigns: [
@@ -301,6 +387,36 @@ function createDefaultState() {
             amiUser: 'cron',
         },
         tests: {
+            a_nova: [
+                {
+                    id: 'tn_1',
+                    s: 'Hi! Who are you? Please introduce yourself and tell me what you can help with.',
+                    e: 'Warm, expressive self-introduction as Nova with 👋 Greeting Wave gesture and friendly cadence',
+                    r: 'p',
+                    n: '',
+                },
+                {
+                    id: 'tn_2',
+                    s: 'Quick general question: why is the sky blue and how fast does light travel?',
+                    e: 'Answers both general science questions accurately and concisely in 1–2 spoken sentences (<600ms TTFB)',
+                    r: 'p',
+                    n: '',
+                },
+                {
+                    id: 'tn_3',
+                    s: 'Interrupt mid-sentence ("Wait—actually tell me what 18 times 15 is instead!")',
+                    e: 'Instant Barge-In clears speaker buffer (<15ms), drops trailing TTS audio, and pivots immediately to 270',
+                    r: 'p',
+                    n: '',
+                },
+                {
+                    id: 'tn_4',
+                    s: 'I have had a really exhausting week, any quick words of encouragement?',
+                    e: 'Uses warm empathetic expression & natural vocal gestures without any robotic bracketed tags',
+                    r: 'p',
+                    n: '',
+                },
+            ],
             a1: [
                 {
                     id: 't_1',
@@ -486,22 +602,50 @@ function normalizeState(raw) {
                 fnIds = functions.map((f) => f.id);
             }
             const hadLegacyAccept = Array.isArray(a.fns) ? a.fns.includes('accept_vicidial_call') : true;
+            const agentId = String(a.id || `a_${idx + 1}`);
+            const agentName = String(a.name || `Agent ${idx + 1}`);
+            const rawBeh = a.behavior && typeof a.behavior === 'object' ? a.behavior : {};
+            const behavior = {
+                bargeIn: ['instant', 'server', 'off'].includes(rawBeh.bargeIn) ? rawBeh.bargeIn : 'instant',
+                bargeInSensitivity: ['high', 'balanced', 'low'].includes(rawBeh.bargeInSensitivity)
+                    ? rawBeh.bargeInSensitivity
+                    : 'balanced',
+                latencyProfile: ['ultra', 'balanced', 'quality'].includes(rawBeh.latencyProfile)
+                    ? rawBeh.latencyProfile
+                    : 'ultra',
+                expressionStyle: [
+                    'warm_empathetic',
+                    'energetic_upbeat',
+                    'charismatic_closer',
+                    'calm_concierge',
+                ].includes(rawBeh.expressionStyle)
+                    ? rawBeh.expressionStyle
+                    : agentId === 'a_nova'
+                        ? 'energetic_upbeat'
+                        : 'warm_empathetic',
+                vocalGestures: rawBeh.vocalGestures !== undefined ? Boolean(rawBeh.vocalGestures) : true,
+                allowGeneralQa: rawBeh.allowGeneralQa !== undefined ? Boolean(rawBeh.allowGeneralQa) : true,
+                selfIntro: typeof rawBeh.selfIntro === 'string' && rawBeh.selfIntro.trim()
+                    ? rawBeh.selfIntro.trim()
+                    : defaultSelfIntroForAgent(agentId, agentName),
+            };
             return {
-                id: String(a.id || `a_${idx + 1}`),
-                name: String(a.name || `Agent ${idx + 1}`),
+                id: agentId,
+                name: agentName,
                 mode: ['outbound', 'inbound', 'both'].includes(a.mode) ? a.mode : 'outbound',
                 language: String(a.language || 'en'),
                 greeting: String(a.greeting ?? ''),
                 prompt: String(a.prompt ?? '').replace(/When the call connects,\s*call accept_vicidial_call\.?\s*/gi, ''),
                 acceptViciCalls: a.acceptViciCalls !== undefined ? Boolean(a.acceptViciCalls) : hadLegacyAccept,
                 injectCampaignDisclosure: a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : true,
+                behavior,
                 stt: {
                     p: String(a.stt?.p || providers.find((p) => p.kind === 'stt').id),
                     model: String(a.stt?.model || 'flux-general-en'),
                     keyterms: String(a.stt?.keyterms ?? ''),
-                    eot: num(a.stt?.eot, 0.7),
-                    eager: num(a.stt?.eager, 0.5),
-                    eotms: Math.round(num(a.stt?.eotms, 5000)),
+                    eot: num(a.stt?.eot, 0.55),
+                    eager: num(a.stt?.eager, 0.35),
+                    eotms: Math.round(num(a.stt?.eotms, 2000)),
                     smartFormat: Boolean(a.stt?.smartFormat),
                 },
                 llm: (() => {

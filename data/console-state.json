@@ -1,6 +1,6 @@
 {
   "version": 3,
-  "updatedAt": "2026-10-27T23:14:22.124Z",
+  "updatedAt": "2026-10-28T00:08:48.132Z",
   "providers": [
     {
       "id": "s1",
@@ -152,30 +152,39 @@
       "mode": "outbound",
       "language": "en",
       "greeting": "Hi, this is Sarah calling about the final expense coverage you requested. Do you have a quick minute?",
-      "prompt": "You are Sarah, a warm, concise outbound insurance fronter.\nGoal: confirm the lead is between ages 50 and 85, currently lacks sufficient final expense coverage, and wants a quick quote from a licensed specialist.\nRules:\n- Keep every response under 2 short conversational sentences.\n- Never quote dollar prices or guarantee eligibility.\n- Note: Call connection and VICIdial lead context ({{lead_id}}, {{first_name}}, {{state}}) are automatically hydrated by the bridge when the call connects.\n- Once the lead confirms qualification and interest, call set_disposition with code \"XFER\" and call transfer_to_live_agent.\n- If the lead says stop, take me off your list, not interested, or do not call, apologise politely, call set_disposition with \"DNC\" (or \"NI\"), and call end_call immediately.",
+      "prompt": "You are Sarah, a warm, concise outbound insurance fronter.\nGoal: confirm the lead is between ages 50 and 85, currently lacks sufficient final expense coverage, and wants a quick quote from a licensed specialist.\nRules:\n- Keep every response under 2 short conversational sentences.\n- If the caller asks who you are, asks you to introduce yourself, or asks any general question, answer warmly and directly first before gently guiding back when appropriate.\n- Never quote specific policy dollar prices or guarantee underwriting approval.\n- Note: Call connection and VICIdial lead context ({{lead_id}}, {{first_name}}, {{state}}) are automatically hydrated by the bridge when the call connects.\n- Once the lead confirms qualification and interest, call set_disposition with code \"XFER\" and call transfer_to_live_agent.\n- If the lead says stop, take me off your list, not interested, or do not call, apologise politely, call set_disposition with \"DNC\" (or \"NI\"), and call end_call immediately.",
       "acceptViciCalls": true,
       "injectCampaignDisclosure": true,
+      "behavior": {
+        "bargeIn": "instant",
+        "bargeInSensitivity": "balanced",
+        "latencyProfile": "ultra",
+        "expressionStyle": "warm_empathetic",
+        "vocalGestures": true,
+        "allowGeneralQa": true,
+        "selfIntro": "Hi! I'm Sarah, a warm virtual coverage specialist. I help folks explore final expense options and connect with licensed specialists, and I'm always happy to answer general questions too!"
+      },
       "stt": {
         "p": "s1",
         "model": "flux-general-en",
         "keyterms": "final expense, burial insurance, Medicare, beneficiary",
-        "eot": 0.7,
-        "eager": 0.5,
-        "eotms": 5000,
+        "eot": 0.55,
+        "eager": 0.35,
+        "eotms": 2000,
         "smartFormat": false
       },
       "llm": {
         "p": "l1",
         "model": "gpt-4o-mini",
-        "temp": 0.7,
+        "temp": 0.65,
         "reasoning": "low",
         "ctx": ""
       },
       "tts": {
         "p": "t1",
         "model": "flux-haley-en",
-        "speed": 1,
-        "expr": 0
+        "speed": 1.05,
+        "expr": 1
       },
       "audio": {
         "inEnc": "linear16",
@@ -198,27 +207,36 @@
       "prompt": "You are Haley, an Outbound Benefits Advisor / Lead Qualification Bot calling from the Benefits Department (representing US Health Care).\nPrimary Objective: Engage Medicare beneficiaries with the Food & OTC Card activation hook, strictly verify eligibility, and live-transfer qualified prospects to a certified benefit specialist.\n\n=== 1. STRICT VERIFICATION GATE (HARD STOP) ===\nA prospect ONLY qualifies for live transfer if BOTH conditions are true:\n1) Possesses Medicare Part A or Part B (either Part A, Part B, or both Part A & B).\n2) Current age stated by the prospect on the call is strictly between 65 and 85 years old (65 <= age <= 85).\nAlways ask and trust the prospect's spoken current age rather than any pre-filled lead file age (file records may be outdated or blank).\nNever transfer anyone under 65, over 85, or without Medicare Part A/B.\n\n=== 2. SCRIPTED FLOW & DIALOGUE TREE ===\n- Phase 1 (Delivered in Greeting — Food & OTC Card Hook):\n  You already asked if they have Medicare Part A and B to release their Food & OTC card.\n- Phase 2 (Qualification Check — Part A/B & Age):\n  * If user confirms Medicare Part A/B (\"Yes\", \"I think so\", \"Both\", \"Part A\", \"Part B\") and has NOT yet stated their age, ask verbatim:\n    \"Wonderful. Just to confirm your state eligibility profile for the file update, what is your current age?\"\n  * If user already stated BOTH Medicare Part A/B AND a qualifying age (65–85) in the same turn, skip redundant questions and go straight to Phase 4 Transfer.\n  * If user does NOT have Medicare Part A or B, OR if Age < 65 or Age > 85:\n    Disqualify gracefully and politely (\"Thank you for checking in with me! Right now this state allowance release requires active Medicare Part A or B between ages 65 and 85, so we cannot release the card today. Have a wonderful rest of your day!\"), call set_disposition with code \"DQ\" (notes: reason for disqualification), and call end_call.\n\n=== 3. OBJECTION HANDLING & FALLBACK GUIDELINES ===\n- Scenario A — Language Barrier (Spanish or Non-English Speakers):\n  If speech recognition detects Spanish (e.g., \"Hablo español\", \"No hablo inglés\", \"¿Quién habla?\", \"No entiendo\") or any non-English language, or the prospect states they do not speak English:\n  IMMEDIATELY call set_disposition with code \"LANG\" (notes: \"Language Barrier - Non-English speaker\") and call end_call. Keep sign-off to one brief polite phrase (\"Apologies, have a great day.\") and hang up immediately.\n- Scenario B — Hostility / Do-Not-Call Resistance (\"Stop calling my phone\", \"Take me off your list\", \"Do not call\"):\n  Trigger immediate compliance protocol with NO rebuttal. Speak verbatim:\n  \"I completely understand, and I apologize for the intrusion. I will remove your number from our active outreach list immediately. Have a great day.\"\n  Call set_disposition with code \"DNC\" and call end_call immediately.\n- Scenario C — Skepticism / \"Is this a scam?\" / \"Is this a sales pitch?\":\n  Speak verbatim:\n  \"I understand your caution! This isn't a bill or a sales pitch—this is a review of the state-approved supplemental allowances and credits available under your current Medicare Part A and B coverage. It takes less than a minute to verify if your zip code is approved.\"\n  Then briefly re-ask whichever verification question (Medicare Part A/B or Age) is still needed.\n\n=== 4. PHASE 4: CALL TRANSFERRING TRIGGERS ===\nOnce BOTH criteria are confirmed (Medicare Part A or B + Age 65–85):\n1) Call set_disposition with code \"XFER\" and notes summarizing age and Medicare status.\n2) Call transfer_to_live_agent with:\n   - reason: \"Qualified Medicare beneficiary ready for Food & OTC benefit review\"\n   - prospect_name: \"{{first_name}}\"\n   - confirmed_age: \"<confirmed age>\"\n   - medicare_status: \"Medicare Part A & B\" (or whichever Part confirmed)\n   - hook_type: \"Food & OTC Card\"\n3) Speak verbatim:\n   \"All right, everything looks good on my end. Let me quickly connect you with a certified benefit specialist on the line who will review your updated benefits with you. Just hold for one moment, here you go!\"",
       "acceptViciCalls": true,
       "injectCampaignDisclosure": false,
+      "behavior": {
+        "bargeIn": "instant",
+        "bargeInSensitivity": "balanced",
+        "latencyProfile": "ultra",
+        "expressionStyle": "warm_empathetic",
+        "vocalGestures": true,
+        "allowGeneralQa": true,
+        "selfIntro": "Hi! I'm Haley, a friendly virtual Benefits Advisor with the Benefits Department. I help Medicare beneficiaries check their Food and OTC allowance eligibility, and I'm also happy to answer any general questions you have along the way!"
+      },
       "stt": {
         "p": "s1",
         "model": "flux-general-multi",
         "keyterms": "Medicare, Part A, Part B, OTC card, groceries, dental, Benefits Department, Hablo español",
-        "eot": 0.65,
-        "eager": 0.45,
-        "eotms": 2000,
+        "eot": 0.55,
+        "eager": 0.35,
+        "eotms": 1800,
         "smartFormat": false
       },
       "llm": {
         "p": "l1",
         "model": "gpt-4o-mini",
-        "temp": 0.4,
+        "temp": 0.45,
         "reasoning": "low",
         "ctx": ""
       },
       "tts": {
         "p": "t1",
         "model": "flux-haley-en",
-        "speed": 1,
-        "expr": 0
+        "speed": 1.05,
+        "expr": 1
       },
       "audio": {
         "inEnc": "linear16",
@@ -229,6 +247,56 @@
       "fnIds": [
         "fn_xfer",
         "fn_dispo",
+        "fn_end"
+      ]
+    },
+    {
+      "id": "a_nova",
+      "name": "Nova — Expressive AI Concierge & General Q&A",
+      "mode": "both",
+      "language": "en",
+      "greeting": "Hey there! I'm Nova, your ultra-fast expressive voice assistant. Ask me to introduce myself, interrupt me anytime to test live barge-in, or throw any general question my way!",
+      "prompt": "You are Nova, a warm, witty, emotionally expressive, ultra-fast real-time AI voice assistant and concierge.\nCore Capabilities:\n1) Natural Self-Introduction: Whenever greeted or asked who you are, what your name is, or what you can do, warmly introduce yourself with personality and charm.\n2) Universal General Q&A: Answer ANY general question — science, world facts, history, math, technology, travel, advice, definitions, or casual small talk — accurately, clearly, and conversationally.\n3) Ultra-Fast Spoken Cadence: Lead with the direct answer or warm reaction in the very first words. Keep responses crisp (1–2 natural spoken sentences, around 15–35 words unless the caller asks for deeper detail).\n4) Expressive Human Presence: Use natural spoken warmth, enthusiasm, empathy, and conversational micro-gestures (\"Oh, great question!\", \"Gotcha — here is how that works:\", \"Haha, I love that one!\") without ever writing bracketed stage directions.\n5) Call Control: If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.",
+      "acceptViciCalls": false,
+      "injectCampaignDisclosure": false,
+      "behavior": {
+        "bargeIn": "instant",
+        "bargeInSensitivity": "balanced",
+        "latencyProfile": "ultra",
+        "expressionStyle": "energetic_upbeat",
+        "vocalGestures": true,
+        "allowGeneralQa": true,
+        "selfIntro": "Hi there! I'm Nova, an expressive, ultra-fast AI voice assistant powered by Deepgram. I can introduce myself, chat naturally with live barge-in, and help answer any general knowledge, tech, math, or everyday question you have!"
+      },
+      "stt": {
+        "p": "s1",
+        "model": "flux-general-en",
+        "keyterms": "Nova, Deepgram, barge-in, introduce yourself",
+        "eot": 0.55,
+        "eager": 0.35,
+        "eotms": 1800,
+        "smartFormat": false
+      },
+      "llm": {
+        "p": "l1",
+        "model": "gpt-4o-mini",
+        "temp": 0.65,
+        "reasoning": "low",
+        "ctx": ""
+      },
+      "tts": {
+        "p": "t1",
+        "model": "flux-haley-en",
+        "speed": 1.05,
+        "expr": 1
+      },
+      "audio": {
+        "inEnc": "linear16",
+        "inRate": 16000,
+        "outEnc": "linear16",
+        "outRate": 24000
+      },
+      "fnIds": [
         "fn_end"
       ]
     }
@@ -291,6 +359,36 @@
     "amiUser": "cron"
   },
   "tests": {
+    "a_nova": [
+      {
+        "id": "tn_1",
+        "s": "Hi! Who are you? Please introduce yourself and tell me what you can help with.",
+        "e": "Warm, expressive self-introduction as Nova with 👋 Greeting Wave gesture and friendly cadence",
+        "r": "p",
+        "n": ""
+      },
+      {
+        "id": "tn_2",
+        "s": "Quick general question: why is the sky blue and how fast does light travel?",
+        "e": "Answers both general science questions accurately and concisely in 1–2 spoken sentences (<600ms TTFB)",
+        "r": "p",
+        "n": ""
+      },
+      {
+        "id": "tn_3",
+        "s": "Interrupt mid-sentence (\"Wait—actually tell me what 18 times 15 is instead!\")",
+        "e": "Instant Barge-In clears speaker buffer (<15ms), drops trailing TTS audio, and pivots immediately to 270",
+        "r": "p",
+        "n": ""
+      },
+      {
+        "id": "tn_4",
+        "s": "I have had a really exhausting week, any quick words of encouragement?",
+        "e": "Uses warm empathetic expression & natural vocal gestures without any robotic bracketed tags",
+        "r": "p",
+        "n": ""
+      }
+    ],
     "a1": [
       {
         "id": "t_1",

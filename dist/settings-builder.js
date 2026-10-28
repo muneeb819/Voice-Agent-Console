@@ -4,6 +4,7 @@ exports.isPlainObject = isPlainObject;
 exports.parseJsonObject = parseJsonObject;
 exports.parseJsonSchema = parseJsonSchema;
 exports.isValidFluxSpeed = isValidFluxSpeed;
+exports.composeBehavioralPrompt = composeBehavioralPrompt;
 exports.buildDeepgramSettings = buildDeepgramSettings;
 exports.validateAgent = validateAgent;
 exports.validateCampaign = validateCampaign;
@@ -58,6 +59,43 @@ function isValidFluxSpeed(speed) {
         return false;
     const scaled = Math.round(speed * 20);
     return Math.abs(speed * 20 - scaled) < 1e-6;
+}
+function composeBehavioralPrompt(agent) {
+    const basePrompt = (agent.prompt || '').trim();
+    const b = agent.behavior;
+    if (!b)
+        return basePrompt;
+    // Respect Deepgram's 25,000-char managed prompt ceiling
+    if (basePrompt.length > 23500)
+        return basePrompt;
+    const toneMap = {
+        warm_empathetic: 'Warm, caring, empathetic, and reassuring — sound genuinely attentive and human.',
+        energetic_upbeat: 'Bright, upbeat, friendly, and enthusiastic — speak with a natural smile in your voice.',
+        charismatic_closer: 'Confident, poised, articulate, and high-trust — crisp executive advisor energy.',
+        calm_concierge: 'Calm, composed, clear, and soothing — smooth concierge presence.',
+    };
+    const lines = [
+        '',
+        '=== REAL-TIME PRESENCE, BARGE-IN, EXPRESSIONS & GENERAL Q&A ===',
+    ];
+    if (b.selfIntro && b.selfIntro.trim()) {
+        lines.push(`- SELF-INTRODUCTION: Whenever greeted casually or asked "Who are you?", "What is your name?", "Introduce yourself", or "What can you do?", warmly introduce yourself in 1–2 natural spoken sentences based on: "${b.selfIntro.trim()}"`);
+    }
+    if (b.allowGeneralQa !== false) {
+        lines.push('- GENERAL KNOWLEDGE & OPEN Q&A: If the caller asks ANY general question (science, math, geography, technology, definitions, advice, trivia, or everyday small talk), answer it directly, accurately, and warmly in 1–2 concise spoken sentences instead of deflecting. (Always still honor compliance rules like DNC, language barriers, or campaign eligibility gates when applicable.)');
+    }
+    if (b.bargeIn !== 'off') {
+        lines.push('- LIVE BARGE-IN AWARENESS: The caller can interrupt you mid-sentence at any time. If interrupted, never repeat cut-off sentences — pivot immediately and naturally to their latest question or remark.');
+    }
+    lines.push(`- VOCAL EXPRESSION STYLE: ${toneMap[b.expressionStyle] || toneMap.warm_empathetic}`);
+    if (b.vocalGestures !== false) {
+        lines.push('- NATURAL VOCAL GESTURES: Use subtle, authentic spoken micro-gestures when natural (e.g., "Oh, great question!", "Gotcha —", "Mm-hmm, I hear you.", "Right, so—", light warmth) and natural conversational pauses ("—"). NEVER output bracketed or asterisk tags like [laughs], [smiles], (sighs), or *waves* because TTS speaks brackets literally.');
+    }
+    if (b.latencyProfile === 'ultra') {
+        lines.push('- ULTRA-LOW LATENCY STREAMING: Begin every reply immediately with the core answer or reaction in the first 4–6 words. Keep turns crisp (1–2 spoken sentences, ~15–35 words unless asked for detail) in plain spoken words with zero markdown (*, #, bullets).');
+    }
+    const combined = `${basePrompt}\n${lines.join('\n')}`.trim();
+    return combined.length <= 24950 ? combined : basePrompt;
 }
 function buildDeepgramSettings(state, agent, explicitCampaign, options) {
     const sp = state.providers.find((p) => p.id === agent.stt.p) || {};
@@ -157,7 +195,7 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
     });
     const think = {
         provider: thinkProvider,
-        prompt: agent.prompt,
+        prompt: composeBehavioralPrompt(agent),
         functions: fns,
     };
     if (lp.endpoint && lp.endpoint.trim()) {

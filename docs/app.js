@@ -24,7 +24,7 @@
   let latestRevisionId = null;
 
   let tab = 'agents';
-  let cur = { a: 'a_medicare', c: 'c_medicare' };
+  let cur = { a: 'a_nova', c: 'c_medicare' };
 
   // Voice catalog state (Step 1)
   let voiceCatalog = {
@@ -428,6 +428,199 @@
     } catch {}
   })();
 
+  function defaultSelfIntroForClient(id, name) {
+    if (id === 'a_nova' || /nova|concierge|general/i.test(name || '')) {
+      return "Hi there! I'm Nova, an expressive, ultra-fast AI voice assistant powered by Deepgram. I can introduce myself, chat naturally with live barge-in, and help answer any general knowledge, tech, math, or everyday question you have!";
+    }
+    if (id === 'a_medicare' || /medicare/i.test(name || '')) {
+      return "Hi! I'm Haley, a friendly virtual Benefits Advisor with the Benefits Department. I help Medicare beneficiaries check their Food and OTC allowance eligibility, and I'm also happy to answer any general questions you have along the way!";
+    }
+    if (id === 'a1' || /final expense|sarah/i.test(name || '')) {
+      return "Hi! I'm Sarah, a warm virtual coverage specialist. I help folks explore final expense options and connect with licensed specialists, and I'm always happy to answer general questions too!";
+    }
+    return `Hi! I'm ${name || 'your AI Voice Assistant'}, a fast, expressive conversational voice assistant ready to introduce myself, chat naturally, and help with both general questions and call assistance!`;
+  }
+
+  function upgradeRealtimeAgentFeatures(state) {
+    if (!state || !Array.isArray(state.agents)) return false;
+    let mutated = false;
+
+    const firstStt = state.providers?.find((p) => p.kind === 'stt')?.id || 's1';
+    const firstLlm = state.providers?.find((p) => p.kind === 'llm' && p.type === 'open_ai')?.id || state.providers?.find((p) => p.kind === 'llm')?.id || 'l1';
+    const firstTts = state.providers?.find((p) => p.kind === 'tts' && p.type === 'deepgram')?.id || state.providers?.find((p) => p.kind === 'tts')?.id || 't1';
+    const endFn = state.functions?.find((f) => f.name === 'end_call')?.id;
+
+    // Ensure built-in Nova General AI Concierge exists for existing localStorage users (one-time seed)
+    if (!state._novaSeededV26 && !state.agents.some((a) => a.id === 'a_nova')) {
+      state._novaSeededV26 = true;
+      state.agents.push({
+        id: 'a_nova',
+        name: 'Nova — Expressive AI Concierge & General Q&A',
+        mode: 'both',
+        language: 'en',
+        greeting:
+          "Hey there! I'm Nova, your ultra-fast expressive voice assistant. Ask me to introduce myself, interrupt me anytime to test live barge-in, or throw any general question my way!",
+        prompt:
+          'You are Nova, a warm, witty, emotionally expressive, ultra-fast real-time AI voice assistant and concierge.\n' +
+          'Core Capabilities:\n' +
+          '1) Natural Self-Introduction: Whenever greeted or asked who you are, what your name is, or what you can do, warmly introduce yourself with personality and charm.\n' +
+          '2) Universal General Q&A: Answer ANY general question — science, world facts, history, math, technology, travel, advice, definitions, or casual small talk — accurately, clearly, and conversationally.\n' +
+          '3) Ultra-Fast Spoken Cadence: Lead with the direct answer or warm reaction in the very first words. Keep responses crisp (1–2 natural spoken sentences, around 15–35 words unless the caller asks for deeper detail).\n' +
+          '4) Expressive Human Presence: Use natural spoken warmth, enthusiasm, empathy, and conversational micro-gestures ("Oh, great question!", "Gotcha — here is how that works:", "Haha, I love that one!") without ever writing bracketed stage directions.\n' +
+          '5) Call Control: If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.',
+        acceptViciCalls: false,
+        injectCampaignDisclosure: false,
+        behavior: {
+          bargeIn: 'instant',
+          bargeInSensitivity: 'balanced',
+          latencyProfile: 'ultra',
+          expressionStyle: 'energetic_upbeat',
+          vocalGestures: true,
+          allowGeneralQa: true,
+          selfIntro: defaultSelfIntroForClient('a_nova', 'Nova'),
+        },
+        stt: {
+          p: firstStt,
+          model: 'flux-general-en',
+          keyterms: 'Nova, Deepgram, barge-in, introduce yourself',
+          eot: 0.55,
+          eager: 0.35,
+          eotms: 1800,
+          smartFormat: false,
+        },
+        llm: {
+          p: firstLlm,
+          model: 'gpt-4o-mini',
+          temp: 0.65,
+          reasoning: 'low',
+          ctx: '',
+        },
+        tts: {
+          p: firstTts,
+          model: 'flux-haley-en',
+          speed: 1.05,
+          expr: 1,
+        },
+        audio: {
+          inEnc: 'linear16',
+          inRate: 16000,
+          outEnc: 'linear16',
+          outRate: 24000,
+        },
+        fnIds: endFn ? [endFn] : [],
+      });
+      if (!state.tests) state.tests = {};
+      if (!Array.isArray(state.tests.a_nova)) {
+        state.tests.a_nova = [
+          {
+            id: 'tn_1',
+            s: 'Hi! Who are you? Please introduce yourself and tell me what you can help with.',
+            e: 'Warm, expressive self-introduction as Nova with 👋 Greeting Wave gesture',
+            r: 'p',
+            n: '',
+          },
+          {
+            id: 'tn_2',
+            s: 'Quick general question: why is the sky blue and how fast does light travel?',
+            e: 'Answers both general science questions accurately in 1–2 spoken sentences (<600ms TTFB)',
+            r: 'p',
+            n: '',
+          },
+          {
+            id: 'tn_3',
+            s: 'Wait—actually tell me what 18 times 15 is instead!',
+            e: 'Instant Barge-In clears speaker buffer (<15ms) and pivots immediately to 270',
+            r: 'p',
+            n: '',
+          },
+        ];
+      }
+      mutated = true;
+    }
+
+    for (const ag of state.agents) {
+      if (!ag.behavior || typeof ag.behavior !== 'object') {
+        ag.behavior = {
+          bargeIn: 'instant',
+          bargeInSensitivity: 'balanced',
+          latencyProfile: 'ultra',
+          expressionStyle: ag.id === 'a_nova' ? 'energetic_upbeat' : 'warm_empathetic',
+          vocalGestures: true,
+          allowGeneralQa: true,
+          selfIntro: defaultSelfIntroForClient(ag.id, ag.name),
+        };
+        // Upgrade sluggish v2.4/v2.5 defaults to ultra-low latency & expressive Flux v2 prosody
+        if (ag.stt && ag.stt.eot >= 0.65 && ag.stt.eotms >= 2000) {
+          ag.stt.eot = 0.55;
+          ag.stt.eager = 0.35;
+          ag.stt.eotms = 1800;
+        }
+        if (ag.tts && Number(ag.tts.expr) === 0 && Number(ag.tts.speed) === 1) {
+          ag.tts.expr = 1;
+          ag.tts.speed = 1.05;
+        }
+        mutated = true;
+      } else {
+        if (!['instant', 'server', 'off'].includes(ag.behavior.bargeIn)) ag.behavior.bargeIn = 'instant';
+        if (!['high', 'balanced', 'low'].includes(ag.behavior.bargeInSensitivity)) ag.behavior.bargeInSensitivity = 'balanced';
+        if (!['ultra', 'balanced', 'quality'].includes(ag.behavior.latencyProfile)) ag.behavior.latencyProfile = 'ultra';
+        if (!['warm_empathetic', 'energetic_upbeat', 'charismatic_closer', 'calm_concierge'].includes(ag.behavior.expressionStyle)) {
+          ag.behavior.expressionStyle = 'warm_empathetic';
+        }
+        if (ag.behavior.vocalGestures === undefined) ag.behavior.vocalGestures = true;
+        if (ag.behavior.allowGeneralQa === undefined) ag.behavior.allowGeneralQa = true;
+        if (!ag.behavior.selfIntro || !String(ag.behavior.selfIntro).trim()) {
+          ag.behavior.selfIntro = defaultSelfIntroForClient(ag.id, ag.name);
+        }
+      }
+    }
+
+    return mutated;
+  }
+
+  function composeBehavioralPromptClient(agent) {
+    const basePrompt = (agent.prompt || '').trim();
+    const b = agent.behavior;
+    if (!b || basePrompt.length > 23500) return basePrompt;
+
+    const toneMap = {
+      warm_empathetic: 'Warm, caring, empathetic, and reassuring — sound genuinely attentive and human.',
+      energetic_upbeat: 'Bright, upbeat, friendly, and enthusiastic — speak with a natural smile in your voice.',
+      charismatic_closer: 'Confident, poised, articulate, and high-trust — crisp executive advisor energy.',
+      calm_concierge: 'Calm, composed, clear, and soothing — smooth concierge presence.',
+    };
+
+    const lines = ['', '=== REAL-TIME PRESENCE, BARGE-IN, EXPRESSIONS & GENERAL Q&A ==='];
+    if ((b.selfIntro || '').trim()) {
+      lines.push(
+        `- SELF-INTRODUCTION: Whenever greeted casually or asked "Who are you?", "What is your name?", "Introduce yourself", or "What can you do?", warmly introduce yourself in 1–2 natural spoken sentences based on: "${b.selfIntro.trim()}"`
+      );
+    }
+    if (b.allowGeneralQa !== false) {
+      lines.push(
+        '- GENERAL KNOWLEDGE & OPEN Q&A: If the caller asks ANY general question (science, math, geography, technology, definitions, advice, trivia, or everyday small talk), answer it directly, accurately, and warmly in 1–2 concise spoken sentences instead of deflecting. (Always still honor compliance rules like DNC, language barriers, or campaign eligibility gates when applicable.)'
+      );
+    }
+    if (b.bargeIn !== 'off') {
+      lines.push(
+        '- LIVE BARGE-IN AWARENESS: The caller can interrupt you mid-sentence at any time. If interrupted, never repeat cut-off sentences — pivot immediately and naturally to their latest question or remark.'
+      );
+    }
+    lines.push(`- VOCAL EXPRESSION STYLE: ${toneMap[b.expressionStyle] || toneMap.warm_empathetic}`);
+    if (b.vocalGestures !== false) {
+      lines.push(
+        '- NATURAL VOCAL GESTURES: Use subtle, authentic spoken micro-gestures when natural (e.g., "Oh, great question!", "Gotcha —", "Mm-hmm, I hear you.", "Right, so—", light warmth) and natural conversational pauses ("—"). NEVER output bracketed or asterisk tags like [laughs], [smiles], (sighs), or *waves* because TTS speaks brackets literally.'
+      );
+    }
+    if (b.latencyProfile === 'ultra') {
+      lines.push(
+        '- ULTRA-LOW LATENCY STREAMING: Begin every reply immediately with the core answer or reaction in the first 4–6 words. Keep turns crisp (1–2 spoken sentences, ~15–35 words unless asked for detail) in plain spoken words with zero markdown (*, #, bullets).'
+      );
+    }
+    const combined = `${basePrompt}\n${lines.join('\n')}`.trim();
+    return combined.length <= 24950 ? combined : basePrompt;
+  }
+
   // Live Call Simulator state (Step 2)
   let sim = {
     active: false,
@@ -451,6 +644,11 @@
     startedAtMs: 0,
     elapsedSec: 0,
     turns: 0,
+    bargeInCount: 0,
+    bargeInSuppressAudio: false,
+    bargeInFlashUntil: 0,
+    vadConsecutiveFrames: 0,
+    lastLocalBargeInAt: 0,
     lastTtfbMs: null,
     avgTtfbMs: null,
     lastLlmMs: null,
@@ -471,6 +669,14 @@
     micTxBytes: 0,
     micPeakPct: 0,
     playCtx: null,
+    playAnalyser: null,
+    lipRaf: null,
+    botMouthLevel: 0,
+    expression: 'smile',
+    expressionLabel: '😊 Warm & Ready',
+    gesture: 'wave',
+    gestureIcon: '👋',
+    gestureLabel: 'Greeting Wave',
     scheduledSources: [],
     nextPlayTime: 0,
     sampleRateIn: 16000,
@@ -643,7 +849,7 @@
         return o;
       });
 
-    const think = { provider: thinkProvider, prompt: agent.prompt, functions: fns };
+    const think = { provider: thinkProvider, prompt: composeBehavioralPromptClient(agent), functions: fns };
 
     const speakProvider = { type: tp.type || 'deepgram' };
     const mk = tp.type === 'deepgram' || tp.type === 'open_ai' ? 'model' : tp.mk || 'model_id';
@@ -1053,10 +1259,225 @@
     return out.buffer;
   }
 
+  function startPersonaLipSyncLoop() {
+    if (sim.lipRaf) return;
+    const data = new Uint8Array(64);
+    const tick = () => {
+      if (!sim.active && !sim.connecting) {
+        sim.lipRaf = null;
+        return;
+      }
+      let mouthOpen = 0;
+      if (sim.playAnalyser && sim.scheduledSources.length > 0 && !sim.bargeInSuppressAudio) {
+        sim.playAnalyser.getByteTimeDomainData(data);
+        let sum = 0;
+        for (let i = 0; i < data.length; i++) {
+          const v = (data[i] - 128) / 128;
+          sum += v * v;
+        }
+        const rms = Math.sqrt(sum / data.length);
+        mouthOpen = Math.min(1, rms * 5.2);
+      }
+      sim.botMouthLevel = mouthOpen;
+      const mouthEl = document.getElementById('persona-mouth');
+      const ringEl = document.getElementById('persona-ring');
+      if (mouthEl) {
+        if (sim.expression === 'surprised') {
+          mouthEl.setAttribute('d', 'M35 53 Q41 61 47 53 Q41 60 35 53 Z');
+        } else if (mouthOpen > 0.08) {
+          const openPx = Math.round(3 + mouthOpen * 10);
+          mouthEl.setAttribute(
+            'd',
+            `M32 52 Q41 ${52 + openPx} 50 52 Q41 ${52 + Math.round(openPx * 0.45)} 32 52 Z`
+          );
+        } else if (sim.expression === 'empathy') {
+          mouthEl.setAttribute('d', 'M33 53 Q41 57 49 53');
+        } else {
+          mouthEl.setAttribute('d', 'M31 51 Q41 59 51 51');
+        }
+      }
+      if (ringEl && sim.scheduledSources.length > 0) {
+        const sc = (1 + mouthOpen * 0.14).toFixed(3);
+        ringEl.style.transform = `scale(${sc})`;
+      } else if (ringEl) {
+        ringEl.style.transform = '';
+      }
+      sim.lipRaf = requestAnimationFrame(tick);
+    };
+    sim.lipRaf = requestAnimationFrame(tick);
+  }
+
+  function applyPersonaExpressionAndGesture(expr, exprLabel, gesture, gestureIcon, gestureLabel) {
+    sim.expression = expr;
+    sim.expressionLabel = exprLabel;
+    sim.gesture = gesture;
+    sim.gestureIcon = gestureIcon;
+    sim.gestureLabel = gestureLabel;
+    updatePersonaStageDom();
+  }
+
+  function classifyBotUtterancePresence(text) {
+    const t = String(text || '');
+    if (/\b(i'm |i am |my name is|hey there|hi there|welcome|nice to meet|introduce)\b/i.test(t)) {
+      applyPersonaExpressionAndGesture('smile', '😊 Warm Self-Intro Smile', 'wave', '👋', 'Friendly Greeting Wave');
+    } else if (/\b(sorry|apologize|understand|hear you|exhausting|tough|completely understand)\b/i.test(t)) {
+      applyPersonaExpressionAndGesture('empathy', '🥰 Empathetic & Caring', 'empathy', '🤝', 'Reassuring Nod');
+    } else if (/\b(wonderful|awesome|great question|love that|everything looks good|connect you|congratulations)\b/i.test(t)) {
+      applyPersonaExpressionAndGesture('celebrate', '🤩 Upbeat & Expressive', 'celebrate', '👍', 'Enthusiastic Thumbs-Up');
+    } else if (/\b(because|capital|speed|miles|million|actually|means|works|equals|\d+)\b/i.test(t)) {
+      applyPersonaExpressionAndGesture('explain', '🤓 Articulate & Clear', 'explain', '🤲', 'Open-Palm Explain');
+    } else {
+      applyPersonaExpressionAndGesture('smile', '😊 Expressive Speaking', 'speak', '💬', 'Conversational Gesture');
+    }
+  }
+
+  function updatePersonaStageDom() {
+    const stage = document.getElementById('persona-stage');
+    if (!stage) return;
+    const isBargeFlash = Date.now() < sim.bargeInFlashUntil;
+    const isSpeaking = sim.agentState === 'speaking' || sim.scheduledSources.length > 0;
+    const isListeningUser = sim.agentState === 'user_speaking';
+    stage.className = `persona-stage${isSpeaking ? ' speaking' : ''}${isListeningUser ? ' listening-user' : ''}${isBargeFlash ? ' barge-flash' : ''}`;
+
+    const svg = document.getElementById('persona-svg');
+    if (svg) {
+      const tiltMap = {
+        wave: 'tilt-wave',
+        listen: 'tilt-listen',
+        think: 'tilt-think',
+        yield: 'tilt-barge',
+        empathy: 'tilt-empathy',
+        celebrate: 'tilt-celebrate',
+      };
+      svg.setAttribute('class', `persona-svg ${tiltMap[sim.gesture] || ''}`);
+    }
+
+    const browL = document.getElementById('persona-brow-l');
+    const browR = document.getElementById('persona-brow-r');
+    if (browL && browR) {
+      if (sim.expression === 'surprised') {
+        browL.setAttribute('d', 'M25 27 Q31 22 36 26');
+        browR.setAttribute('d', 'M46 26 Q51 22 57 27');
+      } else if (sim.expression === 'empathy') {
+        browL.setAttribute('d', 'M25 29 Q31 26 36 30');
+        browR.setAttribute('d', 'M46 30 Q51 26 57 29');
+      } else if (sim.expression === 'think') {
+        browL.setAttribute('d', 'M25 28 Q31 25 36 28');
+        browR.setAttribute('d', 'M46 30 Q51 28 57 30');
+      } else {
+        browL.setAttribute('d', 'M25 30 Q31 27 36 29');
+        browR.setAttribute('d', 'M46 29 Q51 27 57 30');
+      }
+    }
+
+    const badge = document.getElementById('persona-gesture-badge');
+    if (badge) {
+      badge.textContent = sim.gestureIcon || '👋';
+      badge.className = `persona-gesture-badge${sim.gesture === 'wave' ? ' wave-anim' : ''}`;
+    }
+
+    const exprPill = document.getElementById('persona-expr-pill');
+    if (exprPill) exprPill.textContent = sim.expressionLabel;
+    const gestPill = document.getElementById('persona-gest-pill');
+    if (gestPill) gestPill.textContent = `${sim.gestureIcon} ${sim.gestureLabel}`;
+    const bargePill = document.getElementById('persona-barge-pill');
+    if (bargePill) {
+      bargePill.textContent = isBargeFlash
+        ? `⚡ BARGE-IN INTERRUPTED (${sim.bargeInCount})`
+        : `🛑 Barge-Ins: ${sim.bargeInCount}`;
+      bargePill.className = `pill ${isBargeFlash ? 'wn' : sim.bargeInCount > 0 ? 'ok' : ''}`;
+    }
+  }
+
+  function renderPersonaStageHtml(agent) {
+    const beh = agent.behavior || {};
+    const bargeModeLbl =
+      beh.bargeIn === 'off'
+        ? 'Barge-In Off'
+        : beh.bargeIn === 'server'
+        ? 'Server VAD Barge-In'
+        : '⚡ Instant <15ms Barge-In';
+    return `
+      <div class="persona-stage" id="persona-stage">
+        <div class="persona-avatar-wrap">
+          <div class="persona-ring" id="persona-ring"></div>
+          <svg class="persona-svg ${sim.gesture === 'wave' ? 'tilt-wave' : ''}" id="persona-svg" viewBox="0 0 82 82" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <circle cx="41" cy="41" r="39" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.28)" stroke-width="1.5"/>
+            <path id="persona-brow-l" d="M25 30 Q31 27 36 29" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round"/>
+            <path id="persona-brow-r" d="M46 29 Q51 27 57 30" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round"/>
+            <g class="persona-eye"><ellipse cx="31" cy="37" rx="3.6" ry="4.2" fill="#ffffff"/><circle cx="31.8" cy="36.5" r="1.5" fill="#0f172a"/></g>
+            <g class="persona-eye"><ellipse cx="51" cy="37" rx="3.6" ry="4.2" fill="#ffffff"/><circle cx="51.8" cy="36.5" r="1.5" fill="#0f172a"/></g>
+            <circle cx="23.5" cy="45.5" r="3.8" fill="rgba(255,180,200,0.34)"/>
+            <circle cx="58.5" cy="45.5" r="3.8" fill="rgba(255,180,200,0.34)"/>
+            <path id="persona-mouth" d="M31 51 Q41 59 51 51" stroke="#ffffff" stroke-width="2.8" fill="rgba(15,23,42,0.32)" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <div class="persona-gesture-badge ${sim.gesture === 'wave' ? 'wave-anim' : ''}" id="persona-gesture-badge" title="Live Persona Gesture">${esc(sim.gestureIcon || '👋')}</div>
+        </div>
+        <div class="persona-meta">
+          <div class="persona-top-row">
+            <div class="persona-title">
+              <span>${esc(agent.name)}</span>
+              <span class="pill ok" style="font-size:10.5px">${esc(bargeModeLbl)}</span>
+            </div>
+            <div class="bar" style="margin:0;gap:6px">
+              <button class="g" id="btn-manual-barge" style="font-size:11px;padding:3px 9px;text-transform:none" ${sim.active ? '' : 'disabled title="Start a call first"'} title="Instantly interrupt bot speech (<2ms) & test Barge-In reaction">✋ Interrupt / Barge-In</button>
+              <button class="g" id="btn-trigger-intro" style="font-size:11px;padding:3px 9px;text-transform:none" ${sim.active ? '' : 'disabled title="Start a call first"'} title="Ask agent to introduce itself with warm greeting gesture">👋 Self-Intro</button>
+            </div>
+          </div>
+          <div class="persona-badges">
+            <span class="pill" id="persona-expr-pill">${esc(sim.expressionLabel)}</span>
+            <span class="pill" id="persona-gest-pill">${esc(sim.gestureIcon)} ${esc(sim.gestureLabel)}</span>
+            <span class="pill ${sim.bargeInCount > 0 ? 'ok' : ''}" id="persona-barge-pill">🛑 Barge-Ins: ${sim.bargeInCount}</span>
+          </div>
+          <div class="note" style="margin:0;font-size:11.4px">
+            Speak anytime while the agent is talking to trigger <b>instant &lt;15ms Barge-In</b>, ask <b>general knowledge questions</b>, or request a <b>self-introduction</b>.
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function triggerInstantBargeIn(sourceLabel = 'Barge-In') {
+    const beh = A()?.behavior || {};
+    if (beh.bargeIn === 'off') return;
+    const wasSpeaking = sim.scheduledSources.length > 0 || sim.agentState === 'speaking';
+    flushSimulatorSpeakerQueue();
+    sim.bargeInSuppressAudio = true;
+    sim.lastLocalBargeInAt = Date.now();
+    if (wasSpeaking || sourceLabel === 'Manual Button') {
+      sim.bargeInCount += 1;
+      sim.bargeInFlashUntil = Date.now() + 1400;
+      applyPersonaExpressionAndGesture(
+        'surprised',
+        `⚡ Interrupted (${sourceLabel})`,
+        'yield',
+        '✋',
+        'Yielding Floor Instantly'
+      );
+      setTimeout(() => {
+        if (sim.active && sim.agentState === 'user_speaking') {
+          applyPersonaExpressionAndGesture('listen', '👂 Attentive Focus', 'listen', '🎧', 'Listening to Caller');
+        }
+      }, 950);
+    } else {
+      applyPersonaExpressionAndGesture('listen', '👂 Attentive Focus', 'listen', '🎧', 'Listening to Caller');
+    }
+    sim.agentState = 'user_speaking';
+    sim.statusText = `⚡ Barge-In Active — Listening (${sourceLabel})`;
+    updateSimStatusDom();
+    updateSimKpisDom();
+    updatePersonaStageDom();
+    if (sim.ws && !sim.ws._directDg && !sim.ws._isSandbox && sim.ws.readyState === WebSocket.OPEN) {
+      try {
+        sim.ws.send(JSON.stringify({ type: 'client_barge_in' }));
+      } catch {}
+    }
+  }
+
   function flushSimulatorSpeakerQueue() {
     for (const src of sim.scheduledSources) {
       try {
-        src.stop();
+        src.stop(0);
       } catch {}
     }
     sim.scheduledSources = [];
@@ -1066,9 +1487,20 @@
   }
 
   function enqueuePcm16Playback(arrayBuf) {
+    if (sim.bargeInSuppressAudio) return;
     if (!sim.playCtx || arrayBuf.byteLength < 2) return;
     if (sim.playCtx.state === 'suspended') {
       sim.playCtx.resume().catch(() => {});
+    }
+    if (!sim.playAnalyser) {
+      try {
+        sim.playAnalyser = sim.playCtx.createAnalyser();
+        sim.playAnalyser.fftSize = 256;
+        sim.playAnalyser.smoothingTimeConstant = 0.55;
+        sim.playAnalyser.connect(sim.playCtx.destination);
+      } catch {
+        sim.playAnalyser = null;
+      }
     }
     const int16 = new Int16Array(arrayBuf.slice(0, arrayBuf.byteLength - (arrayBuf.byteLength % 2)));
     const float32 = new Float32Array(int16.length);
@@ -1081,13 +1513,14 @@
 
     const src = sim.playCtx.createBufferSource();
     src.buffer = audioBuffer;
-    src.connect(sim.playCtx.destination);
+    src.connect(sim.playAnalyser || sim.playCtx.destination);
 
     const now = sim.playCtx.currentTime;
-    const startAt = Math.max(now + 0.015, sim.nextPlayTime || now + 0.015);
+    const startAt = Math.max(now + 0.006, sim.nextPlayTime || now + 0.006);
     src.start(startAt);
     sim.nextPlayTime = startAt + audioBuffer.duration;
     sim.scheduledSources.push(src);
+    startPersonaLipSyncLoop();
 
     src.onended = () => {
       const idx = sim.scheduledSources.indexOf(src);
@@ -1142,20 +1575,48 @@
     if ((!sim.active && !sim.connecting) || sim.muted) {
       const meter = document.getElementById('sim-mic-bar');
       if (meter) meter.style.width = '0%';
+      sim.vadConsecutiveFrames = 0;
       return;
     }
     const gain = Number(sim.micGain) || 1.0;
     let sum = 0;
+    let rawSum = 0;
     for (let i = 0; i < ch.length; i++) {
+      rawSum += ch[i] * ch[i];
       const v = ch[i] * gain;
       sum += v * v;
     }
+    const rawRms = Math.sqrt(rawSum / ch.length);
     const rms = Math.sqrt(sum / ch.length);
     const pct = Math.min(100, Math.round(rms * 420));
     if (pct > sim.micPeakPct) sim.micPeakPct = pct;
 
     const meter = document.getElementById('sim-mic-bar');
     if (meter) meter.style.width = `${pct}%`;
+
+    // Sub-15ms Local Smart Barge-In VAD: immediately silences WebAudio speaker output when caller speaks over bot
+    const beh = A()?.behavior || {};
+    if (
+      sim.active &&
+      beh.bargeIn === 'instant' &&
+      (sim.scheduledSources.length > 0 || sim.agentState === 'speaking') &&
+      Date.now() - sim.lastLocalBargeInAt > 650
+    ) {
+      const sens = beh.bargeInSensitivity || 'balanced';
+      const rmsThresh = sens === 'high' ? 0.022 : sens === 'low' ? 0.065 : 0.038;
+      const reqFrames = sens === 'high' ? 2 : sens === 'low' ? 4 : 3;
+      if (rawRms >= rmsThresh) {
+        sim.vadConsecutiveFrames += 1;
+        if (sim.vadConsecutiveFrames >= reqFrames) {
+          sim.vadConsecutiveFrames = 0;
+          triggerInstantBargeIn('Instant Mic VAD <15ms');
+        }
+      } else {
+        sim.vadConsecutiveFrames = Math.max(0, sim.vadConsecutiveFrames - 1);
+      }
+    } else {
+      sim.vadConsecutiveFrames = 0;
+    }
 
     if (sim.ws && sim.ws.readyState === WebSocket.OPEN) {
       const pcmBuf = downsampleFloat32ToInt16(ch, inSampleRate, sim.sampleRateIn, gain);
@@ -1228,7 +1689,7 @@
             class VacMicCaptureProcessor extends AudioWorkletProcessor {
               constructor() {
                 super();
-                this._buf = new Float32Array(1024);
+                this._buf = new Float32Array(512);
                 this._pos = 0;
               }
               process(inputs) {
@@ -1237,7 +1698,7 @@
                   const ch = input[0];
                   for (let i = 0; i < ch.length; i++) {
                     this._buf[this._pos++] = ch[i];
-                    if (this._pos >= 1024) {
+                    if (this._pos >= 512) {
                       this.port.postMessage(this._buf.slice(0));
                       this._pos = 0;
                     }
@@ -1273,7 +1734,7 @@
 
     // Fallback to ScriptProcessorNode if AudioWorklet unavailable
     if (!procNode) {
-      const processor = ctx.createScriptProcessor(2048, 1, 1);
+      const processor = ctx.createScriptProcessor(1024, 1, 1);
       processor.onaudioprocess = (ev) => {
         handleMicFloatSamples(ev.inputBuffer.getChannelData(0), ctx.sampleRate);
       };
@@ -1309,12 +1770,17 @@
       clearInterval(sim.durationTimer);
       sim.durationTimer = null;
     }
+    if (sim.lipRaf) {
+      cancelAnimationFrame(sim.lipRaf);
+      sim.lipRaf = null;
+    }
     stopMicCaptureOnly();
     if (sim.captureCtx) {
       sim.captureCtx.close().catch(() => {});
       sim.captureCtx = null;
     }
     flushSimulatorSpeakerQueue();
+    sim.playAnalyser = null;
     if (sim.playCtx) {
       sim.playCtx.close().catch(() => {});
       sim.playCtx = null;
@@ -1334,6 +1800,11 @@
     sim.micEnabled = withMic;
     sim.lastError = null;
     sim.turns = 0;
+    sim.bargeInCount = 0;
+    sim.bargeInSuppressAudio = false;
+    sim.bargeInFlashUntil = 0;
+    sim.vadConsecutiveFrames = 0;
+    sim.lastLocalBargeInAt = 0;
     sim.lastTtfbMs = null;
     sim.avgTtfbMs = null;
     sim.lastLlmMs = null;
@@ -1343,23 +1814,28 @@
     sim.elapsedSec = 0;
     sim.micTxBytes = 0;
     sim.micPeakPct = 0;
-    sim.statusText = 'Connecting WebSocket…';
+    sim.expression = 'smile';
+    sim.expressionLabel = '😊 Greeting Ready';
+    sim.gesture = 'wave';
+    sim.gestureIcon = '👋';
+    sim.gestureLabel = 'Friendly Wave';
+    sim.statusText = 'Connecting Ultra-Low Latency WebSocket…';
     sim.agentState = 'connecting';
 
     const mode = effectiveSimulatorMode();
     sim.sampleRateIn = sim.bandwidth === 'telephony' ? 8000 : 16000;
     sim.sampleRateOut = sim.bandwidth === 'telephony' ? 8000 : 24000;
 
-    // Unlock BOTH Speaker AND Microphone WebAudio contexts synchronously inside click gesture!
-    // (In Chrome/Edge on Windows, creating captureCtx after async getUserMedia leaves it 'suspended'!)
+    // Unlock BOTH Speaker AND Microphone WebAudio contexts synchronously inside click gesture with interactive low-latency hint!
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (AudioCtx) {
       try {
-        sim.playCtx = new AudioCtx();
+        sim.playCtx = new AudioCtx({ latencyHint: 'interactive' });
+        sim.playAnalyser = null;
         sim.nextPlayTime = 0;
         sim.playCtx.resume().catch(() => {});
         if (withMic) {
-          sim.captureCtx = new AudioCtx();
+          sim.captureCtx = new AudioCtx({ latencyHint: 'interactive' });
           sim.captureCtx.resume().catch(() => {});
         }
       } catch (audioErr) {
@@ -1463,12 +1939,28 @@
         }, 500);
         if (tab === 'test') render();
       } else if (msg.type === 'barge_in') {
-        flushSimulatorSpeakerQueue();
-        sim.agentState = 'user_speaking';
-        sim.statusText = 'Caller Speaking (Barge-In Cleared Speaker Buffer)';
-        updateSimStatusDom();
+        if ((A()?.behavior?.bargeIn || 'instant') !== 'off') {
+          if (Date.now() - sim.lastLocalBargeInAt > 500) {
+            triggerInstantBargeIn(msg.source === 'client_vad' ? 'Instant Mic VAD' : 'Deepgram VAD');
+          } else {
+            flushSimulatorSpeakerQueue();
+            sim.bargeInSuppressAudio = true;
+          }
+        }
       } else if (msg.type === 'agent_state') {
         sim.agentState = msg.state;
+        if (msg.state === 'thinking') {
+          sim.bargeInSuppressAudio = false;
+          applyPersonaExpressionAndGesture('think', '🧠 Ultra-Fast Thinking', 'think', '💭', 'Speculative Compute');
+        } else if (msg.state === 'speaking') {
+          sim.bargeInSuppressAudio = false;
+        } else if (msg.state === 'user_speaking') {
+          if (Date.now() >= sim.bargeInFlashUntil) {
+            applyPersonaExpressionAndGesture('listen', '👂 Attentive Focus', 'listen', '🎧', 'Listening to Caller');
+          }
+        } else if (msg.state === 'listening') {
+          applyPersonaExpressionAndGesture('smile', '🙂 Ready & Attentive', 'ready', '✨', 'Open Turn');
+        }
         const labels = {
           listening: 'Listening for Caller…',
           user_speaking: 'Caller Speaking…',
@@ -1477,8 +1969,14 @@
         };
         sim.statusText = labels[msg.state] || msg.state;
         updateSimStatusDom();
+        updatePersonaStageDom();
       } else if (msg.type === 'transcript') {
-        if (msg.role === 'user') sim.turns += 1;
+        sim.bargeInSuppressAudio = false;
+        if (msg.role === 'user') {
+          sim.turns += 1;
+        } else {
+          classifyBotUtterancePresence(msg.content);
+        }
         sim.events.push({
           kind: 'msg',
           role: msg.role,
@@ -1590,11 +2088,42 @@
       sim.active = true;
       sim.startedAtMs = Date.now();
       sim.statusText = 'Live in Browser Sandbox Dry-Run';
-      sim.events.push({ kind: 'msg', role: 'assistant', content: settings.agent.greeting || agent.greeting });
+      const greetTxt = settings.agent.greeting || agent.greeting;
+      sim.events.push({ kind: 'msg', role: 'assistant', content: greetTxt });
+      classifyBotUtterancePresence(greetTxt);
       sim.ws = {
         readyState: WebSocket.OPEN,
         _isSandbox: true,
         send: () => {},
+        injectSandbox(userTxt) {
+          const low = String(userTxt || '').toLowerCase();
+          sim.turns += 1;
+          sim.lastTtfbMs = 190;
+          sim.avgTtfbMs = 190;
+          sim.events.push({ kind: 'msg', role: 'user', content: userTxt });
+          let botReply =
+            "Oh, great question! Add your DEEPGRAM_API_KEY in 🔑 API Keys to chat with live Deepgram Flux v2 voice & managed LLMs in real time!";
+          if (/(introduce yourself|who are you|what is your name|what's your name|what can you do)/i.test(low)) {
+            botReply =
+              agent.behavior?.selfIntro ||
+              defaultSelfIntroForClient(agent.id, agent.name);
+          } else if (/capital of japan/i.test(low)) {
+            botReply = 'Oh, great question! The capital of Japan is Tokyo — a vibrant metropolis of nearly 14 million people!';
+          } else if (/sky blue/i.test(low)) {
+            botReply = 'Oh, I love that one! Sunlight scatters off nitrogen and oxygen in our atmosphere, and short blue wavelengths scatter the most!';
+          } else if (/18 times 15/i.test(low)) {
+            botReply = 'Gotcha — 18 times 15 is 270!';
+          }
+          setTimeout(() => {
+            if (!sim.active) return;
+            sim.events.push({ kind: 'msg', role: 'assistant', content: botReply });
+            classifyBotUtterancePresence(botReply);
+            renderSimFeedDom();
+            updateSimKpisDom();
+          }, 180);
+          renderSimFeedDom();
+          updateSimKpisDom();
+        },
         close: () => {
           sim.active = false;
           cleanupSimulatorMedia();
@@ -1701,27 +2230,39 @@
         }, 5000);
         if (tab === 'test') render();
       } else if (msg.type === 'UserStartedSpeaking') {
-        flushSimulatorSpeakerQueue();
-        sim.agentState = 'user_speaking';
-        sim.statusText = 'Caller Speaking…';
-        updateSimStatusDom();
+        if ((agent.behavior?.bargeIn || 'instant') !== 'off') {
+          if (Date.now() - sim.lastLocalBargeInAt > 500) {
+            triggerInstantBargeIn('Deepgram VAD');
+          } else {
+            flushSimulatorSpeakerQueue();
+            sim.bargeInSuppressAudio = true;
+          }
+        }
       } else if (msg.type === 'AgentThinking') {
+        sim.bargeInSuppressAudio = false;
         sim.agentState = 'thinking';
         sim.statusText = 'LLM Thinking…';
+        applyPersonaExpressionAndGesture('think', '🧠 Ultra-Fast Thinking', 'think', '💭', 'Speculative Compute');
         updateSimStatusDom();
       } else if (msg.type === 'AgentStartedSpeaking') {
+        sim.bargeInSuppressAudio = false;
         sim.agentState = 'speaking';
         sim.statusText = 'Bot Speaking…';
         updateSimStatusDom();
+        updatePersonaStageDom();
       } else if (msg.type === 'AgentAudioDone') {
         sim.agentState = 'listening';
         sim.statusText = 'Listening for Caller…';
+        applyPersonaExpressionAndGesture('smile', '🙂 Ready & Attentive', 'ready', '✨', 'Open Turn');
         updateSimStatusDom();
       } else if (msg.type === 'ConversationText') {
+        sim.bargeInSuppressAudio = false;
         if (msg.role === 'user') {
           sim.turns += 1;
           lastUserTurnAt = Date.now();
           awaitingFirstAudio = true;
+        } else {
+          classifyBotUtterancePresence(msg.content);
         }
         sim.events.push({ kind: 'msg', role: msg.role, content: msg.content });
         renderSimFeedDom();
@@ -1804,7 +2345,16 @@
   function injectCallerUtterance(text) {
     const clean = String(text || '').trim();
     if (!clean || !sim.ws) return;
-    flushSimulatorSpeakerQueue();
+    if (sim.scheduledSources.length > 0 || sim.agentState === 'speaking') {
+      triggerInstantBargeIn('Text Barge-In');
+    } else {
+      flushSimulatorSpeakerQueue();
+    }
+    sim.bargeInSuppressAudio = false;
+    if (sim.ws._isSandbox && sim.ws.injectSandbox) {
+      sim.ws.injectSandbox(clean);
+      return;
+    }
     if (sim.ws._directDg) {
       sim.turns += 1;
       sim.events.push({ kind: 'msg', role: 'user', content: clean });
@@ -1834,11 +2384,22 @@
   function updateSimKpisDom() {
     const elTurns = document.getElementById('sim-kpi-turns');
     const elTtfb = document.getElementById('sim-kpi-ttfb');
+    const elBarge = document.getElementById('sim-kpi-barge');
     const elDispo = document.getElementById('sim-kpi-dispo');
     const elXfer = document.getElementById('sim-kpi-xfer');
     if (elTurns) elTurns.textContent = String(sim.turns);
     if (elTtfb) {
-      elTtfb.textContent = sim.lastTtfbMs !== null ? `${sim.lastTtfbMs} ms (avg ${sim.avgTtfbMs} ms)` : '—';
+      if (sim.lastTtfbMs !== null) {
+        const fastBadge = sim.lastTtfbMs <= 650 ? '⚡ ' : '';
+        elTtfb.textContent = `${fastBadge}${sim.lastTtfbMs} ms (avg ${sim.avgTtfbMs} ms)`;
+        elTtfb.className = `kpi-val ${sim.lastTtfbMs <= 700 ? 'ok' : ''}`;
+      } else {
+        elTtfb.textContent = '—';
+      }
+    }
+    if (elBarge) {
+      elBarge.textContent = String(sim.bargeInCount || 0);
+      elBarge.className = `kpi-val ${sim.bargeInCount > 0 ? 'ok' : ''}`;
     }
     if (elDispo) {
       elDispo.textContent = sim.disposition || '—';
@@ -1891,6 +2452,7 @@
   function renderSimulatorDomOnly() {
     updateSimStatusDom();
     updateSimKpisDom();
+    updatePersonaStageDom();
     renderSimFeedDom();
   }
 
@@ -2364,6 +2926,58 @@
           ${F('Greeting (spoken immediately when session opens)', 'a.greeting', 'ta')}
           ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
 
+          <h2>⚡ Barge-In, Expressions, Gestures, Speed &amp; General Q&amp;A</h2>
+          <label>1-Click Processing Speed &amp; Ultra-Low Latency Presets</label>
+          <div class="speed-preset-grid">
+            <button type="button" class="speed-card ${a.llm.model === 'gpt-4o-mini' && Number(a.stt.eot) <= 0.56 ? 'active' : ''}" data-speed-preset="ultra">
+              <div class="speed-card-title"><span>⚡ Ultra-Fast OpenAI</span><span class="pill ok">~550ms</span></div>
+              <div class="speed-card-sub">GPT-4o mini + Speculative Flux EOT (0.55 / 0.35) + 1.05x Expressive</div>
+            </button>
+            <button type="button" class="speed-card ${a.llm.model === 'gemini-2.5-flash-lite' ? 'active' : ''}" data-speed-preset="gemini">
+              <div class="speed-card-title"><span>✨ Gemini Flash-Lite</span><span class="pill ok">~515ms</span></div>
+              <div class="speed-card-sub">Fastest Google Deepgram-Managed streaming LLM + Turbo EOT</div>
+            </button>
+            <button type="button" class="speed-card ${a.llm.model === 'openai/gpt-oss-20b' ? 'active' : ''}" data-speed-preset="groq">
+              <div class="speed-card-title"><span>🚀 Groq LPU OSS</span><span class="pill ok">LPU</span></div>
+              <div class="speed-card-sub">Deepgram-Managed Groq GPT OSS 20B + Instant Eager EOT</div>
+            </button>
+            <button type="button" class="speed-card ${a.llm.model === 'gpt-4.1-mini' && Number(a.stt.eot) > 0.56 ? 'active' : ''}" data-speed-preset="balanced">
+              <div class="speed-card-title"><span>⚖️ Balanced Smart</span><span class="pill">~700ms</span></div>
+              <div class="speed-card-sub">GPT-4.1 mini + Balanced Turn Detection (0.62 / 0.42)</div>
+            </button>
+          </div>
+
+          <div class="row r3">
+            ${F('🛑 Barge-In Interruption Mode', 'a.behavior.bargeIn', 'sel', [
+              ['instant', '⚡ Instant Dual-Layer (<15ms Mic VAD + Deepgram)'],
+              ['server', '🌐 Deepgram Server VAD Only'],
+              ['off', '🔒 Disabled (Finish Speaking First)'],
+            ])}
+            ${F('🎙️ Barge-In Mic Sensitivity', 'a.behavior.bargeInSensitivity', 'sel', [
+              ['high', 'High (Fastest Interruption)'],
+              ['balanced', 'Balanced (Echo-Safe Smart VAD)'],
+              ['low', 'Low (Noisy Background Safe)'],
+            ])}
+            ${F('⚡ Streaming Cadence Profile', 'a.behavior.latencyProfile', 'sel', [
+              ['ultra', '⚡ Ultra-Fast Front-Loaded Speech'],
+              ['balanced', '⚖️ Balanced Conversational'],
+              ['quality', '🧠 Detailed Responses'],
+            ])}
+          </div>
+          <div class="row">
+            ${F('😊 Vocal Expression & Persona Tone', 'a.behavior.expressionStyle', 'sel', [
+              ['warm_empathetic', '🥰 Warm, Empathetic & Caring'],
+              ['energetic_upbeat', '🤩 Energetic, Bright & Upbeat'],
+              ['charismatic_closer', '🔥 Confident, Charismatic & Persuasive'],
+              ['calm_concierge', '🧘 Calm, Articulate & Executive'],
+            ])}
+            <div style="display:flex;flex-direction:column;justify-content:center;gap:8px;padding-top:16px">
+              ${F('👋 Enable Natural Vocal Gestures & Micro-Reactions ("Oh, great question!", "Gotcha —")', 'a.behavior.vocalGestures', 'chk')}
+              ${F('🌍 Answer Any General Knowledge, Math, Science & Everyday Questions', 'a.behavior.allowGeneralQa', 'chk')}
+            </div>
+          </div>
+          ${F('👋 Self-Introduction Bio (spoken naturally when asked "Who are you?" or "Introduce yourself")', 'a.behavior.selfIntro', 'ta')}
+
           <h2>Speech-to-Text (Listen)</h2>
           <div class="row">
             ${F('STT Plug-in', 'a.stt.p', 'sel', providersByKind('stt'))}
@@ -2780,10 +3394,13 @@
               : ''
           }
 
+          ${renderPersonaStageHtml(a)}
+
           <div class="sim-kpis">
             <div class="kpi"><div class="kpi-lbl">Duration</div><div class="kpi-val" id="sim-kpi-dur">${formatDuration(sim.elapsedSec)}</div></div>
             <div class="kpi"><div class="kpi-lbl">Caller Turns</div><div class="kpi-val" id="sim-kpi-turns">${sim.turns}</div></div>
-            <div class="kpi"><div class="kpi-lbl">Audio TTFB Latency</div><div class="kpi-val" id="sim-kpi-ttfb">${sim.lastTtfbMs !== null ? `${sim.lastTtfbMs} ms` : '—'}</div></div>
+            <div class="kpi"><div class="kpi-lbl">Audio TTFB Speed</div><div class="kpi-val ${sim.lastTtfbMs && sim.lastTtfbMs <= 700 ? 'ok' : ''}" id="sim-kpi-ttfb">${sim.lastTtfbMs !== null ? `${sim.lastTtfbMs <= 650 ? '⚡ ' : ''}${sim.lastTtfbMs} ms` : '—'}</div></div>
+            <div class="kpi"><div class="kpi-lbl">Barge-Ins</div><div class="kpi-val ${sim.bargeInCount > 0 ? 'ok' : ''}" id="sim-kpi-barge">${sim.bargeInCount || 0}</div></div>
             <div class="kpi"><div class="kpi-lbl">VICIdial Dispo</div><div class="kpi-val" id="sim-kpi-dispo">${esc(sim.disposition || '—')}</div></div>
             <div class="kpi"><div class="kpi-lbl">Closer Transfer</div><div class="kpi-val" id="sim-kpi-xfer">${esc(sim.transferredTo || '—')}</div></div>
           </div>
@@ -2791,24 +3408,30 @@
           <div class="sim-feed" id="sim-feed"></div>
 
           <div class="bar" style="margin-top:10px;margin-bottom:0">
-            <input id="sim-inject-input" style="flex:1" placeholder="${sim.active ? 'Type caller utterance & press Enter (sends InjectUserMessage)…' : 'Start a call above to speak or inject utterances…'}" ${sim.active ? '' : 'disabled'}>
+            <input id="sim-inject-input" style="flex:1" placeholder="${sim.active ? 'Type any general question, self-intro prompt, or campaign reply & press Enter…' : 'Start a call above to speak, barge-in, or inject utterances…'}" ${sim.active ? '' : 'disabled'}>
             <button class="b" id="btn-sim-inject" ${sim.active ? '' : 'disabled'}>Send Utterance</button>
           </div>
           <div class="chip-row">
-            ${(
-              a.id === 'a_medicare' || /medicare/i.test(a.name)
+            ${[
+              'Hi! Who are you? Please introduce yourself!',
+              'Why is the sky blue and what is the capital of Japan?',
+              'What is 18 times 15, and give me a quick productivity tip!',
+              ...(a.id === 'a_medicare' || /medicare/i.test(a.name)
                 ? [
                     'Yes, I have Medicare Part A and Part B, and I am 71.',
                     'Is this a scam or a sales pitch?',
-                    'Hablo español, no hablo inglés.',
                     'Stop calling my phone please.',
+                  ]
+                : a.id === 'a_nova'
+                ? [
+                    'I had a really long week — share some warm encouragement!',
+                    'Explain quantum computing in two super simple sentences.',
                   ]
                 : [
                     "Yes, I'm 64 and looking for final expense coverage.",
-                    'How much does it cost per month?',
                     'Take me off your calling list please.',
-                  ]
-            )
+                  ]),
+            ]
               .map(
                 (q) =>
                   `<button class="chip" data-inject="${esc(q)}" ${sim.active ? '' : 'disabled title="Start call first"'}>💬 "${esc(q)}"</button>`
@@ -3267,7 +3890,9 @@
         loadedState = await staticRes.json();
       }
       S = loadedState;
-      if (enforceDeepgramOnlyLlms(S)) {
+      const mig1 = enforceDeepgramOnlyLlms(S);
+      const mig2 = upgradeRealtimeAgentFeatures(S);
+      if (mig1 || mig2) {
         try {
           window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
         } catch {}
@@ -3294,6 +3919,7 @@
     const data = await res.json();
     S = data.state;
     enforceDeepgramOnlyLlms(S);
+    upgradeRealtimeAgentFeatures(S);
     snap = comparableSnapshot(S);
     revisions = data.revisions || [];
     secretsStatus = data.secrets || {};
@@ -3894,6 +4520,69 @@
     if (d.gls) {
       appearance.glass = d.gls;
       applyAppearance(true);
+      return;
+    }
+
+    if (d.speedPreset) {
+      const a = A();
+      if (!a.behavior) upgradeRealtimeAgentFeatures(S);
+      const findLlmProv = (type) => S.providers.find((p) => p.kind === 'llm' && p.type === type);
+      if (d.speedPreset === 'ultra') {
+        const p = findLlmProv('open_ai');
+        if (p) a.llm.p = p.id;
+        a.llm.model = 'gpt-4o-mini';
+        a.stt.eot = 0.55;
+        a.stt.eager = 0.35;
+        a.stt.eotms = 1800;
+        a.tts.speed = 1.05;
+        a.tts.expr = 1;
+        a.behavior.latencyProfile = 'ultra';
+      } else if (d.speedPreset === 'gemini') {
+        const p = findLlmProv('google');
+        if (p) a.llm.p = p.id;
+        a.llm.model = 'gemini-2.5-flash-lite';
+        a.stt.eot = 0.55;
+        a.stt.eager = 0.35;
+        a.stt.eotms = 1800;
+        a.tts.speed = 1.05;
+        a.tts.expr = 1;
+        a.behavior.latencyProfile = 'ultra';
+      } else if (d.speedPreset === 'groq') {
+        const p = findLlmProv('groq');
+        if (p) a.llm.p = p.id;
+        a.llm.model = 'openai/gpt-oss-20b';
+        a.stt.eot = 0.55;
+        a.stt.eager = 0.35;
+        a.stt.eotms = 1800;
+        a.tts.speed = 1.05;
+        a.tts.expr = 1;
+        a.behavior.latencyProfile = 'ultra';
+      } else if (d.speedPreset === 'balanced') {
+        const p = findLlmProv('open_ai');
+        if (p) a.llm.p = p.id;
+        a.llm.model = 'gpt-4.1-mini';
+        a.stt.eot = 0.62;
+        a.stt.eager = 0.42;
+        a.stt.eotms = 2400;
+        a.tts.speed = 1.0;
+        a.tts.expr = 1;
+        a.behavior.latencyProfile = 'balanced';
+      }
+      render();
+      return;
+    }
+
+    if (b.id === 'btn-manual-barge') {
+      if (sim.active) {
+        triggerInstantBargeIn('Manual Button');
+      }
+      return;
+    }
+
+    if (b.id === 'btn-trigger-intro') {
+      if (sim.active) {
+        injectCallerUtterance('Hi! Who are you? Please introduce yourself and tell me what you can help me with!');
+      }
       return;
     }
 
