@@ -3,11 +3,35 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>Voice Agent Console — AI Telephony &amp; VICIdial Studio</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=elite-2.6" />
+  <link rel="stylesheet" href="./styles.css?v=elite-2.7" />
+  <script>
+    (function () {
+      var CURRENT_BUILD = 'elite-2.7';
+      // Keep the browser URL bar permanently clean (strip any legacy ?v= or ?cb= query params)
+      try {
+        if (window.location.search && /^[?&](v|cb|_)=/.test(window.location.search)) {
+          window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+        }
+      } catch (e) {}
+      // Seamless background check so the permanent URL always picks up newly published builds automatically
+      fetch('./version.json?t=' + Date.now(), { cache: 'no-store' })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) {
+          if (j && j.build && j.build !== CURRENT_BUILD && sessionStorage.getItem('vac_reloaded_build') !== j.build) {
+            sessionStorage.setItem('vac_reloaded_build', j.build);
+            window.location.reload();
+          }
+        })
+        .catch(function () {});
+    })();
+  </script>
 </head>
 <body>
   <!-- GPU-Composited Ambient Light Exposure & Architectural Grid Canvas -->
@@ -125,6 +149,6 @@
   </div>
 
   <input type="file" id="import-file" accept="application/json,.json" hidden />
-  <script src="./app.js?v=elite-2.6"></script>
+  <script src="./app.js?v=elite-2.7"></script>
 </body>
 </html>
