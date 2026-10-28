@@ -366,6 +366,163 @@
 
   applyAppearance(false);
 
+  // ==================== SIDE COLLAPSIBLE CONTROL PANEL ====================
+  const SIDEBAR_STORAGE_KEY = 'vac_sidebar_collapsed_v1';
+  const NAV_ITEMS = [
+    { key: 'agents', ico: '🤖', label: 'Agents', sub: 'Personas, Speed & Barge-In', group: 'Studio Builder' },
+    { key: 'plugins', ico: '🧩', label: 'Plug-ins', sub: 'STT, Deepgram LLMs & TTS', group: 'Studio Builder' },
+    { key: 'campaigns', ico: '📢', label: 'Campaigns', sub: 'Dialer Rules & Transfers', group: 'Studio Builder' },
+    { key: 'voice', ico: '🎧', label: 'Voice Lab', sub: '139 Flux v2 & Aura Voices', group: 'Studio Builder' },
+    { key: 'test', ico: '📞', label: 'Live Bot', sub: 'Talk, Gestures & Simulator', group: 'Live & Operations' },
+    { key: 'vici', ico: '☎️', label: 'Vici Bridge', sub: 'SIP :5062 & AudioSocket', group: 'Live & Operations' },
+    { key: 'wallboard', ico: '📊', label: 'Wallboard', sub: 'KPIs & Stereo Recordings', group: 'Live & Operations' },
+    { key: 'export', ico: '💾', label: 'Export', sub: 'Settings JSON & Backup', group: 'Live & Operations' },
+  ];
+
+  let sidebarCollapsed = (() => {
+    try {
+      return window.localStorage?.getItem(SIDEBAR_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
+  })();
+  let mobileRailOpen = false;
+  let railTipEl = null;
+
+  function ensureRailTooltip() {
+    if (!railTipEl && document.body) {
+      railTipEl = document.createElement('div');
+      railTipEl.id = 'rail-floating-tip';
+      railTipEl.className = 'rail-floating-tip';
+      document.body.appendChild(railTipEl);
+    }
+    return railTipEl;
+  }
+
+  function hideRailTooltip() {
+    if (railTipEl) railTipEl.classList.remove('show');
+  }
+
+  function applySidebarState(save = false) {
+    const shell = document.getElementById('app-shell');
+    const backdrop = document.getElementById('rail-backdrop');
+    const topArrow = document.getElementById('btn-rail-collapse');
+    const footIco = document.getElementById('rail-foot-ico');
+    if (shell) {
+      shell.classList.toggle('rail-collapsed', sidebarCollapsed);
+      shell.classList.toggle('mobile-rail-open', mobileRailOpen);
+    }
+    if (backdrop) {
+      backdrop.hidden = !mobileRailOpen;
+    }
+    const arrowGlyph = sidebarCollapsed ? '»' : '«';
+    const actionHint = sidebarCollapsed ? 'Expand Side Menu (Ctrl+B)' : 'Collapse Side Menu (Ctrl+B)';
+    if (topArrow) {
+      topArrow.textContent = arrowGlyph;
+      topArrow.title = actionHint;
+    }
+    if (footIco) {
+      footIco.textContent = arrowGlyph;
+    }
+    const footBtn = document.getElementById('btn-rail-foot-toggle');
+    if (footBtn) {
+      footBtn.title = actionHint;
+    }
+    hideRailTooltip();
+    if (save) {
+      try {
+        window.localStorage?.setItem(SIDEBAR_STORAGE_KEY, sidebarCollapsed ? '1' : '0');
+      } catch {}
+    }
+  }
+
+  function toggleSidebar() {
+    if (window.matchMedia && window.matchMedia('(max-width: 860px)').matches) {
+      mobileRailOpen = !mobileRailOpen;
+      applySidebarState(false);
+    } else {
+      sidebarCollapsed = !sidebarCollapsed;
+      applySidebarState(true);
+    }
+  }
+
+  function renderSideNav() {
+    const navEl = document.getElementById('nav');
+    if (!navEl) return;
+    let isLiveCall = false;
+    try {
+      isLiveCall = Boolean(sim && (sim.active || sim.connecting));
+    } catch {}
+    let lastGroup = '';
+    const html = [];
+    for (const item of NAV_ITEMS) {
+      if (item.group !== lastGroup) {
+        if (lastGroup) html.push('<div class="nav-divider" aria-hidden="true"></div>');
+        html.push(`<div class="nav-group-lbl">${esc(item.group)}</div>`);
+        lastGroup = item.group;
+      }
+      const isOn = tab === item.key;
+      const showDot = item.key === 'test' && isLiveCall;
+      html.push(`
+        <button type="button" data-t="${item.key}" class="nav-item ${isOn ? 'on' : ''}" data-tip-title="${esc(item.ico + ' ' + item.label)}" data-tip-sub="${esc(item.sub)}" aria-current="${isOn ? 'page' : 'false'}">
+          <span class="nav-ico" aria-hidden="true">${item.ico}</span>
+          <span class="nav-txt">
+            <span class="nav-lbl">${esc(item.label)}</span>
+            <span class="nav-sub">${esc(item.sub)}</span>
+          </span>
+          ${showDot ? '<span class="nav-live-dot" title="Live Voice Session Active"></span>' : ''}
+        </button>
+      `);
+    }
+    navEl.innerHTML = html.join('');
+
+    const activeItem = NAV_ITEMS.find((i) => i.key === tab) || NAV_ITEMS[0];
+    const crumbEl = document.getElementById('active-nav-crumb');
+    if (crumbEl && activeItem) {
+      crumbEl.textContent = `${activeItem.ico} ${activeItem.label}`;
+    }
+  }
+
+  renderSideNav();
+  applySidebarState(false);
+
+  const railBackdropEl = document.getElementById('rail-backdrop');
+  if (railBackdropEl) {
+    railBackdropEl.addEventListener('click', () => {
+      mobileRailOpen = false;
+      applySidebarState(false);
+    });
+  }
+
+  const sideNavHoverEl = document.getElementById('nav');
+  if (sideNavHoverEl) {
+    sideNavHoverEl.addEventListener('mouseover', (e) => {
+      const btn = e.target.closest('button.nav-item');
+      if (!btn || !sidebarCollapsed || (window.matchMedia && window.matchMedia('(max-width: 860px)').matches)) {
+        hideRailTooltip();
+        return;
+      }
+      const tip = ensureRailTooltip();
+      if (!tip) return;
+      const rect = btn.getBoundingClientRect();
+      tip.innerHTML = `${esc(btn.dataset.tipTitle || '')}<span class="tip-sub">${esc(btn.dataset.tipSub || '')}</span>`;
+      tip.style.left = `${Math.round(rect.right + 12)}px`;
+      tip.style.top = `${Math.round(rect.top + rect.height / 2 - 20)}px`;
+      tip.classList.add('show');
+    });
+    sideNavHoverEl.addEventListener('mouseleave', hideRailTooltip);
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
+      e.preventDefault();
+      toggleSidebar();
+    } else if (e.key === 'Escape' && mobileRailOpen) {
+      mobileRailOpen = false;
+      applySidebarState(false);
+    }
+  });
+
   function readCloudSecrets() {
     try {
       const raw = window.localStorage?.getItem(CLOUD_SECRETS_KEY);
@@ -2485,6 +2642,7 @@
   }
 
   function renderSimulatorDomOnly() {
+    renderSideNav();
     updateSimStatusDom();
     updateSimKpisDom();
     updatePersonaStageDom();
@@ -2923,19 +3081,8 @@
 
   function render() {
     if (!S) return;
-    const tabs = [
-      ['agents', '🤖 Agents'],
-      ['plugins', '🧩 Plug-ins'],
-      ['campaigns', '📢 Campaigns'],
-      ['voice', '🎧 Voice Lab'],
-      ['test', '📞 Live Bot'],
-      ['vici', '☎️ Vici Bridge'],
-      ['wallboard', '📊 Wallboard'],
-      ['export', '💾 Export'],
-    ];
-    document.getElementById('nav').innerHTML = tabs
-      .map(([k, lbl]) => `<button data-t="${k}" class="${tab === k ? 'on' : ''}">${lbl}</button>`)
-      .join('');
+    renderSideNav();
+    applySidebarState(false);
 
     const m = document.getElementById('m');
     m.className = tab === 'voice' || tab === 'export' ? 'wide' : '';
@@ -4509,9 +4656,19 @@
     if (!b) return;
     const d = b.dataset;
 
+    if (b.id === 'btn-sidebar-toggle' || b.id === 'btn-rail-collapse' || b.id === 'btn-rail-foot-toggle') {
+      toggleSidebar();
+      return;
+    }
+
     if (d.t) {
       stopAllAudio();
       tab = d.t;
+      if (mobileRailOpen) {
+        mobileRailOpen = false;
+        applySidebarState(false);
+      }
+      hideRailTooltip();
       if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
       render();
       return;
