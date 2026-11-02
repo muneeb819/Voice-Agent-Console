@@ -7,16 +7,13 @@ exports.defaultSelfIntroForAgent = defaultSelfIntroForAgent;
 exports.deepgramModelsForProviderType = deepgramModelsForProviderType;
 exports.createDefaultState = createDefaultState;
 exports.normalizeState = normalizeState;
-exports.VOICE_AGENT_STT_MODELS = ['flux-general-en', 'flux-general-multi'];
+// Deepgram Voice Agent listens with either Nova (general purpose) or Flux v2.
+// The Voice Agent's own verified baseline is Nova-3; Flux models remain available.
+exports.VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'];
 function defaultVoiceAgentSttModel(language) {
-    const languages = String(language || 'en')
-        .toLowerCase()
-        .split(/[\s,]+/)
-        .map((entry) => entry.split(/[-_]/)[0])
-        .filter(Boolean);
-    return languages.some((entry) => entry !== 'en') || languages.length > 1
-        ? 'flux-general-multi'
-        : 'flux-general-en';
+    // Nova-3 is multilingual and is the Voice Agent API's default listen model.
+    void language;
+    return 'nova-3';
 }
 function normalizeVoiceAgentSttModel(model, language) {
     const value = String(model || '').trim();
@@ -119,7 +116,7 @@ function createDefaultState() {
             makeProvider('l3', 'llm', 'Google Gemini (Deepgram Managed)', 'google', 'gemini-2.5-flash,gemini-2.5-flash-lite,gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.1-pro-preview,gemini-3.5-flash,gemini-3.8-flash'),
             makeProvider('l4', 'llm', 'Groq OSS (Deepgram Managed)', 'groq', 'openai/gpt-oss-20b'),
             makeProvider('l5', 'llm', 'NVIDIA Nemotron (Deepgram Managed)', 'nvidia', 'nvidia/nemotron-3.5-lightning-30b-a3b'),
-            makeProvider('t1', 'tts', 'Deepgram TTS (Flux v2 & Aura v1)', 'deepgram', 'flux-haley-en,flux-kit-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en'),
+            makeProvider('t1', 'tts', 'Deepgram TTS (Flux v2 & Aura v1)', 'deepgram', 'flux-kit-en,flux-haley-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en'),
         ],
         functions: [
             makeFn('fn_xfer', 'transfer_to_live_agent', 'Transfer the call to a live licensed specialist/closer once eligibility criteria are verified, passing structured metadata (Name, Age, Medicare Status, Hook Type)', objSchema({

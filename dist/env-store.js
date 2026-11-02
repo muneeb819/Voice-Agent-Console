@@ -230,12 +230,12 @@ async function verifyDeepgramConnection(explicitKey) {
                             output: { encoding: 'linear16', sample_rate: 24000, container: 'none' },
                         },
                         agent: {
-                            listen: { provider: { type: 'deepgram', version: 'v2', model: 'flux-general-en' } },
+                            listen: { provider: { type: 'deepgram', model: 'nova-3' } },
                             think: {
                                 provider: { type: 'open_ai', model: 'gpt-4o-mini', temperature: 0.7 },
                                 prompt: 'Diagnostic ping.',
                             },
-                            speak: { provider: { type: 'deepgram', version: 'v2', model: 'flux-haley-en' } },
+                            speak: { provider: { type: 'deepgram', version: 'v2', model: 'flux-kit-en' } },
                         },
                     }));
                 }

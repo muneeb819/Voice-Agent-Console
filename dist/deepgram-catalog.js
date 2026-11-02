@@ -227,9 +227,8 @@ async function fetchDeepgramVoiceCatalog(forceRefresh = false) {
                     return famRank[a.family] - famRank[b.family];
                 return a.displayName.localeCompare(b.displayName);
             });
-            // Voice Agent Settings accepts only these Flux v2 listen models. Keep Nova models
-            // out of the Agent console catalog even though the standalone STT API offers them.
-            const sttSet = new Set(['flux-general-en', 'flux-general-multi']);
+            // Voice Agent Settings accepts Nova-3 plus the Flux v2 listen models.
+            const sttSet = new Set(['nova-3', 'flux-general-en', 'flux-general-multi']);
             if (voices.length === 0) {
                 throw new Error('Deepgram models response returned 0 TTS voices');
             }
@@ -251,7 +250,7 @@ async function fetchDeepgramVoiceCatalog(forceRefresh = false) {
                 source: 'fallback_catalog',
                 authenticated: false,
                 voices: FALLBACK_VOICES,
-                sttModels: ['flux-general-en', 'flux-general-multi'],
+                sttModels: ['nova-3', 'flux-general-en', 'flux-general-multi'],
             };
         }
         finally {

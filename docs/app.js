@@ -693,7 +693,7 @@
     } catch {}
   })();
 
-  const VOICE_AGENT_STT_MODELS = ['flux-general-en', 'flux-general-multi'];
+  const VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'];
   function defaultSelfIntroForClient(id, name) {
     if (id === 'a_nova' || /nova|concierge|general/i.test(name || '')) {
       return "Hi there! I'm Nova, a live Customer Support & Concierge Specialist here on the line. I'm happy to chat naturally and help answer any general knowledge, everyday, or support question you have!";
@@ -741,7 +741,7 @@
       }
     }
 
-    // Migrate legacy Nova STT selections: Voice Agent Settings currently accepts Flux v2 only.
+    // Deepgram Voice Agent listen models: Nova-3 baseline plus Flux v2.
     const sttProviders = (state.providers || []).filter((p) => p.kind === 'stt');
     for (const provider of sttProviders) {
       if (provider.type !== 'deepgram') {
@@ -1186,27 +1186,38 @@
     const linkedCampaign = S.campaigns.find((c) => c.agentId === agent.id);
 
     const sttModel = VOICE_AGENT_STT_MODELS.includes(String(S.services?.stt?.model || '')) ? S.services.stt.model : '';
+    const isFluxListen = sttModel.startsWith('flux-');
     const listenProvider = {
       type: sttModel && sp.type === 'deepgram' ? 'deepgram' : '',
-      version: sttModel && sp.type === 'deepgram' ? 'v2' : '',
       model: sttModel,
-      eot_threshold: Number(agent.stt.eot),
-      eager_eot_threshold: Number(agent.stt.eager),
-      eot_timeout_ms: Math.round(Number(agent.stt.eotms)),
     };
-    if (sttModel === 'flux-general-multi' && agent.language) {
-      listenProvider.language_hints = agent.language.split(',').map((s) => s.trim()).filter(Boolean);
+    if (isFluxListen) {
+      listenProvider.version = 'v2';
+      listenProvider.eot_threshold = Number(agent.stt.eot);
+      listenProvider.eager_eot_threshold = Number(agent.stt.eager);
+      listenProvider.eot_timeout_ms = Math.round(Number(agent.stt.eotms));
+      if (sttModel === 'flux-general-multi' && agent.language) {
+        listenProvider.language_hints = agent.language.split(',').map((s) => s.trim()).filter(Boolean);
+      }
+      const kt = (agent.stt.keyterms || '').split(',').map((s) => s.trim()).filter(Boolean);
+      if (kt.length) listenProvider.keyterms = kt;
     }
-    const kt = (agent.stt.keyterms || '').split(',').map((s) => s.trim()).filter(Boolean);
-    if (kt.length) listenProvider.keyterms = kt;
     const spEx = parseJsonObject(sp.extra);
     if (spEx.ok) Object.assign(listenProvider, spEx.value);
     listenProvider.type = sttModel && sp.type === 'deepgram' ? 'deepgram' : '';
-    listenProvider.version = sttModel && sp.type === 'deepgram' ? 'v2' : '';
     listenProvider.model = sttModel;
     delete listenProvider.language;
     delete listenProvider.smart_format;
-    if (sttModel !== 'flux-general-multi') delete listenProvider.language_hints;
+    if (!isFluxListen) {
+      delete listenProvider.version;
+      delete listenProvider.eot_threshold;
+      delete listenProvider.eager_eot_threshold;
+      delete listenProvider.eot_timeout_ms;
+      delete listenProvider.language_hints;
+      delete listenProvider.keyterms;
+    } else if (sttModel !== 'flux-general-multi') {
+      delete listenProvider.language_hints;
+    }
 
     const llmModel = String(S.services?.llm?.model || '').trim();
     const thinkProvider = { type: lp.type || '' };
@@ -1249,10 +1260,8 @@
     const mk = tp.type === 'deepgram' || tp.type === 'open_ai' ? 'model' : tp.mk || 'model_id';
     if (tp.type && ttsModel && tp.type !== 'aws_polly') speakProvider[mk] = ttsModel;
     if (tp.type === 'deepgram' && ttsModel) {
-      const isFlux = ttsModel.startsWith('flux');
-      speakProvider.version = isFlux ? 'v2' : 'v1';
-      speakProvider.speed = isFlux ? normalizeFluxSpeed(agent.tts.speed) : Number(agent.tts.speed);
-      if (isFlux && Number(agent.tts.expr) !== 0) speakProvider.expressivity = Math.round(Number(agent.tts.expr));
+      // Voice Agent speak provider: exactly {type, version, model}.
+      speakProvider.version = ttsModel.startsWith('flux') ? 'v2' : 'v1';
     } else if (tp.type === 'cartesia') {
       speakProvider.speed = Number(agent.tts.speed);
     }
@@ -1266,6 +1275,9 @@
     delete speakProvider.model;
     delete speakProvider.model_id;
     if (tp.type && ttsModel && tp.type !== 'aws_polly') speakProvider[mk] = ttsModel;
+    if (tp.type === 'deepgram' && ttsModel) {
+      speakProvider.version = ttsModel.startsWith('flux') ? 'v2' : 'v1';
+    }
     const speak = { provider: speakProvider };
     if ((tp.endpoint || '').trim()) {
       const th = parseJsonObject(tp.headers);
@@ -1315,7 +1327,7 @@
     push(Boolean(sp && sp.type === 'deepgram'), 'Global STT provider is Deepgram (required by Deepgram Voice Agent API)');
     push(
       Boolean(sp && VOICE_AGENT_STT_MODELS.includes(sttModel)),
-      `Global STT model "${sttModel || 'not selected'}" is supported by Voice Agent (Flux v2 only)`
+      `Global STT model "${sttModel || 'not selected'}" is supported by Voice Agent (Nova-3 or Flux v2)`
     );
     push((agent.greeting || '').trim().length > 10, 'Greeting is set (> 10 chars)');
     const promptOk = (agent.prompt || '').trim().length > 0 && agent.prompt.length <= 25000;
@@ -1347,15 +1359,15 @@
       `Selected global TTS model "${ttsModel || 'not selected'}" belongs to the chosen provider`);
 
     if (tp?.type === 'deepgram') {
-      const isFlux = ttsModel.startsWith('flux');
-      const spd = Number(agent.tts.speed);
-      const expr = Number(agent.tts.expr);
-      if (isFlux) {
-        push(isValidFluxSpeed(spd), `Flux TTS speed (${spd}) in 0.5–1.5 with 0.05 steps`);
-        push(Number.isInteger(expr) && expr >= -2 && expr <= 2, `Flux TTS expressivity (${expr}) integer in -2..2`);
-      } else {
-        push(spd >= 0.7 && spd <= 1.5, `Aura TTS speed (${spd}) in 0.7–1.5`);
-      }
+      push(
+        Boolean(ttsModel.startsWith('flux-') || ttsModel.startsWith('aura-')),
+        `Deepgram speak model "${ttsModel || 'not selected'}" is a recognized Flux/Aura voice`
+      );
+      push(
+        ttsModel.startsWith('flux-'),
+        `Speak provider sends only {type:"deepgram", version:"v2", model:"${ttsModel || '…'}"}`,
+        !ttsModel.startsWith('flux-')
+      );
     }
 
     const hasPlaceholder = Boolean(tp && ((tp.endpoint || '').includes('{voice_id}') || (tp.extra || '').includes('"VOICE_ID"')));
@@ -1642,7 +1654,7 @@
       </div>
       ${
         isStt
-          ? '<div class="note">Voice Agent STT models are restricted to <code>flux-general-en</code> and <code>flux-general-multi</code> (Flux v2). Legacy Nova selections are automatically migrated.</div>'
+          ? '<div class="note">Voice Agent STT models: <code>nova-3</code> (Nova baseline), <code>flux-general-en</code>, and <code>flux-general-multi</code> (Flux v2).</div>'
           : F('Models (comma-separated)', `p.${idx}.models`)
       }
       ${p.kind === 'tts' ? F('Model field key sent to API', `p.${idx}.mk`, 'sel', ['model', 'model_id']) : ''}
@@ -5393,10 +5405,10 @@
         const defaultType = kind === 'stt' ? 'deepgram' : kind === 'llm' ? 'open_ai' : 'deepgram';
         const defaultModel =
           kind === 'stt'
-            ? 'flux-general-en'
+            ? 'nova-3'
             : kind === 'llm'
             ? dgLlmModelIdsForType('open_ai').join(',')
-            : 'flux-haley-en';
+            : 'flux-kit-en';
         S.providers.push({
           id: uid(kind),
           kind,

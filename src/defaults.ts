@@ -1,17 +1,14 @@
 import { AgentBehavior, AgentFunction, ConsoleState, Provider } from './types';
 
-export const VOICE_AGENT_STT_MODELS = ['flux-general-en', 'flux-general-multi'] as const;
+// Deepgram Voice Agent listens with either Nova (general purpose) or Flux v2.
+// The Voice Agent's own verified baseline is Nova-3; Flux models remain available.
+export const VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'] as const;
 export type VoiceAgentSttModel = (typeof VOICE_AGENT_STT_MODELS)[number];
 
 export function defaultVoiceAgentSttModel(language?: string): VoiceAgentSttModel {
-  const languages = String(language || 'en')
-    .toLowerCase()
-    .split(/[\s,]+/)
-    .map((entry) => entry.split(/[-_]/)[0])
-    .filter(Boolean);
-  return languages.some((entry) => entry !== 'en') || languages.length > 1
-    ? 'flux-general-multi'
-    : 'flux-general-en';
+  // Nova-3 is multilingual and is the Voice Agent API's default listen model.
+  void language;
+  return 'nova-3';
 }
 
 export function normalizeVoiceAgentSttModel(model: unknown, language?: string): VoiceAgentSttModel {
@@ -165,7 +162,7 @@ export function createDefaultState(): ConsoleState {
         'tts',
         'Deepgram TTS (Flux v2 & Aura v1)',
         'deepgram',
-        'flux-haley-en,flux-kit-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en'
+        'flux-kit-en,flux-haley-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en'
       ),
     ],
     functions: [
