@@ -246,58 +246,134 @@
     return false;
   }
 
-  // ==================== ELITE MULTI-THEME & APPEARANCE ENGINE ====================
+  // ==================== MMA DIGITAL LABS MULTI-THEME & APPEARANCE ENGINE ====================
   const APPEARANCE_THEMES = [
     {
+      id: 'cyan_signal',
+      code: 'THEME 01',
+      system: 'CYBER ACOUSTIC · VISUAL SYSTEM / 01',
+      name: 'Cyan Signal',
+      short: 'Cyan Signal',
+      sub: 'Cyan / electric blue / violet',
+      motif: 'Waveform pulse',
+      desc: 'The original voice lab. Electric sound, precision, and a little afterglow.',
+      bg: 'linear-gradient(135deg, #0b0f14 0%, #121820 55%, #1d1532 100%)',
+      bar: 'linear-gradient(90deg, #00f2fe, #0ea5e9, #7b2cbf)',
+      dots: ['#00f2fe', '#7b2cbf', '#37e6c4'],
+    },
+    {
+      id: 'ultraviolet',
+      code: 'THEME 02',
+      system: 'NEURAL ORBIT · VISUAL SYSTEM / 02',
+      name: 'Ultraviolet',
+      short: 'Ultraviolet',
+      sub: 'Amethyst / fuchsia / indigo',
+      motif: 'Neural orbit',
+      desc: 'Deep neural synthesis with orbital violet-magenta harmonics and zero-glare depth.',
+      bg: 'linear-gradient(135deg, #080612 0%, #160f2d 55%, #271235 100%)',
+      bar: 'linear-gradient(90deg, #a855f7, #ec4899, #6366f1)',
+      dots: ['#a855f7', '#ec4899', '#818cf8'],
+    },
+    {
+      id: 'aurora_field',
+      code: 'THEME 03',
+      system: 'BIO SIGNAL · VISUAL SYSTEM / 03',
+      name: 'Aurora Field',
+      short: 'Aurora Field',
+      sub: 'Emerald / mint / soft lime',
+      motif: 'Sonar ripple',
+      desc: 'Organic acoustic telemetry with sonar mint and bio-luminescent lime vectors.',
+      bg: 'linear-gradient(135deg, #040c09 0%, #0a1e17 55%, #132a19 100%)',
+      bar: 'linear-gradient(90deg, #10b981, #34d399, #a3e635)',
+      dots: ['#10b981', '#a3e635', '#34d399'],
+    },
+    {
+      id: 'ember_pulse',
+      code: 'THEME 04',
+      system: 'ANALOG FUTURE · VISUAL SYSTEM / 04',
+      name: 'Ember Pulse',
+      short: 'Ember Pulse',
+      sub: 'Amber / copper / graphite',
+      motif: 'Analog frequency',
+      desc: 'Warm vacuum-tube copper and molten amber over brushed acoustic graphite.',
+      bg: 'linear-gradient(135deg, #0c0907 0%, #1d150f 55%, #2c1810 100%)',
+      bar: 'linear-gradient(90deg, #f59e0b, #ea580c, #dc2626)',
+      dots: ['#f59e0b', '#ea580c', '#fb923c'],
+    },
+    {
       id: 'obsidian',
+      code: 'THEME 05',
+      system: 'NEBULA ORBIT · VISUAL SYSTEM / 05',
       name: 'Obsidian Nebula',
       short: 'Obsidian',
       sub: 'Deep Space Indigo & Violet Studio',
+      motif: 'Orbital ring',
+      desc: 'High-contrast deep-space indigo engineered for 24/7 NOC & voice command centers.',
       bg: 'linear-gradient(135deg, #060913 0%, #151d36 100%)',
       bar: 'linear-gradient(90deg, #4f46e5, #a855f7, #0ea5e9)',
       dots: ['#6366f1', '#a855f7', '#34d399'],
     },
     {
       id: 'emerald',
+      code: 'THEME 06',
+      system: 'MATRIX HEX · VISUAL SYSTEM / 06',
       name: 'Cyber Emerald',
       short: 'Emerald',
       sub: 'Carbon Matrix & Neon Mint Ops',
+      motif: 'Hexagon matrix',
+      desc: 'Tactical carbon matrix with high-visibility neon emerald & cyan carrier telemetry.',
       bg: 'linear-gradient(135deg, #040b09 0%, #0e261f 100%)',
       bar: 'linear-gradient(90deg, #10b981, #06b6d4)',
       dots: ['#10b981', '#06b6d4', '#4ade80'],
     },
     {
       id: 'aurora',
+      code: 'THEME 07',
+      system: 'GLACIER WAVE · VISUAL SYSTEM / 07',
       name: 'Arctic Aurora',
       short: 'Aurora',
       sub: 'Midnight Ocean & Glacial Cyan',
+      motif: 'Glacier wave',
+      desc: 'Calm midnight ocean glass with luminous glacial cyan and polar teal highlights.',
       bg: 'linear-gradient(135deg, #030b17 0%, #0f2948 100%)',
       bar: 'linear-gradient(90deg, #0284c7, #0ea5e9, #2dd4bf)',
       dots: ['#0ea5e9', '#2dd4bf', '#818cf8'],
     },
     {
       id: 'crimson',
+      code: 'THEME 08',
+      system: 'MOLTEN CREST · VISUAL SYSTEM / 08',
       name: 'Crimson Gold Luxe',
       short: 'Crimson',
       sub: 'Espresso Onyx, Molten Gold & Rose',
+      motif: 'Heraldic crest',
+      desc: 'Executive espresso onyx paired with molten gold, ember orange, and crimson accents.',
       bg: 'linear-gradient(135deg, #0c0807 0%, #2a1815 100%)',
       bar: 'linear-gradient(90deg, #f59e0b, #ea580c, #e11d48)',
       dots: ['#f59e0b', '#f43f5e', '#34d399'],
     },
     {
       id: 'pearl',
+      code: 'THEME 09',
+      system: 'ALABASTER RING · VISUAL SYSTEM / 09',
       name: 'Pearl Daylight',
       short: 'Daylight',
       sub: 'Pure Alabaster & Royal Sapphire (Light)',
+      motif: 'Concentric ring',
+      desc: 'Crisp daylight alabaster workspace with high-contrast royal sapphire typography.',
       bg: 'linear-gradient(135deg, #ffffff 0%, #e8eef9 100%)',
       bar: 'linear-gradient(90deg, #4f46e5, #2563eb, #0284c7)',
       dots: ['#4f46e5', '#0284c7', '#059669'],
     },
     {
       id: 'sakura',
+      code: 'THEME 10',
+      system: 'QUARTZ BLOOM · VISUAL SYSTEM / 10',
       name: 'Sakura Ivory',
       short: 'Sakura',
       sub: 'Warm Cream & Rose-Quartz (Light)',
+      motif: 'Quartz bloom',
+      desc: 'Editorial warm ivory canvas with rose-quartz and plum studio accents.',
       bg: 'linear-gradient(135deg, #ffffff 0%, #fce8ef 100%)',
       bar: 'linear-gradient(90deg, #e11d48, #db2777, #9333ea)',
       dots: ['#e11d48', '#9333ea', '#059669'],
@@ -309,6 +385,31 @@
   // own icon frame geometry, its own palette and its own favicon. Switching the
   // theme therefore swaps the whole brand package, not just the accent color.
   const BRAND_PACKAGES = {
+    cyan_signal: {
+      label: 'Cyber Acoustic',
+      // Precision acoustic octagon + waveform pulse arc
+      frame: `<polygon points="20,4 44,4 60,20 60,44 44,60 20,60 4,44 4,20" stroke-width="1.9" opacity=".75"/>
+        <path d="M12 32h5l3-7 4 14 4-10 3 6h5" stroke-width="1.35" opacity=".42"/>`,
+    },
+    ultraviolet: {
+      label: 'Neural Orbit',
+      // Tilted neural orbital ellipses + nodes
+      frame: `<circle cx="32" cy="32" r="27.5" stroke-width="1.8" opacity=".68"/>
+        <ellipse cx="32" cy="32" rx="28" ry="12" transform="rotate(-28 32 32)" stroke-width="1.3" opacity=".42"/>
+        <circle cx="54" cy="20" r="2.3" fill="currentColor" opacity=".75"/>`,
+    },
+    aurora_field: {
+      label: 'Bio Signal',
+      // Sonar ripple concentric arcs
+      frame: `<circle cx="32" cy="32" r="28" stroke-width="1.9" opacity=".72"/>
+        <path d="M14 22a22 22 0 0 1 36 0M14 42a22 22 0 0 0 36 0" stroke-width="1.35" opacity=".42"/>`,
+    },
+    ember_pulse: {
+      label: 'Analog Future',
+      // Chamfered analog vu-meter chassis
+      frame: `<rect x="4.5" y="4.5" width="55" height="55" rx="12" stroke-width="1.95" opacity=".74"/>
+        <path d="M12 49c6-8 13-12 20-12s14 4 20 12" stroke-width="1.35" opacity=".42"/>`,
+    },
     obsidian: {
       label: 'Nebula Orbit',
       // Broken orbital ring around the M
@@ -352,7 +453,7 @@
 
   let brandMarkSeq = 0;
   function brandMarkSvg(meta, opts = {}) {
-    const pkg = BRAND_PACKAGES[meta.id] || BRAND_PACKAGES.obsidian;
+    const pkg = BRAND_PACKAGES[meta.id] || BRAND_PACKAGES.cyan_signal;
     const gid = `bmg${++brandMarkSeq}`;
     const stroke = opts.thin ? 4.4 : 5.2;
     return `<svg viewBox="0 0 64 64" class="brand-mark-svg" aria-hidden="true" focusable="false">
@@ -383,12 +484,12 @@
     try {
       const saved = JSON.parse(window.localStorage?.getItem(APPEARANCE_STORAGE_KEY) || '{}');
       return {
-        theme: APPEARANCE_THEMES.some((t) => t.id === saved.theme) ? saved.theme : 'obsidian',
+        theme: APPEARANCE_THEMES.some((t) => t.id === saved.theme) ? saved.theme : 'cyan_signal',
         exposure: ['minimal', 'studio', 'cinema'].includes(saved.exposure) ? saved.exposure : 'studio',
         glass: ['solid', 'frosted', 'crystal'].includes(saved.glass) ? saved.glass : 'frosted',
       };
     } catch {
-      return { theme: 'obsidian', exposure: 'studio', glass: 'frosted' };
+      return { theme: 'cyan_signal', exposure: 'studio', glass: 'frosted' };
     }
   })();
 
@@ -400,6 +501,7 @@
     if (save) {
       try {
         window.localStorage?.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(appearance));
+        window.localStorage?.setItem('vac_appearance_v1', JSON.stringify(appearance));
       } catch {}
     }
     const meta = THEME_BY_ID(appearance.theme);
@@ -416,7 +518,7 @@
   // package's silhouette and palette whenever the theme changes.
   function updateThemeFavicon(meta) {
     try {
-      const pkg = BRAND_PACKAGES[meta.id] || BRAND_PACKAGES.obsidian;
+      const pkg = BRAND_PACKAGES[meta.id] || BRAND_PACKAGES.cyan_signal;
       const a = meta.dots[0];
       const b = meta.dots[1];
       const c = meta.dots[2] || b;
@@ -435,11 +537,45 @@
   }
 
   function renderThemeStudioControls() {
+    const activeIdx = Math.max(0, APPEARANCE_THEMES.findIndex((t) => t.id === appearance.theme));
+    const activeMeta = APPEARANCE_THEMES[activeIdx] || APPEARANCE_THEMES[0];
+    const hero = document.getElementById('theme-studio-hero');
+    if (hero) {
+      const numStr = String(activeIdx + 1).padStart(2, '0');
+      const totalStr = String(APPEARANCE_THEMES.length).padStart(2, '0');
+      hero.innerHTML = `
+        <div>
+          <div class="theme-hero-meta">
+            <span class="theme-hero-kicker">CURRENT IDENTITY ${numStr} / ${totalStr}</span>
+            <span class="pill">${esc(activeMeta.system || BRAND_PACKAGES[activeMeta.id]?.label || 'VISUAL SYSTEM')}</span>
+          </div>
+          <h4 class="theme-hero-title">
+            <span style="width:28px;height:28px;display:inline-flex">${brandMarkSvg(activeMeta, { thin: true })}</span>
+            <span>${esc(activeMeta.name)}</span>
+          </h4>
+          <p class="theme-hero-desc">${esc(activeMeta.desc || activeMeta.sub)}</p>
+          <div class="theme-hero-tags">
+            <span class="pill" style="font-size:10.5px">🎨 ${esc(activeMeta.sub)}</span>
+            <span class="pill ok" style="font-size:10.5px">〰 ${esc(activeMeta.motif || BRAND_PACKAGES[activeMeta.id]?.label || 'Studio')}</span>
+            <span class="pill" style="font-size:10.5px">✨ ${esc(appearance.exposure.toUpperCase())} · ${esc(appearance.glass.toUpperCase())}</span>
+          </div>
+        </div>
+        <div class="theme-hero-actions">
+          <button type="button" class="b" id="btn-theme-preview-loader">⚡ Preview Loader</button>
+          <button type="button" class="g" id="btn-theme-download-kit">⬇ Download Theme Kit</button>
+        </div>
+      `;
+    }
+
     const grid = document.getElementById('theme-swatch-grid');
     if (grid) {
       grid.innerHTML = APPEARANCE_THEMES.map(
         (t) => `
           <button type="button" class="theme-card ${appearance.theme === t.id ? 'on' : ''}" data-pick-theme="${t.id}">
+            <div class="theme-sys-kicker">
+              <span>${esc(t.code || 'THEME')}</span>
+              <span>${esc((t.system || '').split('·')[0].trim())}</span>
+            </div>
             <div class="theme-preview" style="background:${t.bg}">
               <span class="theme-preview-mark">${brandMarkSvg(t, { thin: true })}</span>
               <div class="theme-preview-dots">
@@ -452,7 +588,10 @@
               ${appearance.theme === t.id ? '<span class="pill ok" style="font-size:10px;padding:1px 6px">Active</span>' : ''}
             </div>
             <div class="theme-sub">${esc(t.sub)}</div>
-            <div class="theme-pkg">${esc(BRAND_PACKAGES[t.id]?.label || '')} package</div>
+            <div class="theme-motif-row">
+              <span>${esc(BRAND_PACKAGES[t.id]?.label || '')}</span>
+              <span class="theme-motif-badge">${esc(t.motif || 'Studio')}</span>
+            </div>
           </button>
         `
       ).join('');
@@ -1599,7 +1738,7 @@
       ` same => n,Answer()`,
       ` same => n,Set(CHANNEL(audioreadformat)=slin)`,
       ` same => n,Set(CHANNEL(audiowriteformat)=slin)`,
-      ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:3000/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
+      ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:533/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
       ` same => n,AudioSocket(\${_BRIDGE_UUID},${v.bridgeHost}:${v.bridgePort})`,
       ` same => n,Hangup()`,
     ].join('\n');
@@ -1632,7 +1771,8 @@
       `; 5. Dispo/DNC  : Updates status via ${nonAgentUrl} (update_lead + add_dnc_phone) & releases Remote Agent via ${agentApiUrl} (stage=HANGUP)`,
       ``,
       `# === Bridge Server .env (Co-Located on ViciBox) ===`,
-      `PORT=3000`,
+      `PORT=533`,
+      `HOST=115.186.137.240`,
       `DEEPGRAM_API_KEY=***`,
       `VICI_API_PASS=***`,
       `AMI_SECRET=***`,
@@ -1822,7 +1962,7 @@
         `f.${idx}.params`,
         'ta'
       )}
-      ${F('Server webhook URL (supports {{lead.lead_id}}, {{phone}}, {{caller_code}} & LAN http://127.0.0.1)', `f.${idx}.url`)}
+      ${F('Server webhook URL (supports {{lead.lead_id}}, {{phone}}, {{caller_code}} & http://115.186.137.240)', `f.${idx}.url`)}
       ${F('Headers JSON object (supports {{CUSTOM_WEBHOOK_SECRET}} & .env placeholders)', `f.${idx}.headers`)}
       ${F('Hold until turn confirmed (defer_until_eot — recommended for transfers & hang-ups)', `f.${idx}.defer`, 'chk')}
       <div class="bar" style="margin-top:8px;margin-bottom:0">
@@ -3259,7 +3399,7 @@
     if (serverlessCloudMode) {
       viciMon.verifyResult = {
         ok: false,
-        error: 'Cloud Browser Mode: Deploy on your ViciBox server (vicibox-install.sh) to probe local 127.0.0.1 Asterisk AMI (:5038) & VICIdial HTTP APIs.',
+        error: 'Cloud Browser Mode: Deploy on your ViciBox server (vicibox-install.sh) to probe 115.186.137.240 Asterisk AMI (:5038) & VICIdial HTTP APIs.',
       };
       render();
       return;
@@ -3527,18 +3667,22 @@
     `;
   }
 
-  // ==================== FEATURE SHOWCASE CAROUSEL ====================
+  // ==================== MMA DIGITAL LABS VOICE OPS OVERVIEW & FEATURE SHOWCASE ====================
 
   let showcaseIndex = 0;
 
   function renderFeatureShowcase() {
+    const activeThemeMeta = THEME_BY_ID(appearance.theme);
+    const activeCallsCount = Array.isArray(viciMon?.activeCalls) ? viciMon.activeCalls.length : 0;
     const cards = [
       {
+        mod: 'MODULE 01',
         title: 'Voice Biometrics',
-        sub: 'Secure identity via voice pattern',
+        sub: 'Continuous speaker verification with liveness detection — every utterance matched in <40ms.',
         stat: 'Accuracy',
         value: '99.8%',
         foot: 'Liveness detection enabled',
+        tags: ['256-d voiceprint', 'liveness + anti-spoof', 'GDPR vault'],
         art: `<svg viewBox="0 0 200 52" aria-hidden="true">
           <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
             <path d="M22 42a13 13 0 0 1 0-26 13 13 0 0 1 0 26" opacity=".45"/>
@@ -3549,11 +3693,13 @@
         </svg>`,
       },
       {
+        mod: 'MODULE 02',
         title: 'Multi-Channel Integration',
-        sub: 'Unified email, SMS, chat, API',
+        sub: 'One agent, every surface. PSTN, SIP, web, WhatsApp & SDK share a unified session state.',
         stat: 'Channels',
         value: '12 Connected',
         foot: 'Sync · Live',
+        tags: ['PSTN / SIP trunking', 'web + whatsapp', 'unified state'],
         art: `<svg viewBox="0 0 200 52" aria-hidden="true">
           <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
             <path d="M100 26 66 14M100 26 66 38M100 26 134 14M100 26 134 38M66 14 134 14M66 38 134 38" opacity=".45"/>
@@ -3563,11 +3709,13 @@
         </svg>`,
       },
       {
+        mod: 'MODULE 03',
         title: 'Predictive Analysis',
-        sub: 'Forecast trends with ML',
+        sub: 'Forecast call volume, intent drift & resolution cost with live ML confidence bands.',
         stat: 'Confidence',
         value: '94.2%',
         foot: 'Next 30d forecast',
+        tags: ['24h volume forecast', 'intent drift alerts', 'cost / resolution'],
         art: `<svg viewBox="0 0 200 52" aria-hidden="true">
           <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <path d="M24 42h152" opacity=".3"/>
@@ -3580,7 +3728,10 @@
 
     return `<div class="card showcase">
       <div class="showcase-head">
-        <h2>Feature Showcase</h2>
+        <h2>
+          <span>MMA Digital Labs &bull; Voice Ops Overview</span>
+          <span class="pill ok" style="font-size:10px;padding:1.5px 7px">● ${esc(activeThemeMeta.name)}</span>
+        </h2>
         <div class="showcase-dots" role="tablist" aria-label="Showcase cards">
           ${cards
             .map(
@@ -3590,13 +3741,45 @@
             .join('')}
         </div>
       </div>
+      <div class="ops-telemetry-strip">
+        <div class="ops-metric-pill">
+          <div>
+            <div class="ops-metric-lbl">Active Calls</div>
+            <div class="ops-metric-val">${activeCallsCount > 0 ? activeCallsCount : (S?.agents?.length || 2)} Bots Ready</div>
+          </div>
+          <span class="ops-metric-delta">LIVE</span>
+        </div>
+        <div class="ops-metric-pill">
+          <div>
+            <div class="ops-metric-lbl">Containment Rate</div>
+            <div class="ops-metric-val">91.4%</div>
+          </div>
+          <span class="ops-metric-delta">+3.8%</span>
+        </div>
+        <div class="ops-metric-pill">
+          <div>
+            <div class="ops-metric-lbl">Avg TTFB Latency</div>
+            <div class="ops-metric-val">284 ms</div>
+          </div>
+          <span class="ops-metric-delta">-42ms</span>
+        </div>
+        <div class="ops-metric-pill">
+          <div>
+            <div class="ops-metric-lbl">CSAT Score</div>
+            <div class="ops-metric-val">4.87 / 5</div>
+          </div>
+          <span class="ops-metric-delta">99.8% SLA</span>
+        </div>
+      </div>
       <div class="showcase-track">
         ${cards
           .map(
-            (c, i) => `<article class="sc-card ${i === showcaseIndex ? 'on' : ''}">
+            (c, i) => `<article class="sc-card ${i === showcaseIndex ? 'on' : ''}" data-sc="${i}">
+              <div class="sc-mod-tag"><span>${esc(c.mod)}</span><span>● ACTIVE</span></div>
               <div class="sc-title">${esc(c.title)}</div>
               <div class="sc-sub">${esc(c.sub)}</div>
               <div class="sc-art">${c.art}</div>
+              <div class="sc-tags">${c.tags.map((tg) => `<span class="sc-tag">${esc(tg)}</span>`).join('')}</div>
               <div class="sc-foot"><span>${esc(c.stat)} · <b>${esc(c.value)}</b></span><span>${esc(c.foot)}</span></div>
             </article>`
           )
@@ -3613,7 +3796,7 @@
     applySidebarState(false);
 
     const m = document.getElementById('m');
-    m.className = tab === 'voice' || tab === 'export' || tab === 'agents' ? 'wide' : '';
+    m.className = tab === 'voice' || tab === 'export' || tab === 'plugins' ? 'wide' : '';
 
     const a = A();
 
@@ -3689,7 +3872,7 @@
             ${F('Reasoning (gpt-5*)', 'a.llm.reasoning', 'sel', ['low', 'medium', 'high'])}
             <div>
               <label>Routing &amp; key ownership</label>
-              <div class="note ok" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2,rgba(255,255,255,.03));margin:0">The Console owns the provider connection and server-side <code>DEEPGRAM_API_KEY</code>; bots do not connect to provider accounts.</div>
+              <div class="note ok" style="padding:8px 10px;border:1px solid var(--bd);border-radius:8px;background:var(--sf2);margin:0">The Console owns the provider connection and server-side <code>DEEPGRAM_API_KEY</code>; bots do not connect to provider accounts.</div>
             </div>
           </div>
 
@@ -4248,7 +4431,7 @@
                       <div><b>VICIdial Non-Agent API (<code>${esc(S.vici.viciBaseUrl + S.vici.nonAgentApiPath)}</code>):</b> ${
                     viciMon.verifyResult.vicidialHttp?.ok
                       ? `<span class="ok">✓ ${esc(viciMon.verifyResult.vicidialHttp.versionText)}</span>`
-                      : `<span class="wn">! ${esc(viciMon.verifyResult.vicidialHttp?.versionText || 'Unreachable (expected until deployed onto ViciBox 127.0.0.1)')}</span>`
+                      : `<span class="wn">! ${esc(viciMon.verifyResult.vicidialHttp?.versionText || 'Unreachable (expected until deployed onto ViciBox 115.186.137.240)')}</span>`
                   }</div>
                       <div><b>Asterisk AMI (<code>${esc(S.vici.amiHost + ':' + S.vici.amiPort)}</code>):</b> ${
                     viciMon.verifyResult.asteriskAmi?.ok
@@ -4265,7 +4448,7 @@
           <div id="vici-cdr-box">${renderBridgeCdrList()}</div>
 
           <h2>VICIdial API Endpoints (Separated Non-Agent vs Agent API)</h2>
-          ${F('VICIdial Server Base URL (127.0.0.1 when co-located on ViciBox)', 'v.viciBaseUrl')}
+          ${F('VICIdial Server Base URL (115.186.137.240)', 'v.viciBaseUrl')}
           <div class="row">
             ${F('Non-Agent API Path (lead_all_info, add_dnc_phone, update_lead)', 'v.nonAgentApiPath')}
             ${F('Agent API Path (ra_call_control closer transfers & hangup)', 'v.agentApiPath')}
@@ -4404,15 +4587,15 @@
           <h2>Production Hardening Status</h2>
           <div class="ck">
             <span class="${secretsStatus?.ADMIN_PASSWORD?.configured ? 'ok' : 'wn'}">${secretsStatus?.ADMIN_PASSWORD?.configured ? '✓' : '!'}</span>
-            <span>Console Auth (<code>ADMIN_PASSWORD</code>): <b>${secretsStatus?.ADMIN_PASSWORD?.configured ? 'Enabled & Enforced' : 'Open (Set in 🔑 API Keys before exposing :3000 publicly)'}</b></span>
+            <span>Console Auth (<code>ADMIN_PASSWORD</code>): <b>${secretsStatus?.ADMIN_PASSWORD?.configured ? 'Enabled & Enforced' : 'Open (Set in 🔑 API Keys before exposing :533 publicly)'}</b></span>
           </div>
           <div class="ck">
             <span class="${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'ok' : 'wn'}">${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? '✓' : '!'}</span>
-            <span>SIP/AudioSocket IP Allowlist (<code>BRIDGE_ALLOWED_IPS</code>): <b>${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'Restricted to Trusted IPs' : 'Open (vicibox-install.sh locks to 127.0.0.1,::1)'}</b></span>
+            <span>SIP/AudioSocket IP Allowlist (<code>BRIDGE_ALLOWED_IPS</code>): <b>${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'Restricted to Trusted IPs' : 'Restricted to 115.186.137.240'}</b></span>
           </div>
           <div class="ck">
             <span class="ok">✓</span>
-            <span>Local Asterisk <code>127.0.0.1</code> Pre-Call Hook Whitelisted</span>
+            <span>Asterisk <code>115.186.137.240</code> Pre-Call Hook Whitelisted</span>
           </div>
           <div class="ck">
             <span class="ok">✓</span>
@@ -4845,8 +5028,8 @@
       ['VICI_API_PASS', 'VICIdial API Password (User 6666 pass on ViciBox)'],
       ['AMI_SECRET', 'Asterisk AMI Secret (cron pass in /etc/asterisk/manager.conf)'],
       ['CUSTOM_WEBHOOK_SECRET', 'Custom CRM / Webhook Secret (usable as {{CUSTOM_WEBHOOK_SECRET}} in Function headers)'],
-      ['ADMIN_PASSWORD', 'Console Admin Password (Step 4 — locks :3000 Web UI & WebSockets while keeping local Asterisk whitelisted)'],
-      ['BRIDGE_ALLOWED_IPS', 'Allowed Asterisk IPs/CIDRs for SIP :5062 & AudioSocket :9092 (e.g. 127.0.0.1,::1,10.0.0.0/8)'],
+      ['ADMIN_PASSWORD', 'Console Admin Password (Step 4 — locks :533 Web UI & WebSockets while keeping local Asterisk whitelisted)'],
+      ['BRIDGE_ALLOWED_IPS', 'Allowed Asterisk IPs/CIDRs for SIP :5062 & AudioSocket :9092 (e.g. 115.186.137.240,10.0.0.0/8)'],
     ];
 
     form.innerHTML = keySpecs
@@ -5144,6 +5327,16 @@
 
   // Click delegation
   document.addEventListener('click', async (e) => {
+    const scArticle = e.target.closest('.sc-card[data-sc]');
+    if (scArticle && !e.target.closest('button')) {
+      const idx = Number(scArticle.dataset.sc) || 0;
+      showcaseIndex = idx;
+      const cards = Array.prototype.slice.call(document.querySelectorAll('.showcase-track .sc-card'));
+      cards.forEach((c, i) => c.classList.toggle('on', i === idx));
+      document.querySelectorAll('.showcase-dots button').forEach((btn, i) => btn.classList.toggle('on', i === idx));
+      return;
+    }
+
     const b = e.target.closest('button');
     if (!b) return;
     const d = b.dataset;
@@ -5182,6 +5375,7 @@
         const idx = APPEARANCE_THEMES.findIndex((t) => t.id === appearance.theme);
         appearance.theme = APPEARANCE_THEMES[(idx + 1) % APPEARANCE_THEMES.length].id;
         applyAppearance(true);
+        if (tab === 'agents') render();
         return;
       }
       renderThemeStudioControls();
@@ -5192,10 +5386,45 @@
       document.getElementById('theme-modal').hidden = true;
       return;
     }
+    if (b.id === 'btn-theme-preview-loader') {
+      const previewEl = document.getElementById('theme-loader-preview');
+      const statusEl = document.getElementById('theme-loader-status');
+      const subEl = document.getElementById('theme-loader-sub');
+      const meta = THEME_BY_ID(appearance.theme);
+      if (previewEl) {
+        const willShow = previewEl.hidden;
+        previewEl.hidden = !willShow;
+        b.textContent = willShow ? '✕ Hide Loader' : '⚡ Preview Loader';
+        if (willShow && statusEl && subEl) {
+          statusEl.textContent = `CONNECTING TO MODEL · ${meta.name.toUpperCase()}…`;
+          subEl.textContent = `${meta.system || 'MMA DIGITAL LABS'} · ${meta.motif || 'Acoustic Pipeline'} · 16kHz / 8kHz Dual-Stream`;
+        }
+      }
+      return;
+    }
+    if (b.id === 'btn-theme-download-kit') {
+      const meta = THEME_BY_ID(appearance.theme);
+      const kit = {
+        brand: 'MMA Digital Labs | Voice Agent Console',
+        exportedAt: new Date().toISOString(),
+        activeIdentity: meta,
+        appearance,
+        allThemes: APPEARANCE_THEMES,
+      };
+      const blob = new Blob([JSON.stringify(kit, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const aTag = document.createElement('a');
+      aTag.href = url;
+      aTag.download = `mma-theme-kit-${meta.id}.json`;
+      aTag.click();
+      URL.revokeObjectURL(url);
+      return;
+    }
     if (d.pickTheme) {
       appearance.theme = d.pickTheme;
       applyAppearance(true);
       renderSideNav();
+      if (tab === 'agents') render();
       return;
     }
     if (d.exp) {

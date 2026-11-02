@@ -20,7 +20,7 @@ Start-Process -FilePath $node -ArgumentList "dist\server.js" `
 
 Start-Sleep -Seconds 5
 try {
-    $h = Invoke-RestMethod "http://127.0.0.1:3000/api/health" -TimeoutSec 5
+    $h = Invoke-RestMethod "http://115.186.137.240:533/api/health" -TimeoutSec 5
     "console started; health ok=$($h.ok) auth=$($h.authEnabled)"
 }
 catch {

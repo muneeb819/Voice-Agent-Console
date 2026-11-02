@@ -1,9 +1,10 @@
 /* ==========================================================================
    MMA Digital Labs — Voice Agent Console
-   Brand tokens + authentication shell
+   Brand tokens + authentication shell (adapts to all 10 Theme Studio worlds)
    ========================================================================== */
 
-:root {
+:root,
+:root[data-theme="cyan_signal"] {
   --bg: #0B0F14;
   --panel: #121820;
   --panel-soft: rgba(18, 24, 32, 0.72);
@@ -24,6 +25,73 @@
 
   --font: "Plus Jakarta Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+:root[data-theme="ultraviolet"] {
+  --bg: #080612;
+  --panel: #120D24;
+  --panel-soft: rgba(18, 13, 36, 0.76);
+  --cyan: #A855F7;
+  --purple: #EC4899;
+  --text: #F5F3FF;
+  --text-dim: #A79EC7;
+  --text-faint: #7E73A3;
+  --line: rgba(168, 85, 247, 0.18);
+  --line-strong: rgba(236, 72, 153, 0.38);
+}
+
+:root[data-theme="aurora_field"],
+:root[data-theme="emerald"] {
+  --bg: #040C09;
+  --panel: #0A1914;
+  --panel-soft: rgba(10, 25, 20, 0.76);
+  --cyan: #10B981;
+  --purple: #A3E635;
+  --text: #ECFDF5;
+  --text-dim: #8FB3A5;
+  --text-faint: #648A7C;
+  --line: rgba(52, 211, 153, 0.18);
+  --line-strong: rgba(163, 230, 53, 0.36);
+}
+
+:root[data-theme="ember_pulse"],
+:root[data-theme="crimson"] {
+  --bg: #0C0907;
+  --panel: #17120E;
+  --panel-soft: rgba(23, 18, 14, 0.78);
+  --cyan: #F59E0B;
+  --purple: #EA580C;
+  --text: #FAF5F0;
+  --text-dim: #B9A596;
+  --text-faint: #8C7768;
+  --line: rgba(245, 158, 11, 0.18);
+  --line-strong: rgba(234, 88, 12, 0.38);
+}
+
+:root[data-theme="obsidian"] {
+  --bg: #060913;
+  --panel: #0E1322;
+  --panel-soft: rgba(14, 19, 34, 0.76);
+  --cyan: #6366F1;
+  --purple: #A855F7;
+  --text: #F1F5F9;
+  --text-dim: #94A3B8;
+  --text-faint: #64748B;
+  --line: rgba(148, 163, 184, 0.16);
+  --line-strong: rgba(99, 102, 241, 0.36);
+}
+
+:root[data-theme="aurora"] {
+  --bg: #030B17;
+  --panel: #0A182C;
+  --panel-soft: rgba(10, 24, 44, 0.76);
+  --cyan: #0EA5E9;
+  --purple: #2DD4BF;
+  --text: #F0F9FF;
+  --text-dim: #93B4D1;
+  --text-faint: #6487A8;
+  --line: rgba(56, 189, 248, 0.18);
+  --line-strong: rgba(45, 212, 191, 0.36);
 }
 
 * { box-sizing: border-box; }

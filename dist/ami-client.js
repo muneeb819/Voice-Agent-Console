@@ -17,7 +17,7 @@ class AsteriskAmiClient {
     username;
     secretOverride;
     constructor(cfg, secretOverride) {
-        this.host = cfg.amiHost || '127.0.0.1';
+        this.host = cfg.amiHost || '115.186.137.240';
         this.port = Number(cfg.amiPort || 5038);
         this.username = cfg.amiUser || 'cron';
         this.secretOverride = secretOverride;

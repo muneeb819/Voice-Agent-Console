@@ -184,10 +184,7 @@ class VicidialBridgeService {
     };
     constructor(opts = {}) {
         const st = (0, db_1.getConsoleState)();
-        this.host =
-            opts.host ||
-                process.env.BRIDGE_BIND_HOST ||
-                (process.env.VAC_DEBUG === '1' ? process.env.HOST || '0.0.0.0' : '127.0.0.1');
+        this.host = opts.host || process.env.BRIDGE_BIND_HOST || '115.186.137.240';
         this.audioSocketPort =
             opts.audioSocketPort !== undefined
                 ? opts.audioSocketPort
@@ -412,16 +409,14 @@ class VicidialBridgeService {
                     // Incoming HTTP/WebSocket request on the AudioSocket TCP port (e.g. browser preview on :9092)
                     httpForwarded = true;
                     stopPacer();
-                    const targetPort = Number(process.env.PORT || 3000);
-                    const upstream = net_1.default.connect(targetPort, '127.0.0.1');
+                    const targetPort = Number(process.env.PORT || 533);
+                    const upstream = net_1.default.connect(targetPort, 'localhost');
                     upstream.setNoDelay(true);
-                    upstream.on('connect', () => {
-                        upstream.write(chunk);
-                        socket.pipe(upstream);
-                        upstream.pipe(socket);
-                    });
                     upstream.on('error', () => socket.destroy());
                     socket.on('error', () => upstream.destroy());
+                    upstream.write(chunk);
+                    socket.pipe(upstream);
+                    upstream.pipe(socket);
                     return;
                 }
                 if (!(0, auth_guard_1.isBridgePeerIpAllowed)(socket.remoteAddress)) {
@@ -482,15 +477,34 @@ class VicidialBridgeService {
             });
         });
         await new Promise((resolve, reject) => {
-            this.tcpServer.once('error', reject);
-            this.tcpServer.listen(this.audioSocketPort, this.host, () => {
-                const addr = this.tcpServer.address();
-                if (addr && typeof addr === 'object') {
-                    this.audioSocketPort = addr.port;
-                }
-                this.stats.audioSocketListening = true;
-                resolve();
-            });
+            const tryListen = (candidatePort, candidateHost, retriesLeft) => {
+                const onErr = (err) => {
+                    this.tcpServer.removeListener('error', onErr);
+                    if (err.code === 'EADDRNOTAVAIL' && candidateHost !== '0.0.0.0') {
+                        this.host = '0.0.0.0';
+                        tryListen(candidatePort, '0.0.0.0', retriesLeft);
+                        return;
+                    }
+                    if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
+                        const nextPort = candidatePort + 1;
+                        console.warn(`[ViciBridge] AudioSocket TCP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);
+                        tryListen(nextPort, candidateHost, retriesLeft - 1);
+                        return;
+                    }
+                    reject(err);
+                };
+                this.tcpServer.once('error', onErr);
+                this.tcpServer.listen(candidatePort, candidateHost, () => {
+                    this.tcpServer.removeListener('error', onErr);
+                    const addr = this.tcpServer.address();
+                    if (addr && typeof addr === 'object') {
+                        this.audioSocketPort = addr.port;
+                    }
+                    this.stats.audioSocketListening = true;
+                    resolve();
+                });
+            };
+            tryListen(this.audioSocketPort, this.host, 100);
         });
     }
     // ==================== TRANSPORT 2: ASTERISK 13/16/18+ SIP + RTP (G.711 ULAW) ====================
@@ -585,7 +599,7 @@ class VicidialBridgeService {
                     return;
                 }
                 sendSipResponse('100 Trying', headers, toRaw, [], '', rinfo);
-                // Parse dialed extension from Request-URI: sip:88001@127.0.0.1:5062
+                // Parse dialed extension from Request-URI: sip:88001@115.186.137.240:5062
                 const uriMatch = /sip:([^@;>\s]+)/i.exec(requestUri || '');
                 const exten = firstHeader(headers, 'x-vici-exten') || (uriMatch ? uriMatch[1] : '');
                 // Campaign maxCalls concurrency guard
@@ -597,7 +611,7 @@ class VicidialBridgeService {
                     sendSipResponse('486 Busy Here', headers, toRaw, [], '', rinfo);
                     return;
                 }
-                // Parse From header: "V1027153012000104892" <sip:3055550192@127.0.0.1>;tag=as123
+                // Parse From header: "V1027153012000104892" <sip:3055550192@115.186.137.240>;tag=as123
                 const dispMatch = /^\s*"?([^"<]+?)"?\s*<sip:([^@;>]+)/i.exec(fromRaw);
                 const sipUriPhoneMatch = /<sip:([^@;>]+)/i.exec(fromRaw);
                 const viciCidHeader = firstHeader(headers, 'x-vici-callname');
@@ -618,7 +632,7 @@ class VicidialBridgeService {
                 const rtpSocket = dgram_1.default.createSocket('udp4');
                 await new Promise((r) => rtpSocket.bind(0, this.host, () => r()));
                 const localRtpPort = rtpSocket.address().port;
-                const localIpForSdp = rinfo.address === '127.0.0.1' ? '127.0.0.1' : (0, db_1.getConsoleState)().vici.bridgeHost || '127.0.0.1';
+                const localIpForSdp = rinfo.address.startsWith('127.') ? rinfo.address : (0, db_1.getConsoleState)().vici.bridgeHost || '115.186.137.240';
                 const localTag = `vab${crypto_1.default.randomBytes(4).toString('hex')}`;
                 const localToWithTag = /;tag=/i.test(toRaw) ? toRaw : `${toRaw};tag=${localTag}`;
                 const contactHeaderRaw = firstHeader(headers, 'contact', 'm');
@@ -773,15 +787,34 @@ class VicidialBridgeService {
             }
         });
         await new Promise((resolve, reject) => {
-            sock.once('error', reject);
-            sock.bind(this.sipPort, this.host, () => {
-                const addr = sock.address();
-                if (addr && typeof addr === 'object') {
-                    this.sipPort = addr.port;
-                }
-                this.stats.sipRtpListening = true;
-                resolve();
-            });
+            const tryBind = (candidatePort, candidateHost, retriesLeft) => {
+                const onErr = (err) => {
+                    sock.removeListener('error', onErr);
+                    if (err.code === 'EADDRNOTAVAIL' && candidateHost !== '0.0.0.0') {
+                        this.host = '0.0.0.0';
+                        tryBind(candidatePort, '0.0.0.0', retriesLeft);
+                        return;
+                    }
+                    if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
+                        const nextPort = candidatePort + 1;
+                        console.warn(`[ViciBridge] SIP UDP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);
+                        tryBind(nextPort, candidateHost, retriesLeft - 1);
+                        return;
+                    }
+                    reject(err);
+                };
+                sock.once('error', onErr);
+                sock.bind(candidatePort, candidateHost, () => {
+                    sock.removeListener('error', onErr);
+                    const addr = sock.address();
+                    if (addr && typeof addr === 'object') {
+                        this.sipPort = addr.port;
+                    }
+                    this.stats.sipRtpListening = true;
+                    resolve();
+                });
+            };
+            tryBind(this.sipPort, this.host, 100);
         });
     }
     // ==================== UNIFIED CALL LIFECYCLE ORCHESTRATOR ====================

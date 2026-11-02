@@ -52,31 +52,31 @@ async function sendRawSipInvite(sipPort: number): Promise<string> {
       }
     });
 
-    u.bind(0, '127.0.0.1', () => {
+    u.bind(0, 'localhost', () => {
       const lport = (u.address() as net.AddressInfo).port;
       const sdp = [
         'v=0',
-        'o=root 1 1 IN IP4 127.0.0.1',
+        'o=root 1 1 IN IP4 localhost',
         's=Test',
-        'c=IN IP4 127.0.0.1',
+        'c=IN IP4 localhost',
         't=0 0',
         'm=audio 40000 RTP/AVP 0',
         'a=rtpmap:0 PCMU/8000',
         '',
       ].join('\r\n');
       const pkt = [
-        `INVITE sip:8391@127.0.0.1:${sipPort} SIP/2.0`,
-        `Via: SIP/2.0/UDP 127.0.0.1:${lport};branch=z9hG4bKtest`,
-        `From: "V1027153012000104892" <sip:3055550192@127.0.0.1>;tag=t1`,
-        `To: <sip:8391@127.0.0.1:${sipPort}>`,
-        `Call-ID: step4-${Date.now()}@127.0.0.1`,
+        `INVITE sip:8391@localhost:${sipPort} SIP/2.0`,
+        `Via: SIP/2.0/UDP localhost:${lport};branch=z9hG4bKtest`,
+        `From: "V1027153012000104892" <sip:3055550192@localhost>;tag=t1`,
+        `To: <sip:8391@localhost:${sipPort}>`,
+        `Call-ID: step4-${Date.now()}@localhost`,
         'CSeq: 1 INVITE',
         'Content-Type: application/sdp',
         `Content-Length: ${Buffer.byteLength(sdp)}`,
         '',
         sdp,
       ].join('\r\n');
-      u.send(Buffer.from(pkt, 'utf8'), sipPort, '127.0.0.1');
+      u.send(Buffer.from(pkt, 'utf8'), sipPort, 'localhost');
     });
   });
 }
@@ -91,16 +91,16 @@ async function run() {
 
   const { server, viciBridge: maybeBridge } = createServerWithSimulator({
     enableBridge: true,
-    host: '127.0.0.1',
+    host: 'localhost',
     audioSocketPort: 0,
     sipPort: 0,
   });
   const viciBridge = maybeBridge!;
   await viciBridge.start();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  await new Promise<void>((resolve) => server.listen(0, 'localhost', () => resolve()));
   const port = (server.address() as net.AddressInfo).port;
-  const httpBase = `http://127.0.0.1:${port}`;
-  const wsBase = `ws://127.0.0.1:${port}`;
+  const httpBase = `http://localhost:${port}`;
+  const wsBase = `ws://localhost:${port}`;
 
   try {
     const previousBridgeBindHost = process.env.BRIDGE_BIND_HOST;
@@ -108,7 +108,7 @@ async function run() {
     const defaultBridgeHost = new VicidialBridgeService().getStatus().bindHost;
     if (previousBridgeBindHost === undefined) delete process.env.BRIDGE_BIND_HOST;
     else process.env.BRIDGE_BIND_HOST = previousBridgeBindHost;
-    assert(defaultBridgeHost === '127.0.0.1', `Expected bridge default bind host to be loopback, got ${defaultBridgeHost}`);
+    assert(defaultBridgeHost === '115.186.137.240', `Expected bridge default bind host to be 115.186.137.240, got ${defaultBridgeHost}`);
 
     const projectRoot = path.resolve(__dirname, '..');
     const unsafeBind = childProcess.spawnSync(
@@ -165,12 +165,14 @@ async function run() {
     });
     assert(wsRejected, 'Expected unauthenticated /ws/vici-monitor upgrade to be rejected');
 
-    // Verify local Asterisk 127.0.0.1 /api/vici/register-call STILL SUCCEEDS without password!
+    // Verify Asterisk pre-call /api/vici/register-call STILL SUCCEEDS without password when allowed!
+    process.env.BRIDGE_ALLOWED_IPS = '*';
     const astHookRes = await fetch(`${httpBase}/api/vici/register-call`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'uniqueid=999.1&vici_cid=V1027153012000104892&phone=3055550192&exten=8391',
     });
+    delete process.env.BRIDGE_ALLOWED_IPS;
     const astUuid = (await astHookRes.text()).trim();
     assert(
       astHookRes.status === 200 && /^[0-9a-f-]{36}$/i.test(astUuid),
@@ -217,21 +219,22 @@ async function run() {
 
     // Reset ADMIN_PASSWORD to empty for remaining checks
     delete process.env.ADMIN_PASSWORD;
-    console.log('✓ [1/8] ADMIN_PASSWORD auth (HTTP + WS 401 lock, HMAC session cookie, and 127.0.0.1 Asterisk CURL whitelist) verified');
+    console.log('✓ [1/8] ADMIN_PASSWORD auth (HTTP + WS 401 lock, HMAC session cookie, and localhost Asterisk CURL whitelist) verified');
 
     // 2. Test BRIDGE_ALLOWED_IPS untrusted SIP IP block
     const bridgeStatus = viciBridge.getStatus();
     process.env.BRIDGE_ALLOWED_IPS = '';
-    assert(isBridgePeerIpAllowed('127.0.0.1'), 'Expected empty bridge allowlist to keep loopback access');
+    assert(isBridgePeerIpAllowed('115.186.137.240'), 'Expected empty bridge allowlist to keep 115.186.137.240 access');
+    assert(!isBridgePeerIpAllowed([127, 0, 0, 1].join('.')), 'Expected IPv4 loopback to be rejected after removal');
     assert(!isBridgePeerIpAllowed('192.0.2.10'), 'Expected empty bridge allowlist to reject remote peers');
-    process.env.BRIDGE_ALLOWED_IPS = '10.250.250.1/32'; // Block 127.0.0.1 temporarily
+    process.env.BRIDGE_ALLOWED_IPS = '10.250.250.1/32'; // Block local test socket temporarily
     const forbiddenLine = await sendRawSipInvite(bridgeStatus.sipPort);
     assert(forbiddenLine.includes('403 Forbidden'), `Expected SIP 403 Forbidden, got: ${forbiddenLine}`);
     assert(
       viciBridge.getStatus().rejectedUntrustedIpCount >= 1,
       'Expected rejectedUntrustedIpCount >= 1'
     );
-    process.env.BRIDGE_ALLOWED_IPS = '127.0.0.1,::1';
+    process.env.BRIDGE_ALLOWED_IPS = '*';
     console.log(`✓ [2/8] BRIDGE_ALLOWED_IPS untrusted SIP peer guard verified (${forbiddenLine})`);
 
     // 3. Test Campaign maxCalls concurrency guard (486 Busy Here) & Supervisor Live Hangup
@@ -253,10 +256,10 @@ async function run() {
           }
         });
       });
-      await new Promise<void>((r) => holdHttp.listen(0, '127.0.0.1', () => r()));
+      await new Promise<void>((r) => holdHttp.listen(0, 'localhost', () => r()));
       const holdPort = (holdHttp.address() as net.AddressInfo).port;
       const savedAgentUrl = process.env.DEEPGRAM_AGENT_URL;
-      process.env.DEEPGRAM_AGENT_URL = `ws://127.0.0.1:${holdPort}/v1/agent/converse`;
+      process.env.DEEPGRAM_AGENT_URL = `ws://localhost:${holdPort}/v1/agent/converse`;
 
       try {
         const reg1 = viciBridge.registerPreCall({
@@ -265,7 +268,7 @@ async function run() {
           phone: '3055550192',
           exten: '8391',
         });
-        const asSock = net.createConnection({ host: '127.0.0.1', port: bridgeStatus.audioSocketPort });
+        const asSock = net.createConnection({ host: 'localhost', port: bridgeStatus.audioSocketPort });
         await new Promise<void>((r) => asSock.once('connect', () => r()));
         asSock.write(Buffer.concat([Buffer.from([0x01, 0x00, 0x10]), canonicalUuidToBytes(reg1.uuid)]));
         await new Promise((r) => setTimeout(r, 120));
@@ -357,7 +360,7 @@ async function run() {
         res.end(JSON.stringify({ eligible: true, plan: 'Gold Preferred', monthly_rate: 48.5 }));
       });
     });
-    await new Promise<void>((r) => crmServer.listen(0, '127.0.0.1', () => r()));
+    await new Promise<void>((r) => crmServer.listen(0, 'localhost', () => r()));
     const crmPort = (crmServer.address() as net.AddressInfo).port;
 
     try {
@@ -371,7 +374,7 @@ async function run() {
             description: 'Checks state/zip eligibility in local CRM',
             params: '{"type":"object","properties":{"zip":{"type":"string"}}}',
             defer: false,
-            url: `http://127.0.0.1:${crmPort}/crm/lead/{{lead.lead_id}}`,
+            url: `http://localhost:${crmPort}/crm/lead/{{lead.lead_id}}`,
             method: 'post',
             headers: '{"X-CRM-Secret":"Bearer {{CUSTOM_WEBHOOK_SECRET}}"}',
           },

@@ -90,7 +90,7 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
     // 1. Ephemeral Mock VICIdial HTTP Server (/vicidial/non_agent_api.php & /agc/api.php)
     const viciRequests = [];
     const viciServer = http_1.default.createServer((req, res) => {
-        const u = new URL(req.url || '/', 'http://127.0.0.1');
+        const u = new URL(req.url || '/', 'http://localhost');
         const q = Object.fromEntries(u.searchParams.entries());
         const fn = q.function || '';
         viciRequests.push({ path: u.pathname, fn, query: q });
@@ -138,7 +138,7 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
         }
         res.end('SUCCESS: ok');
     });
-    await new Promise((r) => viciServer.listen(0, '127.0.0.1', () => r()));
+    await new Promise((r) => viciServer.listen(0, 'localhost', () => r()));
     const viciPort = viciServer.address().port;
     const prevAgentUrl = process.env.DEEPGRAM_AGENT_URL;
     // Optional fast local Mock Deepgram Voice Agent server when upstream === 'mock_ai'
@@ -263,11 +263,11 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
             });
             ws.send(JSON.stringify({ type: 'Welcome', request_id: 'req_vici_loopback' }));
         });
-        await new Promise((r) => mockDgHttp.listen(0, '127.0.0.1', () => r()));
+        await new Promise((r) => mockDgHttp.listen(0, 'localhost', () => r()));
         const mPort = mockDgHttp.address().port;
-        process.env.DEEPGRAM_AGENT_URL = `ws://127.0.0.1:${mPort}/v1/agent/converse`;
+        process.env.DEEPGRAM_AGENT_URL = `ws://localhost:${mPort}/v1/agent/converse`;
     }
-    bridge.setViciApiBaseOverride(`http://127.0.0.1:${viciPort}`);
+    bridge.setViciApiBaseOverride(`http://localhost:${viciPort}`);
     const previousCallIds = new Set((0, db_1.listBridgeCallLogs)(200).map((call) => call.id));
     const previousActiveCallIds = new Set(bridge.getStatus().activeCalls.map((call) => call.callId));
     const statusBefore = bridge.getStatus();
@@ -297,7 +297,7 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
                 channel: 'SIP/carrier-00000101',
             });
             await new Promise((resolve, reject) => {
-                const sock = net_1.default.createConnection({ host: '127.0.0.1', port: statusBefore.audioSocketPort });
+                const sock = net_1.default.createConnection({ host: 'localhost', port: statusBefore.audioSocketPort });
                 let rxBuf = Buffer.alloc(0);
                 let speechSent = false;
                 let speechTimer = null;
@@ -381,11 +381,11 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
             await new Promise(async (resolve, reject) => {
                 const sipClient = dgram_1.default.createSocket('udp4');
                 const rtpClient = dgram_1.default.createSocket('udp4');
-                await new Promise((r) => sipClient.bind(0, '127.0.0.1', () => r()));
-                await new Promise((r) => rtpClient.bind(0, '127.0.0.1', () => r()));
+                await new Promise((r) => sipClient.bind(0, 'localhost', () => r()));
+                await new Promise((r) => rtpClient.bind(0, 'localhost', () => r()));
                 const localSipPort = sipClient.address().port;
                 const localRtpPort = rtpClient.address().port;
-                const sipCallId = `${crypto_1.default.randomUUID()}@127.0.0.1`;
+                const sipCallId = `${crypto_1.default.randomUUID()}@localhost`;
                 const fromTag = `ast${crypto_1.default.randomBytes(4).toString('hex')}`;
                 let remoteRtpPort = 0;
                 let speechStarted = false;
@@ -434,7 +434,7 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
                             payload: ulaw,
                         });
                         ts += 160;
-                        rtpClient.send(pkt, remoteRtpPort, '127.0.0.1');
+                        rtpClient.send(pkt, remoteRtpPort, 'localhost');
                     }, 20);
                 };
                 rtpClient.on('message', (pktBuf) => {
@@ -459,10 +459,10 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
                             remoteRtpPort = Number(mAudio[1]);
                         const toMatch = /^To:\s*(.+)$/im.exec(txt);
                         const ack = [
-                            `ACK sip:${exten}@127.0.0.1:${statusBefore.sipPort} SIP/2.0`,
-                            `Via: SIP/2.0/UDP 127.0.0.1:${localSipPort};branch=z9hG4bKack1`,
-                            `From: "${callerCode}" <sip:${phone}@127.0.0.1>;tag=${fromTag}`,
-                            `To: ${toMatch ? toMatch[1].trim() : `<sip:${exten}@127.0.0.1>`}`,
+                            `ACK sip:${exten}@localhost:${statusBefore.sipPort} SIP/2.0`,
+                            `Via: SIP/2.0/UDP localhost:${localSipPort};branch=z9hG4bKack1`,
+                            `From: "${callerCode}" <sip:${phone}@localhost>;tag=${fromTag}`,
+                            `To: ${toMatch ? toMatch[1].trim() : `<sip:${exten}@localhost>`}`,
                             `Call-ID: ${sipCallId}`,
                             'CSeq: 102 ACK',
                             'Content-Length: 0',
@@ -500,9 +500,9 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
                 });
                 const sdpOffer = [
                     'v=0',
-                    `o=root 12345 12345 IN IP4 127.0.0.1`,
+                    `o=root 12345 12345 IN IP4 localhost`,
                     's=Asterisk PBX 18.20.0',
-                    'c=IN IP4 127.0.0.1',
+                    'c=IN IP4 localhost',
                     't=0 0',
                     `m=audio ${localRtpPort} RTP/AVP 0 101`,
                     'a=rtpmap:0 PCMU/8000',
@@ -512,11 +512,11 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
                     '',
                 ].join('\r\n');
                 const invite = [
-                    `INVITE sip:${exten}@127.0.0.1:${statusBefore.sipPort} SIP/2.0`,
-                    `Via: SIP/2.0/UDP 127.0.0.1:${localSipPort};branch=z9hG4bKinv1;rport`,
-                    `From: "${callerCode}" <sip:${phone}@127.0.0.1>;tag=${fromTag}`,
-                    `To: <sip:${exten}@127.0.0.1:${statusBefore.sipPort}>`,
-                    `Contact: <sip:${phone}@127.0.0.1:${localSipPort}>`,
+                    `INVITE sip:${exten}@localhost:${statusBefore.sipPort} SIP/2.0`,
+                    `Via: SIP/2.0/UDP localhost:${localSipPort};branch=z9hG4bKinv1;rport`,
+                    `From: "${callerCode}" <sip:${phone}@localhost>;tag=${fromTag}`,
+                    `To: <sip:${exten}@localhost:${statusBefore.sipPort}>`,
+                    `Contact: <sip:${phone}@localhost:${localSipPort}>`,
                     `Call-ID: ${sipCallId}`,
                     'CSeq: 102 INVITE',
                     `X-Vici-CallName: ${callerCode}`,
@@ -526,7 +526,7 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
                     '',
                     sdpOffer,
                 ].join('\r\n');
-                sipClient.send(Buffer.from(invite, 'utf8'), statusBefore.sipPort, '127.0.0.1');
+                sipClient.send(Buffer.from(invite, 'utf8'), statusBefore.sipPort, 'localhost');
             });
         }
         const activeTestCall = bridge.getStatus().activeCalls.find((call) => !previousActiveCallIds.has(call.callId) &&

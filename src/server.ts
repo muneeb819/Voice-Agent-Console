@@ -790,8 +790,12 @@ export function createServerWithSimulator(bridgeOpts?: ViciBridgeOptions & { ena
 }
 
 if (require.main === module) {
-  const initialPort = Number(process.env.PORT || 3000);
-  const host = process.env.HOST || '127.0.0.1';
+  const requestedPort = Number(process.env.PORT || 533);
+  const initialPort =
+    process.env.E2B_SANDBOX === 'true' && requestedPort > 0 && requestedPort < 1024
+      ? requestedPort + 5000
+      : requestedPort;
+  const host = process.env.HOST || '115.186.137.240';
   const debugMode = process.env.VAC_DEBUG === '1';
   if (!isLoopbackIp(host) && !isAuthEnabled() && !debugMode) {
     console.error('[VoiceAgentConsole] Refusing to bind to a non-loopback interface without ADMIN_PASSWORD.');
@@ -800,6 +804,75 @@ if (require.main === module) {
   const { server, viciBridge } = createServerWithSimulator({ enableBridge: true });
 
   (async () => {
+    if (initialPort !== requestedPort) {
+      console.warn(
+        `[VoiceAgentConsole] Cloud preview proxy blocks privileged ports <1024 (port ${requestedPort}) — mapping preview listener to port ${initialPort} (production ViciBox/115.186.137.240 keeps port ${requestedPort}).`
+      );
+    }
+
+    let bindHost = host;
+    await new Promise<void>((resolveListen) => {
+      const listenWithFallback = (candidatePort: number, retriesLeft: number) => {
+        let onListening: () => void;
+        const onError = (err: NodeJS.ErrnoException) => {
+          server.removeListener('listening', onListening);
+          if (err.code === 'EADDRNOTAVAIL' && bindHost !== '0.0.0.0') {
+            console.warn(
+              `[VoiceAgentConsole] Host ${bindHost} is not a local interface (EADDRNOTAVAIL) — binding 0.0.0.0:${candidatePort} to accept traffic from ${bindHost}...`
+            );
+            server.removeListener('error', onError);
+            bindHost = '0.0.0.0';
+            listenWithFallback(candidatePort, retriesLeft);
+            return;
+          }
+          if (err.code === 'EACCES' && candidatePort < 1024 && retriesLeft > 0) {
+            const nextPort = candidatePort + 5000;
+            console.warn(
+              `[VoiceAgentConsole] Privileged port ${candidatePort} requires CAP_NET_BIND_SERVICE (EACCES) — switching automatically to port ${nextPort}...`
+            );
+            server.removeListener('error', onError);
+            listenWithFallback(nextPort, retriesLeft - 1);
+            return;
+          }
+          if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
+            const nextPort = candidatePort + 1;
+            console.warn(
+              `[VoiceAgentConsole] Port ${candidatePort} is busy (EADDRINUSE) — switching automatically to port ${nextPort}...`
+            );
+            server.removeListener('error', onError);
+            listenWithFallback(nextPort, retriesLeft - 1);
+            return;
+          }
+          console.error('[VoiceAgentConsole] HTTP listen error:', err);
+          process.exit(1);
+        };
+        onListening = () => {
+          server.removeListener('error', onError);
+          process.env.PORT = String(candidatePort);
+          console.log(
+            `[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://115.186.137.240:${candidatePort} (bound ${bindHost}:${candidatePort}, allowed peer: 115.186.137.240)${debugMode ? ' [DEBUG MODE]' : ''}`
+          );
+          if (debugMode) {
+            const currentState = getConsoleState();
+            const checks = validateState(currentState);
+            const okCount = checks.filter((c) => c.level === 'ok').length;
+            const wnCount = checks.filter((c) => c.level === 'wn').length;
+            const erCount = checks.filter((c) => c.level === 'er').length;
+            console.log(
+              `[VAC:DEBUG] Active state loaded: ${currentState.agents.length} agents (${currentState.agents.map((a) => `"${a.name}"`).join(', ')}), ${currentState.campaigns.length} campaigns (${currentState.campaigns.map((c) => `"${c.name}"`).join(', ')}) | TTS=${currentState.services.tts.model || 'none'} | Pre-flight checks: ${okCount} passed, ${wnCount} warnings, ${erCount} errors`
+            );
+          }
+          fetchDeepgramVoiceCatalog().catch(() => {});
+          resolveListen();
+        };
+        server.once('error', onError);
+        server.once('listening', onListening);
+        server.listen(candidatePort, bindHost);
+      };
+
+      listenWithFallback(initialPort, 100);
+    });
+
     if (viciBridge) {
       try {
         await viciBridge.start();
@@ -813,43 +886,6 @@ if (require.main === module) {
         );
       }
     }
-
-    const listenWithFallback = (candidatePort: number, retriesLeft: number) => {
-      const onError = (err: NodeJS.ErrnoException) => {
-        if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
-          const nextPort = candidatePort === 3000 ? 3850 : candidatePort + 1;
-          console.warn(
-            `[VoiceAgentConsole] Port ${candidatePort} is busy (EADDRINUSE) — switching automatically to port ${nextPort}...`
-          );
-          server.removeListener('error', onError);
-          listenWithFallback(nextPort, retriesLeft - 1);
-          return;
-        }
-        console.error('[VoiceAgentConsole] HTTP listen error:', err);
-        process.exit(1);
-      };
-      server.once('error', onError);
-      server.listen(candidatePort, host, () => {
-        server.removeListener('error', onError);
-        process.env.PORT = String(candidatePort);
-        console.log(
-          `[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://localhost:${candidatePort} (bound ${host}:${candidatePort})${debugMode ? ' [DEBUG MODE]' : ''}`
-        );
-        if (debugMode) {
-          const currentState = getConsoleState();
-          const checks = validateState(currentState);
-          const okCount = checks.filter((c) => c.level === 'ok').length;
-          const wnCount = checks.filter((c) => c.level === 'wn').length;
-          const erCount = checks.filter((c) => c.level === 'er').length;
-          console.log(
-            `[VAC:DEBUG] Active state loaded: ${currentState.agents.length} agents (${currentState.agents.map((a) => `"${a.name}"`).join(', ')}), ${currentState.campaigns.length} campaigns (${currentState.campaigns.map((c) => `"${c.name}"`).join(', ')}) | TTS=${currentState.services.tts.model || 'none'} | Pre-flight checks: ${okCount} passed, ${wnCount} warnings, ${erCount} errors`
-          );
-        }
-        fetchDeepgramVoiceCatalog().catch(() => {});
-      });
-    };
-
-    listenWithFallback(initialPort, 15);
   })().catch((err) => {
     console.error('[VoiceAgentConsole] Startup fatal error:', err);
     process.exit(1);

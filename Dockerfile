@@ -15,8 +15,8 @@ RUN npm ci --no-audit --no-fund
 COPY --chown=appuser:appuser . .
 RUN npm run build && mkdir -p data/recordings
 
-ENV PORT=7860
-ENV HOST=0.0.0.0
-EXPOSE 7860
+ENV PORT=533
+ENV HOST=115.186.137.240
+EXPOSE 533
 
 CMD ["npm", "start"]

@@ -3,6 +3,13 @@
 (function () {
   'use strict';
 
+  try {
+    var savedApp = JSON.parse(localStorage.getItem('vac_appearance_v2') || localStorage.getItem('vac_appearance_v1') || '{}');
+    if (savedApp && savedApp.theme) {
+      document.documentElement.dataset.theme = savedApp.theme;
+    }
+  } catch (e) {}
+
   var loader = document.getElementById('loader');
   var loaderText = document.getElementById('loader-text');
   var progressBar = document.getElementById('progress-bar');

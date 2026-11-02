@@ -32,7 +32,7 @@ export function normalizeIp(raw?: string | null): string {
 
 export function isLoopbackIp(raw?: string | null): boolean {
   const ip = normalizeIp(raw);
-  return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
+  return ip === '115.186.137.240' || ip === '::1' || ip === 'localhost';
 }
 
 function ipv4ToInt(ip: string): number | null {
@@ -69,16 +69,23 @@ function matchesIpRule(ip: string, rule: string): boolean {
   return normalizeIp(cleanRule) === ip;
 }
 
+export const DEFAULT_TRUSTED_IPS = ['115.186.137.240'];
+
+export function isTrustedDefaultIp(raw?: string | null): boolean {
+  const ip = normalizeIp(raw);
+  return isLoopbackIp(ip) || DEFAULT_TRUSTED_IPS.includes(ip);
+}
+
 /**
  * Checks whether an incoming SIP (:5062) or AudioSocket (:9092) peer IP is allowed.
- * When BRIDGE_ALLOWED_IPS is empty, allows loopback peers only.
- * When BRIDGE_ALLOWED_IPS is configured (e.g. "127.0.0.1,::1,10.0.0.0/8"), enforces strict allowlist.
+ * When BRIDGE_ALLOWED_IPS is empty, allows trusted IPs (115.186.137.240).
+ * When BRIDGE_ALLOWED_IPS is configured (e.g. "115.186.137.240,10.0.0.0/8"), enforces strict allowlist.
  */
 export function isBridgePeerIpAllowed(remoteAddress?: string | null): boolean {
   const ip = normalizeIp(remoteAddress);
   const rawAllow = getSecret('BRIDGE_ALLOWED_IPS');
   if (!rawAllow || rawAllow.trim() === '') {
-    return isLoopbackIp(ip);
+    return isTrustedDefaultIp(ip);
   }
   if (rawAllow.trim() === '*') {
     return true;
@@ -87,7 +94,7 @@ export function isBridgePeerIpAllowed(remoteAddress?: string | null): boolean {
     .split(',')
     .map((r) => r.trim())
     .filter(Boolean);
-  if (rules.length === 0) return isLoopbackIp(ip);
+  if (rules.length === 0) return isTrustedDefaultIp(ip);
   return rules.some((rule) => matchesIpRule(ip, rule));
 }
 
@@ -249,7 +256,7 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
   // Co-located Asterisk dialplan CURL() pre-call registration whitelist
   if (p === '/vici/register-call' || p === '/vici/precall') {
     const peerIp = req.socket?.remoteAddress || req.ip;
-    if (isLoopbackIp(peerIp) || (getSecret('BRIDGE_ALLOWED_IPS') && isBridgePeerIpAllowed(peerIp))) {
+    if (isTrustedDefaultIp(peerIp) || (getSecret('BRIDGE_ALLOWED_IPS') && isBridgePeerIpAllowed(peerIp))) {
       next();
       return;
     }

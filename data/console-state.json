@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "updatedAt": "2026-11-02T17:29:44.329Z",
+  "updatedAt": "2026-11-02T18:37:23.277Z",
   "services": {
     "stt": {
       "providerId": "s1",
@@ -387,19 +387,19 @@
     }
   ],
   "vici": {
-    "viciBaseUrl": "http://127.0.0.1",
+    "viciBaseUrl": "http://115.186.137.240",
     "nonAgentApiPath": "/vicidial/non_agent_api.php",
     "agentApiPath": "/agc/api.php",
     "apiUser": "6666",
     "source": "aibot",
     "transport": "sip_trunk",
-    "bridgeHost": "127.0.0.1",
+    "bridgeHost": "115.186.137.240",
     "bridgePort": 9092,
     "sipPort": 5062,
     "aiExten": "8800",
     "remoteAgentUser": "9001",
     "inIngroup": "AI_INBOUND",
-    "amiHost": "127.0.0.1",
+    "amiHost": "115.186.137.240",
     "amiPort": 5038,
     "amiUser": "cron"
   },
