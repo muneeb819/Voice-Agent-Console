@@ -110,7 +110,11 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   // ==================== STEP 4: AUTHENTICATION ROUTES & GUARD ====================
 
-  const rateKey = (req: Request): string => String(req.socket?.remoteAddress || req.ip || 'unknown');
+  const rateKey = (req: Request): string => {
+    const cfIp = String(req.headers['cf-connecting-ip'] || '').trim();
+    if (cfIp) return cfIp;
+    return String(req.socket?.remoteAddress || req.ip || 'unknown');
+  };
 
   const rateLimited = (
     key: string,
@@ -263,6 +267,19 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   app.use('/api', apiAuthMiddleware);
 
+  const readPublicDemoUrl = (): string | null => {
+    const envUrl = String(process.env.PUBLIC_DEMO_URL || '').trim();
+    if (/^https?:\/\//i.test(envUrl)) return envUrl;
+    try {
+      const demoFile = path.resolve(__dirname, '..', 'logs', 'public-demo-url.txt');
+      if (fs.existsSync(demoFile)) {
+        const txt = fs.readFileSync(demoFile, 'utf8').trim();
+        if (/^https?:\/\//i.test(txt)) return txt;
+      }
+    } catch {}
+    return null;
+  };
+
   const buildPayload = (state = getConsoleState()) => {
     const validations = validateState(state);
     const counts = {
@@ -289,6 +306,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       revisions: listRevisions(12),
       secrets: getSecretsStatus(),
       viciBridge: viciBridge ? viciBridge.getStatus() : null,
+      publicDemoUrl: readPublicDemoUrl(),
     };
   };
 

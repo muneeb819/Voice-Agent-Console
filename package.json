@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
+    "demo": "node tools/start-demo.js",
     "build": "tsc",
     "test:step1": "node tools/run-tests.js step1",
     "test:step2": "node tools/run-tests.js step2",

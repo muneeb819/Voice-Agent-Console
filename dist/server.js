@@ -61,7 +61,12 @@ function createApp(viciBridge) {
         });
     }
     // ==================== STEP 4: AUTHENTICATION ROUTES & GUARD ====================
-    const rateKey = (req) => String(req.socket?.remoteAddress || req.ip || 'unknown');
+    const rateKey = (req) => {
+        const cfIp = String(req.headers['cf-connecting-ip'] || '').trim();
+        if (cfIp)
+            return cfIp;
+        return String(req.socket?.remoteAddress || req.ip || 'unknown');
+    };
     const rateLimited = (key, bucket = loginAttempts, limit = loginAttemptLimit) => {
         const now = Date.now();
         const attempts = bucket.get(key);
@@ -193,6 +198,21 @@ function createApp(viciBridge) {
         res.json({ ok: true, authEnabled: true, authenticated: false });
     });
     app.use('/api', auth_guard_1.apiAuthMiddleware);
+    const readPublicDemoUrl = () => {
+        const envUrl = String(process.env.PUBLIC_DEMO_URL || '').trim();
+        if (/^https?:\/\//i.test(envUrl))
+            return envUrl;
+        try {
+            const demoFile = path_1.default.resolve(__dirname, '..', 'logs', 'public-demo-url.txt');
+            if (fs_1.default.existsSync(demoFile)) {
+                const txt = fs_1.default.readFileSync(demoFile, 'utf8').trim();
+                if (/^https?:\/\//i.test(txt))
+                    return txt;
+            }
+        }
+        catch { }
+        return null;
+    };
     const buildPayload = (state = (0, db_1.getConsoleState)()) => {
         const validations = (0, settings_builder_1.validateState)(state);
         const counts = {
@@ -217,6 +237,7 @@ function createApp(viciBridge) {
             revisions: (0, db_1.listRevisions)(12),
             secrets: (0, env_store_1.getSecretsStatus)(),
             viciBridge: viciBridge ? viciBridge.getStatus() : null,
+            publicDemoUrl: readPublicDemoUrl(),
         };
     };
     app.get('/api/health', (req, res) => {

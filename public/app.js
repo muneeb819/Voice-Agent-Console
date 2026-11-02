@@ -4782,6 +4782,19 @@
     }
     const data = await res.json();
     S = data.state;
+    const shareBtn = document.getElementById('btn-share-demo');
+    const activeDemoUrl =
+      data.publicDemoUrl ||
+      (/\.trycloudflare\.com$/i.test(window.location.hostname) ? window.location.origin : null);
+    if (shareBtn) {
+      if (activeDemoUrl) {
+        shareBtn.style.display = 'inline-flex';
+        shareBtn.dataset.demoUrl = activeDemoUrl;
+        shareBtn.title = `Public Client Demo URL: ${activeDemoUrl} (click to copy)`;
+      } else {
+        shareBtn.style.display = 'none';
+      }
+    }
     enforceDeepgramOnlyLlms(S);
     upgradeRealtimeAgentFeatures(S);
     snap = comparableSnapshot(S);
@@ -5576,6 +5589,20 @@
       if (inp) inp.value = '';
       document.getElementById('auth-modal').hidden = true;
       await loadFromServer();
+      return;
+    }
+    if (b.id === 'btn-share-demo') {
+      const demoUrl = b.dataset.demoUrl || window.location.origin;
+      try {
+        await navigator.clipboard.writeText(demoUrl);
+        const orig = b.textContent;
+        b.textContent = '✓ Copied Client Link!';
+        setTimeout(() => {
+          b.textContent = orig;
+        }, 2200);
+      } catch {
+        window.prompt('Copy this public HTTPS link for your client:', demoUrl);
+      }
       return;
     }
     if (b.id === 'btn-logout') {
