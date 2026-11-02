@@ -814,8 +814,18 @@ if (require.main === module) {
       }
     }
 
+    let bindHost = host;
     const listenWithFallback = (candidatePort: number, retriesLeft: number) => {
       const onError = (err: NodeJS.ErrnoException) => {
+        if (err.code === 'EADDRNOTAVAIL' && bindHost !== '0.0.0.0') {
+          console.warn(
+            `[VoiceAgentConsole] Host ${bindHost} is not a local interface (EADDRNOTAVAIL) — binding 0.0.0.0:${candidatePort} to accept traffic from ${bindHost}...`
+          );
+          server.removeListener('error', onError);
+          bindHost = '0.0.0.0';
+          listenWithFallback(candidatePort, retriesLeft);
+          return;
+        }
         if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
           const nextPort = candidatePort === 3000 ? 3850 : candidatePort + 1;
           console.warn(
@@ -829,11 +839,11 @@ if (require.main === module) {
         process.exit(1);
       };
       server.once('error', onError);
-      server.listen(candidatePort, host, () => {
+      server.listen(candidatePort, bindHost, () => {
         server.removeListener('error', onError);
         process.env.PORT = String(candidatePort);
         console.log(
-          `[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://localhost:${candidatePort} (bound ${host}:${candidatePort})${debugMode ? ' [DEBUG MODE]' : ''}`
+          `[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://localhost:${candidatePort} (bound ${bindHost}:${candidatePort}, allowed peer: 115.186.137.240)${debugMode ? ' [DEBUG MODE]' : ''}`
         );
         if (debugMode) {
           const currentState = getConsoleState();

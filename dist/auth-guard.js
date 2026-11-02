@@ -3,9 +3,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.DEFAULT_TRUSTED_IPS = void 0;
 exports.invalidateUserCountCache = invalidateUserCountCache;
 exports.normalizeIp = normalizeIp;
 exports.isLoopbackIp = isLoopbackIp;
+exports.isTrustedDefaultIp = isTrustedDefaultIp;
 exports.isBridgePeerIpAllowed = isBridgePeerIpAllowed;
 exports.isAuthEnabled = isAuthEnabled;
 exports.createSessionToken = createSessionToken;
@@ -84,16 +86,21 @@ function matchesIpRule(ip, rule) {
     }
     return normalizeIp(cleanRule) === ip;
 }
+exports.DEFAULT_TRUSTED_IPS = ['115.186.137.240'];
+function isTrustedDefaultIp(raw) {
+    const ip = normalizeIp(raw);
+    return isLoopbackIp(ip) || exports.DEFAULT_TRUSTED_IPS.includes(ip);
+}
 /**
  * Checks whether an incoming SIP (:5062) or AudioSocket (:9092) peer IP is allowed.
- * When BRIDGE_ALLOWED_IPS is empty, allows loopback peers only.
- * When BRIDGE_ALLOWED_IPS is configured (e.g. "127.0.0.1,::1,10.0.0.0/8"), enforces strict allowlist.
+ * When BRIDGE_ALLOWED_IPS is empty, allows loopback and default trusted IPs (115.186.137.240).
+ * When BRIDGE_ALLOWED_IPS is configured (e.g. "127.0.0.1,::1,115.186.137.240,10.0.0.0/8"), enforces strict allowlist.
  */
 function isBridgePeerIpAllowed(remoteAddress) {
     const ip = normalizeIp(remoteAddress);
     const rawAllow = (0, env_store_1.getSecret)('BRIDGE_ALLOWED_IPS');
     if (!rawAllow || rawAllow.trim() === '') {
-        return isLoopbackIp(ip);
+        return isTrustedDefaultIp(ip);
     }
     if (rawAllow.trim() === '*') {
         return true;
@@ -103,7 +110,7 @@ function isBridgePeerIpAllowed(remoteAddress) {
         .map((r) => r.trim())
         .filter(Boolean);
     if (rules.length === 0)
-        return isLoopbackIp(ip);
+        return isTrustedDefaultIp(ip);
     return rules.some((rule) => matchesIpRule(ip, rule));
 }
 function isAuthEnabled() {
@@ -255,7 +262,7 @@ function apiAuthMiddleware(req, res, next) {
     // Co-located Asterisk dialplan CURL() pre-call registration whitelist
     if (p === '/vici/register-call' || p === '/vici/precall') {
         const peerIp = req.socket?.remoteAddress || req.ip;
-        if (isLoopbackIp(peerIp) || ((0, env_store_1.getSecret)('BRIDGE_ALLOWED_IPS') && isBridgePeerIpAllowed(peerIp))) {
+        if (isTrustedDefaultIp(peerIp) || ((0, env_store_1.getSecret)('BRIDGE_ALLOWED_IPS') && isBridgePeerIpAllowed(peerIp))) {
             next();
             return;
         }
