@@ -9,12 +9,14 @@ exports.normalizeIp = normalizeIp;
 exports.isLoopbackIp = isLoopbackIp;
 exports.isTrustedDefaultIp = isTrustedDefaultIp;
 exports.isBridgePeerIpAllowed = isBridgePeerIpAllowed;
+exports.hasRegisteredUsers = hasRegisteredUsers;
 exports.isAuthEnabled = isAuthEnabled;
 exports.createSessionToken = createSessionToken;
 exports.verifySessionToken = verifySessionToken;
 exports.constantTimePasswordMatch = constantTimePasswordMatch;
 exports.getRequestSessionToken = getRequestSessionToken;
 exports.getAuthenticatedUser = getAuthenticatedUser;
+exports.hasActiveAuthSession = hasActiveAuthSession;
 exports.isRequestAuthorized = isRequestAuthorized;
 exports.setAuthCookie = setAuthCookie;
 exports.clearAuthCookie = clearAuthCookie;
@@ -113,10 +115,13 @@ function isBridgePeerIpAllowed(remoteAddress) {
         return isTrustedDefaultIp(ip);
     return rules.some((rule) => matchesIpRule(ip, rule));
 }
+function hasRegisteredUsers() {
+    return cachedUserCount() > 0;
+}
 function isAuthEnabled() {
     if ((0, env_store_1.getSecret)('ADMIN_PASSWORD').length > 0)
         return true;
-    return cachedUserCount() > 0;
+    return hasRegisteredUsers();
 }
 function signTimestamp(ts, password) {
     return crypto_1.default
@@ -201,11 +206,11 @@ function getAuthenticatedUser(req) {
     }
 }
 /**
- * Verifies an HTTP Request or WebSocket Upgrade IncomingMessage.
+ * Checks whether the request carries an explicit user account session or admin-password session.
+ * Used to gate the web UI entry page (`/`) so Sign Up / Sign In is always shown first,
+ * even before the first user account is created.
  */
-function isRequestAuthorized(req) {
-    if (!isAuthEnabled())
-        return true;
+function hasActiveAuthSession(req) {
     // 1. Check Authorization header (Bearer <ADMIN_PASSWORD> or Basic base64(user:<ADMIN_PASSWORD>))
     const authHdr = String(req.headers.authorization || '').trim();
     if (authHdr) {
@@ -235,6 +240,14 @@ function isRequestAuthorized(req) {
         return true;
     }
     return false;
+}
+/**
+ * Verifies an HTTP Request or WebSocket Upgrade IncomingMessage.
+ */
+function isRequestAuthorized(req) {
+    if (!isAuthEnabled())
+        return true;
+    return hasActiveAuthSession(req);
 }
 function setAuthCookie(res, token) {
     const maxAgeSec = Math.floor(SESSION_TTL_MS / 1000);

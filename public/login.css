@@ -94,6 +94,32 @@
   --line-strong: rgba(45, 212, 191, 0.36);
 }
 
+:root[data-theme="pearl"] {
+  --bg: #F4F7FB;
+  --panel: #FFFFFF;
+  --panel-soft: rgba(255, 255, 255, 0.90);
+  --cyan: #2563EB;
+  --purple: #7C3AED;
+  --text: #0F172A;
+  --text-dim: #475569;
+  --text-faint: #64748B;
+  --line: rgba(37, 99, 235, 0.18);
+  --line-strong: rgba(37, 99, 235, 0.38);
+}
+
+:root[data-theme="sakura"] {
+  --bg: #FFF7FA;
+  --panel: #FFFFFF;
+  --panel-soft: rgba(255, 255, 255, 0.90);
+  --cyan: #DB2777;
+  --purple: #9333EA;
+  --text: #1F122B;
+  --text-dim: #6B4E71;
+  --text-faint: #8D6E94;
+  --line: rgba(219, 39, 119, 0.18);
+  --line-strong: rgba(219, 39, 119, 0.38);
+}
+
 * { box-sizing: border-box; }
 
 html, body { height: 100%; }

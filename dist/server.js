@@ -35,8 +35,10 @@ const user_store_1 = require("./user-store");
 function createApp(viciBridge) {
     const app = (0, express_1.default)();
     const loginAttempts = new Map();
+    const signupAttempts = new Map();
     const loginWindowMs = 15 * 60 * 1000;
     const loginAttemptLimit = 5;
+    const signupAttemptLimit = 10;
     app.use((req, res, next) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
@@ -60,38 +62,44 @@ function createApp(viciBridge) {
     }
     // ==================== STEP 4: AUTHENTICATION ROUTES & GUARD ====================
     const rateKey = (req) => String(req.socket?.remoteAddress || req.ip || 'unknown');
-    const rateLimited = (key) => {
+    const rateLimited = (key, bucket = loginAttempts, limit = loginAttemptLimit) => {
         const now = Date.now();
-        const attempts = loginAttempts.get(key);
+        const attempts = bucket.get(key);
         if (attempts && attempts.resetAt <= now) {
-            loginAttempts.delete(key);
+            bucket.delete(key);
             return { limited: false, retryAfter: 0 };
         }
-        if (attempts && attempts.count >= loginAttemptLimit) {
+        if (attempts && attempts.count >= limit) {
             return { limited: true, retryAfter: Math.max(1, Math.ceil((attempts.resetAt - now) / 1000)) };
         }
         return { limited: false, retryAfter: 0 };
     };
-    const noteFailure = (key) => {
+    const noteFailure = (key, bucket = loginAttempts) => {
         const now = Date.now();
-        let attempts = loginAttempts.get(key);
+        let attempts = bucket.get(key);
         if (!attempts || attempts.resetAt <= now) {
-            if (loginAttempts.size >= 1000) {
-                const oldestIp = loginAttempts.keys().next().value;
+            if (bucket.size >= 1000) {
+                const oldestIp = bucket.keys().next().value;
                 if (oldestIp)
-                    loginAttempts.delete(oldestIp);
+                    bucket.delete(oldestIp);
             }
             attempts = { count: 0, resetAt: now + loginWindowMs };
-            loginAttempts.set(key, attempts);
+            bucket.set(key, attempts);
         }
         attempts.count += 1;
     };
     app.get('/api/auth/status', (req, res) => {
+        const user = (0, auth_guard_1.getAuthenticatedUser)(req);
+        const sessionAuth = (0, auth_guard_1.hasActiveAuthSession)(req);
+        const hasUsers = (0, auth_guard_1.hasRegisteredUsers)();
         res.json({
             ok: true,
-            authEnabled: (0, auth_guard_1.isAuthEnabled)(),
-            authenticated: (0, auth_guard_1.isRequestAuthorized)(req),
-            user: (0, auth_guard_1.getAuthenticatedUser)(req),
+            authEnabled: true,
+            apiAuthEnforced: (0, auth_guard_1.isAuthEnabled)(),
+            hasUsers,
+            adminPasswordConfigured: (0, env_store_1.getSecret)('ADMIN_PASSWORD').length > 0,
+            authenticated: sessionAuth,
+            user,
             signupOpen: true,
         });
     });
@@ -106,7 +114,7 @@ function createApp(viciBridge) {
     // Create a new account (email + full name + password) and sign in immediately.
     app.post('/api/auth/signup', (req, res) => {
         const key = rateKey(req);
-        const gate = rateLimited(key);
+        const gate = rateLimited(key, signupAttempts, signupAttemptLimit);
         if (gate.limited) {
             res.setHeader('Retry-After', String(gate.retryAfter));
             res.status(429).json({ ok: false, code: 'SIGNUP_RATE_LIMITED', error: 'Too many attempts. Try again later.' });
@@ -114,6 +122,7 @@ function createApp(viciBridge) {
         }
         const result = (0, user_store_1.createUser)(req.body || {});
         if (!result.ok || !result.user) {
+            noteFailure(key, signupAttempts);
             res.status(400).json({
                 ok: false,
                 code: 'SIGNUP_INVALID',
@@ -123,6 +132,7 @@ function createApp(viciBridge) {
             return;
         }
         loginAttempts.delete(key);
+        signupAttempts.delete(key);
         (0, auth_guard_1.invalidateUserCountCache)();
         (0, user_store_1.purgeExpiredSessions)();
         const token = (0, user_store_1.createUserSession)(result.user.id);
@@ -159,8 +169,12 @@ function createApp(viciBridge) {
             return;
         }
         // --- Legacy admin password sign-in ---
-        if (!(0, auth_guard_1.isAuthEnabled)()) {
-            res.json({ ok: true, authEnabled: false, authenticated: true });
+        if (!(0, env_store_1.getSecret)('ADMIN_PASSWORD')) {
+            res.status(400).json({
+                ok: false,
+                code: 'ADMIN_PASSWORD_NOT_CONFIGURED',
+                error: 'ADMIN_PASSWORD is not configured in server .env. Sign in with your email account or create an account.',
+            });
             return;
         }
         if (!(0, auth_guard_1.constantTimePasswordMatch)(candidate)) {
@@ -176,7 +190,7 @@ function createApp(viciBridge) {
     app.post('/api/auth/logout', (req, res) => {
         (0, user_store_1.destroyUserSession)((0, auth_guard_1.getRequestSessionToken)(req));
         (0, auth_guard_1.clearAuthCookie)(res);
-        res.json({ ok: true, authEnabled: (0, auth_guard_1.isAuthEnabled)(), authenticated: !(0, auth_guard_1.isAuthEnabled)() });
+        res.json({ ok: true, authEnabled: true, authenticated: false });
     });
     app.use('/api', auth_guard_1.apiAuthMiddleware);
     const buildPayload = (state = (0, db_1.getConsoleState)()) => {
@@ -640,17 +654,37 @@ function createApp(viciBridge) {
         }
     });
     const publicDir = path_1.default.resolve(__dirname, '..', 'public');
-    app.use(express_1.default.static(publicDir));
-    // Dedicated authentication pages (same shell, tabbed Sign In / Sign Up)
-    app.get('/login', (_req, res) => {
+    // Dedicated authentication pages (same shell, tabbed Sign In / Create Account)
+    const serveAuthShell = (req, res) => {
+        if ((0, auth_guard_1.hasActiveAuthSession)(req)) {
+            const rawNext = typeof req.query.next === 'string' ? req.query.next : '';
+            const target = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/';
+            res.redirect(target);
+            return;
+        }
+        res.setHeader('Cache-Control', 'no-store');
         res.sendFile(path_1.default.join(publicDir, 'login.html'));
-    });
-    app.get('/signup', (_req, res) => {
-        res.sendFile(path_1.default.join(publicDir, 'login.html'));
-    });
-    app.get('*', (_req, res) => {
+    };
+    app.get('/login', serveAuthShell);
+    app.get('/signup', serveAuthShell);
+    // Gate the web console entry point so Sign Up / Sign In is always the very first page
+    const serveConsoleEntry = (req, res) => {
+        if (!(0, auth_guard_1.hasActiveAuthSession)(req)) {
+            const entryPath = (0, auth_guard_1.hasRegisteredUsers)() ? '/login' : '/signup';
+            const qsIdx = req.originalUrl.indexOf('?');
+            const nextSuffix = (req.path === '/' || req.path === '/index.html') && qsIdx === -1
+                ? ''
+                : `?next=${encodeURIComponent(req.originalUrl)}`;
+            res.redirect(`${entryPath}${nextSuffix}`);
+            return;
+        }
+        res.setHeader('Cache-Control', 'no-store');
         res.sendFile(path_1.default.join(publicDir, 'index.html'));
-    });
+    };
+    app.get('/', serveConsoleEntry);
+    app.get('/index.html', serveConsoleEntry);
+    app.use(express_1.default.static(publicDir, { index: false }));
+    app.get('*', serveConsoleEntry);
     return app;
 }
 function createServerWithSimulator(bridgeOpts) {

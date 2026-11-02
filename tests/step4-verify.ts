@@ -548,10 +548,70 @@ async function run() {
     assert(medDq.ok && medDq.cdr?.disposition === 'DQ', `Expected DQ disposition for age 61, got ${medDq.cdr?.disposition}`);
 
     console.log(
-      '✓ [9/9] Medicare Agent (a_medicare) & MEDICARE Campaign (88002 / RA 9002 -> MED_CLOSERS, LANG Spanish barrier, DQ <65 hard-stop & metadata handoff) verified'
+      '✓ [9/10] Medicare Agent (a_medicare) & MEDICARE Campaign (88002 / RA 9002 -> MED_CLOSERS, LANG Spanish barrier, DQ <65 hard-stop & metadata handoff) verified'
     );
 
-    console.log('\nALL 9 STEP 4 CHECKS PASSED SUCCESSFULLY!');
+    // 10. Verify Users SignUp / SignIn Entry Gate (/ -> /signup when 0 users, SignUp -> /, SignOut -> /login, SignIn -> /)
+    const rootFirstRes = await fetch(`${httpBase}/`, { redirect: 'manual' });
+    assert(
+      rootFirstRes.status === 302 && rootFirstRes.headers.get('location') === '/signup',
+      `Expected anonymous GET / with 0 users to redirect 302 -> /signup, got ${rootFirstRes.status} (${rootFirstRes.headers.get('location')})`
+    );
+    const signupHtmlRes = await fetch(`${httpBase}/signup`);
+    const signupHtml = await signupHtmlRes.text();
+    assert(
+      signupHtmlRes.status === 200 && signupHtml.includes('id="signup-form"') && signupHtml.includes('id="signin-form"'),
+      'Expected /signup to serve login.html with Sign In & Create Account forms'
+    );
+
+    const createAcctRes = await fetch(`${httpBase}/api/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fullName: 'Muneeb Akram',
+        email: 'muneeb@mmadigitallabs.com',
+        password: 'StrongUserPass#2026',
+      }),
+    });
+    assert(createAcctRes.status === 201, `Expected 201 from /api/auth/signup, got ${createAcctRes.status}`);
+    const userCookie = (createAcctRes.headers.get('set-cookie') || '').split(';')[0];
+    assert(userCookie.startsWith('vac_session='), 'Expected vac_session cookie on signup');
+
+    const authedRootRes = await fetch(`${httpBase}/`, {
+      headers: { Cookie: userCookie },
+      redirect: 'manual',
+    });
+    const authedRootHtml = await authedRootRes.text();
+    assert(
+      authedRootRes.status === 200 && authedRootHtml.includes('Voice Agent Console'),
+      `Expected authenticated GET / to return 200 index.html, got ${authedRootRes.status}`
+    );
+
+    await fetch(`${httpBase}/api/auth/logout`, {
+      method: 'POST',
+      headers: { Cookie: userCookie },
+    });
+
+    const rootAfterUsersRes = await fetch(`${httpBase}/`, { redirect: 'manual' });
+    assert(
+      rootAfterUsersRes.status === 302 && rootAfterUsersRes.headers.get('location') === '/login',
+      `Expected anonymous GET / after user exists to redirect 302 -> /login, got ${rootAfterUsersRes.status} (${rootAfterUsersRes.headers.get('location')})`
+    );
+
+    const userSignInRes = await fetch(`${httpBase}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'muneeb@mmadigitallabs.com',
+        password: 'StrongUserPass#2026',
+      }),
+    });
+    assert(userSignInRes.status === 200, `Expected 200 from email /api/auth/login, got ${userSignInRes.status}`);
+    console.log(
+      '✓ [10/10] Users SignUp / SignIn First-Page Entry Gate (/ -> /signup, Create Account, Console unlock, Sign Out -> /login & Sign In) verified'
+    );
+
+    console.log('\nALL 10 STEP 4 CHECKS PASSED SUCCESSFULLY!');
   } finally {
     if (prevAdminPass === undefined) delete process.env.ADMIN_PASSWORD;
     else process.env.ADMIN_PASSWORD = prevAdminPass;

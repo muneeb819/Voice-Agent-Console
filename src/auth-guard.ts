@@ -98,9 +98,13 @@ export function isBridgePeerIpAllowed(remoteAddress?: string | null): boolean {
   return rules.some((rule) => matchesIpRule(ip, rule));
 }
 
+export function hasRegisteredUsers(): boolean {
+  return cachedUserCount() > 0;
+}
+
 export function isAuthEnabled(): boolean {
   if (getSecret('ADMIN_PASSWORD').length > 0) return true;
-  return cachedUserCount() > 0;
+  return hasRegisteredUsers();
 }
 
 function signTimestamp(ts: string, password: string): string {
@@ -183,11 +187,11 @@ export function getAuthenticatedUser(req: http.IncomingMessage): PublicUser | nu
 }
 
 /**
- * Verifies an HTTP Request or WebSocket Upgrade IncomingMessage.
+ * Checks whether the request carries an explicit user account session or admin-password session.
+ * Used to gate the web UI entry page (`/`) so Sign Up / Sign In is always shown first,
+ * even before the first user account is created.
  */
-export function isRequestAuthorized(req: http.IncomingMessage): boolean {
-  if (!isAuthEnabled()) return true;
-
+export function hasActiveAuthSession(req: http.IncomingMessage): boolean {
   // 1. Check Authorization header (Bearer <ADMIN_PASSWORD> or Basic base64(user:<ADMIN_PASSWORD>))
   const authHdr = String(req.headers.authorization || '').trim();
   if (authHdr) {
@@ -216,6 +220,14 @@ export function isRequestAuthorized(req: http.IncomingMessage): boolean {
   }
 
   return false;
+}
+
+/**
+ * Verifies an HTTP Request or WebSocket Upgrade IncomingMessage.
+ */
+export function isRequestAuthorized(req: http.IncomingMessage): boolean {
+  if (!isAuthEnabled()) return true;
+  return hasActiveAuthSession(req);
 }
 
 export function setAuthCookie(res: Response, token: string): void {

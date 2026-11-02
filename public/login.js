@@ -291,7 +291,12 @@
       if (res.ok) {
         var data = await res.json();
         if (data.authenticated) { goHome(); return; }
-        if (data.authEnabled === false) { goHome(); return; }
+        if (adminToggle && data.adminPasswordConfigured === false) {
+          adminToggle.style.display = 'none';
+        }
+        if (data.hasUsers === false && location.pathname !== '/login') {
+          setMode('signup');
+        }
       }
     } catch (e) { /* offline: leave the form usable */ }
   })();
