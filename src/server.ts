@@ -19,6 +19,8 @@ import {
   createSessionToken,
   getAuthenticatedUser,
   getRequestSessionToken,
+  hasActiveAuthSession,
+  hasRegisteredUsers,
   invalidateUserCountCache,
   isAuthEnabled,
   isLoopbackIp,
@@ -46,6 +48,7 @@ import {
   synthesizeTtsPreview,
 } from './deepgram-catalog';
 import {
+  getSecret,
   getSecretsStatus,
   loadEnv,
   MANAGED_SECRET_KEYS,
@@ -76,8 +79,10 @@ loadEnv();
 export function createApp(viciBridge?: VicidialBridgeService) {
   const app = express();
   const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+  const signupAttempts = new Map<string, { count: number; resetAt: number }>();
   const loginWindowMs = 15 * 60 * 1000;
   const loginAttemptLimit = 5;
+  const signupAttemptLimit = 10;
 
   app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -105,41 +110,58 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   // ==================== STEP 4: AUTHENTICATION ROUTES & GUARD ====================
 
-  const rateKey = (req: Request): string => String(req.socket?.remoteAddress || req.ip || 'unknown');
+  const rateKey = (req: Request): string => {
+    const cfIp = String(req.headers['cf-connecting-ip'] || '').trim();
+    if (cfIp) return cfIp;
+    return String(req.socket?.remoteAddress || req.ip || 'unknown');
+  };
 
-  const rateLimited = (key: string): { limited: boolean; retryAfter: number } => {
+  const rateLimited = (
+    key: string,
+    bucket: Map<string, { count: number; resetAt: number }> = loginAttempts,
+    limit = loginAttemptLimit
+  ): { limited: boolean; retryAfter: number } => {
     const now = Date.now();
-    const attempts = loginAttempts.get(key);
+    const attempts = bucket.get(key);
     if (attempts && attempts.resetAt <= now) {
-      loginAttempts.delete(key);
+      bucket.delete(key);
       return { limited: false, retryAfter: 0 };
     }
-    if (attempts && attempts.count >= loginAttemptLimit) {
+    if (attempts && attempts.count >= limit) {
       return { limited: true, retryAfter: Math.max(1, Math.ceil((attempts.resetAt - now) / 1000)) };
     }
     return { limited: false, retryAfter: 0 };
   };
 
-  const noteFailure = (key: string): void => {
+  const noteFailure = (
+    key: string,
+    bucket: Map<string, { count: number; resetAt: number }> = loginAttempts
+  ): void => {
     const now = Date.now();
-    let attempts = loginAttempts.get(key);
+    let attempts = bucket.get(key);
     if (!attempts || attempts.resetAt <= now) {
-      if (loginAttempts.size >= 1000) {
-        const oldestIp = loginAttempts.keys().next().value;
-        if (oldestIp) loginAttempts.delete(oldestIp);
+      if (bucket.size >= 1000) {
+        const oldestIp = bucket.keys().next().value;
+        if (oldestIp) bucket.delete(oldestIp);
       }
       attempts = { count: 0, resetAt: now + loginWindowMs };
-      loginAttempts.set(key, attempts);
+      bucket.set(key, attempts);
     }
     attempts.count += 1;
   };
 
   app.get('/api/auth/status', (req: Request, res: Response) => {
+    const user = getAuthenticatedUser(req);
+    const sessionAuth = hasActiveAuthSession(req);
+    const hasUsers = hasRegisteredUsers();
     res.json({
       ok: true,
-      authEnabled: isAuthEnabled(),
-      authenticated: isRequestAuthorized(req),
-      user: getAuthenticatedUser(req),
+      authEnabled: true,
+      apiAuthEnforced: isAuthEnabled(),
+      hasUsers,
+      adminPasswordConfigured: getSecret('ADMIN_PASSWORD').length > 0,
+      authenticated: sessionAuth,
+      user,
       signupOpen: true,
     });
   });
@@ -156,7 +178,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   // Create a new account (email + full name + password) and sign in immediately.
   app.post('/api/auth/signup', (req: Request, res: Response) => {
     const key = rateKey(req);
-    const gate = rateLimited(key);
+    const gate = rateLimited(key, signupAttempts, signupAttemptLimit);
     if (gate.limited) {
       res.setHeader('Retry-After', String(gate.retryAfter));
       res.status(429).json({ ok: false, code: 'SIGNUP_RATE_LIMITED', error: 'Too many attempts. Try again later.' });
@@ -165,6 +187,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
     const result = createUser(req.body || {});
     if (!result.ok || !result.user) {
+      noteFailure(key, signupAttempts);
       res.status(400).json({
         ok: false,
         code: 'SIGNUP_INVALID',
@@ -175,6 +198,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     }
 
     loginAttempts.delete(key);
+    signupAttempts.delete(key);
     invalidateUserCountCache();
     purgeExpiredSessions();
 
@@ -216,8 +240,12 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     }
 
     // --- Legacy admin password sign-in ---
-    if (!isAuthEnabled()) {
-      res.json({ ok: true, authEnabled: false, authenticated: true });
+    if (!getSecret('ADMIN_PASSWORD')) {
+      res.status(400).json({
+        ok: false,
+        code: 'ADMIN_PASSWORD_NOT_CONFIGURED',
+        error: 'ADMIN_PASSWORD is not configured in server .env. Sign in with your email account or create an account.',
+      });
       return;
     }
     if (!constantTimePasswordMatch(candidate)) {
@@ -234,10 +262,23 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   app.post('/api/auth/logout', (req: Request, res: Response) => {
     destroyUserSession(getRequestSessionToken(req));
     clearAuthCookie(res);
-    res.json({ ok: true, authEnabled: isAuthEnabled(), authenticated: !isAuthEnabled() });
+    res.json({ ok: true, authEnabled: true, authenticated: false });
   });
 
   app.use('/api', apiAuthMiddleware);
+
+  const readPublicDemoUrl = (): string | null => {
+    const envUrl = String(process.env.PUBLIC_DEMO_URL || '').trim();
+    if (/^https?:\/\//i.test(envUrl)) return envUrl;
+    try {
+      const demoFile = path.resolve(__dirname, '..', 'logs', 'public-demo-url.txt');
+      if (fs.existsSync(demoFile)) {
+        const txt = fs.readFileSync(demoFile, 'utf8').trim();
+        if (/^https?:\/\//i.test(txt)) return txt;
+      }
+    } catch {}
+    return null;
+  };
 
   const buildPayload = (state = getConsoleState()) => {
     const validations = validateState(state);
@@ -265,6 +306,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       revisions: listRevisions(12),
       secrets: getSecretsStatus(),
       viciBridge: viciBridge ? viciBridge.getStatus() : null,
+      publicDemoUrl: readPublicDemoUrl(),
     };
   };
 
@@ -740,19 +782,44 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   });
 
   const publicDir = path.resolve(__dirname, '..', 'public');
-  app.use(express.static(publicDir));
 
-  // Dedicated authentication pages (same shell, tabbed Sign In / Sign Up)
-  app.get('/login', (_req: Request, res: Response) => {
+  // Dedicated authentication pages (same shell, tabbed Sign In / Create Account)
+  const serveAuthShell = (req: Request, res: Response) => {
+    if (hasActiveAuthSession(req)) {
+      const rawNext = typeof req.query.next === 'string' ? req.query.next : '';
+      const target = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/';
+      res.redirect(target);
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
     res.sendFile(path.join(publicDir, 'login.html'));
-  });
-  app.get('/signup', (_req: Request, res: Response) => {
-    res.sendFile(path.join(publicDir, 'login.html'));
-  });
+  };
 
-  app.get('*', (_req: Request, res: Response) => {
+  app.get('/login', serveAuthShell);
+  app.get('/signup', serveAuthShell);
+
+  // Gate the web console entry point so Sign Up / Sign In is always the very first page
+  const serveConsoleEntry = (req: Request, res: Response) => {
+    if (!hasActiveAuthSession(req)) {
+      const entryPath = hasRegisteredUsers() ? '/login' : '/signup';
+      const qsIdx = req.originalUrl.indexOf('?');
+      const nextSuffix =
+        (req.path === '/' || req.path === '/index.html') && qsIdx === -1
+          ? ''
+          : `?next=${encodeURIComponent(req.originalUrl)}`;
+      res.redirect(`${entryPath}${nextSuffix}`);
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-store');
     res.sendFile(path.join(publicDir, 'index.html'));
-  });
+  };
+
+  app.get('/', serveConsoleEntry);
+  app.get('/index.html', serveConsoleEntry);
+
+  app.use(express.static(publicDir, { index: false }));
+
+  app.get('*', serveConsoleEntry);
 
   return app;
 }

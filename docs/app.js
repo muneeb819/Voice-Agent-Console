@@ -4717,15 +4717,25 @@
   }
 
   async function loadFromServer() {
-    const authRes = await fetch('/api/auth/status').catch(() => null);
+    const authRes = await fetch('/api/auth/status', { credentials: 'same-origin' }).catch(() => null);
     if (authRes && authRes.ok && (authRes.headers.get('content-type') || '').includes('application/json')) {
       const authJson = await authRes.json().catch(() => ({}));
       const logoutBtn = document.getElementById('btn-logout');
-      if (logoutBtn) logoutBtn.style.display = authJson.authEnabled && authJson.authenticated ? 'inline-block' : 'none';
-      if (authJson.authEnabled && !authJson.authenticated) {
-        const next = encodeURIComponent(window.location.pathname + window.location.search);
-        window.location.replace('/login?next=' + next);
+      if (!authJson.authenticated) {
+        const entry = authJson.hasUsers === false ? '/signup' : '/login';
+        const qs = window.location.search || '';
+        const next = window.location.pathname === '/' && !qs ? '' : '?next=' + encodeURIComponent(window.location.pathname + qs);
+        window.location.replace(entry + next);
         return;
+      }
+      if (logoutBtn) {
+        logoutBtn.style.display = 'inline-flex';
+        if (authJson.user && (authJson.user.fullName || authJson.user.email)) {
+          const who = authJson.user.fullName || authJson.user.email;
+          logoutBtn.title = `Signed in as ${who} (${authJson.user.email || ''}) — Click to sign out`;
+          const span = logoutBtn.querySelector('span');
+          if (span) span.textContent = `Sign Out (${who.split(' ')[0]})`;
+        }
       }
     }
 
@@ -4772,6 +4782,19 @@
     }
     const data = await res.json();
     S = data.state;
+    const shareBtn = document.getElementById('btn-share-demo');
+    const activeDemoUrl =
+      data.publicDemoUrl ||
+      (/\.trycloudflare\.com$/i.test(window.location.hostname) ? window.location.origin : null);
+    if (shareBtn) {
+      if (activeDemoUrl) {
+        shareBtn.style.display = 'inline-flex';
+        shareBtn.dataset.demoUrl = activeDemoUrl;
+        shareBtn.title = `Public Client Demo URL: ${activeDemoUrl} (click to copy)`;
+      } else {
+        shareBtn.style.display = 'none';
+      }
+    }
     enforceDeepgramOnlyLlms(S);
     upgradeRealtimeAgentFeatures(S);
     snap = comparableSnapshot(S);
@@ -5568,9 +5591,23 @@
       await loadFromServer();
       return;
     }
+    if (b.id === 'btn-share-demo') {
+      const demoUrl = b.dataset.demoUrl || window.location.origin;
+      try {
+        await navigator.clipboard.writeText(demoUrl);
+        const orig = b.textContent;
+        b.textContent = '✓ Copied Client Link!';
+        setTimeout(() => {
+          b.textContent = orig;
+        }, 2200);
+      } catch {
+        window.prompt('Copy this public HTTPS link for your client:', demoUrl);
+      }
+      return;
+    }
     if (b.id === 'btn-logout') {
-      await fetch('/api/auth/logout', { method: 'POST' });
-      await loadFromServer();
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+      window.location.replace('/login');
       return;
     }
     if (b.id === 'btn-wb-refresh') {

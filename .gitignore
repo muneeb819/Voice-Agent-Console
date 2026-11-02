@@ -17,6 +17,7 @@ data/recordings/*.wav
 *.log
 
 # Local tunnel binary (large, machine-specific)
+tools/cloudflared
 tools/cloudflared.exe
 
 # Runtime logs
