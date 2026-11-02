@@ -415,13 +415,11 @@ class VicidialBridgeService {
                     const targetPort = Number(process.env.PORT || 3000);
                     const upstream = net_1.default.connect(targetPort, '127.0.0.1');
                     upstream.setNoDelay(true);
-                    upstream.on('connect', () => {
-                        upstream.write(chunk);
-                        socket.pipe(upstream);
-                        upstream.pipe(socket);
-                    });
                     upstream.on('error', () => socket.destroy());
                     socket.on('error', () => upstream.destroy());
+                    upstream.write(chunk);
+                    socket.pipe(upstream);
+                    upstream.pipe(socket);
                     return;
                 }
                 if (!(0, auth_guard_1.isBridgePeerIpAllowed)(socket.remoteAddress)) {
