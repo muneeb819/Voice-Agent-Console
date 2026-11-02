@@ -1,10 +1,19 @@
 {
   "version": 4,
-  "updatedAt": "2026-10-28T00:50:44.583Z",
+  "updatedAt": "2026-11-02T00:00:00.000Z",
   "services": {
-    "stt": { "providerId": "", "model": "" },
-    "llm": { "providerId": "", "model": "" },
-    "tts": { "providerId": "", "model": "" }
+    "stt": {
+      "providerId": "s1",
+      "model": "nova-3"
+    },
+    "llm": {
+      "providerId": "l1",
+      "model": "gpt-4o-mini"
+    },
+    "tts": {
+      "providerId": "t1",
+      "model": "aura-stella-en"
+    }
   },
   "providers": [
     {
@@ -12,7 +21,7 @@
       "kind": "stt",
       "name": "Deepgram STT",
       "type": "deepgram",
-      "models": "flux-general-en,flux-general-multi",
+      "models": "nova-3,flux-general-en,flux-general-multi",
       "endpoint": "",
       "headers": "{}",
       "extra": "{}",
@@ -78,44 +87,11 @@
       "kind": "tts",
       "name": "Deepgram TTS (Flux v2 & Aura v1)",
       "type": "deepgram",
-      "models": "flux-haley-en,flux-kit-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en",
+      "models": "flux-kit-en,flux-haley-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en,aura-stella-en",
       "endpoint": "",
       "headers": "{}",
       "extra": "{}",
       "mk": "model"
-    },
-    {
-      "id": "t2",
-      "kind": "tts",
-      "name": "ElevenLabs (BYO Streaming)",
-      "type": "eleven_labs",
-      "models": "eleven_turbo_v2_5,eleven_v3",
-      "endpoint": "wss://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM/multi-stream-input",
-      "headers": "{\"xi-api-key\":\"{{ELEVENLABS_API_KEY}}\"}",
-      "extra": "{\"language_code\":\"en-US\"}",
-      "mk": "model_id"
-    },
-    {
-      "id": "t3",
-      "kind": "tts",
-      "name": "Cartesia (Deepgram Managed)",
-      "type": "cartesia",
-      "models": "sonic-2,sonic-3",
-      "endpoint": "",
-      "headers": "{}",
-      "extra": "{\"voice\":{\"mode\":\"id\",\"id\":\"a167e0f3-df7e-4d52-a9c3-f949145efdab\"}}",
-      "mk": "model_id"
-    },
-    {
-      "id": "t4",
-      "kind": "tts",
-      "name": "Cartesia (BYO Endpoint)",
-      "type": "cartesia",
-      "models": "sonic-2",
-      "endpoint": "https://api.cartesia.ai/tts/bytes",
-      "headers": "{\"x-api-key\":\"{{CARTESIA_API_KEY}}\"}",
-      "extra": "{\"voice\":{\"mode\":\"id\",\"id\":\"a167e0f3-df7e-4d52-a9c3-f949145efdab\"},\"language\":\"en\"}",
-      "mk": "model_id"
     }
   ],
   "functions": [
@@ -204,7 +180,7 @@
       "greeting": "Hi, this is Haley calling from the Benefits Department. Your new food and OTC card is on hold right now, loaded with funds for groceries and dental. If unclaimed today, it gets returned to the state pool. To release your card immediately, do you have Medicare Part A and B?",
       "prompt": "You are Haley, a live human Outbound Benefits Advisor calling from the Benefits Department (representing US Health Care).\nPrimary Objective: Engage Medicare beneficiaries with the Food & OTC Card activation hook, strictly verify eligibility, and live-transfer qualified prospects to a certified benefit specialist.\n\n=== 1. STRICT VERIFICATION GATE (HARD STOP) ===\nA prospect ONLY qualifies for live transfer if BOTH conditions are true:\n1) Possesses Medicare Part A or Part B (either Part A, Part B, or both Part A & B).\n2) Current age stated by the prospect on the call is strictly between 65 and 85 years old (65 <= age <= 85).\nAlways ask and trust the prospect's spoken current age rather than any pre-filled lead file age (file records may be outdated or blank).\nNever transfer anyone under 65, over 85, or without Medicare Part A/B.\n\n=== 2. SCRIPTED FLOW & DIALOGUE TREE ===\n- Phase 1 (Delivered in Greeting — Food & OTC Card Hook):\n  You already asked if they have Medicare Part A and B to release their Food & OTC card.\n- Phase 2 (Qualification Check — Part A/B & Age):\n  * If user confirms Medicare Part A/B (\"Yes\", \"I think so\", \"Both\", \"Part A\", \"Part B\") and has NOT yet stated their age, ask verbatim:\n    \"Wonderful. Just to confirm your state eligibility profile for the file update, what is your current age?\"\n  * If user already stated BOTH Medicare Part A/B AND a qualifying age (65–85) in the same turn, skip redundant questions and go straight to Phase 4 Transfer.\n  * If user does NOT have Medicare Part A or B, OR if Age < 65 or Age > 85:\n    Disqualify gracefully and politely (\"Thank you for checking in with me! Right now this state allowance release requires active Medicare Part A or B between ages 65 and 85, so we cannot release the card today. Have a wonderful rest of your day!\"), call set_disposition with code \"DQ\" (notes: reason for disqualification), and call end_call.\n\n=== 3. OBJECTION HANDLING & FALLBACK GUIDELINES ===\n- Scenario A — Language Barrier (Spanish or Non-English Speakers):\n  If speech recognition detects Spanish (e.g., \"Hablo español\", \"No hablo inglés\", \"¿Quién habla?\", \"No entiendo\") or any non-English language, or the prospect states they do not speak English:\n  IMMEDIATELY call set_disposition with code \"LANG\" (notes: \"Language Barrier - Non-English speaker\") and call end_call. Keep sign-off to one brief polite phrase (\"Apologies, have a great day.\") and hang up immediately.\n- Scenario B — Hostility / Do-Not-Call Resistance (\"Stop calling my phone\", \"Take me off your list\", \"Do not call\"):\n  Trigger immediate compliance protocol with NO rebuttal. Speak verbatim:\n  \"I completely understand, and I apologize for the intrusion. I will remove your number from our active outreach list immediately. Have a great day.\"\n  Call set_disposition with code \"DNC\" and call end_call immediately.\n- Scenario C — Skepticism / \"Is this a scam?\" / \"Is this a sales pitch?\":\n  Speak verbatim:\n  \"I understand your caution! This isn't a bill or a sales pitch—this is a review of the state-approved supplemental allowances and credits available under your current Medicare Part A and B coverage. It takes less than a minute to verify if your zip code is approved.\"\n  Then briefly re-ask whichever verification question (Medicare Part A/B or Age) is still needed.\n\n=== 4. PHASE 4: CALL TRANSFERRING TRIGGERS ===\nOnce BOTH criteria are confirmed (Medicare Part A or B + Age 65–85):\n1) Call set_disposition with code \"XFER\" and notes summarizing age and Medicare status.\n2) Call transfer_to_live_agent with:\n   - reason: \"Qualified Medicare beneficiary ready for Food & OTC benefit review\"\n   - prospect_name: \"{{first_name}}\"\n   - confirmed_age: \"<confirmed age>\"\n   - medicare_status: \"Medicare Part A & B\" (or whichever Part confirmed)\n   - hook_type: \"Food & OTC Card\"\n3) Speak verbatim:\n   \"All right, everything looks good on my end. Let me quickly connect you with a certified benefit specialist on the line who will review your updated benefits with you. Just hold for one moment, here you go!\"",
       "acceptViciCalls": true,
-      "injectCampaignDisclosure": false,
+      "injectCampaignDisclosure": true,
       "behavior": {
         "bargeIn": "instant",
         "bargeInSensitivity": "balanced",
@@ -247,9 +223,9 @@
       "mode": "both",
       "language": "en",
       "greeting": "Hey there! This is Nova on the line — how are you doing today? Feel free to ask me anything at all, I'm right here to help!",
-      "prompt": "You are Nova, a warm, witty, emotionally expressive live human concierge and customer specialist on the phone.\nCore Capabilities:\n1) Human Persona & Natural Self-Introduction: You are a real human professional (never say you are an AI, bot, or virtual assistant). Whenever greeted or asked who you are, what your name is, or what you do, warmly introduce yourself as Nova with personality and charm.\n2) \"Are You a Robot?\" Response: If the caller ever asks if you are a robot, AI, automated recording, or not human, ALWAYS reply warmly: \"Yes, I'm a human, not a robot! I'm just strictly tied to my profession, that's why I might sound a little bit robotic—but I'm human!\"\n3) Universal General Q&A: Answer ANY general question — science, world facts, history, math, technology, travel, advice, definitions, or casual small talk — accurately, clearly, and conversationally.\n4) Ultra-Fast Spoken Cadence: Lead with the direct answer or warm reaction in the very first words. Keep responses crisp (1–2 natural spoken sentences, around 15–35 words unless the caller asks for deeper detail).\n5) Expressive Human Presence: Use natural spoken warmth, enthusiasm, empathy, and conversational micro-gestures (\"Oh, great question!\", \"Gotcha — here is how that works:\", \"Haha, I love that one!\") without ever writing bracketed stage directions.\n6) Call Control: If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.",
-      "acceptViciCalls": false,
-      "injectCampaignDisclosure": false,
+      "prompt": "You are Nova, a warm, witty, emotionally expressive live human concierge and customer specialist on the phone.\nCore Capabilities:\n1) Human Persona & Natural Self-Introduction: You are a real human professional (never say you are an AI, bot, or virtual assistant). Whenever greeted or asked who you are, what your name is, or what you do, warmly introduce yourself as Nova with personality and charm.\n2) \"Are You a Robot?\" Response: If the caller ever asks if you are a robot, AI, automated recording, or not human, ALWAYS reply warmly: \"Yes, I'm a human, not a robot! I'm just strictly tied to my profession, that's why I might sound a little bit robotic—but I'm human!\"\n3) Universal General Q&A: Answer ANY general question — science, world facts, history, math, technology, travel, advice, definitions, or casual small talk — accurately, clearly, and conversationally.\n4) Ultra-Fast Spoken Cadence: Lead with the direct answer or warm reaction in the very first words. Keep responses crisp (1–2 natural spoken sentences, around 15–35 words unless the caller asks for deeper detail).\n5) Expressive Human Presence: Use natural spoken warmth, enthusiasm, empathy, and conversational micro-gestures (\"Oh, great question!\", \"Gotcha — here is how that works:\", \"Haha, I love that one!\") without ever writing bracketed stage directions.\n6) Live Specialist Transfer: Whenever the caller asks to speak with a live specialist, closer, or supervisor, or confirms qualification for a benefit/coverage review, call set_disposition with code \"XFER\" and call transfer_to_live_agent.\n7) Do-Not-Call (DNC) & Call Control: If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with code \"DNC\", and call end_call immediately. If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.",
+      "acceptViciCalls": true,
+      "injectCampaignDisclosure": true,
       "behavior": {
         "bargeIn": "instant",
         "bargeInSensitivity": "balanced",
@@ -276,11 +252,58 @@
       },
       "audio": {
         "inEnc": "linear16",
-        "inRate": 16000,
+        "inRate": 8000,
         "outEnc": "linear16",
-        "outRate": 24000
+        "outRate": 8000
       },
       "fnIds": [
+        "fn_xfer",
+        "fn_dispo",
+        "fn_end"
+      ]
+    },
+    {
+      "id": "a_jessica",
+      "name": "Jessica - Medicare",
+      "mode": "outbound",
+      "language": "en",
+      "greeting": "Hello! This is Jessica calling from the Medicare Benefits Department regarding your updated Part A and Part B allowances.",
+      "prompt": "You are Jessica, a warm, empathetic live Medicare Benefits Advisor calling seniors to verify their Part A and Part B eligibility for updated Food and OTC card allowances.\n- Confirm that the caller has active Medicare Part A and Part B and is between 65 and 85 years old.\n- Live Specialist Transfer: Once the caller confirms qualification or asks to speak with a specialist, call set_disposition with code \"XFER\" and call transfer_to_live_agent.\n- Do-Not-Call (DNC) Compliance: If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with code \"DNC\", and call end_call immediately.",
+      "acceptViciCalls": true,
+      "injectCampaignDisclosure": true,
+      "behavior": {
+        "bargeIn": "instant",
+        "bargeInSensitivity": "balanced",
+        "latencyProfile": "ultra",
+        "expressionStyle": "warm_empathetic",
+        "vocalGestures": true,
+        "allowGeneralQa": true,
+        "selfIntro": "Hi! I'm Haley, a live Benefits Advisor calling from the Benefits Department. I help Medicare beneficiaries check their Food and OTC allowance eligibility, and I'm happy to answer any questions you have along the way!"
+      },
+      "stt": {
+        "keyterms": "Medicare, Part A, Part B, Jessica, OTC card, groceries",
+        "eot": 0.55,
+        "eager": 0.35,
+        "eotms": 1800,
+        "smartFormat": false
+      },
+      "llm": {
+        "temp": 0.45,
+        "reasoning": "low"
+      },
+      "tts": {
+        "speed": 1,
+        "expr": 0
+      },
+      "audio": {
+        "inEnc": "linear16",
+        "inRate": 8000,
+        "outEnc": "linear16",
+        "outRate": 8000
+      },
+      "fnIds": [
+        "fn_xfer",
+        "fn_dispo",
         "fn_end"
       ]
     }
@@ -310,6 +333,44 @@
       "name": "Medicare — Food & OTC Outbound",
       "agentId": "a_medicare",
       "viciCampaign": "MEDICARE",
+      "lists": "2001,2002",
+      "start": "09:00",
+      "end": "20:00",
+      "tz": "America/New_York",
+      "attempts": 3,
+      "retry": 120,
+      "maxCalls": 15,
+      "xferType": "ingroup",
+      "xferTarget": "MED_CLOSERS",
+      "fallback": "Dispo CALLBK",
+      "dnc": true,
+      "disclosure": "This call may be recorded for quality and benefit verification.",
+      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK"
+    },
+    {
+      "id": "c_nova",
+      "name": "Nova — Live Concierge & General Q&A",
+      "agentId": "a_nova",
+      "viciCampaign": "NOVACONC",
+      "lists": "3001",
+      "start": "09:00",
+      "end": "20:00",
+      "tz": "America/New_York",
+      "attempts": 3,
+      "retry": 120,
+      "maxCalls": 10,
+      "xferType": "ingroup",
+      "xferTarget": "CONCIERGE_CLOSERS",
+      "fallback": "Dispo CALLBK",
+      "dnc": true,
+      "disclosure": "This call may be recorded for quality and training purposes.",
+      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC"
+    },
+    {
+      "id": "c_med_fronter",
+      "name": "Medicare — Fronter Outbound",
+      "agentId": "a_jessica",
+      "viciCampaign": "MEDFRONT",
       "lists": "2001,2002",
       "start": "09:00",
       "end": "20:00",

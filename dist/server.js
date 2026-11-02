@@ -49,6 +49,15 @@ function createApp(viciBridge) {
     });
     app.use(express_1.default.json({ limit: '4mb' }));
     app.use(express_1.default.urlencoded({ extended: false }));
+    if (process.env.VAC_DEBUG === '1') {
+        app.use((req, res, next) => {
+            const started = Date.now();
+            res.on('finish', () => {
+                console.log(`[VAC:DEBUG] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${Date.now() - started}ms)`);
+            });
+            next();
+        });
+    }
     // ==================== STEP 4: AUTHENTICATION ROUTES & GUARD ====================
     const rateKey = (req) => String(req.socket?.remoteAddress || req.ip || 'unknown');
     const rateLimited = (key) => {
@@ -677,7 +686,8 @@ function createServerWithSimulator(bridgeOpts) {
 if (require.main === module) {
     const initialPort = Number(process.env.PORT || 3000);
     const host = process.env.HOST || '127.0.0.1';
-    if (!(0, auth_guard_1.isLoopbackIp)(host) && !(0, auth_guard_1.isAuthEnabled)()) {
+    const debugMode = process.env.VAC_DEBUG === '1';
+    if (!(0, auth_guard_1.isLoopbackIp)(host) && !(0, auth_guard_1.isAuthEnabled)() && !debugMode) {
         console.error('[VoiceAgentConsole] Refusing to bind to a non-loopback interface without ADMIN_PASSWORD.');
         process.exit(1);
     }
@@ -709,7 +719,15 @@ if (require.main === module) {
             server.listen(candidatePort, host, () => {
                 server.removeListener('error', onError);
                 process.env.PORT = String(candidatePort);
-                console.log(`[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://localhost:${candidatePort} (bound ${host}:${candidatePort})`);
+                console.log(`[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://localhost:${candidatePort} (bound ${host}:${candidatePort})${debugMode ? ' [DEBUG MODE]' : ''}`);
+                if (debugMode) {
+                    const currentState = (0, db_1.getConsoleState)();
+                    const checks = (0, settings_builder_1.validateState)(currentState);
+                    const okCount = checks.filter((c) => c.level === 'ok').length;
+                    const wnCount = checks.filter((c) => c.level === 'wn').length;
+                    const erCount = checks.filter((c) => c.level === 'er').length;
+                    console.log(`[VAC:DEBUG] Active state loaded: ${currentState.agents.length} agents (${currentState.agents.map((a) => `"${a.name}"`).join(', ')}), ${currentState.campaigns.length} campaigns (${currentState.campaigns.map((c) => `"${c.name}"`).join(', ')}) | TTS=${currentState.services.tts.model || 'none'} | Pre-flight checks: ${okCount} passed, ${wnCount} warnings, ${erCount} errors`);
+                }
                 (0, deepgram_catalog_1.fetchDeepgramVoiceCatalog)().catch(() => { });
             });
         };

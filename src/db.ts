@@ -236,7 +236,22 @@ export function getConsoleState(): ConsoleState {
 
   if (row?.value) {
     try {
-      return normalizeState(JSON.parse(row.value));
+      const parsed = JSON.parse(row.value);
+      const normalized = normalizeState(parsed);
+      const beforeComparable = JSON.stringify({ ...parsed, updatedAt: '' });
+      const afterComparable = JSON.stringify({ ...normalized, updatedAt: '' });
+      if (beforeComparable !== afterComparable) {
+        const json = JSON.stringify(normalized, null, 2);
+        conn
+          .prepare('INSERT OR REPLACE INTO console_store (key, value, updated_at) VALUES (?, ?, ?)')
+          .run('active_state', json, normalized.updatedAt);
+        try {
+          fs.writeFileSync(JSON_MIRROR_PATH, json, 'utf8');
+        } catch {
+          // Ignore mirror write error
+        }
+      }
+      return normalized;
     } catch {
       // Fallback below
     }

@@ -165,7 +165,23 @@ function getConsoleState() {
     const row = conn.prepare('SELECT value FROM console_store WHERE key = ?').get('active_state');
     if (row?.value) {
         try {
-            return (0, defaults_1.normalizeState)(JSON.parse(row.value));
+            const parsed = JSON.parse(row.value);
+            const normalized = (0, defaults_1.normalizeState)(parsed);
+            const beforeComparable = JSON.stringify({ ...parsed, updatedAt: '' });
+            const afterComparable = JSON.stringify({ ...normalized, updatedAt: '' });
+            if (beforeComparable !== afterComparable) {
+                const json = JSON.stringify(normalized, null, 2);
+                conn
+                    .prepare('INSERT OR REPLACE INTO console_store (key, value, updated_at) VALUES (?, ?, ?)')
+                    .run('active_state', json, normalized.updatedAt);
+                try {
+                    fs_1.default.writeFileSync(JSON_MIRROR_PATH, json, 'utf8');
+                }
+                catch {
+                    // Ignore mirror write error
+                }
+            }
+            return normalized;
         }
         catch {
             // Fallback below

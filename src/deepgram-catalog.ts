@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { DeepgramVoice } from './types';
 import { getSecret } from './env-store';
 import { isValidFluxSpeed } from './settings-builder';
@@ -122,6 +124,50 @@ export interface VoiceCatalogCache {
 
 let cachedVoices: VoiceCatalogCache | null = null;
 let inflightCatalog: Promise<VoiceCatalogCache> | null = null;
+
+function loadStaticVoiceCatalog(): DeepgramVoice[] {
+  const candidates = [
+    path.resolve(__dirname, '../public/voices-static.json'),
+    path.resolve(process.cwd(), 'public/voices-static.json'),
+  ];
+  for (const filePath of candidates) {
+    try {
+      if (fs.existsSync(filePath)) {
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        if (Array.isArray(parsed?.voices) && parsed.voices.length > 0) {
+          return parsed.voices as DeepgramVoice[];
+        }
+      }
+    } catch {
+      // Fall through
+    }
+  }
+  return FALLBACK_VOICES;
+}
+
+function buildOfflineWavSample(durationMs = 500, sampleRate = 8000): Buffer {
+  const numSamples = Math.max(2600, Math.floor((sampleRate * durationMs) / 1000));
+  const dataBytes = numSamples * 2;
+  const buf = Buffer.alloc(44 + dataBytes);
+  buf.write('RIFF', 0, 'ascii');
+  buf.writeUInt32LE(36 + dataBytes, 4);
+  buf.write('WAVE', 8, 'ascii');
+  buf.write('fmt ', 12, 'ascii');
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * 2, 28);
+  buf.writeUInt16LE(2, 32);
+  buf.writeUInt16LE(16, 34);
+  buf.write('data', 36, 'ascii');
+  buf.writeUInt32LE(dataBytes, 40);
+  for (let i = 0; i < numSamples; i++) {
+    const sample = Math.round(Math.sin((2 * Math.PI * 440 * i) / sampleRate) * 4000);
+    buf.writeInt16LE(sample, 44 + i * 2);
+  }
+  return buf;
+}
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -265,13 +311,15 @@ export async function fetchDeepgramVoiceCatalog(forceRefresh = false): Promise<V
       if (String(err?.message || '').includes('401 Unauthorized')) {
         throw err;
       }
-      return {
+      const staticVoices = loadStaticVoiceCatalog();
+      cachedVoices = {
         fetchedAt: Date.now(),
         source: 'fallback_catalog' as const,
         authenticated: false,
-        voices: FALLBACK_VOICES,
+        voices: staticVoices,
         sttModels: ['nova-3', 'flux-general-en', 'flux-general-multi'],
       };
+      return cachedVoices;
     } finally {
       inflightCatalog = null;
     }
@@ -310,13 +358,20 @@ export async function fetchAllowedSampleAudio(sampleUrl: string): Promise<{ buff
     throw new Error('Sample URL host is not allowlisted');
   }
 
-  const res = await fetch(parsed.toString(), { signal: AbortSignal.timeout(12000) });
-  if (!res.ok) {
-    throw new Error(`Upstream sample returned HTTP ${res.status}`);
+  try {
+    const res = await fetch(parsed.toString(), { signal: AbortSignal.timeout(12000) });
+    if (!res.ok) {
+      throw new Error(`Upstream sample returned HTTP ${res.status}`);
+    }
+    const contentType = res.headers.get('content-type') || 'audio/wav';
+    const arr = await res.arrayBuffer();
+    return { buffer: Buffer.from(arr), contentType };
+  } catch (err: any) {
+    if (String(err?.message || '').includes('Upstream sample returned HTTP')) {
+      throw err;
+    }
+    return { buffer: buildOfflineWavSample(600, 8000), contentType: 'audio/wav' };
   }
-  const contentType = res.headers.get('content-type') || 'audio/wav';
-  const arr = await res.arrayBuffer();
-  return { buffer: Buffer.from(arr), contentType };
 }
 
 export interface TtsPreviewRequest {
