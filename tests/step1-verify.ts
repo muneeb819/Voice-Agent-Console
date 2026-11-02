@@ -2,6 +2,7 @@ import assert from 'assert';
 import fs from 'fs';
 import path from 'path';
 import { createDefaultState, normalizeState } from '../src/defaults';
+import { DATA_DIR } from '../src/data-paths';
 import {
   buildDeepgramSettings,
   generateViciConfig,
@@ -11,6 +12,18 @@ import {
 } from '../src/settings-builder';
 
 const BASE = process.env.TEST_URL || 'http://127.0.0.1:3000';
+
+function configureTestServices(state: any) {
+  const stt = state.providers.find((p: any) => p.kind === 'stt');
+  const llm = state.providers.find((p: any) => p.kind === 'llm' && p.type === 'open_ai');
+  const tts = state.providers.find((p: any) => p.kind === 'tts' && p.type === 'deepgram');
+  state.services = {
+    stt: { providerId: stt.id, model: 'flux-general-multi' },
+    llm: { providerId: llm.id, model: 'gpt-4o-mini' },
+    tts: { providerId: tts.id, model: 'flux-haley-en' },
+  };
+  return state;
+}
 
 async function run() {
   const results: string[] = [];
@@ -98,8 +111,8 @@ async function run() {
   });
 
   await check('6. Bug Fix Regression: Function immutable IDs & safe function rename', () => {
-    const st = createDefaultState();
-    const fnDispo = st.functions.find((f) => f.id === 'fn_dispo')!;
+    const st = configureTestServices(createDefaultState());
+    const fnDispo = st.functions.find((f: any) => f.id === 'fn_dispo')!;
     fnDispo.name = 'record_vici_outcome';
     const settings = buildDeepgramSettings(st, st.agents[0]);
     const emittedNames = settings.agent.think.functions.map((f: any) => f.name);
@@ -111,7 +124,7 @@ async function run() {
     assert.strictEqual(parseJsonObject('[1,2,3]').ok, false, 'JSON array must be rejected');
     assert.strictEqual(parseJsonSchema('{"foo":"bar"}').ok, false, 'Non-object-schema must be rejected');
 
-    const st = createDefaultState();
+    const st = configureTestServices(createDefaultState());
     st.providers[0].extra = '"corrupt"';
     const built = buildDeepgramSettings(st, st.agents[0]);
     assert.strictEqual('0' in built.agent.listen.provider, false, 'Must never spread string chars into Settings');
@@ -119,62 +132,71 @@ async function run() {
     assert.ok(checks.some((c) => c.level === 'er' && c.message.includes('JSON')));
   });
 
-  await check('8. Voice Agent STT: migrate legacy Nova models and lock Settings payload to Flux v2', () => {
+  await check('8. Global service routing: unset services block use; legacy Nova cannot override the Console selection', () => {
+    const unconfigured = createDefaultState();
+    const missing = validateAgent(unconfigured, unconfigured.agents[0]);
+    assert.ok(missing.some((item) => item.level === 'er' && item.message.includes('global STT')));
+    assert.ok(missing.some((item) => item.level === 'er' && item.message.includes('global LLM')));
+    assert.ok(missing.some((item) => item.level === 'er' && item.message.includes('global TTS')));
+
     const legacy: any = createDefaultState();
     legacy.agents[0].language = 'en,es';
-    legacy.agents[0].stt.model = 'nova-3';
+    (legacy.agents[0].stt as any).model = 'nova-3';
     legacy.providers.find((p: any) => p.kind === 'stt').models = 'nova-3,nova-2';
     legacy.providers.find((p: any) => p.kind === 'stt').extra = '{"model":"nova-3","version":"v1","smart_format":true}';
-
     const migrated = normalizeState(legacy);
-    assert.strictEqual(migrated.agents[0].stt.model, 'flux-general-multi');
+    assert.strictEqual((migrated.agents[0].stt as any).model, undefined, 'Per-agent STT model overrides are removed during migration');
     assert.strictEqual(migrated.providers.find((p) => p.kind === 'stt')?.models, 'flux-general-en,flux-general-multi');
+    assert.strictEqual(migrated.services.stt.providerId, '', 'Old per-agent values must not silently choose a global channel');
 
-    // Defense in depth: even an unnormalized/hand-edited state and extras cannot emit Nova.
-    legacy.agents[0].stt.model = 'nova-3';
-    const settings = buildDeepgramSettings(legacy, legacy.agents[0]);
+    const ready = configureTestServices(migrated);
+    ready.services.stt.model = 'flux-general-multi';
+    (ready.agents[0].stt as any).model = 'nova-3'; // Legacy agent field must be ignored at runtime.
+    const settings = buildDeepgramSettings(ready, ready.agents[0]);
     const listen = settings.agent.listen.provider;
     assert.strictEqual(listen.type, 'deepgram');
     assert.strictEqual(listen.version, 'v2');
     assert.strictEqual(listen.model, 'flux-general-multi');
     assert.strictEqual('smart_format' in listen, false);
-    assert.ok(validateAgent(legacy, legacy.agents[0]).some((item) => item.level === 'er' && item.message.includes('Flux v2 only')));
+    assert.strictEqual(settings.agent.think.provider.model, 'gpt-4o-mini');
+    assert.strictEqual(settings.agent.speak.provider.model, 'flux-haley-en');
   });
 
-  await check('9. Bug Fix Regression: Managed Google Gemini passes & BYO Google omits model', () => {
-    const st = createDefaultState();
-    const gemini = st.providers.find((p) => p.type === 'google')!;
-    st.agents[0].llm.p = gemini.id;
-    st.agents[0].llm.model = 'gemini-2.5-flash';
+  await check('9. Global LLM provider/model routes only the saved Deepgram-managed channel', () => {
+    const st = configureTestServices(createDefaultState());
+    const gemini = st.providers.find((p: any) => p.kind === 'llm' && p.type === 'google')!;
+    st.services.llm = { providerId: gemini.id, model: 'gemini-3-flash-preview' };
+    const settings = buildDeepgramSettings(st, st.agents[0]);
+    assert.strictEqual(settings.agent.think.provider.type, 'google');
+    assert.strictEqual(settings.agent.think.provider.model, 'gemini-3-flash-preview');
+    assert.strictEqual(validateAgent(st, st.agents[0]).filter((c) => c.level === 'er').length, 0);
 
-    // Managed Google (blank endpoint) -> 0 errors, includes model
-    const checksManaged = validateAgent(st, st.agents[0]);
-    assert.strictEqual(checksManaged.filter((c) => c.level === 'er').length, 0);
-    const builtManaged = buildDeepgramSettings(st, st.agents[0]);
-    assert.strictEqual(builtManaged.agent.think.provider.model, 'gemini-2.5-flash');
-
-    // BYO Google (custom endpoint) -> omits model per Deepgram spec
-    gemini.endpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent';
-    const builtByo = buildDeepgramSettings(st, st.agents[0]);
-    assert.strictEqual('model' in builtByo.agent.think.provider, false, 'BYO Google must omit provider.model');
+    // Even a malformed provider endpoint/extra cannot override the global managed model route.
+    gemini.endpoint = 'https://example.invalid/custom';
+    gemini.extra = '{"model":"gpt-4o-mini","endpoint":"https://example.invalid/override"}';
+    const guarded = buildDeepgramSettings(st, st.agents[0]);
+    assert.strictEqual(guarded.agent.think.provider.model, 'gemini-3-flash-preview');
+    assert.strictEqual('endpoint' in guarded.agent.think, false);
+    assert.strictEqual('endpoint' in guarded.agent.think.provider, false);
+    assert.ok(validateAgent(st, st.agents[0]).some((c) => c.level === 'er' && c.message.includes('no BYO endpoint')));
   });
 
   await check('10. Bug Fix Regression: Flux TTS speed 0.05 step, integer expressivity & Aura speed range', () => {
-    const st = createDefaultState();
-    st.agents[0].tts.model = 'flux-haley-en';
+    const st = configureTestServices(createDefaultState());
+    st.services.tts.model = 'flux-haley-en';
     st.agents[0].tts.speed = 1.03; // Invalid (not 0.05 increment)
     assert.ok(validateAgent(st, st.agents[0]).some((c) => c.level === 'er' && c.message.includes('0.05')));
 
     st.agents[0].tts.speed = 1.05; // Valid
     assert.strictEqual(validateAgent(st, st.agents[0]).filter((c) => c.level === 'er').length, 0);
 
-    st.agents[0].tts.model = 'aura-2-thalia-en';
+    st.services.tts.model = 'aura-2-thalia-en';
     st.agents[0].tts.speed = 0.55; // Invalid for Aura (< 0.7)
     assert.ok(validateAgent(st, st.agents[0]).some((c) => c.level === 'er' && c.message.includes('0.7–1.5')));
   });
 
   await check('11. Bug Fix Regression: Campaign disclosure + dispo enum + multi-campaign Vici config + legacy vac-v2 migration', () => {
-    const st = createDefaultState();
+    const st = configureTestServices(createDefaultState());
     const settings = buildDeepgramSettings(st, st.agents[0]);
     assert.ok(
       settings.agent.greeting.startsWith('This call may be recorded'),
@@ -230,8 +252,8 @@ async function run() {
     assert.ok('ag_u1' in putData.settingsByAgentId && 'ag_u2' in putData.settingsByAgentId);
 
     // Check SQLite & JSON mirror files exist on disk
-    const dbFile = path.resolve(__dirname, '..', 'data', 'console.sqlite');
-    const jsonFile = path.resolve(__dirname, '..', 'data', 'console-state.json');
+    const dbFile = path.join(DATA_DIR, 'console.sqlite');
+    const jsonFile = path.join(DATA_DIR, 'console-state.json');
     assert.ok(fs.existsSync(dbFile), 'SQLite DB file must exist on disk');
     assert.ok(fs.existsSync(jsonFile), 'JSON mirror file must exist on disk');
 

@@ -8,8 +8,8 @@
 | Component | Bind / Port | Purpose & Security |
 |---|---|---|
 | **Web Console, Wallboard & REST/WS API** | `0.0.0.0:3000` | Protected by `ADMIN_PASSWORD` (`HttpOnly` HMAC cookie / `Bearer` token). Local Asterisk `127.0.0.1` pre-call hooks (`/api/vici/register-call`) are automatically whitelisted. |
-| **Universal SIP + RTP (G.711 μ-law 8 kHz)** | `0.0.0.0:5062` UDP | Works on **all ViciBox 8–12 (Asterisk 13, 16, 18+)** without compiling `app_audiosocket`. Uses `:5062` so it never collides with Asterisk on `:5060`. Restricted via `BRIDGE_ALLOWED_IPS=127.0.0.1,::1`. |
-| **Native Asterisk 18+ AudioSocket TCP** | `0.0.0.0:9092` TCP | Native `slin` 8 kHz TCP audio framing for Asterisk 18+ (`ViciBox 11/12`). Uses `CURL(/api/vici/register-call)` returning a canonical 36-char RFC 4122 UUID. |
+| **Universal SIP + RTP (G.711 μ-law 8 kHz)** | `127.0.0.1:5062` UDP | Works on **all ViciBox 8–12 (Asterisk 13, 16, 18+)** without compiling `app_audiosocket`. Uses `:5062` so it never collides with Asterisk on `:5060`. Restricted via `BRIDGE_ALLOWED_IPS=127.0.0.1,::1`. |
+| **Native Asterisk 18+ AudioSocket TCP** | `127.0.0.1:9092` TCP | Native `slin` 8 kHz TCP audio framing for Asterisk 18+ (`ViciBox 11/12`). Uses `CURL(/api/vici/register-call)` returning a canonical 36-char RFC 4122 UUID. |
 | **VICIdial Non-Agent & Agent HTTP APIs** | `http://127.0.0.1` | `/vicidial/non_agent_api.php` (`lead_all_info`, `update_lead`, `add_dnc_phone`) + `/agc/api.php` (`ra_call_control` `INGROUPTRANSFER`, `EXTENSIONTRANSFER`, `HANGUP`). |
 | **Asterisk Manager Interface (AMI)** | `127.0.0.1:5038` | `Ping` diagnostics + `Redirect` / `Hangup` fallback for direct non-Remote-Agent channels. |
 | **Stereo 8 kHz Call Recordings** | `data/recordings/*.wav` | Automatic 2-channel (`Left = Caller`, `Right = AI Bot`) WAV archive with in-browser playback and 200-call rolling retention. |
@@ -44,13 +44,16 @@ sudo nano /opt/voice-agent-console/.env
 
 Fill in:
 ```ini
-DEEPGRAM_API_KEY=your_deepgram_universal_key
+DEEPGRAM_API_KEY=<SET_LOCALLY_DO_NOT_COMMIT>
 VICI_API_PASS=your_vicidial_6666_user_password
 AMI_SECRET=1234
 ADMIN_PASSWORD=your_strong_console_password
 BRIDGE_ALLOWED_IPS=127.0.0.1,::1
+BRIDGE_BIND_HOST=127.0.0.1
 ```
 *(Tip: On standard ViciBox installs, check `/etc/astguiclient.conf` or `/etc/asterisk/manager.conf` under `[cron]` to confirm `AMI_SECRET`.)*
+
+The SIP and AudioSocket bridge bind to loopback by default. To accept bridge traffic from another host, explicitly set `BRIDGE_BIND_HOST` and add only trusted peers to `BRIDGE_ALLOWED_IPS`; keep these ports closed to the public internet.
 
 Restart if edited via CLI:
 ```bash

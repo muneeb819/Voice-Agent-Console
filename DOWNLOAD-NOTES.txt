@@ -1,0 +1,5 @@
+Voice Agent Console source snapshot
+Source commit: 2ab6f5a (feat(console): select global providers per service)
+This ZIP omits Git metadata, installed dependencies, and model checkpoints.
+The production runbook API-key assignment was replaced with a local-setup placeholder in this download; no secret is included.
+Install dependencies with npm ci, then build with npm run build.

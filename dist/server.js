@@ -21,6 +21,7 @@ const auth_guard_1 = require("./auth-guard");
 const call_recorder_1 = require("./call-recorder");
 const db_1 = require("./db");
 const defaults_1 = require("./defaults");
+const data_paths_1 = require("./data-paths");
 const deepgram_catalog_1 = require("./deepgram-catalog");
 const env_store_1 = require("./env-store");
 const live_simulator_1 = require("./live-simulator");
@@ -29,9 +30,13 @@ const vici_bridge_1 = require("./vici-bridge");
 const vici_client_1 = require("./vici-client");
 const vici_loopback_tester_1 = require("./vici-loopback-tester");
 const webhook_executor_1 = require("./webhook-executor");
+const user_store_1 = require("./user-store");
 (0, env_store_1.loadEnv)();
 function createApp(viciBridge) {
     const app = (0, express_1.default)();
+    const loginAttempts = new Map();
+    const loginWindowMs = 15 * 60 * 1000;
+    const loginAttemptLimit = 5;
     app.use((req, res, next) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
@@ -45,28 +50,122 @@ function createApp(viciBridge) {
     app.use(express_1.default.json({ limit: '4mb' }));
     app.use(express_1.default.urlencoded({ extended: false }));
     // ==================== STEP 4: AUTHENTICATION ROUTES & GUARD ====================
+    const rateKey = (req) => String(req.socket?.remoteAddress || req.ip || 'unknown');
+    const rateLimited = (key) => {
+        const now = Date.now();
+        const attempts = loginAttempts.get(key);
+        if (attempts && attempts.resetAt <= now) {
+            loginAttempts.delete(key);
+            return { limited: false, retryAfter: 0 };
+        }
+        if (attempts && attempts.count >= loginAttemptLimit) {
+            return { limited: true, retryAfter: Math.max(1, Math.ceil((attempts.resetAt - now) / 1000)) };
+        }
+        return { limited: false, retryAfter: 0 };
+    };
+    const noteFailure = (key) => {
+        const now = Date.now();
+        let attempts = loginAttempts.get(key);
+        if (!attempts || attempts.resetAt <= now) {
+            if (loginAttempts.size >= 1000) {
+                const oldestIp = loginAttempts.keys().next().value;
+                if (oldestIp)
+                    loginAttempts.delete(oldestIp);
+            }
+            attempts = { count: 0, resetAt: now + loginWindowMs };
+            loginAttempts.set(key, attempts);
+        }
+        attempts.count += 1;
+    };
     app.get('/api/auth/status', (req, res) => {
         res.json({
             ok: true,
             authEnabled: (0, auth_guard_1.isAuthEnabled)(),
             authenticated: (0, auth_guard_1.isRequestAuthorized)(req),
+            user: (0, auth_guard_1.getAuthenticatedUser)(req),
+            signupOpen: true,
+        });
+    });
+    app.get('/api/auth/me', (req, res) => {
+        const user = (0, auth_guard_1.getAuthenticatedUser)(req);
+        if (!user) {
+            res.status(401).json({ ok: false, code: 'AUTH_REQUIRED', error: 'Not signed in.' });
+            return;
+        }
+        res.json({ ok: true, user });
+    });
+    // Create a new account (email + full name + password) and sign in immediately.
+    app.post('/api/auth/signup', (req, res) => {
+        const key = rateKey(req);
+        const gate = rateLimited(key);
+        if (gate.limited) {
+            res.setHeader('Retry-After', String(gate.retryAfter));
+            res.status(429).json({ ok: false, code: 'SIGNUP_RATE_LIMITED', error: 'Too many attempts. Try again later.' });
+            return;
+        }
+        const result = (0, user_store_1.createUser)(req.body || {});
+        if (!result.ok || !result.user) {
+            res.status(400).json({
+                ok: false,
+                code: 'SIGNUP_INVALID',
+                field: result.field || null,
+                error: result.error || 'Unable to create account.',
+            });
+            return;
+        }
+        loginAttempts.delete(key);
+        (0, auth_guard_1.invalidateUserCountCache)();
+        (0, user_store_1.purgeExpiredSessions)();
+        const token = (0, user_store_1.createUserSession)(result.user.id);
+        (0, auth_guard_1.setAuthCookie)(res, token);
+        res.status(201).json({
+            ok: true,
+            authEnabled: true,
+            authenticated: true,
+            user: result.user,
         });
     });
     app.post('/api/auth/login', (req, res) => {
+        const key = rateKey(req);
+        const gate = rateLimited(key);
+        if (gate.limited) {
+            res.setHeader('Retry-After', String(gate.retryAfter));
+            res.status(429).json({ ok: false, code: 'LOGIN_RATE_LIMITED', error: 'Too many failed sign-in attempts. Try again later.' });
+            return;
+        }
+        const email = String(req.body?.email ?? '').trim();
         const candidate = String(req.body?.password ?? '');
+        // --- Email/password account sign-in ---
+        if (email) {
+            const user = (0, user_store_1.authenticateUser)(email, candidate);
+            if (!user) {
+                noteFailure(key);
+                res.status(401).json({ ok: false, code: 'INVALID_CREDENTIALS', error: 'Invalid email or password.' });
+                return;
+            }
+            loginAttempts.delete(key);
+            const token = (0, user_store_1.createUserSession)(user.id);
+            (0, auth_guard_1.setAuthCookie)(res, token);
+            res.json({ ok: true, authEnabled: true, authenticated: true, user });
+            return;
+        }
+        // --- Legacy admin password sign-in ---
         if (!(0, auth_guard_1.isAuthEnabled)()) {
             res.json({ ok: true, authEnabled: false, authenticated: true });
             return;
         }
         if (!(0, auth_guard_1.constantTimePasswordMatch)(candidate)) {
+            noteFailure(key);
             res.status(401).json({ ok: false, code: 'INVALID_PASSWORD', error: 'Invalid admin password' });
             return;
         }
+        loginAttempts.delete(key);
         const token = (0, auth_guard_1.createSessionToken)();
         (0, auth_guard_1.setAuthCookie)(res, token);
         res.json({ ok: true, authEnabled: true, authenticated: true, token });
     });
-    app.post('/api/auth/logout', (_req, res) => {
+    app.post('/api/auth/logout', (req, res) => {
+        (0, user_store_1.destroyUserSession)((0, auth_guard_1.getRequestSessionToken)(req));
         (0, auth_guard_1.clearAuthCookie)(res);
         res.json({ ok: true, authEnabled: (0, auth_guard_1.isAuthEnabled)(), authenticated: !(0, auth_guard_1.isAuthEnabled)() });
     });
@@ -108,7 +207,7 @@ function createApp(viciBridge) {
             authenticated: authed,
             websocket: '/ws/simulator',
             viciMonitorWs: '/ws/vici-monitor',
-            viciBridge: viciBridge ? viciBridge.getStatus() : null,
+            ...(authed ? { viciBridge: viciBridge ? viciBridge.getStatus() : null } : {}),
             ...(authed ? { secrets: (0, env_store_1.getSecretsStatus)() } : {}),
         });
     });
@@ -350,7 +449,7 @@ function createApp(viciBridge) {
         }
     });
     app.get('/api/vici/release-bundle', (_req, res) => {
-        const bundlePath = path_1.default.resolve(__dirname, '..', '..', 'voice-agent-vicibox-release.tar.gz');
+        const bundlePath = path_1.default.join(data_paths_1.DATA_DIR, 'voice-agent-vicibox-release.tar.gz');
         try {
             if (!fs_1.default.existsSync(bundlePath)) {
                 const projectRoot = path_1.default.resolve(__dirname, '..');
@@ -358,9 +457,12 @@ function createApp(viciBridge) {
                     '-czf',
                     bundlePath,
                     '--exclude=node_modules',
-                    '--exclude=data/recordings/*.wav',
-                    '--exclude=data/*.sqlite*',
+                    '--exclude=.git',
                     '--exclude=.env',
+                    '--exclude=data',
+                    '--exclude=logs',
+                    '--exclude=logs/*',
+                    '--exclude=tools/cloudflared.exe',
                     '-C',
                     path_1.default.dirname(projectRoot),
                     path_1.default.basename(projectRoot),
@@ -530,6 +632,13 @@ function createApp(viciBridge) {
     });
     const publicDir = path_1.default.resolve(__dirname, '..', 'public');
     app.use(express_1.default.static(publicDir));
+    // Dedicated authentication pages (same shell, tabbed Sign In / Sign Up)
+    app.get('/login', (_req, res) => {
+        res.sendFile(path_1.default.join(publicDir, 'login.html'));
+    });
+    app.get('/signup', (_req, res) => {
+        res.sendFile(path_1.default.join(publicDir, 'login.html'));
+    });
     app.get('*', (_req, res) => {
         res.sendFile(path_1.default.join(publicDir, 'index.html'));
     });
@@ -567,14 +676,18 @@ function createServerWithSimulator(bridgeOpts) {
 }
 if (require.main === module) {
     const initialPort = Number(process.env.PORT || 3000);
-    const host = process.env.HOST || '0.0.0.0';
+    const host = process.env.HOST || '127.0.0.1';
+    if (!(0, auth_guard_1.isLoopbackIp)(host) && !(0, auth_guard_1.isAuthEnabled)()) {
+        console.error('[VoiceAgentConsole] Refusing to bind to a non-loopback interface without ADMIN_PASSWORD.');
+        process.exit(1);
+    }
     const { server, viciBridge } = createServerWithSimulator({ enableBridge: true });
     (async () => {
         if (viciBridge) {
             try {
                 await viciBridge.start();
                 const st = viciBridge.getStatus();
-                console.log(`[ViciBridge] AudioSocket TCP listening on ${host}:${st.audioSocketPort} | SIP+RTP (PCMU) UDP listening on ${host}:${st.sipPort}`);
+                console.log(`[ViciBridge] AudioSocket TCP listening on ${st.bindHost}:${st.audioSocketPort} | SIP+RTP (PCMU) UDP listening on ${st.bindHost}:${st.sipPort}`);
             }
             catch (bridgeErr) {
                 console.warn(`[ViciBridge] Telephony UDP/TCP listener skipped on cloud host (${bridgeErr?.message || bridgeErr}) — Web Console & Live WebSocket Simulator remain active.`);

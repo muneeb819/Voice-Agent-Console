@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="MMA monogram">
+  <defs>
+    <filter id="g" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <linearGradient id="m" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7B2CBF"/>
+      <stop offset="1" stop-color="#00F2FE"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="40" fill="#0B0F14"/>
+  <rect x="10" y="10" width="236" height="236" rx="32" fill="none" stroke="#00F2FE" stroke-opacity="0.18" stroke-width="2"/>
+  <g filter="url(#g)">
+    <path d="M78 186 V70 L128 130 L178 70 V186" fill="none" stroke="url(#m)" stroke-width="14"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M78 186 V70 L128 130 L178 70 V186" fill="none" stroke="#00F2FE" stroke-width="3"
+          stroke-linecap="round" stroke-linejoin="round" opacity="0.85"/>
+  </g>
+</svg>

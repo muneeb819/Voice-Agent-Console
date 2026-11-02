@@ -1,0 +1,224 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.isValidEmail = isValidEmail;
+exports.normalizeEmail = normalizeEmail;
+exports.normalizeFullName = normalizeFullName;
+exports.validatePassword = validatePassword;
+exports.validateFullName = validateFullName;
+exports.createUser = createUser;
+exports.findUserByEmail = findUserByEmail;
+exports.authenticateUser = authenticateUser;
+exports.countUsers = countUsers;
+exports.getUserById = getUserById;
+exports.createUserSession = createUserSession;
+exports.getUserBySessionToken = getUserBySessionToken;
+exports.destroyUserSession = destroyUserSession;
+exports.purgeExpiredSessions = purgeExpiredSessions;
+const crypto_1 = __importDefault(require("crypto"));
+const db_1 = require("./db");
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MIN_PASSWORD_LENGTH = 8;
+const MAX_PASSWORD_LENGTH = 200;
+const MAX_NAME_LENGTH = 80;
+let schemaReady = false;
+function ensureSchema() {
+    if (schemaReady)
+        return;
+    const db = (0, db_1.getDb)();
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      full_name TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_login_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      token TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_user_sessions_expiry ON user_sessions(expires_at);
+  `);
+    schemaReady = true;
+}
+// ---------------------------------------------------------------- passwords
+function hashPassword(password) {
+    const salt = crypto_1.default.randomBytes(16);
+    const hash = crypto_1.default.scryptSync(password, salt, 64);
+    return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;
+}
+function verifyPassword(password, stored) {
+    const parts = String(stored || '').split('$');
+    if (parts.length !== 3 || parts[0] !== 'scrypt')
+        return false;
+    const salt = Buffer.from(parts[1], 'hex');
+    const expected = Buffer.from(parts[2], 'hex');
+    if (salt.length === 0 || expected.length === 0)
+        return false;
+    let actual;
+    try {
+        actual = crypto_1.default.scryptSync(password, salt, expected.length);
+    }
+    catch {
+        return false;
+    }
+    if (actual.length !== expected.length)
+        return false;
+    return crypto_1.default.timingSafeEqual(actual, expected);
+}
+// ---------------------------------------------------------------- validation
+function isValidEmail(email) {
+    if (!email || email.length > 254)
+        return false;
+    if (email.includes('..'))
+        return false;
+    return /^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(email);
+}
+function normalizeEmail(raw) {
+    return String(raw ?? '').trim().toLowerCase();
+}
+function normalizeFullName(raw) {
+    return String(raw ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+function validatePassword(raw) {
+    const pw = String(raw ?? '');
+    if (pw.length < MIN_PASSWORD_LENGTH) {
+        return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+    }
+    if (pw.length > MAX_PASSWORD_LENGTH) {
+        return `Password must be at most ${MAX_PASSWORD_LENGTH} characters.`;
+    }
+    return null;
+}
+function validateFullName(raw) {
+    const name = normalizeFullName(raw);
+    if (name.length < 2)
+        return 'Please enter your full name.';
+    if (name.length > MAX_NAME_LENGTH)
+        return `Full name must be at most ${MAX_NAME_LENGTH} characters.`;
+    if (!/[A-Za-z\u00C0-\u024F]/.test(name))
+        return 'Full name must contain letters.';
+    return null;
+}
+// ---------------------------------------------------------------- users
+function rowToUser(row) {
+    return {
+        id: String(row.id),
+        email: String(row.email),
+        fullName: String(row.full_name),
+        createdAt: String(row.created_at),
+        lastLoginAt: row.last_login_at ? String(row.last_login_at) : null,
+    };
+}
+function createUser(input) {
+    ensureSchema();
+    const email = normalizeEmail(input.email);
+    const fullName = normalizeFullName(input.fullName);
+    const password = String(input.password ?? '');
+    if (!isValidEmail(email)) {
+        return { ok: false, field: 'email', error: 'Enter a valid email address.' };
+    }
+    const nameErr = validateFullName(fullName);
+    if (nameErr)
+        return { ok: false, field: 'fullName', error: nameErr };
+    const pwErr = validatePassword(password);
+    if (pwErr)
+        return { ok: false, field: 'password', error: pwErr };
+    const db = (0, db_1.getDb)();
+    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    if (existing) {
+        return { ok: false, field: 'email', error: 'An account with this email already exists.' };
+    }
+    const id = crypto_1.default.randomUUID();
+    const now = new Date().toISOString();
+    try {
+        db.prepare('INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, NULL)').run(id, email, fullName, hashPassword(password), now);
+    }
+    catch (err) {
+        if (String(err?.message || '').toLowerCase().includes('unique')) {
+            return { ok: false, field: 'email', error: 'An account with this email already exists.' };
+        }
+        throw err;
+    }
+    return {
+        ok: true,
+        user: { id, email, fullName, createdAt: now, lastLoginAt: null },
+    };
+}
+function findUserByEmail(rawEmail) {
+    ensureSchema();
+    const email = normalizeEmail(rawEmail);
+    if (!email)
+        return null;
+    const row = (0, db_1.getDb)().prepare('SELECT * FROM users WHERE email = ?').get(email);
+    return row ? rowToUser(row) : null;
+}
+function authenticateUser(rawEmail, password) {
+    ensureSchema();
+    const email = normalizeEmail(rawEmail);
+    if (!email)
+        return null;
+    const row = (0, db_1.getDb)().prepare('SELECT * FROM users WHERE email = ?').get(email);
+    if (!row)
+        return null;
+    if (!verifyPassword(password, String(row.password_hash)))
+        return null;
+    const now = new Date().toISOString();
+    (0, db_1.getDb)().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(now, row.id);
+    const user = rowToUser(row);
+    user.lastLoginAt = now;
+    return user;
+}
+function countUsers() {
+    ensureSchema();
+    const row = (0, db_1.getDb)().prepare('SELECT COUNT(*) AS n FROM users').get();
+    return Number(row?.n || 0);
+}
+function getUserById(id) {
+    ensureSchema();
+    const row = (0, db_1.getDb)().prepare('SELECT * FROM users WHERE id = ?').get(id);
+    return row ? rowToUser(row) : null;
+}
+// ---------------------------------------------------------------- sessions
+function createUserSession(userId) {
+    ensureSchema();
+    const token = crypto_1.default.randomBytes(32).toString('hex');
+    const now = Date.now();
+    (0, db_1.getDb)()
+        .prepare('INSERT INTO user_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
+        .run(token, userId, new Date(now).toISOString(), new Date(now + SESSION_TTL_MS).toISOString());
+    return token;
+}
+function getUserBySessionToken(token) {
+    if (!token || token.length < 32 || token.includes('.'))
+        return null;
+    ensureSchema();
+    const db = (0, db_1.getDb)();
+    const row = db.prepare('SELECT * FROM user_sessions WHERE token = ?').get(token);
+    if (!row)
+        return null;
+    if (new Date(String(row.expires_at)).getTime() <= Date.now()) {
+        db.prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
+        return null;
+    }
+    return getUserById(String(row.user_id));
+}
+function destroyUserSession(token) {
+    if (!token || token.includes('.'))
+        return;
+    ensureSchema();
+    (0, db_1.getDb)().prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
+}
+function purgeExpiredSessions() {
+    ensureSchema();
+    (0, db_1.getDb)().prepare('DELETE FROM user_sessions WHERE expires_at <= ?').run(new Date().toISOString());
+}

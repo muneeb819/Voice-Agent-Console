@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Admin sub-branding badge">
+  <defs>
+    <linearGradient id="steel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef2f6"/>
+      <stop offset="0.5" stop-color="#aeb8c3"/>
+      <stop offset="1" stop-color="#8b95a1"/>
+    </linearGradient>
+    <linearGradient id="m2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#00F2FE"/>
+      <stop offset="1" stop-color="#7B2CBF"/>
+    </linearGradient>
+  </defs>
+  <polygon points="128,8 232,68 232,188 128,248 24,188 24,68" fill="url(#steel)" stroke="#5d6773" stroke-width="3"/>
+  <polygon points="128,24 218,76 218,180 128,232 38,180 38,76" fill="#0B0F14"/>
+  <g stroke="#00F2FE" stroke-width="3" stroke-linecap="round" opacity="0.85">
+    <line x1="48" y1="112" x2="64" y2="112"/><line x1="48" y1="128" x2="60" y2="128"/><line x1="48" y1="144" x2="64" y2="144"/>
+    <line x1="208" y1="112" x2="192" y2="112"/><line x1="208" y1="128" x2="196" y2="128"/><line x1="208" y1="144" x2="192" y2="144"/>
+  </g>
+  <path d="M92 168 V96 L128 140 L164 96 V168" fill="none" stroke="url(#m2)" stroke-width="11"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

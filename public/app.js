@@ -23,7 +23,15 @@
   let secretsStatus = {};
   let latestRevisionId = null;
 
-  let tab = 'agents';
+  let tab = (() => {
+    try {
+      const requested = new URLSearchParams(window.location.search).get('tab') || '';
+      const valid = ['agents', 'plugins', 'campaigns', 'voice', 'test', 'vici', 'wallboard', 'export'];
+      return valid.includes(requested) ? requested : 'agents';
+    } catch {
+      return 'agents';
+    }
+  })();
   let cur = { a: 'a_nova', c: 'c_medicare' };
 
   // Voice catalog state (Step 1)
@@ -171,27 +179,17 @@
       }
     }
 
-    const llmProvs = state.providers.filter((p) => p.kind === 'llm');
-    if (Array.isArray(state.agents) && llmProvs.length > 0) {
+    if (Array.isArray(state.agents)) {
       for (const ag of state.agents) {
-        if (!ag.llm) ag.llm = { p: llmProvs[0].id, model: 'gpt-5-mini', temp: 0.7, reasoning: 'low', ctx: '' };
-        let chosen = llmProvs.find((p) => p.id === ag.llm.p);
-        if (!chosen) {
-          chosen = llmProvs[0];
-          ag.llm.p = chosen.id;
+        if (!ag.llm || typeof ag.llm !== 'object') {
+          ag.llm = { temp: 0.7, reasoning: 'low' };
           mutated = true;
         }
-        const allowed = dgLlmModelIdsForType(chosen.type);
-        if (!allowed.includes(ag.llm.model)) {
-          ag.llm.model =
-            chosen.type === 'open_ai' && allowed.includes('gpt-5-mini')
-              ? 'gpt-5-mini'
-              : allowed[0] || 'gpt-5-mini';
-          mutated = true;
-        }
-        if ((ag.llm.ctx || '').trim() !== '') {
-          ag.llm.ctx = '';
-          mutated = true;
+        for (const key of ['p', 'model', 'ctx']) {
+          if (Object.prototype.hasOwnProperty.call(ag.llm, key)) {
+            delete ag.llm[key];
+            mutated = true;
+          }
         }
       }
     }
@@ -306,6 +304,81 @@
     },
   ];
 
+  // ==================== BRAND PACKAGES (one per theme) ====================
+  // Every theme ships a complete identity: its own monogram silhouette, its
+  // own icon frame geometry, its own palette and its own favicon. Switching the
+  // theme therefore swaps the whole brand package, not just the accent color.
+  const BRAND_PACKAGES = {
+    obsidian: {
+      label: 'Nebula Orbit',
+      // Broken orbital ring around the M
+      frame: `<path d="M32 3.2A28.8 28.8 0 0 1 52.4 11.6" stroke-width="1.9" opacity=".55"/>
+        <path d="M60.8 32a28.8 28.8 0 0 1-8.4 20.4" stroke-width="1.9" opacity=".55"/>
+        <path d="M32 60.8a28.8 28.8 0 0 1-20.4-8.4" stroke-width="1.9" opacity=".55"/>
+        <path d="M3.2 32A28.8 28.8 0 0 1 11.6 11.6" stroke-width="1.9" opacity=".55"/>`,
+    },
+    emerald: {
+      label: 'Matrix Hex',
+      // Hexagon containment
+      frame: `<path d="M32 3.6 56.6 17.8v28.4L32 60.4 7.4 46.2V17.8z" stroke-width="1.9" opacity=".7"/>
+        <path d="M32 9.5 51.5 20.8v22.4L32 54.5 12.5 43.2V20.8z" stroke-width="1.2" opacity=".3"/>`,
+    },
+    aurora: {
+      label: 'Glacier Wave',
+      // Squircle with a glacial wave
+      frame: `<rect x="4" y="4" width="56" height="56" rx="17" stroke-width="1.9" opacity=".7"/>
+        <path d="M10 45c6-6 10 4 16 0s10-8 16-2 8 2 12-2" stroke-width="1.6" opacity=".5"/>`,
+    },
+    crimson: {
+      label: 'Molten Crest',
+      // Heraldic shield
+      frame: `<path d="M32 3.8 54.5 11.6v20.6c0 14.2-10.1 22.6-22.5 28-12.4-5.4-22.5-13.8-22.5-28V11.6z" stroke-width="1.9" opacity=".72"/>
+        <path d="M32 9.6l17 5.9v16.7c0 10.6-7.6 17.2-17 21.6-9.4-4.4-17-11-17-21.6V15.5z" stroke-width="1.1" opacity=".28"/>`,
+    },
+    pearl: {
+      label: 'Alabaster Ring',
+      // Concentric circle
+      frame: `<circle cx="32" cy="32" r="28" stroke-width="1.9" opacity=".72"/>
+        <circle cx="32" cy="32" r="23" stroke-width="1.1" opacity=".3"/>`,
+    },
+    sakura: {
+      label: 'Quartz Bloom',
+      // Five-petal bloom
+      frame: `<path d="M32 5c6.4 8 11.4 11.2 19 11.4-3.4 7.8-4.6 12.8-.6 19.6-8.6-1.6-13.4-.4-18.4 6.6-5-7-9.8-8.2-18.4-6.6 4-6.8 2.8-11.8-.6-19.6 7.6-.2 12.6-3.4 19-11.4z" stroke-width="1.9" opacity=".72"/>`,
+    },
+  };
+
+  const THEME_BY_ID = (id) => APPEARANCE_THEMES.find((t) => t.id === id) || APPEARANCE_THEMES[0];
+
+  let brandMarkSeq = 0;
+  function brandMarkSvg(meta, opts = {}) {
+    const pkg = BRAND_PACKAGES[meta.id] || BRAND_PACKAGES.obsidian;
+    const gid = `bmg${++brandMarkSeq}`;
+    const stroke = opts.thin ? 4.4 : 5.2;
+    return `<svg viewBox="0 0 64 64" class="brand-mark-svg" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="${gid}" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="${meta.dots[0]}"/>
+          <stop offset="0.55" stop-color="${meta.dots[1]}"/>
+          <stop offset="1" stop-color="${meta.dots[2] || meta.dots[1]}"/>
+        </linearGradient>
+      </defs>
+      <g fill="none" stroke="url(#${gid})" stroke-linecap="round" stroke-linejoin="round">
+        ${pkg.frame}
+        <path d="M20 46V20l12 14 12-14v26" stroke-width="${stroke}"/>
+      </g>
+    </svg>`;
+  }
+
+  function renderBrandMark() {
+    const el = document.getElementById('brand-mark');
+    if (!el) return;
+    const meta = THEME_BY_ID(appearance.theme);
+    el.innerHTML = brandMarkSvg(meta);
+    el.dataset.pkg = meta.id;
+    el.title = `${meta.name} · ${BRAND_PACKAGES[meta.id]?.label || 'Brand'}`;
+  }
+
   let appearance = (() => {
     try {
       const saved = JSON.parse(window.localStorage?.getItem(APPEARANCE_STORAGE_KEY) || '{}');
@@ -329,10 +402,36 @@
         window.localStorage?.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(appearance));
       } catch {}
     }
-    const meta = APPEARANCE_THEMES.find((t) => t.id === appearance.theme) || APPEARANCE_THEMES[0];
+    const meta = THEME_BY_ID(appearance.theme);
     const lbl = document.getElementById('theme-active-lbl');
     if (lbl) lbl.textContent = meta.short;
+    const dot = document.getElementById('theme-active-dot');
+    if (dot) dot.style.background = meta.bar;
+    renderBrandMark();
+    updateThemeFavicon(meta);
     renderThemeStudioControls();
+  }
+
+  // Each theme is a complete brand package: the favicon is drawn from that
+  // package's silhouette and palette whenever the theme changes.
+  function updateThemeFavicon(meta) {
+    try {
+      const pkg = BRAND_PACKAGES[meta.id] || BRAND_PACKAGES.obsidian;
+      const a = meta.dots[0];
+      const b = meta.dots[1];
+      const c = meta.dots[2] || b;
+      const light = meta.id === 'pearl' || meta.id === 'sakura';
+      const bg = light ? '#ffffff' : '#0b0f14';
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="0.55" stop-color="${b}"/><stop offset="1" stop-color="${c}"/></linearGradient></defs><rect width="64" height="64" rx="14" fill="${bg}"/><g fill="none" stroke="url(#g)" stroke-linecap="round" stroke-linejoin="round">${pkg.frame}<path d="M20 46V20l12 14 12-14v26" stroke-width="5.2"/></g></svg>`;
+      let link = document.querySelector('link[rel="icon"]');
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.head.appendChild(link);
+      }
+      link.type = 'image/svg+xml';
+      link.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+    } catch {}
   }
 
   function renderThemeStudioControls() {
@@ -342,6 +441,7 @@
         (t) => `
           <button type="button" class="theme-card ${appearance.theme === t.id ? 'on' : ''}" data-pick-theme="${t.id}">
             <div class="theme-preview" style="background:${t.bg}">
+              <span class="theme-preview-mark">${brandMarkSvg(t, { thin: true })}</span>
               <div class="theme-preview-dots">
                 ${t.dots.map((c) => `<span style="background:${c}"></span>`).join('')}
               </div>
@@ -352,6 +452,7 @@
               ${appearance.theme === t.id ? '<span class="pill ok" style="font-size:10px;padding:1px 6px">Active</span>' : ''}
             </div>
             <div class="theme-sub">${esc(t.sub)}</div>
+            <div class="theme-pkg">${esc(BRAND_PACKAGES[t.id]?.label || '')} package</div>
           </button>
         `
       ).join('');
@@ -593,21 +694,6 @@
   })();
 
   const VOICE_AGENT_STT_MODELS = ['flux-general-en', 'flux-general-multi'];
-  const defaultVoiceAgentSttModel = (language) => {
-    const languages = String(language || 'en')
-      .toLowerCase()
-      .split(/[\s,]+/)
-      .map((entry) => entry.split(/[-_]/)[0])
-      .filter(Boolean);
-    return languages.some((entry) => entry !== 'en') || languages.length > 1
-      ? 'flux-general-multi'
-      : 'flux-general-en';
-  };
-  const normalizeVoiceAgentSttModel = (model, language) =>
-    VOICE_AGENT_STT_MODELS.includes(String(model || '').trim())
-      ? String(model).trim()
-      : defaultVoiceAgentSttModel(language);
-
   function defaultSelfIntroForClient(id, name) {
     if (id === 'a_nova' || /nova|concierge|general/i.test(name || '')) {
       return "Hi there! I'm Nova, a live Customer Support & Concierge Specialist here on the line. I'm happy to chat naturally and help answer any general knowledge, everyday, or support question you have!";
@@ -625,10 +711,35 @@
     if (!state || !Array.isArray(state.agents)) return false;
     let mutated = false;
 
-    const firstStt = state.providers?.find((p) => p.kind === 'stt')?.id || 's1';
-    const firstLlm = state.providers?.find((p) => p.kind === 'llm' && p.type === 'open_ai')?.id || state.providers?.find((p) => p.kind === 'llm')?.id || 'l1';
-    const firstTts = state.providers?.find((p) => p.kind === 'tts' && p.type === 'deepgram')?.id || state.providers?.find((p) => p.kind === 'tts')?.id || 't1';
     const endFn = state.functions?.find((f) => f.name === 'end_call')?.id;
+
+    // Global service channels are deliberately empty on migration; operators must select and save them.
+    if (!state.services || typeof state.services !== 'object') {
+      state.services = {
+        stt: { providerId: '', model: '' },
+        llm: { providerId: '', model: '' },
+        tts: { providerId: '', model: '' },
+      };
+      mutated = true;
+    }
+    for (const kind of ['stt', 'llm', 'tts']) {
+      if (!state.services[kind] || typeof state.services[kind] !== 'object') {
+        state.services[kind] = { providerId: '', model: '' };
+        mutated = true;
+      }
+      const selection = state.services[kind];
+      const provider = (state.providers || []).find((p) => p.kind === kind && p.id === selection.providerId);
+      const models = kind === 'stt'
+        ? VOICE_AGENT_STT_MODELS
+        : kind === 'llm'
+        ? provider ? dgLlmModelIdsForType(provider.type) : []
+        : provider ? (provider.models || '').split(',').map((x) => x.trim()).filter(Boolean) : [];
+      if (!provider || !models.includes(String(selection.model || ''))) {
+        if (selection.providerId || selection.model) mutated = true;
+        selection.providerId = '';
+        selection.model = '';
+      }
+    }
 
     // Migrate legacy Nova STT selections: Voice Agent Settings currently accepts Flux v2 only.
     const sttProviders = (state.providers || []).filter((p) => p.kind === 'stt');
@@ -645,18 +756,46 @@
     }
     for (const agent of state.agents) {
       if (!agent.stt || typeof agent.stt !== 'object') {
-        agent.stt = { p: firstStt, model: 'flux-general-en', keyterms: '', eot: 0.55, eager: 0.35, eotms: 2000, smartFormat: false };
+        agent.stt = { keyterms: '', eot: 0.55, eager: 0.35, eotms: 2000, smartFormat: false };
         mutated = true;
       }
-      if (!sttProviders.some((provider) => provider.id === agent.stt.p) && sttProviders.length) {
-        agent.stt.p = sttProviders[0].id;
+      for (const key of ['p', 'model']) {
+        if (Object.prototype.hasOwnProperty.call(agent.stt, key)) {
+          delete agent.stt[key];
+          mutated = true;
+        }
+      }
+      agent.stt.keyterms ??= '';
+      agent.stt.eot ??= 0.55;
+      agent.stt.eager ??= 0.35;
+      agent.stt.eotms ??= 2000;
+      agent.stt.smartFormat ??= false;
+
+      if (!agent.llm || typeof agent.llm !== 'object') {
+        agent.llm = { temp: 0.7, reasoning: 'low' };
         mutated = true;
       }
-      const supportedModel = normalizeVoiceAgentSttModel(agent.stt.model, agent.language);
-      if (agent.stt.model !== supportedModel) {
-        agent.stt.model = supportedModel;
+      for (const key of ['p', 'model', 'ctx']) {
+        if (Object.prototype.hasOwnProperty.call(agent.llm, key)) {
+          delete agent.llm[key];
+          mutated = true;
+        }
+      }
+      agent.llm.temp ??= 0.7;
+      if (!['low', 'medium', 'high'].includes(agent.llm.reasoning)) agent.llm.reasoning = 'low';
+
+      if (!agent.tts || typeof agent.tts !== 'object') {
+        agent.tts = { speed: 1, expr: 0 };
         mutated = true;
       }
+      for (const key of ['p', 'model']) {
+        if (Object.prototype.hasOwnProperty.call(agent.tts, key)) {
+          delete agent.tts[key];
+          mutated = true;
+        }
+      }
+      agent.tts.speed ??= 1;
+      agent.tts.expr ??= 0;
     }
 
     // Ensure built-in Nova Live Concierge exists for existing localStorage users (one-time seed)
@@ -690,8 +829,6 @@
           selfIntro: defaultSelfIntroForClient('a_nova', 'Nova'),
         },
         stt: {
-          p: firstStt,
-          model: 'flux-general-en',
           keyterms: 'Nova, introduce yourself, human',
           eot: 0.55,
           eager: 0.35,
@@ -699,15 +836,10 @@
           smartFormat: false,
         },
         llm: {
-          p: firstLlm,
-          model: 'gpt-4o-mini',
           temp: 0.65,
           reasoning: 'low',
-          ctx: '',
         },
         tts: {
-          p: firstTts,
-          model: 'flux-haley-en',
           speed: 1.05,
           expr: 1,
         },
@@ -1028,7 +1160,17 @@
 
     const dgKey = secretsStatus?.DEEPGRAM_API_KEY?.configured;
     const btnKeys = document.getElementById('btn-keys');
-    btnKeys.innerHTML = dgKey ? '🔑 API Keys <span class="ok">●</span>' : '🔑 API Keys <span class="wn">!</span>';
+    if (btnKeys) {
+      let badge = btnKeys.querySelector('.keys-state');
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = 'keys-state';
+        btnKeys.appendChild(badge);
+      }
+      badge.className = `keys-state ${dgKey ? 'ok' : 'wn'}`;
+      badge.textContent = dgKey ? '' : '!';
+      badge.title = dgKey ? 'DEEPGRAM_API_KEY configured' : 'DEEPGRAM_API_KEY missing';
+    }
 
     const btnNewTab = document.getElementById('btn-newtab');
     if (btnNewTab) {
@@ -1038,15 +1180,15 @@
   }
 
   function buildSettings(agent) {
-    const sp = prov(agent.stt.p) || {};
-    const lp = prov(agent.llm.p) || {};
-    const tp = prov(agent.tts.p) || {};
+    const sp = globalServiceProvider('stt') || {};
+    const lp = globalServiceProvider('llm') || {};
+    const tp = globalServiceProvider('tts') || {};
     const linkedCampaign = S.campaigns.find((c) => c.agentId === agent.id);
 
-    const sttModel = normalizeVoiceAgentSttModel(agent.stt.model, agent.language);
+    const sttModel = VOICE_AGENT_STT_MODELS.includes(String(S.services?.stt?.model || '')) ? S.services.stt.model : '';
     const listenProvider = {
-      type: 'deepgram',
-      version: 'v2',
+      type: sttModel && sp.type === 'deepgram' ? 'deepgram' : '',
+      version: sttModel && sp.type === 'deepgram' ? 'v2' : '',
       model: sttModel,
       eot_threshold: Number(agent.stt.eot),
       eager_eot_threshold: Number(agent.stt.eager),
@@ -1059,23 +1201,27 @@
     if (kt.length) listenProvider.keyterms = kt;
     const spEx = parseJsonObject(sp.extra);
     if (spEx.ok) Object.assign(listenProvider, spEx.value);
-    listenProvider.type = 'deepgram';
-    listenProvider.version = 'v2';
+    listenProvider.type = sttModel && sp.type === 'deepgram' ? 'deepgram' : '';
+    listenProvider.version = sttModel && sp.type === 'deepgram' ? 'v2' : '';
     listenProvider.model = sttModel;
     delete listenProvider.language;
     delete listenProvider.smart_format;
     if (sttModel !== 'flux-general-multi') delete listenProvider.language_hints;
 
-    const isGoogleByo = lp.type === 'google' && Boolean((lp.endpoint || '').trim());
-    const thinkProvider = { type: lp.type || 'open_ai' };
-    if (!isGoogleByo) thinkProvider.model = agent.llm.model;
-    if (lp.type === 'open_ai' && /^gpt-5/.test(agent.llm.model)) {
+    const llmModel = String(S.services?.llm?.model || '').trim();
+    const thinkProvider = { type: lp.type || '' };
+    if (llmModel) thinkProvider.model = llmModel;
+    if (lp.type === 'open_ai' && /^gpt-5/.test(llmModel)) {
       thinkProvider.reasoning_mode = agent.llm.reasoning;
     } else {
       thinkProvider.temperature = Number(agent.llm.temp);
     }
     const lpEx = parseJsonObject(lp.extra);
     if (lpEx.ok) Object.assign(thinkProvider, lpEx.value);
+    thinkProvider.type = lp.type || '';
+    delete thinkProvider.endpoint;
+    delete thinkProvider.model;
+    if (llmModel) thinkProvider.model = llmModel;
 
     const campaignDispos = (linkedCampaign?.dispos || '').split(',').map((d) => d.trim()).filter(Boolean);
     const fns = (agent.fnIds || [])
@@ -1098,11 +1244,12 @@
 
     const think = { provider: thinkProvider, prompt: composeBehavioralPromptClient(agent), functions: fns };
 
-    const speakProvider = { type: tp.type || 'deepgram' };
+    const ttsModel = String(S.services?.tts?.model || '').trim();
+    const speakProvider = { type: tp.type || '' };
     const mk = tp.type === 'deepgram' || tp.type === 'open_ai' ? 'model' : tp.mk || 'model_id';
-    if (tp.type !== 'aws_polly') speakProvider[mk] = agent.tts.model;
-    if (tp.type === 'deepgram') {
-      const isFlux = agent.tts.model.startsWith('flux');
+    if (tp.type && ttsModel && tp.type !== 'aws_polly') speakProvider[mk] = ttsModel;
+    if (tp.type === 'deepgram' && ttsModel) {
+      const isFlux = ttsModel.startsWith('flux');
       speakProvider.version = isFlux ? 'v2' : 'v1';
       speakProvider.speed = isFlux ? normalizeFluxSpeed(agent.tts.speed) : Number(agent.tts.speed);
       if (isFlux && Number(agent.tts.expr) !== 0) speakProvider.expressivity = Math.round(Number(agent.tts.expr));
@@ -1115,6 +1262,10 @@
       if (tp.type === 'deepgram') delete copy.language;
       Object.assign(speakProvider, copy);
     }
+    speakProvider.type = tp.type || '';
+    delete speakProvider.model;
+    delete speakProvider.model_id;
+    if (tp.type && ttsModel && tp.type !== 'aws_polly') speakProvider[mk] = ttsModel;
     const speak = { provider: speakProvider };
     if ((tp.endpoint || '').trim()) {
       const th = parseJsonObject(tp.headers);
@@ -1151,24 +1302,26 @@
     const push = (ok, message, warn = false) =>
       items.push([ok ? 'ok' : warn ? 'wn' : 'er', ok ? '✓' : warn ? '!' : '✗', message]);
 
-    const sp = prov(agent.stt.p);
-    const lp = prov(agent.llm.p);
-    const tp = prov(agent.tts.p);
-    push(Boolean(sp && lp && tp), 'STT, LLM and TTS plug-ins exist and are linked');
-    if (!sp || !lp || !tp) return items;
+    const sp = globalServiceProvider('stt');
+    const lp = globalServiceProvider('llm');
+    const tp = globalServiceProvider('tts');
+    const sttModel = String(S.services?.stt?.model || '');
+    const llmModel = String(S.services?.llm?.model || '');
+    const ttsModel = String(S.services?.tts?.model || '');
+    push(Boolean(sp), 'One global STT provider is selected in Plug-Ins');
+    push(Boolean(lp), 'One global LLM provider is selected in Plug-Ins');
+    push(Boolean(tp), 'One global TTS provider is selected in Plug-Ins');
 
-    push(sp.type === 'deepgram', 'STT provider type is "deepgram" (required by Deepgram Voice Agent API)');
+    push(Boolean(sp && sp.type === 'deepgram'), 'Global STT provider is Deepgram (required by Deepgram Voice Agent API)');
     push(
-      VOICE_AGENT_STT_MODELS.includes(agent.stt.model),
-      `STT model "${agent.stt.model}" is supported by Voice Agent (Flux v2 only)`
+      Boolean(sp && VOICE_AGENT_STT_MODELS.includes(sttModel)),
+      `Global STT model "${sttModel || 'not selected'}" is supported by Voice Agent (Flux v2 only)`
     );
     push((agent.greeting || '').trim().length > 10, 'Greeting is set (> 10 chars)');
-    const promptOk = (lp.endpoint || '').trim()
-      ? (agent.prompt || '').trim().length > 0
-      : (agent.prompt || '').trim().length > 0 && agent.prompt.length <= 25000;
+    const promptOk = (agent.prompt || '').trim().length > 0 && agent.prompt.length <= 25000;
     push(promptOk, 'System prompt within 25,000-character managed limit');
 
-    if (agent.stt.model.startsWith('flux')) {
+    if (sttModel.startsWith('flux')) {
       const eot = Number(agent.stt.eot);
       const eager = Number(agent.stt.eager);
       const eotms = Number(agent.stt.eotms);
@@ -1180,19 +1333,21 @@
     }
 
     push(
-      DG_LLM_PROVIDER_TYPES.includes(lp.type) && !(lp.endpoint || '').trim(),
-      `LLM provider (${lp.type}) is natively managed by Deepgram (no BYO endpoint)`
+      Boolean(lp && DG_LLM_PROVIDER_TYPES.includes(lp.type) && !(lp.endpoint || '').trim()),
+      `Selected global LLM provider (${lp?.name || 'none'}) is natively managed by Deepgram (no BYO endpoint)`
     );
     push(
-      dgLlmModelIdsForType(lp.type).includes(agent.llm.model),
-      `LLM model "${agent.llm.model}" is officially provided by Deepgram`
+      Boolean(lp && dgLlmModelIdsForType(lp.type).includes(llmModel)),
+      `Selected global LLM model "${llmModel || 'not selected'}" belongs to the chosen Deepgram provider`
     );
 
-    const ttsNeedsEp = !['deepgram', 'cartesia'].includes(tp.type);
-    push(!ttsNeedsEp || Boolean((tp.endpoint || '').trim()), `TTS endpoint configured where required (${tp.type})`);
+    const ttsNeedsEp = Boolean(tp && !['deepgram', 'cartesia'].includes(tp.type));
+    push(Boolean(tp && (!ttsNeedsEp || (tp.endpoint || '').trim())), `TTS endpoint configured where required (${tp?.type || 'no provider'})`);
+    push(Boolean(tp && ttsModel && (tp.models || '').split(',').map((s) => s.trim()).includes(ttsModel)),
+      `Selected global TTS model "${ttsModel || 'not selected'}" belongs to the chosen provider`);
 
-    if (tp.type === 'deepgram') {
-      const isFlux = agent.tts.model.startsWith('flux');
+    if (tp?.type === 'deepgram') {
+      const isFlux = ttsModel.startsWith('flux');
       const spd = Number(agent.tts.speed);
       const expr = Number(agent.tts.expr);
       if (isFlux) {
@@ -1203,10 +1358,10 @@
       }
     }
 
-    const hasPlaceholder = (tp.endpoint || '').includes('{voice_id}') || (tp.extra || '').includes('"VOICE_ID"');
+    const hasPlaceholder = Boolean(tp && ((tp.endpoint || '').includes('{voice_id}') || (tp.extra || '').includes('"VOICE_ID"')));
     push(!hasPlaceholder, 'No unreplaced {voice_id} or VOICE_ID placeholder in TTS config', true);
 
-    const provJsonOk = [sp, lp, tp].every((p) => parseJsonObject(p.headers).ok && parseJsonObject(p.extra).ok);
+    const provJsonOk = [sp, lp, tp].every((p) => Boolean(p && parseJsonObject(p.headers).ok && parseJsonObject(p.extra).ok));
     const agentFns = (agent.fnIds || []).map((id) => S.functions.find((f) => f.id === id)).filter(Boolean);
     const fnJsonOk = agentFns.every((f) => parseJsonSchema(f.params).ok && parseJsonObject(f.headers).ok);
     push(provJsonOk && fnJsonOk, 'Plug-in JSON objects and function JSON schemas are valid');
@@ -1366,6 +1521,17 @@
   };
 
   const providersByKind = (kind) => S.providers.filter((p) => p.kind === kind).map((p) => [p.id, p.name]);
+
+  // Only routes that actually work with the console's single server-side
+  // DEEPGRAM_API_KEY are offered in the UI.
+  const SUPPORTED_PROVIDER_TYPES = {
+    stt: ['deepgram'],
+    llm: ['open_ai', 'anthropic', 'google', 'groq', 'nvidia'],
+    tts: ['deepgram'],
+  };
+  const isSupportedProvider = (p) => (SUPPORTED_PROVIDER_TYPES[p.kind] || []).includes(p.type);
+  const supportedProvidersByKind = (kind) =>
+    S.providers.filter((p) => p.kind === kind && isSupportedProvider(p)).map((p) => [p.id, p.name]);
   const modelsForProvider = (id) => {
     const p = prov(id);
     if (!p) return [];
@@ -1383,6 +1549,48 @@
     if (!p) return [];
     return dgLlmEntriesForType(p.type).map((m) => [m.id, `${m.name} (${m.id})`]);
   };
+
+  function globalServiceProvider(kind) {
+    const id = S?.services?.[kind]?.providerId;
+    return S?.providers?.find((p) => p.kind === kind && p.id === id) || null;
+  }
+
+  function globalServiceModelOptions(kind) {
+    const placeholder = [['', 'Select a model…']];
+    const p = globalServiceProvider(kind);
+    if (!p) return placeholder;
+    if (kind === 'stt') return placeholder.concat(VOICE_AGENT_STT_MODELS.map((id) => [id, id]));
+    if (kind === 'llm') return placeholder.concat(dgLlmEntriesForType(p.type).map((m) => [m.id, `${m.name} (${m.id})`]));
+    return placeholder.concat(modelsForProvider(p.id).map((id) => [id, id]));
+  }
+
+  function renderGlobalServiceRouting() {
+    const kinds = [
+      ['llm', 'LLM — Think', supportedProvidersByKind('llm')],
+      ['stt', 'STT — Listen', supportedProvidersByKind('stt')],
+      ['tts', 'TTS — Speak', supportedProvidersByKind('tts')],
+    ];
+    const missing = kinds.filter(([kind]) => !S.services?.[kind]?.providerId || !S.services?.[kind]?.model);
+    return `<div class="card global-services-card">
+      <h2>Service Selection <button class="g" id="sync-llm" style="font-size:11px;padding:3px 8px;text-transform:none">↻ Refresh model list</button></h2>
+      <div class="note">Pick one provider and one model for each service, then press <b>Save &amp; verify</b>. The saved route applies to every bot.</div>
+      <div class="row r3">${kinds.map(([kind, label, providers]) => `
+        <div class="global-service-choice">
+          <h3>${label}</h3>
+          ${F('Provider', `services.${kind}.providerId`, 'sel', [['', 'Select provider…'], ...providers])}
+          ${F('Model', `services.${kind}.model`, 'sel', globalServiceModelOptions(kind))}
+        </div>`).join('')}
+      </div>
+      ${
+        missing.length
+          ? `<div class="note wn" style="margin-top:10px">! Still missing a saved provider/model for: <b>${missing
+              .map(([, label]) => label.split(' — ')[0])
+              .join(', ')}</b>. Live sessions stay blocked until all three are saved.</div>`
+          : '<div class="note ok" style="margin-top:10px">✓ All three services have a saved provider and model.</div>'
+      }
+      <div class="note" style="margin-top:6px">Only Deepgram-backed routes that work with your server-side <code>DEEPGRAM_API_KEY</code> are listed.</div>
+    </div>`;
+  }
 
   const renderSelectorBar = (kind) => {
     const arr = kind === 'a' ? S.agents : S.campaigns;
@@ -2050,6 +2258,27 @@
 
   async function startLiveCall(withMic = true) {
     if (sim.active || sim.connecting) return;
+    let savedServices = {};
+    try {
+      savedServices = JSON.parse(snap || '{}').services || {};
+    } catch {}
+    const missingGlobalServices = ['stt', 'llm', 'tts'].filter((kind) => {
+      const selection = S?.services?.[kind];
+      const saved = savedServices[kind];
+      return (
+        !globalServiceProvider(kind) ||
+        !String(selection?.model || '').trim() ||
+        saved?.providerId !== selection?.providerId ||
+        saved?.model !== selection?.model
+      );
+    });
+    if (missingGlobalServices.length) {
+      sim.lastError = `Select and save one global provider/model for ${missingGlobalServices.join(', ')} on the Plug-Ins page before starting a live session.`;
+      sim.statusText = 'Global Services Need Setup';
+      sim.agentState = 'idle';
+      render();
+      return;
+    }
 
     sim.connecting = true;
     sim.muted = false;
@@ -3107,7 +3336,7 @@
       <div class="voice-grid">
         ${list
           .map((v) => {
-            const isAssigned = prov(a.tts.p)?.type === 'deepgram' && a.tts.model === v.id;
+            const isAssigned = globalServiceProvider('tts')?.type === 'deepgram' && S.services?.tts?.model === v.id;
             const famLabel = v.family === 'flux-v2' ? 'Flux v2' : v.family === 'aura-2' ? 'Aura-2 v1' : 'Aura v1';
             const initials = esc((v.displayName || 'V').slice(0, 2).toUpperCase());
             return `<div class="vcard ${isAssigned ? 'active' : ''}">
@@ -3133,15 +3362,95 @@
                     : ''
                 }
                 <button class="g" data-vsynth="${esc(v.id)}" data-vlabel="${esc(v.displayName)} (${esc(v.id)})">🔊 Speak Text</button>
-                <button class="${isAssigned ? 'g' : 'b'}" data-vpick="${esc(v.id)}">
-                  ${isAssigned ? '✓ Active Voice' : 'Set as Agent Voice'}
-                </button>
+                ${
+                  isAssigned
+                    ? '<span class="pill ok">✓ Active Voice (saved)</span>'
+                    : `<button class="b" data-vselect="${esc(v.id)}" data-vlabel="${esc(v.displayName)} (${esc(v.id)})">✓ Use This Voice</button>`
+                }
               </div>
             </div>`;
           })
           .join('')}
       </div>
     `;
+  }
+
+  // ==================== FEATURE SHOWCASE CAROUSEL ====================
+
+  let showcaseIndex = 0;
+
+  function renderFeatureShowcase() {
+    const cards = [
+      {
+        title: 'Voice Biometrics',
+        sub: 'Secure identity via voice pattern',
+        stat: 'Accuracy',
+        value: '99.8%',
+        foot: 'Liveness detection enabled',
+        art: `<svg viewBox="0 0 200 52" aria-hidden="true">
+          <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <path d="M22 42a13 13 0 0 1 0-26 13 13 0 0 1 0 26" opacity=".45"/>
+            <path d="M22 36a7 7 0 0 1 0-14 7 7 0 0 1 0 14" opacity=".7"/>
+            <path d="M22 30a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2"/>
+            <path d="M56 26h6l4-10 5 20 5-14 4 8 4-4h6l4 6 5-12 4 16 5-9 4 4h34" opacity=".9"/>
+          </g>
+        </svg>`,
+      },
+      {
+        title: 'Multi-Channel Integration',
+        sub: 'Unified email, SMS, chat, API',
+        stat: 'Channels',
+        value: '12 Connected',
+        foot: 'Sync · Live',
+        art: `<svg viewBox="0 0 200 52" aria-hidden="true">
+          <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+            <path d="M100 26 66 14M100 26 66 38M100 26 134 14M100 26 134 38M66 14 134 14M66 38 134 38" opacity=".45"/>
+            <circle cx="100" cy="26" r="7"/><circle cx="66" cy="14" r="4.5"/><circle cx="66" cy="38" r="4.5"/>
+            <circle cx="134" cy="14" r="4.5"/><circle cx="134" cy="38" r="4.5"/>
+          </g>
+        </svg>`,
+      },
+      {
+        title: 'Predictive Analysis',
+        sub: 'Forecast trends with ML',
+        stat: 'Confidence',
+        value: '94.2%',
+        foot: 'Next 30d forecast',
+        art: `<svg viewBox="0 0 200 52" aria-hidden="true">
+          <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M24 42h152" opacity=".3"/>
+            <path d="M28 36l22-8 20 6 22-14 20 8 22-12 24 6" opacity=".95"/>
+            <g opacity=".45"><path d="M40 42v-8M70 42v-12M100 42v-9M130 42v-15M160 42v-11"/></g>
+          </g>
+        </svg>`,
+      },
+    ];
+
+    return `<div class="card showcase">
+      <div class="showcase-head">
+        <h2>Feature Showcase</h2>
+        <div class="showcase-dots" role="tablist" aria-label="Showcase cards">
+          ${cards
+            .map(
+              (_, i) =>
+                `<button type="button" data-sc="${i}" class="${i === showcaseIndex ? 'on' : ''}" aria-label="Show card ${i + 1}"></button>`
+            )
+            .join('')}
+        </div>
+      </div>
+      <div class="showcase-track">
+        ${cards
+          .map(
+            (c, i) => `<article class="sc-card ${i === showcaseIndex ? 'on' : ''}">
+              <div class="sc-title">${esc(c.title)}</div>
+              <div class="sc-sub">${esc(c.sub)}</div>
+              <div class="sc-art">${c.art}</div>
+              <div class="sc-foot"><span>${esc(c.stat)} · <b>${esc(c.value)}</b></span><span>${esc(c.foot)}</span></div>
+            </article>`
+          )
+          .join('')}
+      </div>
+    </div>`;
   }
 
   // ==================== MAIN VIEW RENDERER ====================
@@ -3152,15 +3461,16 @@
     applySidebarState(false);
 
     const m = document.getElementById('m');
-    m.className = tab === 'voice' || tab === 'export' ? 'wide' : '';
+    m.className = tab === 'voice' || tab === 'export' || tab === 'agents' ? 'wide' : '';
 
     const a = A();
 
     if (tab === 'agents') {
-      const tp = prov(a.tts.p) || {};
-      const isFluxTts = tp.type === 'deepgram' && a.tts.model.startsWith('flux');
+      const tp = globalServiceProvider('tts') || {};
+      const isFluxTts = tp.type === 'deepgram' && String(S.services?.tts?.model || '').startsWith('flux');
 
       m.innerHTML = `
+        ${renderFeatureShowcase()}
         <div class="card">
           ${renderSelectorBar('a')}
           ${F('Agent name', 'a.name')}
@@ -3175,25 +3485,7 @@
           ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
 
           <h2>⚡ Barge-In, Expressions, Gestures, Speed &amp; General Q&amp;A</h2>
-          <label>1-Click Processing Speed &amp; Ultra-Low Latency Presets</label>
-          <div class="speed-preset-grid">
-            <button type="button" class="speed-card ${a.llm.model === 'gpt-4o-mini' && Number(a.stt.eot) <= 0.56 ? 'active' : ''}" data-speed-preset="ultra">
-              <div class="speed-card-title"><span>⚡ Ultra-Fast OpenAI</span><span class="pill ok">~550ms</span></div>
-              <div class="speed-card-sub">GPT-4o mini + Speculative Flux EOT (0.55 / 0.35) + 1.05x Expressive</div>
-            </button>
-            <button type="button" class="speed-card ${a.llm.model === 'gemini-2.5-flash-lite' ? 'active' : ''}" data-speed-preset="gemini">
-              <div class="speed-card-title"><span>✨ Gemini Flash-Lite</span><span class="pill ok">~515ms</span></div>
-              <div class="speed-card-sub">Fastest Google Deepgram-Managed streaming LLM + Turbo EOT</div>
-            </button>
-            <button type="button" class="speed-card ${a.llm.model === 'openai/gpt-oss-20b' ? 'active' : ''}" data-speed-preset="groq">
-              <div class="speed-card-title"><span>🚀 Groq LPU OSS</span><span class="pill ok">LPU</span></div>
-              <div class="speed-card-sub">Deepgram-Managed Groq GPT OSS 20B + Instant Eager EOT</div>
-            </button>
-            <button type="button" class="speed-card ${a.llm.model === 'gpt-4.1-mini' && Number(a.stt.eot) > 0.56 ? 'active' : ''}" data-speed-preset="balanced">
-              <div class="speed-card-title"><span>⚖️ Balanced Smart</span><span class="pill">~700ms</span></div>
-              <div class="speed-card-sub">GPT-4.1 mini + Balanced Turn Detection (0.62 / 0.42)</div>
-            </button>
-          </div>
+          <div class="note">Service provider and model are controlled globally from Plug-Ins. This agent can tune its conversation behavior, while all agents use the same saved LLM, STT, and TTS channels.</div>
 
           <div class="row r3">
             ${F('🛑 Barge-In Interruption Mode', 'a.behavior.bargeIn', 'sel', [
@@ -3227,11 +3519,7 @@
           ${F('👋 Self-Introduction Bio (spoken naturally when asked "Who are you?" or "Introduce yourself")', 'a.behavior.selfIntro', 'ta')}
 
           <h2>Speech-to-Text (Listen)</h2>
-          <div class="row">
-            ${F('STT Plug-in', 'a.stt.p', 'sel', providersByKind('stt'))}
-            ${F('STT Model', 'a.stt.model', 'sel', modelsForProvider(a.stt.p))}
-          </div>
-          <div class="note">Deepgram Voice Agent currently accepts only <code>flux-general-en</code> and <code>flux-general-multi</code>. Older Nova selections are automatically migrated before connecting.</div>
+          <div class="note">Global STT: <b>${esc(globalServiceProvider('stt')?.name || 'Not selected')}</b> · Model: <code>${esc(S.services?.stt?.model || 'not selected')}</code>. Configure the single shared provider/model in Plug-Ins. Per-agent language hints, keyterms, and turn detection remain configurable here.</div>
           <div class="row">
             ${F('Language / BCP-47 hints', 'a.language')}
             ${F('Keyterms (comma-separated phrases)', 'a.stt.keyterms')}
@@ -3242,26 +3530,19 @@
             ${F('eot_timeout_ms', 'a.stt.eotms', 'number', [], 'min="500" max="15000" step="100"')}
           </div>
 
-          <h2>Language Model (Think — Deepgram Managed Only) <button class="g" id="sync-llm" style="font-size:11px;padding:3px 8px;text-transform:none">↻ Sync Deepgram Models (${deepgramManagedLlms.length})</button></h2>
-          ${llmSyncNotice ? `<div class="note ok" style="margin:2px 0 8px">${esc(llmSyncNotice)}</div>` : ''}
-          <div class="row">
-            ${F('Deepgram LLM Provider', 'a.llm.p', 'sel', providersByKind('llm'))}
-            ${F('Deepgram-Provided LLM Model', 'a.llm.model', 'sel', llmSelectOptionsForProvider(a.llm.p))}
-          </div>
+          <h2>Language Model (Think — Deepgram Managed)</h2>
+          <div class="note">Global LLM: <b>${esc(globalServiceProvider('llm')?.name || 'Not selected')}</b> · Model: <code>${esc(S.services?.llm?.model || 'not selected')}</code>. The saved Plug-Ins selection is shared by every bot; each agent may still have its own response temperature and reasoning preferences.</div>
           <div class="row r3">
             ${F('Temperature (0–2)', 'a.llm.temp', 'number', [], 'min="0" max="2" step="0.05"')}
             ${F('Reasoning (gpt-5*)', 'a.llm.reasoning', 'sel', ['low', 'medium', 'high'])}
             <div>
-              <label>LLM Routing &amp; Key</label>
-              <div class="note ok" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2,rgba(255,255,255,.03));margin:0">✓ Deepgram Managed (<code>DEEPGRAM_API_KEY</code>)</div>
+              <label>Routing &amp; key ownership</label>
+              <div class="note ok" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface-2,rgba(255,255,255,.03));margin:0">The Console owns the provider connection and server-side <code>DEEPGRAM_API_KEY</code>; bots do not connect to provider accounts.</div>
             </div>
           </div>
 
           <h2>Text-to-Speech (Speak) <button class="g" data-t="voice" style="font-size:11px;padding:3px 8px;text-transform:none">🎧 Open Real Voice Lab →</button></h2>
-          <div class="row">
-            ${F('TTS Plug-in', 'a.tts.p', 'sel', providersByKind('tts'))}
-            ${F('Voice Model / ID', 'a.tts.model', 'dl', modelsForProvider(a.tts.p))}
-          </div>
+          <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · Model: <code>${esc(S.services?.tts?.model || 'not selected')}</code>. Change the voice in the Voice Lab or in Plug-Ins; this agent’s speed and expression controls remain independent.</div>
           <div class="row">
             ${F(
               isFluxTts ? 'Speed (0.5–1.5, 0.05 steps)' : 'Speed (0.7–1.5)',
@@ -3315,24 +3596,16 @@
       `;
     } else if (tab === 'plugins') {
       m.innerHTML = `
+        ${renderGlobalServiceRouting()}
         <div class="card">
-          ${['stt', 'llm', 'tts']
-            .map(
-              (kind) => `
-              <h2>${kind.toUpperCase()} Plug-ins</h2>
-              ${S.providers.map((p, idx) => (p.kind === kind ? renderPluginCard(idx) : '')).join('')}
-              <button class="g" data-add="${kind}">+ Add ${kind.toUpperCase()} Plug-in</button>
-            `
-            )
-            .join('')}
-        </div>
-        <div class="card">
-          <h2>Agent Tool Functions</h2>
-          ${S.functions.map((_, idx) => renderFunctionCard(idx)).join('')}
-          <button class="b" data-add="fn">+ Add Function</button>
-          <div class="note">
-            Functions without a webhook URL execute client-side inside your Node VICIdial Bridge (<code>transfer_to_live_agent</code>, <code>set_disposition</code>, <code>end_call</code>). Agents bind to functions by immutable ID, so renaming a function automatically updates all linked agents.
-          </div>
+          <details>
+            <summary style="cursor:pointer;font-weight:700;font-size:13px;letter-spacing:.02em">Advanced — Agent Tool Functions (optional)</summary>
+            <div class="note" style="margin-top:8px">
+              Functions the LLM can call during a live call. They run inside your Node VICIdial Bridge and are optional — leave them untouched if you are not using tool calling.
+            </div>
+            ${S.functions.map((_, idx) => renderFunctionCard(idx)).join('')}
+            <button class="b" data-add="fn">+ Add Function</button>
+          </details>
         </div>
       `;
     } else if (tab === 'campaigns') {
@@ -3395,8 +3668,8 @@
             <div>
               <h2>Real TTS Voice Workbench</h2>
               <div class="bar" style="margin-bottom:6px">
-                <span class="pill">Active TTS: <b>${esc(prov(a.tts.p)?.name || a.tts.p)}</b></span>
-                <span class="pill ok">Voice Model: <code>${esc(a.tts.model)}</code></span>
+                <span class="pill">Global TTS: <b>${esc(globalServiceProvider('tts')?.name || 'Not selected')}</b></span>
+                <span class="pill ok">Model: <code>${esc(S.services?.tts?.model || 'not selected')}</code></span>
               </div>
               <div class="row">
                 ${F('Speed (0.5–1.5, 0.05 steps)', 'a.tts.speed', 'number', [], 'min="0.5" max="1.5" step="0.05"')}
@@ -3423,7 +3696,7 @@
               <h2>Active Agent <code>agent.speak</code> Payload</h2>
               <pre id="pv">${esc(JSON.stringify(settingsSpeak, null, 2))}</pre>
               <div class="note">
-                Clicking <b>Set as Agent Voice</b> on any voice card below automatically sets this agent's TTS plug-in to Deepgram TTS, selects the exact model ID (<code>flux-*</code> v2 or <code>aura-*</code> v1), and updates the live <code>Settings</code> JSON.
+                Pick a voice below with <b>✓ Use This Voice</b> — it is saved immediately and becomes the shared TTS voice for every bot. Speed and expressivity stay per-agent.
               </div>
             </div>
           </div>
@@ -4115,8 +4388,8 @@
       const logoutBtn = document.getElementById('btn-logout');
       if (logoutBtn) logoutBtn.style.display = authJson.authEnabled && authJson.authenticated ? 'inline-block' : 'none';
       if (authJson.authEnabled && !authJson.authenticated) {
-        document.getElementById('auth-modal').hidden = false;
-        document.getElementById('st').textContent = '🔒 Locked — Sign in required';
+        const next = encodeURIComponent(window.location.pathname + window.location.search);
+        window.location.replace('/login?next=' + next);
         return;
       }
     }
@@ -4303,7 +4576,7 @@
   async function synthesizeWithApi(modelOverride, labelOverride) {
     stopAllAudio();
     const a = A();
-    const tp = prov(a.tts.p) || { type: 'deepgram' };
+    const tp = globalServiceProvider('tts') || {};
     const vtEl = document.getElementById('vt');
     const text = (vtEl ? vtEl.value : voiceCatalog.previewText || a.greeting).trim();
     const vs = document.getElementById('vs');
@@ -4311,8 +4584,12 @@
 
     const useDeepgramOverride = Boolean(modelOverride);
     const providerType = useDeepgramOverride ? 'deepgram' : tp.type;
-    const model = modelOverride || a.tts.model;
+    const model = modelOverride || S.services?.tts?.model || '';
     const label = labelOverride || `${providerType}:${model}`;
+    if (!model) {
+      if (vs) vs.textContent = 'Select and save a global TTS provider/model on the Plug-Ins page first.';
+      return;
+    }
 
     if (vs) {
       vs.className = 'note';
@@ -4766,6 +5043,7 @@
     if (d.pickTheme) {
       appearance.theme = d.pickTheme;
       applyAppearance(true);
+      renderSideNav();
       return;
     }
     if (d.exp) {
@@ -4778,53 +5056,13 @@
       applyAppearance(true);
       return;
     }
-
-    if (d.speedPreset) {
-      const a = A();
-      if (!a.behavior) upgradeRealtimeAgentFeatures(S);
-      const findLlmProv = (type) => S.providers.find((p) => p.kind === 'llm' && p.type === type);
-      if (d.speedPreset === 'ultra') {
-        const p = findLlmProv('open_ai');
-        if (p) a.llm.p = p.id;
-        a.llm.model = 'gpt-4o-mini';
-        a.stt.eot = 0.55;
-        a.stt.eager = 0.35;
-        a.stt.eotms = 1800;
-        a.tts.speed = 1.05;
-        a.tts.expr = 1;
-        a.behavior.latencyProfile = 'ultra';
-      } else if (d.speedPreset === 'gemini') {
-        const p = findLlmProv('google');
-        if (p) a.llm.p = p.id;
-        a.llm.model = 'gemini-2.5-flash-lite';
-        a.stt.eot = 0.55;
-        a.stt.eager = 0.35;
-        a.stt.eotms = 1800;
-        a.tts.speed = 1.05;
-        a.tts.expr = 1;
-        a.behavior.latencyProfile = 'ultra';
-      } else if (d.speedPreset === 'groq') {
-        const p = findLlmProv('groq');
-        if (p) a.llm.p = p.id;
-        a.llm.model = 'openai/gpt-oss-20b';
-        a.stt.eot = 0.55;
-        a.stt.eager = 0.35;
-        a.stt.eotms = 1800;
-        a.tts.speed = 1.05;
-        a.tts.expr = 1;
-        a.behavior.latencyProfile = 'ultra';
-      } else if (d.speedPreset === 'balanced') {
-        const p = findLlmProv('open_ai');
-        if (p) a.llm.p = p.id;
-        a.llm.model = 'gpt-4.1-mini';
-        a.stt.eot = 0.62;
-        a.stt.eager = 0.42;
-        a.stt.eotms = 2400;
-        a.tts.speed = 1.0;
-        a.tts.expr = 1;
-        a.behavior.latencyProfile = 'balanced';
-      }
-      render();
+    if (d.sc !== undefined) {
+      const idx = Number(d.sc) || 0;
+      showcaseIndex = idx;
+      const cards = Array.prototype.slice.call(document.querySelectorAll('.showcase-track .sc-card'));
+      cards.forEach((c, i) => c.classList.toggle('on', i === idx));
+      document.querySelectorAll('.showcase-dots button').forEach((b, i) => b.classList.toggle('on', i === idx));
+      if (cards[idx]) cards[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
       return;
     }
 
@@ -5046,36 +5284,35 @@
       return;
     }
 
-    if (d.vpick) {
-      const a = A();
-      let dgTts = S.providers.find((p) => p.kind === 'tts' && p.type === 'deepgram');
-      if (!dgTts) {
-        dgTts = {
-          id: uid('tts'),
-          kind: 'tts',
-          name: 'Deepgram TTS',
-          type: 'deepgram',
-          models: d.vpick,
-          endpoint: '',
-          headers: '{}',
-          extra: '{}',
-          mk: 'model',
-        };
-        S.providers.push(dgTts);
-      } else {
-        const existingModels = modelsForProvider(dgTts.id);
-        if (!existingModels.includes(d.vpick)) {
-          dgTts.models = [d.vpick, ...existingModels].join(',');
-        }
+    if (d.vselect) {
+      // Select a Deepgram voice from the Voice Lab and persist it as the
+      // shared TTS model for every bot in one click.
+      const voiceId = String(d.vselect);
+      const label = d.vlabel || voiceId;
+      const ttsProv =
+        S.providers.find((p) => p.kind === 'tts' && p.type === 'deepgram') ||
+        S.providers.find((p) => p.kind === 'tts');
+      if (!ttsProv) {
+        alert('No TTS provider is configured. Reload the console and try again.');
+        return;
       }
-      a.tts.p = dgTts.id;
-      a.tts.model = d.vpick;
-      if (d.vpick.startsWith('flux-') && !isValidFluxSpeed(Number(a.tts.speed))) {
-        a.tts.speed = Math.round(Math.min(1.5, Math.max(0.5, Number(a.tts.speed) || 1)) * 20) / 20;
-      } else if (!d.vpick.startsWith('flux-') && Number(a.tts.speed) < 0.7) {
-        a.tts.speed = 0.7;
+      // The server-side normalizer only keeps a TTS model that is listed on the
+      // provider, so register this voice before saving or the save is discarded.
+      const models = String(ttsProv.models || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (!models.includes(voiceId)) {
+        models.push(voiceId);
+        ttsProv.models = models.join(',');
       }
-      render();
+      S.services = S.services || {};
+      S.services.tts = { providerId: ttsProv.id, model: voiceId };
+      const vs = document.getElementById('vs');
+      if (vs) vs.textContent = `Saving ${label} as the active voice…`;
+      await commitSave();
+      const vsAfter = document.getElementById('vs');
+      if (vsAfter) vsAfter.textContent = `✓ ${label} is now the saved voice for every bot.`;
       return;
     }
 
@@ -5418,16 +5655,9 @@
       const val = numericSelectPaths.has(t.dataset.p) ? Number(t.value) : t.value;
       setPath(t.dataset.p, val);
 
-      const slotMatch = /^a\.(stt|llm|tts)\.p$/.exec(t.dataset.p);
-      if (slotMatch) {
-        const slot = slotMatch[1];
-        const list = modelsForProvider(t.value);
-        A()[slot].model =
-          slot === 'stt'
-            ? defaultVoiceAgentSttModel(A().language)
-            : slot === 'llm' && list.includes('gpt-5-mini')
-            ? 'gpt-5-mini'
-            : list[0] || '';
+      const globalProviderMatch = /^services\.(stt|llm|tts)\.providerId$/.exec(t.dataset.p);
+      if (globalProviderMatch) {
+        S.services[globalProviderMatch[1]].model = '';
       }
       const provTypeMatch = /^p\.(\d+)\.type$/.exec(t.dataset.p);
       if (provTypeMatch) {

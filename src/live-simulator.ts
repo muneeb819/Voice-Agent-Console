@@ -847,12 +847,38 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
       if (msg.type === 'start' && !started) {
         started = true;
         const startMsg = msg as SimulatorStartMessage;
-        activeState = startMsg.draftState ? normalizeState(startMsg.draftState) : getConsoleState();
+        const persistedState = getConsoleState();
+        activeState = startMsg.draftState ? normalizeState(startMsg.draftState) : persistedState;
+        // Live calls always use saved global provider/model pairs and provider connection settings,
+        // never unsaved draft overrides. Agent prompt/behavior drafts remain testable in the simulator.
+        activeState.services = persistedState.services;
+        for (const kind of ['stt', 'llm', 'tts'] as const) {
+          const selection = persistedState.services[kind];
+          const savedProvider = persistedState.providers.find((p) => p.kind === kind && p.id === selection.providerId);
+          if (!savedProvider) continue;
+          const providerIndex = activeState.providers.findIndex((p) => p.id === savedProvider.id);
+          if (providerIndex >= 0) activeState.providers[providerIndex] = savedProvider;
+          else activeState.providers.push(savedProvider);
+        }
         activeAgent =
           activeState.agents.find((a) => a.id === startMsg.agentId) || activeState.agents[0];
         activeCampaign = startMsg.campaignId
           ? activeState.campaigns.find((c) => c.id === startMsg.campaignId)
           : activeState.campaigns.find((c) => c.agentId === activeAgent!.id);
+
+        const sessionState = activeState;
+        const missingGlobalServices = (['stt', 'llm', 'tts'] as const).filter((kind) => {
+          const selected = sessionState?.services?.[kind];
+          return !sessionState?.providers.some((p) => p.kind === kind && p.id === selected?.providerId) || !String(selected?.model || '').trim();
+        });
+        if (missingGlobalServices.length > 0) {
+          sendFatalError(
+            'GLOBAL_SERVICES_UNCONFIGURED',
+            `Select and save one global provider/model for ${missingGlobalServices.join(', ')} on the Plug-Ins page before starting a session.`
+          );
+          clientWs.close(1008, 'Global service selections are required');
+          return;
+        }
 
         const bandwidth = startMsg.bandwidth === 'telephony' ? 'telephony' : 'wideband';
         sampleRateIn = bandwidth === 'telephony' ? 8000 : 16000;

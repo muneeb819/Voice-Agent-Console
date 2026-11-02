@@ -8,11 +8,11 @@
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",
     "build": "tsc",
-    "test:step1": "tsx tests/step1-verify.ts",
-    "test:step2": "tsx tests/step2-verify.ts",
-    "test:step3": "tsx tests/step3-verify.ts",
-    "test:step4": "tsx tests/step4-verify.ts",
-    "test": "tsx tests/step1-verify.ts && tsx tests/step2-verify.ts && tsx tests/step3-verify.ts && tsx tests/step4-verify.ts"
+    "test:step1": "node tools/run-tests.js step1",
+    "test:step2": "node tools/run-tests.js step2",
+    "test:step3": "node tools/run-tests.js step3",
+    "test:step4": "node tools/run-tests.js step4",
+    "test": "node tools/run-tests.js"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

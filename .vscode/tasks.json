@@ -1,22 +1,41 @@
 {
-  "version": "2.0.0",
-  "tasks": [
-    {
-      "type": "npm",
-      "script": "build",
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      },
-      "problemMatcher": ["$tsc"],
-      "label": "npm: build"
-    },
-    {
-      "type": "npm",
-      "script": "test",
-      "group": "test",
-      "problemMatcher": [],
-      "label": "npm: test"
-    }
-  ]
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"type": "shell",
+			"command": "npm run build",
+			"windows": {
+				"command": "npm.cmd run build"
+			},
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"problemMatcher": [
+				"$tsc"
+			],
+			"label": "npm: build"
+		},
+		{
+			"type": "shell",
+			"command": "npm test",
+			"windows": {
+				"command": "npm.cmd test"
+			},
+			"group": "test",
+			"problemMatcher": [],
+			"label": "npm: test"
+		},
+		{
+			"label": "Audit Full QA",
+			"type": "shell",
+			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"args": [
+				"F:\\Voice-Agent-Console\\tools\\run-tests.js"
+			],
+			"isBackground": false,
+			"problemMatcher": [],
+			"group": "test"
+		}
+	]
 }

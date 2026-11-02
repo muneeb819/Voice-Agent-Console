@@ -121,8 +121,14 @@ export function deepgramModelsForProviderType(providerType: string): string[] {
 
 export function createDefaultState(): ConsoleState {
   return {
-    version: 3,
+    version: 4,
     updatedAt: new Date().toISOString(),
+    // Intentionally unset: an operator must select and save one global provider/model per service.
+    services: {
+      stt: { providerId: '', model: '' },
+      llm: { providerId: '', model: '' },
+      tts: { providerId: '', model: '' },
+    },
     providers: [
       makeProvider('s1', 'stt', 'Deepgram STT', 'deepgram', VOICE_AGENT_STT_MODELS.join(',')),
       makeProvider(
@@ -161,23 +167,6 @@ export function createDefaultState(): ConsoleState {
         'deepgram',
         'flux-haley-en,flux-kit-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en'
       ),
-      makeProvider('t2', 'tts', 'ElevenLabs (BYO Streaming)', 'eleven_labs', 'eleven_turbo_v2_5,eleven_v3', {
-        mk: 'model_id',
-        endpoint: 'wss://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM/multi-stream-input',
-        headers: '{"xi-api-key":"{{ELEVENLABS_API_KEY}}"}',
-        extra: '{"language_code":"en-US"}',
-      }),
-      makeProvider('t3', 'tts', 'Cartesia (Deepgram Managed)', 'cartesia', 'sonic-2,sonic-3', {
-        mk: 'model_id',
-        headers: '{}',
-        extra: '{"voice":{"mode":"id","id":"a167e0f3-df7e-4d52-a9c3-f949145efdab"}}',
-      }),
-      makeProvider('t4', 'tts', 'Cartesia (BYO Endpoint)', 'cartesia', 'sonic-2', {
-        mk: 'model_id',
-        endpoint: 'https://api.cartesia.ai/tts/bytes',
-        headers: '{"x-api-key":"{{CARTESIA_API_KEY}}"}',
-        extra: '{"voice":{"mode":"id","id":"a167e0f3-df7e-4d52-a9c3-f949145efdab"},"language":"en"}',
-      }),
     ],
     functions: [
       makeFn(
@@ -248,8 +237,6 @@ export function createDefaultState(): ConsoleState {
           selfIntro: defaultSelfIntroForAgent('a1', 'Final Expense Fronter'),
         },
         stt: {
-          p: 's1',
-          model: 'flux-general-en',
           keyterms: 'final expense, burial insurance, Medicare, beneficiary',
           eot: 0.55,
           eager: 0.35,
@@ -257,15 +244,10 @@ export function createDefaultState(): ConsoleState {
           smartFormat: false,
         },
         llm: {
-          p: 'l1',
-          model: 'gpt-4o-mini',
           temp: 0.65,
           reasoning: 'low',
-          ctx: '',
         },
         tts: {
-          p: 't1',
-          model: 'flux-haley-en',
           speed: 1.05,
           expr: 1,
         },
@@ -337,8 +319,6 @@ export function createDefaultState(): ConsoleState {
           selfIntro: defaultSelfIntroForAgent('a_medicare', 'Medicare — Food & OTC Advisor'),
         },
         stt: {
-          p: 's1',
-          model: 'flux-general-multi',
           keyterms: 'Medicare, Part A, Part B, OTC card, groceries, dental, Benefits Department, Hablo español',
           eot: 0.55,
           eager: 0.35,
@@ -346,15 +326,10 @@ export function createDefaultState(): ConsoleState {
           smartFormat: false,
         },
         llm: {
-          p: 'l1',
-          model: 'gpt-4o-mini',
           temp: 0.45,
           reasoning: 'low',
-          ctx: '',
         },
         tts: {
-          p: 't1',
-          model: 'flux-haley-en',
           speed: 1.05,
           expr: 1,
         },
@@ -394,8 +369,6 @@ export function createDefaultState(): ConsoleState {
           selfIntro: defaultSelfIntroForAgent('a_nova', 'Nova'),
         },
         stt: {
-          p: 's1',
-          model: 'flux-general-en',
           keyterms: 'Nova, Deepgram, barge-in, introduce yourself',
           eot: 0.55,
           eager: 0.35,
@@ -403,15 +376,10 @@ export function createDefaultState(): ConsoleState {
           smartFormat: false,
         },
         llm: {
-          p: 'l1',
-          model: 'gpt-4o-mini',
           temp: 0.65,
           reasoning: 'low',
-          ctx: '',
         },
         tts: {
-          p: 't1',
-          model: 'flux-haley-en',
           speed: 1.05,
           expr: 1,
         },
@@ -678,6 +646,14 @@ export function normalizeState(raw: any): ConsoleState {
     }
   }
 
+  // Only Deepgram-backed TTS routes are supported by this console (it holds a
+  // single server-side DEEPGRAM_API_KEY). Drop legacy BYO TTS providers from
+  // saved state so the UI only offers routes that actually work.
+  for (let i = providers.length - 1; i >= 0; i -= 1) {
+    const p = providers[i];
+    if (p.kind === 'tts' && p.type !== 'deepgram') providers.splice(i, 1);
+  }
+
   // Ensure at least one provider per kind exists
   for (const kind of ['stt', 'llm', 'tts'] as const) {
     if (!providers.some((p) => p.kind === kind)) {
@@ -685,6 +661,30 @@ export function normalizeState(raw: any): ConsoleState {
       providers.push({ ...fallback });
     }
   }
+
+  const normalizeSelection = (kind: Provider['kind']) => {
+    const rawSelection = src.services?.[kind] || {};
+    const provider = providers.find((p) => p.kind === kind && p.id === String(rawSelection.providerId || ''));
+    const model = String(rawSelection.model || '').trim();
+    if (!provider || !model) return { providerId: '', model: '' };
+    if (kind === 'stt') {
+      return provider.type === 'deepgram' && VOICE_AGENT_STT_MODELS.includes(model as VoiceAgentSttModel)
+        ? { providerId: provider.id, model }
+        : { providerId: '', model: '' };
+    }
+    if (kind === 'llm') {
+      return deepgramModelsForProviderType(provider.type).includes(model)
+        ? { providerId: provider.id, model }
+        : { providerId: '', model: '' };
+    }
+    const allowedModels = provider.models.split(',').map((entry) => entry.trim()).filter(Boolean);
+    return allowedModels.includes(model) ? { providerId: provider.id, model } : { providerId: '', model: '' };
+  };
+  const services: ConsoleState['services'] = {
+    stt: normalizeSelection('stt'),
+    llm: normalizeSelection('llm'),
+    tts: normalizeSelection('tts'),
+  };
 
   const num = (val: any, fallback: number): number => {
     const n = Number(val);
@@ -745,39 +745,20 @@ export function normalizeState(raw: any): ConsoleState {
             a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : true,
           behavior,
           stt: {
-            p: String(a.stt?.p || providers.find((p) => p.kind === 'stt')!.id),
-            model: normalizeVoiceAgentSttModel(a.stt?.model, String(a.language || 'en')),
             keyterms: String(a.stt?.keyterms ?? ''),
             eot: num(a.stt?.eot, 0.55),
             eager: num(a.stt?.eager, 0.35),
             eotms: Math.round(num(a.stt?.eotms, 2000)),
             smartFormat: Boolean(a.stt?.smartFormat),
           },
-          llm: (() => {
-            const firstLlm = providers.find((p) => p.kind === 'llm')!;
-            const chosenProv =
-              providers.find((p) => p.kind === 'llm' && p.id === String(a.llm?.p || '')) || firstLlm;
-            const allowedModels = deepgramModelsForProviderType(chosenProv.type);
-            const rawModel = String(a.llm?.model || '').trim();
-            const safeModel = allowedModels.includes(rawModel)
-              ? rawModel
-              : chosenProv.type === 'open_ai' && allowedModels.includes('gpt-5-mini')
-              ? 'gpt-5-mini'
-              : allowedModels[0] || 'gpt-5-mini';
-            return {
-              p: chosenProv.id,
-              model: safeModel,
-              temp: num(a.llm?.temp, 0.7),
-              reasoning: (['low', 'medium', 'high'].includes(a.llm?.reasoning) ? a.llm.reasoning : 'low') as
-                | 'low'
-                | 'medium'
-                | 'high',
-              ctx: '',
-            };
-          })(),
+          llm: {
+            temp: num(a.llm?.temp, 0.7),
+            reasoning: (['low', 'medium', 'high'].includes(a.llm?.reasoning) ? a.llm.reasoning : 'low') as
+              | 'low'
+              | 'medium'
+              | 'high',
+          },
           tts: {
-            p: String(a.tts?.p || providers.find((p) => p.kind === 'tts')!.id),
-            model: String(a.tts?.model || 'flux-haley-en'),
             speed: num(a.tts?.speed, 1.0),
             expr: Math.round(num(a.tts?.expr, 0)),
           },
@@ -866,8 +847,9 @@ export function normalizeState(raw: any): ConsoleState {
   }
 
   return {
-    version: 3,
+    version: 4,
     updatedAt: new Date().toISOString(),
+    services,
     providers,
     functions,
     agents,

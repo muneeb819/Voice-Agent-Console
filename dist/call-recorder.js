@@ -9,7 +9,8 @@ exports.pruneOldRecordings = pruneOldRecordings;
 exports.clearAllRecordings = clearAllRecordings;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-exports.RECORDINGS_DIR = path_1.default.resolve(__dirname, '..', 'data', 'recordings');
+const data_paths_1 = require("./data-paths");
+exports.RECORDINGS_DIR = path_1.default.join(data_paths_1.DATA_DIR, 'recordings');
 const MAX_SAMPLE_FRAMES = 8000 * 60 * 15; // Cap per-call buffer at 15 minutes (8 kHz)
 const MAX_STORED_RECORDINGS = 200;
 /**

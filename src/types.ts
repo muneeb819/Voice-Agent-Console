@@ -44,8 +44,6 @@ export interface Agent {
   injectCampaignDisclosure: boolean; // Prepends campaign disclosure to greeting when linked
   behavior: AgentBehavior;
   stt: {
-    p: string;
-    model: string;
     keyterms: string;
     eot: number;
     eager: number;
@@ -53,15 +51,10 @@ export interface Agent {
     smartFormat: boolean;
   };
   llm: {
-    p: string;
-    model: string;
     temp: number;
     reasoning: 'low' | 'medium' | 'high';
-    ctx: string;
   };
   tts: {
-    p: string;
-    model: string;
     speed: number;
     expr: number;
   };
@@ -120,9 +113,19 @@ export interface TestScenario {
   n: string;
 }
 
+export interface GlobalServiceSelection {
+  providerId: string;
+  model: string;
+}
+
 export interface ConsoleState {
   version: number;
   updatedAt: string;
+  services: {
+    stt: GlobalServiceSelection;
+    llm: GlobalServiceSelection;
+    tts: GlobalServiceSelection;
+  };
   providers: Provider[];
   functions: AgentFunction[];
   agents: Agent[];

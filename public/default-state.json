@@ -1,6 +1,11 @@
 {
-  "version": 3,
+  "version": 4,
   "updatedAt": "2026-10-28T00:50:44.583Z",
+  "services": {
+    "stt": { "providerId": "", "model": "" },
+    "llm": { "providerId": "", "model": "" },
+    "tts": { "providerId": "", "model": "" }
+  },
   "providers": [
     {
       "id": "s1",
@@ -165,8 +170,6 @@
         "selfIntro": "Hi! I'm Sarah, a live Senior Coverage Coordinator. I help folks explore final expense options and connect with our licensed specialists, and I'm always happy to answer your questions too!"
       },
       "stt": {
-        "p": "s1",
-        "model": "flux-general-en",
         "keyterms": "final expense, burial insurance, Medicare, beneficiary",
         "eot": 0.55,
         "eager": 0.35,
@@ -174,15 +177,10 @@
         "smartFormat": false
       },
       "llm": {
-        "p": "l1",
-        "model": "gpt-4o-mini",
         "temp": 0.65,
-        "reasoning": "low",
-        "ctx": ""
+        "reasoning": "low"
       },
       "tts": {
-        "p": "t1",
-        "model": "flux-haley-en",
         "speed": 1.05,
         "expr": 1
       },
@@ -217,8 +215,6 @@
         "selfIntro": "Hi! I'm Haley, a live Benefits Advisor calling from the Benefits Department. I help Medicare beneficiaries check their Food and OTC allowance eligibility, and I'm happy to answer any questions you have along the way!"
       },
       "stt": {
-        "p": "s1",
-        "model": "flux-general-multi",
         "keyterms": "Medicare, Part A, Part B, OTC card, groceries, dental, Benefits Department, Hablo español",
         "eot": 0.55,
         "eager": 0.35,
@@ -226,15 +222,10 @@
         "smartFormat": false
       },
       "llm": {
-        "p": "l1",
-        "model": "gpt-4o-mini",
         "temp": 0.45,
-        "reasoning": "low",
-        "ctx": ""
+        "reasoning": "low"
       },
       "tts": {
-        "p": "t1",
-        "model": "flux-haley-en",
         "speed": 1.05,
         "expr": 1
       },
@@ -269,8 +260,6 @@
         "selfIntro": "Hi there! I'm Nova, a live Customer Support & Concierge Specialist here on the line. I'm happy to chat naturally and help answer any general knowledge, everyday, or support question you have!"
       },
       "stt": {
-        "p": "s1",
-        "model": "flux-general-en",
         "keyterms": "Nova, Deepgram, barge-in, introduce yourself",
         "eot": 0.55,
         "eager": 0.35,
@@ -278,15 +267,10 @@
         "smartFormat": false
       },
       "llm": {
-        "p": "l1",
-        "model": "gpt-4o-mini",
         "temp": 0.65,
-        "reasoning": "low",
-        "ctx": ""
+        "reasoning": "low"
       },
       "tts": {
-        "p": "t1",
-        "model": "flux-haley-en",
         "speed": 1.05,
         "expr": 1
       },

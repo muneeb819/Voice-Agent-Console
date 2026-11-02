@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import { DATA_DIR } from './data-paths';
 
-export const RECORDINGS_DIR = path.resolve(__dirname, '..', 'data', 'recordings');
+export const RECORDINGS_DIR = path.join(DATA_DIR, 'recordings');
 const MAX_SAMPLE_FRAMES = 8000 * 60 * 15; // Cap per-call buffer at 15 minutes (8 kHz)
 const MAX_STORED_RECORDINGS = 200;
 

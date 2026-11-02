@@ -52,6 +52,31 @@ if [ ! -f "${INSTALL_DIR}/.env" ]; then
   fi
 fi
 
+if ! grep -Eq '^ADMIN_PASSWORD=.+$' "${INSTALL_DIR}/.env"; then
+  GENERATED_PASS="$(openssl rand -hex 24 2>/dev/null || head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  if grep -q '^ADMIN_PASSWORD=' "${INSTALL_DIR}/.env"; then
+    sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=${GENERATED_PASS}/" "${INSTALL_DIR}/.env"
+  else
+    printf '\nADMIN_PASSWORD=%s\n' "${GENERATED_PASS}" >> "${INSTALL_DIR}/.env"
+  fi
+  echo "Generated a strong ADMIN_PASSWORD in ${INSTALL_DIR}/.env."
+fi
+
+if grep -q '^HOST=' "${INSTALL_DIR}/.env"; then
+  sed -i 's/^HOST=.*/HOST=0.0.0.0/' "${INSTALL_DIR}/.env"
+else
+  printf '\nHOST=0.0.0.0\n' >> "${INSTALL_DIR}/.env"
+fi
+
+if ! grep -Eq '^BRIDGE_ALLOWED_IPS=.+$' "${INSTALL_DIR}/.env"; then
+  if grep -q '^BRIDGE_ALLOWED_IPS=' "${INSTALL_DIR}/.env"; then
+    sed -i 's/^BRIDGE_ALLOWED_IPS=.*/BRIDGE_ALLOWED_IPS=127.0.0.1,::1/' "${INSTALL_DIR}/.env"
+  else
+    printf '\nBRIDGE_ALLOWED_IPS=127.0.0.1,::1\n' >> "${INSTALL_DIR}/.env"
+  fi
+fi
+chmod 600 "${INSTALL_DIR}/.env"
+
 echo "=== [3/5] Installing dependencies & building TypeScript ==="
 cd "${INSTALL_DIR}"
 npm ci --include=dev || npm install

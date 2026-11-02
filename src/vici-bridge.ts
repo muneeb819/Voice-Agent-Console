@@ -232,7 +232,7 @@ export class VicidialBridgeService {
 
   constructor(opts: ViciBridgeOptions = {}) {
     const st = getConsoleState();
-    this.host = opts.host || process.env.BRIDGE_BIND_HOST || '0.0.0.0';
+    this.host = opts.host || process.env.BRIDGE_BIND_HOST || '127.0.0.1';
     this.audioSocketPort =
       opts.audioSocketPort !== undefined
         ? opts.audioSocketPort
@@ -274,6 +274,7 @@ export class VicidialBridgeService {
   public getStatus() {
     return {
       ...this.stats,
+      bindHost: this.host,
       audioSocketPort: this.audioSocketPort,
       sipPort: this.sipPort,
       activeCallsCount: this.activeCalls.size,
@@ -914,6 +915,21 @@ export class VicidialBridgeService {
     const startedAtIso = new Date().toISOString();
     const startedAtMs = Date.now();
     const recorder = new StereoCallRecorder8k(startedAtMs);
+
+    const missingGlobalServices = (['stt', 'llm', 'tts'] as const).filter((kind) => {
+      const selected = state.services?.[kind];
+      const provider = state.providers.find((p) => p.kind === kind && p.id === selected?.providerId);
+      return !provider || !String(selected?.model || '').trim();
+    });
+    if (missingGlobalServices.length > 0) {
+      this.stats.lastError = `Global services not configured: ${missingGlobalServices.join(', ')}`;
+      opts.hooks.hangupTransport();
+      return {
+        onCallerPcm8k: () => {},
+        onCallerDtmf: () => {},
+        onTransportClosed: () => {},
+      };
+    }
 
     if (this.isCampaignOverCapacity(campaign)) {
       this.stats.rejectedOverCapacityCount += 1;

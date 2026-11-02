@@ -3,11 +3,15 @@ services:
     name: voice-agent-console
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build
+    buildCommand: npm ci && npm run build
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
         value: 22.14.0
       - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: HOST
+        value: 0.0.0.0
+      - key: ADMIN_PASSWORD
         sync: false

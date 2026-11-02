@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="MMA monogram">
+  <g fill="none" stroke="#ffffff" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M32 2.6A29.4 29.4 0 0 1 52.8 11.2" stroke-width="2.2" opacity="0.55"/>
+    <path d="M61.4 32a29.4 29.4 0 0 1-8.6 20.8" stroke-width="2.2" opacity="0.55"/>
+    <path d="M32 61.4a29.4 29.4 0 0 1-20.8-8.6" stroke-width="2.2" opacity="0.55"/>
+    <path d="M2.6 32A29.4 29.4 0 0 1 11.2 11.2" stroke-width="2.2" opacity="0.55"/>
+    <path d="M17.5 47.5V16.5L32 34.5l14.5-18v31" stroke-width="6.2"/>
+  </g>
+</svg>

@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 220" role="img" aria-label="MMA Digital Labs - Voice Agent Bots Console">
+  <defs>
+    <linearGradient id="steel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f2f5f8"/>
+      <stop offset="0.35" stop-color="#c3ccd6"/>
+      <stop offset="0.52" stop-color="#98a3af"/>
+      <stop offset="0.7" stop-color="#c9d2db"/>
+      <stop offset="1" stop-color="#8e98a4"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="0.4" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="cy" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#00F2FE"/>
+      <stop offset="1" stop-color="#7B2CBF"/>
+    </linearGradient>
+    <linearGradient id="cy2" x1="1" y1="0" x2="0" y2="0">
+      <stop offset="0" stop-color="#00F2FE"/>
+      <stop offset="1" stop-color="#7B2CBF"/>
+    </linearGradient>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect x="3" y="3" width="634" height="214" rx="16" fill="url(#steel)" stroke="#5d6773" stroke-width="2"/>
+  <rect x="3" y="3" width="634" height="214" rx="16" fill="url(#sheen)"/>
+  <rect x="14" y="14" width="612" height="192" rx="11" fill="#0B0F14"/>
+
+  <g fill="#c9d2db" opacity="0.85">
+    <circle cx="27" cy="27" r="4.5"/><circle cx="613" cy="27" r="4.5"/>
+    <circle cx="27" cy="193" r="4.5"/><circle cx="613" cy="193" r="4.5"/>
+  </g>
+  <g stroke="#7d8794" stroke-width="1.5" opacity="0.9">
+    <line x1="27" y1="22" x2="27" y2="32"/><line x1="22" y1="27" x2="32" y2="27"/>
+    <line x1="613" y1="22" x2="613" y2="32"/><line x1="608" y1="27" x2="618" y2="27"/>
+    <line x1="27" y1="188" x2="27" y2="198"/><line x1="22" y1="193" x2="32" y2="193"/>
+    <line x1="613" y1="188" x2="613" y2="198"/><line x1="608" y1="193" x2="618" y2="193"/>
+  </g>
+
+  <g filter="url(#glow)" fill="url(#cy)" opacity="0.95">
+    <rect x="52"  y="96"  width="4" height="18" rx="2"/>
+    <rect x="62"  y="86"  width="4" height="38" rx="2"/>
+    <rect x="72"  y="72"  width="4" height="66" rx="2"/>
+    <rect x="82"  y="90"  width="4" height="30" rx="2"/>
+    <rect x="92"  y="80"  width="4" height="50" rx="2"/>
+    <rect x="102" y="64"  width="4" height="82" rx="2"/>
+    <rect x="112" y="88"  width="4" height="34" rx="2"/>
+    <rect x="122" y="76"  width="4" height="58" rx="2"/>
+    <rect x="132" y="96"  width="4" height="18" rx="2"/>
+    <rect x="142" y="82"  width="4" height="46" rx="2"/>
+    <rect x="152" y="70"  width="4" height="70" rx="2"/>
+    <rect x="162" y="92"  width="4" height="26" rx="2"/>
+  </g>
+
+  <g filter="url(#glow)" fill="url(#cy2)" opacity="0.95">
+    <rect x="474" y="92"  width="4" height="26" rx="2"/>
+    <rect x="484" y="70"  width="4" height="70" rx="2"/>
+    <rect x="494" y="82"  width="4" height="46" rx="2"/>
+    <rect x="504" y="96"  width="4" height="18" rx="2"/>
+    <rect x="514" y="76"  width="4" height="58" rx="2"/>
+    <rect x="524" y="88"  width="4" height="34" rx="2"/>
+    <rect x="534" y="64"  width="4" height="82" rx="2"/>
+    <rect x="544" y="80"  width="4" height="50" rx="2"/>
+    <rect x="554" y="90"  width="4" height="30" rx="2"/>
+    <rect x="564" y="72"  width="4" height="66" rx="2"/>
+    <rect x="574" y="86"  width="4" height="38" rx="2"/>
+    <rect x="584" y="96"  width="4" height="18" rx="2"/>
+  </g>
+
+  <g filter="url(#glow)">
+    <path d="M286 142 V78 L320 116 L354 78 V142" fill="none" stroke="#00F2FE" stroke-width="7"
+          stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M286 142 V78 L320 116 L354 78 V142" fill="none" stroke="#7B2CBF" stroke-width="2.5"
+          stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+  </g>
+  <g fill="#00F2FE" filter="url(#glow)" opacity="0.9">
+    <circle cx="286" cy="78" r="3.4"/><circle cx="354" cy="78" r="3.4"/>
+    <circle cx="320" cy="116" r="3.4"/><circle cx="286" cy="142" r="3.4"/><circle cx="354" cy="142" r="3.4"/>
+  </g>
+
+  <text x="320" y="186" text-anchor="middle" fill="#dbe4ee"
+        font-family="'Segoe UI', Arial, sans-serif" font-size="15" letter-spacing="2.4">
+    MMA DIGITAL LABS  -  VOICE AGENT BOTS CONSOLE
+  </text>
+</svg>

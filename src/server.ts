@@ -17,7 +17,11 @@ import {
   clearAuthCookie,
   constantTimePasswordMatch,
   createSessionToken,
+  getAuthenticatedUser,
+  getRequestSessionToken,
+  invalidateUserCountCache,
   isAuthEnabled,
+  isLoopbackIp,
   isRequestAuthorized,
   setAuthCookie,
 } from './auth-guard';
@@ -34,6 +38,7 @@ import {
   saveConsoleState,
 } from './db';
 import { createDefaultState } from './defaults';
+import { DATA_DIR } from './data-paths';
 import {
   fetchAllowedSampleAudio,
   fetchDeepgramLlmModels,
@@ -58,11 +63,21 @@ import { VicidialBridgeService, ViciBridgeOptions } from './vici-bridge';
 import { parseVicidialCallerCode, VicidialApiClient } from './vici-client';
 import { runSimulatedViciBridgeCall } from './vici-loopback-tester';
 import { executeCustomFunctionWebhook } from './webhook-executor';
+import {
+  authenticateUser,
+  createUser,
+  createUserSession,
+  destroyUserSession,
+  purgeExpiredSessions,
+} from './user-store';
 
 loadEnv();
 
 export function createApp(viciBridge?: VicidialBridgeService) {
   const app = express();
+  const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+  const loginWindowMs = 15 * 60 * 1000;
+  const loginAttemptLimit = 5;
 
   app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -80,30 +95,134 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   // ==================== STEP 4: AUTHENTICATION ROUTES & GUARD ====================
 
+  const rateKey = (req: Request): string => String(req.socket?.remoteAddress || req.ip || 'unknown');
+
+  const rateLimited = (key: string): { limited: boolean; retryAfter: number } => {
+    const now = Date.now();
+    const attempts = loginAttempts.get(key);
+    if (attempts && attempts.resetAt <= now) {
+      loginAttempts.delete(key);
+      return { limited: false, retryAfter: 0 };
+    }
+    if (attempts && attempts.count >= loginAttemptLimit) {
+      return { limited: true, retryAfter: Math.max(1, Math.ceil((attempts.resetAt - now) / 1000)) };
+    }
+    return { limited: false, retryAfter: 0 };
+  };
+
+  const noteFailure = (key: string): void => {
+    const now = Date.now();
+    let attempts = loginAttempts.get(key);
+    if (!attempts || attempts.resetAt <= now) {
+      if (loginAttempts.size >= 1000) {
+        const oldestIp = loginAttempts.keys().next().value;
+        if (oldestIp) loginAttempts.delete(oldestIp);
+      }
+      attempts = { count: 0, resetAt: now + loginWindowMs };
+      loginAttempts.set(key, attempts);
+    }
+    attempts.count += 1;
+  };
+
   app.get('/api/auth/status', (req: Request, res: Response) => {
     res.json({
       ok: true,
       authEnabled: isAuthEnabled(),
       authenticated: isRequestAuthorized(req),
+      user: getAuthenticatedUser(req),
+      signupOpen: true,
+    });
+  });
+
+  app.get('/api/auth/me', (req: Request, res: Response) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, code: 'AUTH_REQUIRED', error: 'Not signed in.' });
+      return;
+    }
+    res.json({ ok: true, user });
+  });
+
+  // Create a new account (email + full name + password) and sign in immediately.
+  app.post('/api/auth/signup', (req: Request, res: Response) => {
+    const key = rateKey(req);
+    const gate = rateLimited(key);
+    if (gate.limited) {
+      res.setHeader('Retry-After', String(gate.retryAfter));
+      res.status(429).json({ ok: false, code: 'SIGNUP_RATE_LIMITED', error: 'Too many attempts. Try again later.' });
+      return;
+    }
+
+    const result = createUser(req.body || {});
+    if (!result.ok || !result.user) {
+      res.status(400).json({
+        ok: false,
+        code: 'SIGNUP_INVALID',
+        field: result.field || null,
+        error: result.error || 'Unable to create account.',
+      });
+      return;
+    }
+
+    loginAttempts.delete(key);
+    invalidateUserCountCache();
+    purgeExpiredSessions();
+
+    const token = createUserSession(result.user.id);
+    setAuthCookie(res, token);
+    res.status(201).json({
+      ok: true,
+      authEnabled: true,
+      authenticated: true,
+      user: result.user,
     });
   });
 
   app.post('/api/auth/login', (req: Request, res: Response) => {
+    const key = rateKey(req);
+    const gate = rateLimited(key);
+    if (gate.limited) {
+      res.setHeader('Retry-After', String(gate.retryAfter));
+      res.status(429).json({ ok: false, code: 'LOGIN_RATE_LIMITED', error: 'Too many failed sign-in attempts. Try again later.' });
+      return;
+    }
+
+    const email = String(req.body?.email ?? '').trim();
     const candidate = String(req.body?.password ?? '');
+
+    // --- Email/password account sign-in ---
+    if (email) {
+      const user = authenticateUser(email, candidate);
+      if (!user) {
+        noteFailure(key);
+        res.status(401).json({ ok: false, code: 'INVALID_CREDENTIALS', error: 'Invalid email or password.' });
+        return;
+      }
+      loginAttempts.delete(key);
+      const token = createUserSession(user.id);
+      setAuthCookie(res, token);
+      res.json({ ok: true, authEnabled: true, authenticated: true, user });
+      return;
+    }
+
+    // --- Legacy admin password sign-in ---
     if (!isAuthEnabled()) {
       res.json({ ok: true, authEnabled: false, authenticated: true });
       return;
     }
     if (!constantTimePasswordMatch(candidate)) {
+      noteFailure(key);
       res.status(401).json({ ok: false, code: 'INVALID_PASSWORD', error: 'Invalid admin password' });
       return;
     }
+    loginAttempts.delete(key);
     const token = createSessionToken();
     setAuthCookie(res, token);
     res.json({ ok: true, authEnabled: true, authenticated: true, token });
   });
 
-  app.post('/api/auth/logout', (_req: Request, res: Response) => {
+  app.post('/api/auth/logout', (req: Request, res: Response) => {
+    destroyUserSession(getRequestSessionToken(req));
     clearAuthCookie(res);
     res.json({ ok: true, authEnabled: isAuthEnabled(), authenticated: !isAuthEnabled() });
   });
@@ -150,7 +269,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       authenticated: authed,
       websocket: '/ws/simulator',
       viciMonitorWs: '/ws/vici-monitor',
-      viciBridge: viciBridge ? viciBridge.getStatus() : null,
+      ...(authed ? { viciBridge: viciBridge ? viciBridge.getStatus() : null } : {}),
       ...(authed ? { secrets: getSecretsStatus() } : {}),
     });
   });
@@ -418,7 +537,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   });
 
   app.get('/api/vici/release-bundle', (_req: Request, res: Response) => {
-    const bundlePath = path.resolve(__dirname, '..', '..', 'voice-agent-vicibox-release.tar.gz');
+    const bundlePath = path.join(DATA_DIR, 'voice-agent-vicibox-release.tar.gz');
     try {
       if (!fs.existsSync(bundlePath)) {
         const projectRoot = path.resolve(__dirname, '..');
@@ -428,9 +547,12 @@ export function createApp(viciBridge?: VicidialBridgeService) {
             '-czf',
             bundlePath,
             '--exclude=node_modules',
-            '--exclude=data/recordings/*.wav',
-            '--exclude=data/*.sqlite*',
+            '--exclude=.git',
             '--exclude=.env',
+            '--exclude=data',
+            '--exclude=logs',
+            '--exclude=logs/*',
+            '--exclude=tools/cloudflared.exe',
             '-C',
             path.dirname(projectRoot),
             path.basename(projectRoot),
@@ -610,6 +732,14 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   const publicDir = path.resolve(__dirname, '..', 'public');
   app.use(express.static(publicDir));
 
+  // Dedicated authentication pages (same shell, tabbed Sign In / Sign Up)
+  app.get('/login', (_req: Request, res: Response) => {
+    res.sendFile(path.join(publicDir, 'login.html'));
+  });
+  app.get('/signup', (_req: Request, res: Response) => {
+    res.sendFile(path.join(publicDir, 'login.html'));
+  });
+
   app.get('*', (_req: Request, res: Response) => {
     res.sendFile(path.join(publicDir, 'index.html'));
   });
@@ -651,7 +781,11 @@ export function createServerWithSimulator(bridgeOpts?: ViciBridgeOptions & { ena
 
 if (require.main === module) {
   const initialPort = Number(process.env.PORT || 3000);
-  const host = process.env.HOST || '0.0.0.0';
+  const host = process.env.HOST || '127.0.0.1';
+  if (!isLoopbackIp(host) && !isAuthEnabled()) {
+    console.error('[VoiceAgentConsole] Refusing to bind to a non-loopback interface without ADMIN_PASSWORD.');
+    process.exit(1);
+  }
   const { server, viciBridge } = createServerWithSimulator({ enableBridge: true });
 
   (async () => {
@@ -660,7 +794,7 @@ if (require.main === module) {
         await viciBridge.start();
         const st = viciBridge.getStatus();
         console.log(
-          `[ViciBridge] AudioSocket TCP listening on ${host}:${st.audioSocketPort} | SIP+RTP (PCMU) UDP listening on ${host}:${st.sipPort}`
+          `[ViciBridge] AudioSocket TCP listening on ${st.bindHost}:${st.audioSocketPort} | SIP+RTP (PCMU) UDP listening on ${st.bindHost}:${st.sipPort}`
         );
       } catch (bridgeErr: any) {
         console.warn(

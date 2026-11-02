@@ -1,4 +1,4 @@
-# Dependencies (dist/ is committed pre-built so 'npm start' works out of the box!)
+﻿# Dependencies (dist/ is committed pre-built so 'npm start' works out of the box!)
 node_modules/
 
 # Server secrets (never commit live API keys!)
@@ -15,3 +15,9 @@ data/recordings/*.wav
 # OS / Editor
 .DS_Store
 *.log
+
+# Local tunnel binary (large, machine-specific)
+tools/cloudflared.exe
+
+# Runtime logs
+logs/

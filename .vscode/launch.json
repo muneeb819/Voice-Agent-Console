@@ -12,7 +12,14 @@
       "args": ["src/server.ts"],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "envFile": "${workspaceFolder}/.env"
+      "envFile": "${workspaceFolder}/.env",
+      "env": {
+        "HOST": "127.0.0.1",
+        "PORT": "3850",
+        "BRIDGE_BIND_HOST": "127.0.0.1",
+        "AUDIOSOCKET_PORT": "19092",
+        "BRIDGE_SIP_PORT": "15062"
+      }
     },
     {
       "name": "Run Production Build (dist/server.js)",
@@ -25,14 +32,10 @@
       "envFile": "${workspaceFolder}/.env"
     },
     {
-      "name": "Run Full 36-Check Verification Suite",
+      "name": "Run Full Isolated Verification Suite",
       "type": "node",
       "request": "launch",
-      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/tsx",
-      "windows": {
-        "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/tsx.cmd"
-      },
-      "args": ["tests/step4-verify.ts"],
+      "program": "${workspaceFolder}/tools/run-tests.js",
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
       "envFile": "${workspaceFolder}/.env"

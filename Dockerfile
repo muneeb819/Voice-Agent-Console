@@ -10,7 +10,7 @@ WORKDIR /home/appuser/app
 
 COPY --chown=appuser:appuser package.json package-lock.json ./
 USER appuser
-RUN npm install --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 
 COPY --chown=appuser:appuser . .
 RUN npm run build && mkdir -p data/recordings

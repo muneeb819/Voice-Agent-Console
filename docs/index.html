@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en" data-theme="obsidian" data-exposure="studio" data-glass="frosted">
 <head>
   <meta charset="utf-8" />
@@ -6,14 +6,17 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <title>Voice Agent Console — AI Telephony &amp; VICIdial Studio</title>
+  <title>Voice Agent Console - AI Telephony &amp; VICIdial Studio</title>
+  <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+  <link rel="apple-touch-icon" href="./assets/monogram.svg" />
+  <meta name="theme-color" content="#0B0F14" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=elite-2.10" />
+  <link rel="stylesheet" href="./styles.css?v=elite-2.13" />
   <script>
     (function () {
-      var CURRENT_BUILD = 'elite-2.10';
+      var CURRENT_BUILD = 'elite-2.13';
       // Keep the browser URL bar permanently clean (strip any legacy ?v= or ?cb= query params)
       try {
         if (window.location.search && /^[?&](v|cb|_)=/.test(window.location.search)) {
@@ -52,16 +55,13 @@
     </button>
 
     <div class="brand">
-      <div class="brand-mark" aria-hidden="true">
-        <span class="brand-glyph">🎙️</span>
-        <span class="brand-pulse"></span>
-      </div>
+      <span class="brand-mark" id="brand-mark" aria-hidden="true"></span>
       <div class="brand-copy">
         <div class="brand-row">
-          <h1>Voice Agent Console</h1>
+          <h1>MMA <span>Digital Labs</span></h1>
           <span class="pill" id="db-pill" title="Backed by server SQLite + JSON mirror">SQLite Ready</span>
         </div>
-        <span class="brand-sub">Deepgram Flux &bull; Universal VICIdial Studio</span>
+        <span class="brand-sub">Voice Agent Console &bull; Deepgram Flux &bull; VICIdial</span>
       </div>
     </div>
 
@@ -69,13 +69,19 @@
 
     <div class="header-actions">
       <span id="st">Loading…</span>
-      <a class="g" id="btn-newtab" href="./" target="_blank" rel="noopener" style="text-decoration:none;display:none" title="Open console in a dedicated browser tab for unrestricted microphone access">↗ Open Tab</a>
+      <a class="g" id="btn-newtab" href="./" target="_blank" rel="noopener" style="text-decoration:none;display:none" title="Open console in a dedicated browser tab for unrestricted microphone access">â†— Open Tab</a>
       <button class="g theme-trigger" id="btn-theme" title="Open Appearance &amp; Theme Studio (6 Elite Themes + Exposure &amp; Glass Controls)">
         <span class="theme-dot" id="theme-active-dot"></span>
         <span id="theme-active-lbl">Theme</span>
       </button>
-      <button class="g" id="btn-logout" style="display:none" title="Sign out of Admin Console">🔒 Sign Out</button>
-      <button class="g" id="btn-keys" title="Configure server-side .env API keys &amp; security">🔑 API Keys</button>
+      <button class="g" id="btn-logout" style="display:none" title="Sign out of the console">
+        <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10.5" width="11" height="10" rx="2.2"/><path d="M7.5 10.5V7.8a4 4 0 0 1 7.4-2.1"/><circle cx="9.5" cy="15.5" r="1.1"/></svg>
+        <span>Sign Out</span>
+      </button>
+      <button class="g" id="btn-keys" title="Configure server-side .env API keys &amp; security">
+        <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="4.2"/><path d="m11 11 8.5 8.5M16 16l2.2-2.2M18.5 18.5 21 16"/></svg>
+        <span>API Keys</span>
+      </button>
       <button class="g" id="dc" disabled>Discard</button>
       <button class="b" id="sv" disabled>Save &amp; verify</button>
     </div>
@@ -102,7 +108,7 @@
           <h3>🎨 Appearance &amp; Theme Studio</h3>
           <div class="note" style="margin-top:2px">Choose from 6 signature color worlds and tune ambient light exposure &amp; glass depth in real time.</div>
         </div>
-        <button class="g" id="theme-close">✕ Done</button>
+        <button class="g" id="theme-close">âœ• Done</button>
       </div>
 
       <h2 class="studio-sec-title">Signature Color Worlds</h2>
@@ -110,7 +116,7 @@
 
       <div class="row" style="margin-top:16px">
         <div>
-          <label>✨ Ambient Light Exposure</label>
+          <label>âœ¨ Ambient Light Exposure</label>
           <div class="seg-group" id="exposure-seg">
             <button type="button" data-exp="minimal">Matte Off</button>
             <button type="button" data-exp="studio">Studio Glow</button>
@@ -150,7 +156,7 @@
     <div class="modal">
       <div class="modal-head">
         <h3>🔑 Environment &amp; Cloud API Keys</h3>
-        <button class="g" id="keys-close-x" onclick="document.getElementById('keys-modal').hidden=true">✕</button>
+        <button class="g" id="keys-close-x" onclick="document.getElementById('keys-modal').hidden=true">âœ•</button>
       </div>
       <div class="note" style="margin-bottom: 10px;">
         Keys are automatically stripped of accidental quotes or <code>Token</code>/<code>Bearer</code> prefixes and verified live against Deepgram's authenticated REST &amp; Voice Agent WebSocket endpoints.
@@ -167,6 +173,6 @@
   </div>
 
   <input type="file" id="import-file" accept="application/json,.json" hidden />
-  <script src="./app.js?v=elite-2.10"></script>
+  <script src="./app.js?v=elite-2.13"></script>
 </body>
 </html>

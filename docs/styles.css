@@ -415,32 +415,26 @@ header::after {
 
 .brand-mark {
   position: relative;
-  width: 36px;
-  height: 36px;
-  border-radius: 11px;
-  background: var(--ac-grad);
-  display: flex;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.35) inset, 0 6px 18px -4px var(--ac-glow);
-  flex-shrink: 0;
+  filter: drop-shadow(0 0 9px var(--ac-glow));
+  transition: filter 0.25s ease, transform 0.25s ease;
 }
 
-.brand-glyph {
-  font-size: 17px;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
+.brand-mark-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
 }
 
-.brand-pulse {
-  position: absolute;
-  right: -2px;
-  bottom: -2px;
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--ok);
-  border: 2px solid var(--bg);
-  box-shadow: 0 0 10px var(--ok);
+.brand:hover .brand-mark {
+  transform: scale(1.05);
+  filter: drop-shadow(0 0 15px var(--ac-glow));
 }
 
 .brand-copy {
@@ -462,6 +456,24 @@ header::after {
   letter-spacing: -0.025em;
   margin: 0;
   white-space: nowrap;
+}
+
+.brand h1 span {
+  color: var(--ac-3);
+  font-weight: 600;
+}
+
+/* Inline SVG icons inside header buttons */
+.btn-ico {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.9;
 }
 
 .brand-sub {
@@ -1025,7 +1037,9 @@ main {
 }
 
 main.wide {
-  grid-template-columns: 1fr;
+  /* minmax(0,1fr) — a bare 1fr would inherit the min-content width of wide
+     children (e.g. the horizontal carousel) and overflow the viewport. */
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @media (max-width: 1080px) {
@@ -2012,4 +2026,250 @@ audio {
   .persona-top-row, .persona-badges {
     justify-content: center;
   }
+}
+
+/* ============================================================================
+   FEATURE SHOWCASE — glass-morphism carousel (3 cards, themed per package)
+   ============================================================================ */
+.showcase {
+  padding: 14px 16px 12px;
+}
+
+.showcase-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.showcase-head h2 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--mu);
+}
+
+.showcase-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.showcase-dots button {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--bd-strong);
+  cursor: pointer;
+  transition: width 0.22s ease, background 0.22s ease, box-shadow 0.22s ease;
+}
+
+.showcase-dots button.on {
+  width: 20px;
+  border-radius: 4px;
+  background: var(--ac-grad);
+  box-shadow: 0 0 10px var(--ac-glow);
+}
+
+.showcase-track {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding: 2px;
+}
+
+.showcase-track::-webkit-scrollbar { display: none; }
+
+.sc-card {
+  flex: 1 1 0;
+  min-width: 210px;
+  scroll-snap-align: start;
+  padding: 12px 14px 10px;
+  border-radius: 14px;
+  border: 1px solid var(--bd);
+  background: var(--sf2);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  transition: border-color 0.22s ease, box-shadow 0.22s ease, transform 0.22s ease;
+}
+
+.sc-card.on {
+  border-color: var(--ac);
+  box-shadow: 0 0 0 1px var(--ac-soft), 0 14px 34px -16px var(--ac-glow);
+  transform: translateY(-1px);
+}
+
+.sc-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--tx);
+}
+
+.sc-sub {
+  font-size: 10.5px;
+  color: var(--mu);
+  margin-top: 1px;
+}
+
+.sc-art {
+  height: 48px;
+  margin: 8px 0 6px;
+  color: var(--ac-3);
+  opacity: 0.95;
+}
+
+.sc-art svg { width: 100%; height: 100%; display: block; }
+
+.sc-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--bd);
+  font-size: 10.5px;
+  color: var(--mu);
+  white-space: nowrap;
+}
+
+.sc-foot b { color: var(--tx); }
+
+@media (max-width: 860px) {
+  .sc-card { min-width: 76%; }
+}
+
+/* Theme studio: each preview card shows that package's monogram */
+.theme-preview { position: relative; }
+
+.theme-preview-mark {
+  position: absolute;
+  top: 7px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  opacity: 0.95;
+}
+
+.theme-preview-mark svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.theme-pkg {
+  margin-top: 2px;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--mu);
+  opacity: 0.8;
+}
+
+/* Carousel sizing guards — prevent intrinsic-width feedback loops */
+.showcase,
+.showcase-track { min-width: 0; max-width: 100%; }
+
+.showcase { overflow: hidden; }
+
+.sc-card {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.sc-art svg { max-width: 100%; }
+
+@media (max-width: 860px) {
+  .sc-card { flex: 0 0 78%; }
+}
+
+/* ============================================================================
+   THEME BRAND PACKAGES — every theme swaps icon frames, corner geometry and
+   component shapes, not just colors.
+   ============================================================================ */
+
+/* Obsidian Nebula — soft squircle frames */
+:root[data-theme="obsidian"] .nav-ico { border-radius: 11px; }
+
+/* Cyber Emerald — hexagonal frames */
+:root[data-theme="emerald"] .nav-ico {
+  border-radius: 0;
+  clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+}
+
+/* Arctic Aurora — circular frames */
+:root[data-theme="aurora"] .nav-ico { border-radius: 50%; }
+
+/* Crimson Gold Luxe — crest frames */
+:root[data-theme="crimson"] .nav-ico { border-radius: 12px 12px 17px 17px; }
+
+/* Pearl Daylight — crisp soft squares */
+:root[data-theme="pearl"] .nav-ico { border-radius: 8px; }
+
+/* Sakura Ivory — petal frames */
+:root[data-theme="sakura"] .nav-ico { border-radius: 50% 50% 50% 12px; }
+
+/* Component corner geometry per package */
+:root[data-theme="emerald"] .card { border-radius: 10px; }
+:root[data-theme="aurora"] .card { border-radius: 20px; }
+:root[data-theme="crimson"] .card { border-radius: 12px; }
+:root[data-theme="pearl"] .card { border-radius: 16px; }
+:root[data-theme="sakura"] .card { border-radius: 22px; }
+
+:root[data-theme="emerald"] .b,
+:root[data-theme="emerald"] .g { border-radius: 7px; }
+:root[data-theme="aurora"] .b,
+:root[data-theme="aurora"] .g { border-radius: 999px; }
+:root[data-theme="crimson"] .b,
+:root[data-theme="crimson"] .g { border-radius: 8px; }
+:root[data-theme="pearl"] .b,
+:root[data-theme="pearl"] .g { border-radius: 11px; }
+:root[data-theme="sakura"] .b,
+:root[data-theme="sakura"] .g { border-radius: 999px; }
+
+/* Package accent wash on the feature carousel */
+:root[data-theme="emerald"] .sc-card.on { border-color: var(--ac); }
+:root[data-theme="aurora"] .sc-card { border-radius: 18px; }
+:root[data-theme="crimson"] .sc-card { border-radius: 10px; }
+:root[data-theme="pearl"] .sc-card { border-radius: 16px; }
+:root[data-theme="sakura"] .sc-card { border-radius: 20px; }
+
+/* Per-package nav icon stroke weight */
+:root[data-theme="emerald"] .nav-ico svg { stroke-width: 2.05; }
+:root[data-theme="aurora"] .nav-ico svg { stroke-width: 1.75; }
+:root[data-theme="crimson"] .nav-ico svg { stroke-width: 1.95; }
+:root[data-theme="pearl"] .nav-ico svg { stroke-width: 1.85; }
+:root[data-theme="sakura"] .nav-ico svg { stroke-width: 1.8; }
+
+/* API-key status badge inside the header button */
+.keys-state {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 1px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.keys-state.ok {
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+}
+
+.keys-state.wn {
+  background: var(--wn);
+  color: #1a1205;
+  box-shadow: 0 0 8px var(--wn);
 }

@@ -2,10 +2,24 @@ import assert from 'assert';
 import http from 'http';
 import WebSocket, { WebSocketServer } from 'ws';
 import { sanitizeSecretValue } from '../src/env-store';
+import { getConsoleState, saveConsoleState } from '../src/db';
 import { createServerWithSimulator } from '../src/server';
 
 const LIVE_HTTP = process.env.TEST_URL || 'http://127.0.0.1:3000';
 const LIVE_WS = LIVE_HTTP.replace(/^http/, 'ws') + '/ws/simulator';
+
+function configureTestServices() {
+  const state = getConsoleState();
+  const stt = state.providers.find((p) => p.kind === 'stt')!;
+  const llm = state.providers.find((p) => p.kind === 'llm' && p.type === 'open_ai')!;
+  const tts = state.providers.find((p) => p.kind === 'tts' && p.type === 'deepgram')!;
+  state.services = {
+    stt: { providerId: stt.id, model: 'flux-general-multi' },
+    llm: { providerId: llm.id, model: 'gpt-4o-mini' },
+    tts: { providerId: tts.id, model: 'flux-haley-en' },
+  };
+  saveConsoleState(state, 'Test setup: select global services');
+}
 
 function waitForEvent<T = any>(
   queue: any[],
@@ -36,6 +50,7 @@ function waitForEvent<T = any>(
 }
 
 async function run() {
+  configureTestServices();
   const results: string[] = [];
   const check = async (name: string, fn: () => Promise<void> | void) => {
     await fn();

@@ -2,9 +2,27 @@ import crypto from 'crypto';
 import http from 'http';
 import type { NextFunction, Request, Response } from 'express';
 import { getSecret } from './env-store';
+import { countUsers, getUserBySessionToken, PublicUser } from './user-store';
 
 const SESSION_COOKIE_NAME = 'vac_session';
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+let userCountCache = { value: 0, at: 0 };
+function cachedUserCount(): number {
+  const now = Date.now();
+  if (now - userCountCache.at > 2000) {
+    try {
+      userCountCache = { value: countUsers(), at: now };
+    } catch {
+      userCountCache = { value: 0, at: now };
+    }
+  }
+  return userCountCache.value;
+}
+
+export function invalidateUserCountCache(): void {
+  userCountCache = { value: 0, at: 0 };
+}
 
 export function normalizeIp(raw?: string | null): string {
   const s = String(raw || '').trim();
@@ -53,25 +71,29 @@ function matchesIpRule(ip: string, rule: string): boolean {
 
 /**
  * Checks whether an incoming SIP (:5062) or AudioSocket (:9092) peer IP is allowed.
- * When BRIDGE_ALLOWED_IPS is empty, allows all peers (dev/cloud test mode).
+ * When BRIDGE_ALLOWED_IPS is empty, allows loopback peers only.
  * When BRIDGE_ALLOWED_IPS is configured (e.g. "127.0.0.1,::1,10.0.0.0/8"), enforces strict allowlist.
  */
 export function isBridgePeerIpAllowed(remoteAddress?: string | null): boolean {
   const ip = normalizeIp(remoteAddress);
   const rawAllow = getSecret('BRIDGE_ALLOWED_IPS');
-  if (!rawAllow || rawAllow.trim() === '' || rawAllow.trim() === '*') {
+  if (!rawAllow || rawAllow.trim() === '') {
+    return isLoopbackIp(ip);
+  }
+  if (rawAllow.trim() === '*') {
     return true;
   }
   const rules = rawAllow
     .split(',')
     .map((r) => r.trim())
     .filter(Boolean);
-  if (rules.length === 0) return true;
+  if (rules.length === 0) return isLoopbackIp(ip);
   return rules.some((rule) => matchesIpRule(ip, rule));
 }
 
 export function isAuthEnabled(): boolean {
-  return getSecret('ADMIN_PASSWORD').length > 0;
+  if (getSecret('ADMIN_PASSWORD').length > 0) return true;
+  return cachedUserCount() > 0;
 }
 
 function signTimestamp(ts: string, password: string): string {
@@ -89,7 +111,7 @@ export function createSessionToken(passwordOverride?: string): string {
 
 export function verifySessionToken(token?: string | null): boolean {
   const pwd = getSecret('ADMIN_PASSWORD');
-  if (!pwd) return true;
+  if (!pwd) return false;
   if (!token) return false;
   const dot = token.indexOf('.');
   if (dot <= 0) return false;
@@ -111,8 +133,11 @@ function parseCookies(cookieHeader?: string): Record<string, string> {
     const eq = part.indexOf('=');
     if (eq > 0) {
       const k = part.slice(0, eq).trim();
-      const v = decodeURIComponent(part.slice(eq + 1).trim());
-      out[k] = v;
+      try {
+        out[k] = decodeURIComponent(part.slice(eq + 1).trim());
+      } catch {
+        continue;
+      }
     }
   }
   return out;
@@ -120,11 +145,34 @@ function parseCookies(cookieHeader?: string): Record<string, string> {
 
 export function constantTimePasswordMatch(candidate: string): boolean {
   const pwd = getSecret('ADMIN_PASSWORD');
-  if (!pwd) return true;
+  if (!pwd) return false;
   const a = Buffer.from(String(candidate || ''), 'utf8');
   const b = Buffer.from(pwd, 'utf8');
   if (a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
+}
+
+export function getRequestSessionToken(req: http.IncomingMessage): string | null {
+  const authHdr = String(req.headers.authorization || '').trim();
+  if (/^Bearer\s+/i.test(authHdr)) {
+    return authHdr.replace(/^Bearer\s+/i, '').trim() || null;
+  }
+  const cookies = parseCookies(req.headers.cookie);
+  return cookies[SESSION_COOKIE_NAME] || null;
+}
+
+/**
+ * Resolves a signed-in end user (email/password account) from the request.
+ * Returns null for admin-password sessions and anonymous requests.
+ */
+export function getAuthenticatedUser(req: http.IncomingMessage): PublicUser | null {
+  const token = getRequestSessionToken(req);
+  if (!token) return null;
+  try {
+    return getUserBySessionToken(token);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -149,9 +197,14 @@ export function isRequestAuthorized(req: http.IncomingMessage): boolean {
     }
   }
 
-  // 2. Check signed HttpOnly session cookie
+  // 2. Check signed HttpOnly session cookie (admin password session)
   const cookies = parseCookies(req.headers.cookie);
   if (cookies[SESSION_COOKIE_NAME] && verifySessionToken(cookies[SESSION_COOKIE_NAME])) {
+    return true;
+  }
+
+  // 3. Check email/password user session (cookie or bearer token)
+  if (getAuthenticatedUser(req)) {
     return true;
   }
 
@@ -210,6 +263,7 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
   res.status(401).json({
     ok: false,
     code: 'AUTH_REQUIRED',
-    error: 'Console authentication required. Sign in with ADMIN_PASSWORD.',
+    error: 'Console authentication required. Sign in at /login.',
+    loginUrl: '/login',
   });
 }

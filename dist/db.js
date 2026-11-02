@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getDb = getDb;
 exports.getConsoleState = getConsoleState;
 exports.saveConsoleState = saveConsoleState;
 exports.listRevisions = listRevisions;
@@ -19,6 +20,7 @@ const path_1 = __importDefault(require("path"));
 const call_recorder_1 = require("./call-recorder");
 const defaults_1 = require("./defaults");
 const settings_builder_1 = require("./settings-builder");
+const data_paths_1 = require("./data-paths");
 function openSqliteEngine(dbPath) {
     const normArgs = (args) => args.map((v) => (v === undefined ? null : v));
     // 1) Primary engine: better-sqlite3 (fast C++ native binding with prebuilds for Node 20..25)
@@ -76,14 +78,13 @@ function openSqliteEngine(dbPath) {
         };
     }
 }
-const DATA_DIR = path_1.default.resolve(__dirname, '..', 'data');
-const DB_PATH = path_1.default.join(DATA_DIR, 'console.sqlite');
-const JSON_MIRROR_PATH = path_1.default.join(DATA_DIR, 'console-state.json');
+const DB_PATH = path_1.default.join(data_paths_1.DATA_DIR, 'console.sqlite');
+const JSON_MIRROR_PATH = path_1.default.join(data_paths_1.DATA_DIR, 'console-state.json');
 let db = null;
 function getDb() {
     if (db)
         return db;
-    fs_1.default.mkdirSync(DATA_DIR, { recursive: true });
+    fs_1.default.mkdirSync(data_paths_1.DATA_DIR, { recursive: true });
     db = openSqliteEngine(DB_PATH);
     db.exec(`
     CREATE TABLE IF NOT EXISTS console_store (
@@ -154,7 +155,7 @@ function getDb() {
     return db;
 }
 function writeJsonMirror(state) {
-    fs_1.default.mkdirSync(DATA_DIR, { recursive: true });
+    fs_1.default.mkdirSync(data_paths_1.DATA_DIR, { recursive: true });
     const tmpPath = `${JSON_MIRROR_PATH}.tmp`;
     fs_1.default.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf8');
     fs_1.default.renameSync(tmpPath, JSON_MIRROR_PATH);

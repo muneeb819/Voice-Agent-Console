@@ -47,7 +47,7 @@ function sanitizeSecretValue(raw) {
 }
 function loadEnv() {
     if (fs_1.default.existsSync(ENV_PATH)) {
-        dotenv_1.default.config({ path: ENV_PATH, override: true });
+        dotenv_1.default.config({ path: ENV_PATH });
     }
 }
 function getSecret(key) {

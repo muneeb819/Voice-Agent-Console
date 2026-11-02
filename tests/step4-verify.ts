@@ -6,13 +6,28 @@ import net from 'net';
 import path from 'path';
 import WebSocket, { WebSocketServer } from 'ws';
 import { getConsoleState, saveConsoleState } from '../src/db';
+import { DATA_DIR } from '../src/data-paths';
 import { createDefaultState } from '../src/defaults';
 import { createServerWithSimulator } from '../src/server';
 import { buildDeepgramSettings, validateAgent } from '../src/settings-builder';
-import { canonicalUuidToBytes } from '../src/vici-bridge';
+import { isBridgePeerIpAllowed } from '../src/auth-guard';
+import { canonicalUuidToBytes, VicidialBridgeService } from '../src/vici-bridge';
 
 function assert(cond: unknown, msg: string): void {
   if (!cond) throw new Error(`Assertion failed: ${msg}`);
+}
+
+function configureTestServices() {
+  const state = getConsoleState();
+  const stt = state.providers.find((p) => p.kind === 'stt')!;
+  const llm = state.providers.find((p) => p.kind === 'llm' && p.type === 'open_ai')!;
+  const tts = state.providers.find((p) => p.kind === 'tts' && p.type === 'deepgram')!;
+  state.services = {
+    stt: { providerId: stt.id, model: 'flux-general-multi' },
+    llm: { providerId: llm.id, model: 'gpt-4o-mini' },
+    tts: { providerId: tts.id, model: 'flux-haley-en' },
+  };
+  saveConsoleState(state, 'Test setup: select global services');
 }
 
 async function sendRawSipInvite(sipPort: number): Promise<string> {
@@ -67,6 +82,7 @@ async function sendRawSipInvite(sipPort: number): Promise<string> {
 }
 
 async function run() {
+  configureTestServices();
   console.log('=== Step 4 Automated Verification Suite (Production Hardening, Recordings, Analytics & Bundle) ===');
 
   const prevAdminPass = process.env.ADMIN_PASSWORD;
@@ -87,11 +103,52 @@ async function run() {
   const wsBase = `ws://127.0.0.1:${port}`;
 
   try {
+    const previousBridgeBindHost = process.env.BRIDGE_BIND_HOST;
+    delete process.env.BRIDGE_BIND_HOST;
+    const defaultBridgeHost = new VicidialBridgeService().getStatus().bindHost;
+    if (previousBridgeBindHost === undefined) delete process.env.BRIDGE_BIND_HOST;
+    else process.env.BRIDGE_BIND_HOST = previousBridgeBindHost;
+    assert(defaultBridgeHost === '127.0.0.1', `Expected bridge default bind host to be loopback, got ${defaultBridgeHost}`);
+
+    const projectRoot = path.resolve(__dirname, '..');
+    const unsafeBind = childProcess.spawnSync(
+      process.execPath,
+      [
+        path.join(projectRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+        path.join(projectRoot, 'src', 'server.ts'),
+      ],
+      {
+        cwd: projectRoot,
+        encoding: 'utf8',
+        timeout: 10000,
+        env: {
+          ...process.env,
+          HOST: '0.0.0.0',
+          PORT: '0',
+          ADMIN_PASSWORD: '',
+        },
+      }
+    );
+    assert(
+      unsafeBind.status === 1 &&
+        `${unsafeBind.stdout || ''}${unsafeBind.stderr || ''}`.includes('Refusing to bind to a non-loopback interface without ADMIN_PASSWORD'),
+      'Expected an unauthenticated public bind to be rejected before listener startup'
+    );
+
     // 1. Test ADMIN_PASSWORD Web/WS Auth + Localhost Asterisk Pre-Call Whitelist
     process.env.ADMIN_PASSWORD = 'vici-super-secret-2026';
 
+    const publicHealthRes = await fetch(`${httpBase}/api/health`);
+    const publicHealth = (await publicHealthRes.json()) as any;
+    assert(publicHealthRes.status === 200 && publicHealth.authenticated === false, 'Expected anonymous health status');
+    assert(!('viciBridge' in publicHealth) && !('secrets' in publicHealth), 'Anonymous health must not reveal calls or secret status');
+
     const lockedStateRes = await fetch(`${httpBase}/api/state`);
     assert(lockedStateRes.status === 401, `Expected 401 when ADMIN_PASSWORD active, got ${lockedStateRes.status}`);
+    const malformedCookieRes = await fetch(`${httpBase}/api/state`, {
+      headers: { Cookie: 'vac_session=%ZZ' },
+    });
+    assert(malformedCookieRes.status === 401, 'Expected malformed cookies to be rejected without a server error');
 
     // Verify WebSocket upgrade is rejected with 401 without cookie/token
     const wsRejected = await new Promise<boolean>((resolve) => {
@@ -143,12 +200,30 @@ async function run() {
     });
     assert(unlockedRes.status === 200, 'Expected 200 on /api/state with valid vac_session cookie');
 
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const failedLogin = await fetch(`${httpBase}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: 'wrong-password' }),
+      });
+      assert(failedLogin.status === 401, `Expected failed attempt ${attempt + 1} to return 401`);
+    }
+    const throttledLogin = await fetch(`${httpBase}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'wrong-password' }),
+    });
+    assert(throttledLogin.status === 429 && throttledLogin.headers.has('retry-after'), 'Expected login throttling after five failures');
+
     // Reset ADMIN_PASSWORD to empty for remaining checks
     delete process.env.ADMIN_PASSWORD;
     console.log('✓ [1/8] ADMIN_PASSWORD auth (HTTP + WS 401 lock, HMAC session cookie, and 127.0.0.1 Asterisk CURL whitelist) verified');
 
     // 2. Test BRIDGE_ALLOWED_IPS untrusted SIP IP block
     const bridgeStatus = viciBridge.getStatus();
+    process.env.BRIDGE_ALLOWED_IPS = '';
+    assert(isBridgePeerIpAllowed('127.0.0.1'), 'Expected empty bridge allowlist to keep loopback access');
+    assert(!isBridgePeerIpAllowed('192.0.2.10'), 'Expected empty bridge allowlist to reject remote peers');
     process.env.BRIDGE_ALLOWED_IPS = '10.250.250.1/32'; // Block 127.0.0.1 temporarily
     const forbiddenLine = await sendRawSipInvite(bridgeStatus.sipPort);
     assert(forbiddenLine.includes('403 Forbidden'), `Expected SIP 403 Forbidden, got: ${forbiddenLine}`);
@@ -344,7 +419,7 @@ async function run() {
     );
 
     // 8. Test Turnkey ViciBox .tar.gz Release Bundle
-    const bundleDiskPath = path.resolve(__dirname, '..', '..', 'voice-agent-vicibox-release.tar.gz');
+    const bundleDiskPath = path.join(DATA_DIR, 'voice-agent-vicibox-release.tar.gz');
     if (fs.existsSync(bundleDiskPath)) fs.unlinkSync(bundleDiskPath);
 
     const bundleRes = await fetch(`${httpBase}/api/vici/release-bundle`);
@@ -355,11 +430,23 @@ async function run() {
       `Expected valid gzip archive >20KB, got ${bundleBytes.length} bytes`
     );
     const tarList = childProcess.execFileSync('tar', ['-tzf', bundleDiskPath], { encoding: 'utf8' });
+    const normalizedTarList = tarList.toLowerCase();
     assert(
-      tarList.includes('voice-agent-console/deploy/vicibox-install.sh') &&
-        tarList.includes('voice-agent-console/dist/server.js') &&
-        tarList.includes('voice-agent-console/VICIBOX-PRODUCTION-RUNBOOK.md'),
+      normalizedTarList.includes('voice-agent-console/deploy/vicibox-install.sh') &&
+        normalizedTarList.includes('voice-agent-console/dist/server.js') &&
+        normalizedTarList.includes('voice-agent-console/vicibox-production-runbook.md'),
       'Release tarball missing vicibox-install.sh, dist/server.js, or VICIBOX-PRODUCTION-RUNBOOK.md'
+    );
+    const archiveEntries = normalizedTarList.split(/\r?\n/);
+    assert(
+      !archiveEntries.some(
+        (entry) =>
+          entry === 'voice-agent-console/.env' ||
+          entry.startsWith('voice-agent-console/data/') ||
+          entry.startsWith('voice-agent-console/logs/') ||
+          entry === 'voice-agent-console/tools/cloudflared.exe'
+      ),
+      'Release tarball must not include credentials, runtime data/logs, or the local tunnel binary'
     );
     console.log(
       `✓ [8/9] Turnkey ViciBox Release Bundle verified (${Math.round(bundleBytes.length / 1024)} KB -> /home/user/voice-agent-vicibox-release.tar.gz)`
@@ -369,7 +456,7 @@ async function run() {
     const freshDefaults = createDefaultState();
     const medAgent = freshDefaults.agents.find((a) => a.id === 'a_medicare');
     const medCamp = freshDefaults.campaigns.find((c) => c.id === 'c_medicare');
-    assert(medAgent && medCamp, 'Expected a_medicare agent & c_medicare campaign in defaults');
+    if (!medAgent || !medCamp) throw new Error('Expected a_medicare agent & c_medicare campaign in defaults');
 
     // Sync Medicare agent/campaign/fn_xfer into persisted SQLite state if not yet present
     const curDbState = getConsoleState();

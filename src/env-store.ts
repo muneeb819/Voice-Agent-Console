@@ -43,7 +43,7 @@ export function sanitizeSecretValue(raw: string): string {
 
 export function loadEnv(): void {
   if (fs.existsSync(ENV_PATH)) {
-    dotenv.config({ path: ENV_PATH, override: true });
+    dotenv.config({ path: ENV_PATH });
   }
 }
 

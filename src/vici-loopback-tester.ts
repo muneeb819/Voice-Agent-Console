@@ -282,6 +282,8 @@ export async function runSimulatedViciBridgeCall(
   }
 
   bridge.setViciApiBaseOverride(`http://127.0.0.1:${viciPort}`);
+  const previousCallIds = new Set(listBridgeCallLogs(200).map((call) => call.id));
+  const previousActiveCallIds = new Set(bridge.getStatus().activeCalls.map((call) => call.callId));
   const statusBefore = bridge.getStatus();
 
   // Prepare caller 8kHz PCM16 speech frames
@@ -543,9 +545,36 @@ export async function runSimulatedViciBridgeCall(
       });
     }
 
-    // Allow async CDR persistence a brief tick to settle
-    await new Promise((r) => setTimeout(r, 120));
-    const latestLogs = listBridgeCallLogs(5);
+    const activeTestCall = bridge.getStatus().activeCalls.find(
+      (call) =>
+        !previousActiveCallIds.has(call.callId) &&
+        call.transport === opts.transport &&
+        call.exten === exten &&
+        call.callerCode === callerCode
+    );
+    if (activeTestCall) bridge.forceHangupCall(activeTestCall.callId);
+
+    const cdrDeadline = Date.now() + 5000;
+    let cdr = listBridgeCallLogs(200).find(
+      (call) =>
+        !previousCallIds.has(call.id) &&
+        call.transport === opts.transport &&
+        call.exten === exten &&
+        call.callerCode === callerCode
+    );
+    while (!cdr && Date.now() < cdrDeadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      cdr = listBridgeCallLogs(200).find(
+        (call) =>
+          !previousCallIds.has(call.id) &&
+          call.transport === opts.transport &&
+          call.exten === exten &&
+          call.callerCode === callerCode
+      );
+    }
+    if (!cdr) {
+      throw new Error(`Timed out waiting for the ${opts.transport} simulation CDR to persist`);
+    }
 
     return {
       ok: true,
@@ -557,8 +586,8 @@ export async function runSimulatedViciBridgeCall(
       callerFramesReceived: rxAudioFramesFromBot,
       viciRequests,
       viciRequestsReceived: viciRequests,
-      latestCdr: latestLogs[0] || null,
-      cdr: latestLogs[0] || null,
+      latestCdr: cdr,
+      cdr,
     };
   } finally {
     bridge.setViciApiBaseOverride(undefined);

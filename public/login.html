@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>Sign In — MMA Digital Labs Voice Agent Console</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+  <link rel="alternate icon" href="/assets/favicon.svg" />
+  <link rel="apple-touch-icon" href="/assets/monogram.svg" />
+  <link rel="stylesheet" href="/login.css" />
+</head>
+<body>
+  <div class="aurora" aria-hidden="true"></div>
+
+  <main class="auth-shell">
+    <header class="brand">
+      <img src="/assets/main-logo.svg" alt="MMA Digital Labs — Voice Agent Bots Console" class="brand-plaque" />
+    </header>
+
+    <section class="card" aria-labelledby="auth-title">
+      <h1 id="auth-title" class="sr-only">Sign in or create an account</h1>
+
+      <div class="tabs" role="tablist" aria-label="Authentication mode">
+        <button type="button" class="tab active" role="tab" id="tab-signin"
+                aria-selected="true" aria-controls="signin-form" data-mode="signin">Sign In</button>
+        <button type="button" class="tab" role="tab" id="tab-signup"
+                aria-selected="false" aria-controls="signup-form" data-mode="signup">Create Account</button>
+      </div>
+
+      <!-- SIGN IN -->
+      <form id="signin-form" class="pane" novalidate aria-labelledby="tab-signin">
+        <div class="field">
+          <label for="signin-email">Email</label>
+          <input id="signin-email" name="email" type="email" autocomplete="email"
+                 inputmode="email" placeholder="you@company.com" required />
+        </div>
+        <div class="field">
+          <label for="signin-password">Password</label>
+          <div class="input-wrap">
+            <input id="signin-password" name="password" type="password"
+                   autocomplete="current-password" placeholder="Your password" required />
+            <button type="button" class="reveal" data-target="signin-password" aria-label="Show password">Show</button>
+          </div>
+        </div>
+        <p class="msg" id="signin-msg" role="alert" aria-live="polite"></p>
+        <button type="submit" class="btn-primary" id="signin-submit">Sign In</button>
+        <button type="button" class="linkish" id="admin-toggle">Use admin password instead</button>
+      </form>
+
+      <!-- ADMIN PASSWORD FALLBACK -->
+      <form id="admin-form" class="pane" hidden novalidate>
+        <div class="field">
+          <label for="admin-password">Admin Password</label>
+          <div class="input-wrap">
+            <input id="admin-password" type="password" autocomplete="current-password"
+                   placeholder="ADMIN_PASSWORD from the server .env" />
+            <button type="button" class="reveal" data-target="admin-password" aria-label="Show password">Show</button>
+          </div>
+          <p class="hint">Server-operator access. End users should use an email account.</p>
+        </div>
+        <p class="msg" id="admin-msg" role="alert" aria-live="polite"></p>
+        <button type="submit" class="btn-primary" id="admin-submit">Unlock Console</button>
+        <button type="button" class="linkish" id="admin-back">Back to user sign in</button>
+      </form>
+
+      <!-- SIGN UP -->
+      <form id="signup-form" class="pane" hidden novalidate aria-labelledby="tab-signup">
+        <div class="field">
+          <label for="signup-name">Full Name</label>
+          <input id="signup-name" name="fullName" type="text" autocomplete="name"
+                 placeholder="Jane Doe" maxlength="80" required />
+        </div>
+        <div class="field">
+          <label for="signup-email">Email</label>
+          <input id="signup-email" name="email" type="email" autocomplete="email"
+                 inputmode="email" placeholder="you@company.com" required />
+        </div>
+        <div class="field">
+          <label for="signup-password">Password</label>
+          <div class="input-wrap">
+            <input id="signup-password" name="password" type="password"
+                   autocomplete="new-password" placeholder="At least 8 characters" required />
+            <button type="button" class="reveal" data-target="signup-password" aria-label="Show password">Show</button>
+          </div>
+          <div class="meter" aria-hidden="true"><span id="pw-meter"></span></div>
+          <p class="hint" id="pw-hint">Use 8+ characters. A longer passphrase is stronger.</p>
+        </div>
+        <p class="msg" id="signup-msg" role="alert" aria-live="polite"></p>
+        <button type="submit" class="btn-primary" id="signup-submit">Create Account</button>
+      </form>
+
+      <p class="fineprint">
+        <svg class="ic" aria-hidden="true"><use href="/assets/icons.svg#i-secure"/></svg>
+        Secured with scrypt password hashing and HttpOnly session cookies.
+      </p>
+    </section>
+
+    <footer class="foot">
+      <img src="/assets/monogram.svg" alt="" class="foot-mark" aria-hidden="true" />
+      <span>MMA Digital Labs - Voice Agent Bots Console</span>
+    </footer>
+  </main>
+
+  <!-- Loading overlay -->
+  <div class="loader" id="loader" hidden>
+    <div class="loader-inner">
+      <img src="/assets/monogram.svg" alt="" class="loader-mark" aria-hidden="true" />
+      <div class="wave" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+      </div>
+      <p class="loader-text" id="loader-text">CONNECTING TO MODEL...</p>
+      <div class="progress" role="progressbar" aria-label="Connecting"><span class="progress-bar" id="progress-bar"></span></div>
+    </div>
+  </div>
+
+  <script src="/login.js"></script>
+</body>
+</html>

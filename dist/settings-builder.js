@@ -109,15 +109,18 @@ function composeBehavioralPrompt(agent) {
     return combined.length <= 24950 ? combined : basePrompt;
 }
 function buildDeepgramSettings(state, agent, explicitCampaign, options) {
-    const sp = state.providers.find((p) => p.id === agent.stt.p) || {};
-    const lp = state.providers.find((p) => p.id === agent.llm.p) || {};
-    const tp = state.providers.find((p) => p.id === agent.tts.p) || {};
+    const sp = state.providers.find((p) => p.kind === 'stt' && p.id === state.services?.stt?.providerId) || {};
+    const lp = state.providers.find((p) => p.kind === 'llm' && p.id === state.services?.llm?.providerId) || {};
+    const tp = state.providers.find((p) => p.kind === 'tts' && p.id === state.services?.tts?.providerId) || {};
     const linkedCampaign = explicitCampaign || state.campaigns.find((c) => c.agentId === agent.id);
     // 1. Listen (STT) — Voice Agent currently accepts Flux v2 models only.
-    const sttModel = (0, defaults_1.normalizeVoiceAgentSttModel)(agent.stt.model, agent.language);
+    const selectedSttModel = String(state.services?.stt?.model || '').trim();
+    const sttModel = defaults_1.VOICE_AGENT_STT_MODELS.includes(selectedSttModel)
+        ? selectedSttModel
+        : '';
     const listenProvider = {
-        type: 'deepgram',
-        version: 'v2',
+        type: sttModel && sp.type === 'deepgram' ? 'deepgram' : '',
+        version: sttModel && sp.type === 'deepgram' ? 'v2' : '',
         model: sttModel,
         eot_threshold: Number(agent.stt.eot),
         eager_eot_threshold: Number(agent.stt.eager),
@@ -140,23 +143,23 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
         Object.assign(listenProvider, spExtra.value);
     // Custom provider extras may configure additional Flux options, but never override
     // the Voice Agent's supported provider/model/version or Nova-only parameters.
-    listenProvider.type = 'deepgram';
-    listenProvider.version = 'v2';
+    listenProvider.type = sttModel && sp.type === 'deepgram' ? 'deepgram' : '';
+    listenProvider.version = sttModel && sp.type === 'deepgram' ? 'v2' : '';
     listenProvider.model = sttModel;
     delete listenProvider.language;
     delete listenProvider.smart_format;
     if (sttModel !== 'flux-general-multi')
         delete listenProvider.language_hints;
     // 2. Think (LLM)
-    const isGoogleByo = lp.type === 'google' && Boolean(lp.endpoint?.trim());
+    const selectedLlmModel = String(state.services?.llm?.model || '').trim();
+    const llmModel = (0, defaults_1.deepgramModelsForProviderType)(lp.type || '').includes(selectedLlmModel) ? selectedLlmModel : '';
     const thinkProvider = {
-        type: lp.type || 'open_ai',
+        type: lp.kind === 'llm' ? lp.type || '' : '',
     };
-    // Deepgram BYO Google rule: omit `model` when custom endpoint URL is set
-    if (!isGoogleByo) {
-        thinkProvider.model = agent.llm.model;
-    }
-    if (lp.type === 'open_ai' && /^gpt-5/.test(agent.llm.model)) {
+    // Deepgram-managed selection is global; never fall back to an agent's legacy model.
+    if (llmModel)
+        thinkProvider.model = llmModel;
+    if (lp.type === 'open_ai' && /^gpt-5/.test(llmModel)) {
         thinkProvider.reasoning_mode = agent.llm.reasoning;
     }
     else {
@@ -165,6 +168,11 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
     const lpExtra = parseJsonObject(lp.extra || '{}');
     if (lpExtra.ok)
         Object.assign(thinkProvider, lpExtra.value);
+    thinkProvider.type = lp.kind === 'llm' ? lp.type || '' : '';
+    delete thinkProvider.endpoint;
+    delete thinkProvider.model;
+    if (llmModel)
+        thinkProvider.model = llmModel;
     const campaignDispos = (linkedCampaign?.dispos || '')
         .split(',')
         .map((d) => d.trim())
@@ -206,27 +214,20 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
         prompt: composeBehavioralPrompt(agent),
         functions: fns,
     };
-    if (lp.endpoint && lp.endpoint.trim()) {
-        const hdrs = parseJsonObject(lp.headers || '{}');
-        think.endpoint = {
-            url: lp.endpoint.trim(),
-            headers: hdrs.ok ? hdrs.value : {},
-        };
-        if (agent.llm.ctx && String(agent.llm.ctx).trim()) {
-            const rawCtx = String(agent.llm.ctx).trim();
-            think.context_length = rawCtx === 'max' || Number.isNaN(Number(rawCtx)) ? rawCtx : Number(rawCtx);
-        }
-    }
+    // LLMs are Deepgram-managed only; do not expose per-plugin BYO endpoints to agents.
     // 3. Speak (TTS)
+    const selectedTtsModel = String(state.services?.tts?.model || '').trim();
+    const availableTtsModels = String(tp.models || '').split(',').map((entry) => entry.trim()).filter(Boolean);
+    const ttsModel = tp.kind === 'tts' && availableTtsModels.includes(selectedTtsModel) ? selectedTtsModel : '';
     const speakProvider = {
-        type: tp.type || 'deepgram',
+        type: tp.kind === 'tts' ? tp.type || '' : '',
     };
     const modelKey = tp.type === 'deepgram' || tp.type === 'open_ai' ? 'model' : tp.mk || 'model_id';
-    if (tp.type !== 'aws_polly') {
-        speakProvider[modelKey] = agent.tts.model;
+    if (tp.type && ttsModel && tp.type !== 'aws_polly') {
+        speakProvider[modelKey] = ttsModel;
     }
-    if (tp.type === 'deepgram') {
-        const isFluxTts = agent.tts.model.startsWith('flux');
+    if (tp.type === 'deepgram' && ttsModel) {
+        const isFluxTts = ttsModel.startsWith('flux');
         speakProvider.version = isFluxTts ? 'v2' : 'v1';
         const configuredSpeed = Number(agent.tts.speed);
         speakProvider.speed = isFluxTts
@@ -248,6 +249,12 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
         }
         Object.assign(speakProvider, extraCopy);
     }
+    // Plugin extras may add provider options, but the saved global choice is authoritative.
+    speakProvider.type = tp.type || '';
+    delete speakProvider.model;
+    delete speakProvider.model_id;
+    if (tp.type && ttsModel && tp.type !== 'aws_polly')
+        speakProvider[modelKey] = ttsModel;
     const speak = { provider: speakProvider };
     if (tp.endpoint && tp.endpoint.trim()) {
         const hdrs = parseJsonObject(tp.headers || '{}');
@@ -295,21 +302,22 @@ function validateAgent(state, agent) {
             message,
         });
     };
-    const sp = state.providers.find((p) => p.id === agent.stt.p);
-    const lp = state.providers.find((p) => p.id === agent.llm.p);
-    const tp = state.providers.find((p) => p.id === agent.tts.p);
-    push(Boolean(sp && lp && tp), 'STT, LLM and TTS plug-ins exist and are linked');
-    if (!sp || !lp || !tp)
-        return items;
+    const sp = state.providers.find((p) => p.kind === 'stt' && p.id === state.services?.stt?.providerId);
+    const lp = state.providers.find((p) => p.kind === 'llm' && p.id === state.services?.llm?.providerId);
+    const tp = state.providers.find((p) => p.kind === 'tts' && p.id === state.services?.tts?.providerId);
+    const sttModel = String(state.services?.stt?.model || '');
+    const llmModel = String(state.services?.llm?.model || '');
+    const ttsModel = String(state.services?.tts?.model || '');
+    push(Boolean(sp), 'One global STT provider is selected in Plug-Ins');
+    push(Boolean(lp), 'One global LLM provider is selected in Plug-Ins');
+    push(Boolean(tp), 'One global TTS provider is selected in Plug-Ins');
     // STT validations
-    push(sp.type === 'deepgram', 'STT provider type is "deepgram" (only Deepgram is supported by Voice Agent API)');
-    push(defaults_1.VOICE_AGENT_STT_MODELS.includes(agent.stt.model), `STT model "${agent.stt.model}" is supported by Voice Agent (Flux v2 only)`);
+    push(Boolean(sp && sp.type === 'deepgram'), 'Global STT provider is Deepgram (required by Voice Agent API)');
+    push(Boolean(sp && defaults_1.VOICE_AGENT_STT_MODELS.includes(sttModel)), `Global STT model "${sttModel || 'not selected'}" is supported by Voice Agent (Flux v2 only)`);
     push(agent.greeting.trim().length > 10, 'Greeting is set (> 10 chars)');
-    const maxPromptOk = lp.endpoint.trim()
-        ? agent.prompt.trim().length > 0
-        : agent.prompt.trim().length > 0 && agent.prompt.length <= 25000;
+    const maxPromptOk = agent.prompt.trim().length > 0 && agent.prompt.length <= 25000;
     push(maxPromptOk, 'System prompt is non-empty and within Deepgram 25,000-char managed limit');
-    if (agent.stt.model.startsWith('flux')) {
+    if (sttModel.startsWith('flux')) {
         const eot = Number(agent.stt.eot);
         const eager = Number(agent.stt.eager);
         const eotms = Number(agent.stt.eotms);
@@ -321,17 +329,15 @@ function validateAgent(state, agent) {
     }
     // LLM validations (strictly Deepgram-managed LLM providers & models)
     const dgManagedProviders = ['open_ai', 'anthropic', 'google', 'groq', 'nvidia'];
-    push(dgManagedProviders.includes(lp.type) && !lp.endpoint.trim(), `LLM provider (${lp.type}) is natively managed by Deepgram (no BYO endpoint)`);
-    const allowedModels = lp.models
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean);
-    push(allowedModels.includes(agent.llm.model), `LLM model "${agent.llm.model}" is an official Deepgram-provided model`);
+    push(Boolean(lp && dgManagedProviders.includes(lp.type) && !lp.endpoint.trim()), `Selected global LLM provider (${lp?.name || 'none'}) is natively managed by Deepgram (no BYO endpoint)`);
+    const allowedModels = lp ? (0, defaults_1.deepgramModelsForProviderType)(lp.type) : [];
+    push(Boolean(lp && allowedModels.includes(llmModel)), `Selected global LLM model "${llmModel || 'not selected'}" is offered by the chosen Deepgram-managed provider`);
     // TTS validations
-    const ttsNeedsEndpoint = !['deepgram', 'cartesia'].includes(tp.type);
-    push(!ttsNeedsEndpoint || Boolean(tp.endpoint.trim()), `TTS endpoint configured where required (${tp.type})`);
-    if (tp.type === 'deepgram') {
-        const isFluxTts = agent.tts.model.startsWith('flux');
+    const ttsNeedsEndpoint = Boolean(tp && !['deepgram', 'cartesia'].includes(tp.type));
+    push(Boolean(tp && (!ttsNeedsEndpoint || tp.endpoint.trim())), `TTS endpoint configured where required (${tp?.type || 'no provider'})`);
+    push(Boolean(tp && ttsModel && tp.models.split(',').map((s) => s.trim()).includes(ttsModel)), `Selected global TTS model "${ttsModel || 'not selected'}" belongs to the chosen provider`);
+    if (tp?.type === 'deepgram') {
+        const isFluxTts = ttsModel.startsWith('flux');
         const spd = Number(agent.tts.speed);
         const expr = Number(agent.tts.expr);
         if (isFluxTts) {
@@ -342,10 +348,10 @@ function validateAgent(state, agent) {
             push(spd >= 0.7 && spd <= 1.5, `Aura TTS speed (${spd}) is within 0.7–1.5`);
         }
     }
-    const hasPlaceholderVoice = tp.endpoint.includes('{voice_id}') || tp.extra.includes('"VOICE_ID"');
+    const hasPlaceholderVoice = Boolean(tp && (tp.endpoint.includes('{voice_id}') || tp.extra.includes('"VOICE_ID"')));
     push(!hasPlaceholderVoice, 'TTS endpoint/extra has no unreplaced {voice_id} or VOICE_ID placeholder', true);
     // JSON syntax & object schema checks
-    const providersValidJson = [sp, lp, tp].every((p) => parseJsonObject(p.headers).ok && parseJsonObject(p.extra).ok);
+    const providersValidJson = [sp, lp, tp].every((p) => Boolean(p && parseJsonObject(p.headers).ok && parseJsonObject(p.extra).ok));
     const fnsForAgent = agent.fnIds
         .map((id) => state.functions.find((f) => f.id === id))
         .filter((f) => Boolean(f));

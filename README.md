@@ -38,7 +38,7 @@ voice-agent-console/
 │   ├── vicibox-install.sh        # One-command co-located ViciBox (OpenSUSE / Ubuntu / Debian) installer
 │   └── voice-agent-bridge.service # Hardened systemd service unit (Restart=always)
 ├── tests/
-│   ├── step1-verify.ts           # 11 automated checks (Catalog, TTS, Schema & UI bug regressions, SQLite)
+│   ├── step1-verify.ts           # 12 automated checks (Catalog, TTS, Schema & UI bug regressions, SQLite)
 │   ├── step2-verify.ts           # 7 automated checks (Live Simulator WS, Comfort Silence, Live Deepgram E2E)
 │   ├── step3-verify.ts           # 9 automated checks (G.711/RTP, AudioSocket, Live 8kHz SIP+RTP, AMI, Vici APIs)
 │   └── step4-verify.ts           # 9 automated checks (Auth, IP/Capacity guards, Stereo WAV, Webhooks, CSV, Medicare E2E)
@@ -79,11 +79,15 @@ npm start
 
 Open **`http://localhost:3000`**.
 
-Run all **36 end-to-end verification checks** across Steps 1–4:
+Run all **37 end-to-end verification checks** across Steps 1–4. The runner uses a temporary data directory and loopback-only ports; live Deepgram checks use your configured API key:
 
 ```bash
 npm test
 ```
+
+## Docker / Render Deployment
+
+The full console requires a long-running Node service with WebSocket support. Configure a strong `ADMIN_PASSWORD` and `DEEPGRAM_API_KEY` in the host's secret manager. The server refuses to bind to a non-loopback interface without `ADMIN_PASSWORD`. For Docker, pass your environment file and override `HOST=0.0.0.0`; keep the SIP and AudioSocket bridge ports private. The `vercel.json` configuration only serves static assets and does not provide the API, WebSocket simulator, or telephony bridge.
 
 ---
 

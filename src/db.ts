@@ -4,6 +4,7 @@ import { clearAllRecordings } from './call-recorder';
 import { ConsoleState } from './types';
 import { createDefaultState, normalizeState } from './defaults';
 import { diffStates } from './settings-builder';
+import { DATA_DIR } from './data-paths';
 
 interface SqliteStatementLike {
   get: (...params: any[]) => any;
@@ -73,7 +74,6 @@ function openSqliteEngine(dbPath: string): SqliteDbLike {
   }
 }
 
-const DATA_DIR = path.resolve(__dirname, '..', 'data');
 const DB_PATH = path.join(DATA_DIR, 'console.sqlite');
 const JSON_MIRROR_PATH = path.join(DATA_DIR, 'console-state.json');
 
@@ -146,7 +146,7 @@ export interface BridgeCallLogRecord {
 
 let db: SqliteDbLike | null = null;
 
-function getDb(): SqliteDbLike {
+export function getDb(): SqliteDbLike {
   if (db) return db;
   fs.mkdirSync(DATA_DIR, { recursive: true });
   db = openSqliteEngine(DB_PATH);
