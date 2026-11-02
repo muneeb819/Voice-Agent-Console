@@ -1,22 +1,22 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="obsidian" data-exposure="studio" data-glass="frosted">
+<html lang="en" data-theme="cyan_signal" data-exposure="studio" data-glass="frosted">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <title>Voice Agent Console - AI Telephony &amp; VICIdial Studio</title>
+  <title>MMA Digital Labs | Voice Agent Console — AI Telephony &amp; VICIdial Studio</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
   <link rel="apple-touch-icon" href="/assets/monogram.svg" />
   <meta name="theme-color" content="#0B0F14" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=elite-2.14" />
+  <link rel="stylesheet" href="./styles.css?v=elite-2.15" />
   <script>
     (function () {
-      var CURRENT_BUILD = 'elite-2.14';
+      var CURRENT_BUILD = 'elite-2.15';
       // Keep the browser URL bar permanently clean (strip any legacy ?v= or ?cb= query params)
       try {
         if (window.location.search && /^[?&](v|cb|_)=/.test(window.location.search)) {
@@ -69,8 +69,8 @@
 
     <div class="header-actions">
       <span id="st">Loading…</span>
-      <a class="g" id="btn-newtab" href="./" target="_blank" rel="noopener" style="text-decoration:none;display:none" title="Open console in a dedicated browser tab for unrestricted microphone access">â†— Open Tab</a>
-      <button class="g theme-trigger" id="btn-theme" title="Open Appearance &amp; Theme Studio (6 Elite Themes + Exposure &amp; Glass Controls)">
+      <a class="g" id="btn-newtab" href="./" target="_blank" rel="noopener" style="text-decoration:none;display:none" title="Open console in a dedicated browser tab for unrestricted microphone access">↗ Open Tab</a>
+      <button class="g theme-trigger" id="btn-theme" title="Open Appearance &amp; Theme Studio (10 Visual Systems + Exposure &amp; Glass Controls)">
         <span class="theme-dot" id="theme-active-dot"></span>
         <span id="theme-active-lbl">Theme</span>
       </button>
@@ -105,18 +105,33 @@
     <div class="modal theme-studio-modal">
       <div class="modal-head">
         <div>
-          <h3>🎨 Appearance &amp; Theme Studio</h3>
-          <div class="note" style="margin-top:2px">Choose from 6 signature color worlds and tune ambient light exposure &amp; glass depth in real time.</div>
+          <div class="studio-eyebrow">DESIGN SYSTEM / THEME STUDIO &bull; MMA DIGITAL LABS</div>
+          <h3>🎨 Four Distinct Identities + Signature Studio Worlds</h3>
+          <div class="note" style="margin-top:2px">Every element — logo, loader, login, and console — adapts in real time. Pick the mood that matches your signal.</div>
         </div>
-        <button class="g" id="theme-close">âœ• Done</button>
+        <button class="g" id="theme-close">✕ Done</button>
       </div>
 
-      <h2 class="studio-sec-title">Signature Color Worlds</h2>
+      <div id="theme-studio-hero" class="theme-studio-hero"></div>
+
+      <div id="theme-loader-preview" class="theme-loader-preview" hidden>
+        <div class="theme-loader-card">
+          <div class="theme-loader-kicker">MMA DIGITAL LABS &bull; ACOUSTIC TELEMETRY</div>
+          <div class="theme-loader-bars" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span><span></span><span></span>
+          </div>
+          <div class="theme-loader-status" id="theme-loader-status">CONNECTING TO MODEL…</div>
+          <div class="theme-loader-sub" id="theme-loader-sub">Synchronizing Deepgram Flux v2 WebSocket &amp; neural voice pipeline</div>
+        </div>
+      </div>
+
+      <h2 class="studio-sec-title">Choose an Identity — Click a card to re-skin the entire system</h2>
       <div class="theme-grid" id="theme-swatch-grid"></div>
 
       <div class="row" style="margin-top:16px">
         <div>
-          <label>âœ¨ Ambient Light Exposure</label>
+          <label>✨ Ambient Light Exposure</label>
           <div class="seg-group" id="exposure-seg">
             <button type="button" data-exp="minimal">Matte Off</button>
             <button type="button" data-exp="studio">Studio Glow</button>
@@ -156,7 +171,7 @@
     <div class="modal">
       <div class="modal-head">
         <h3>🔑 Environment &amp; Cloud API Keys</h3>
-        <button class="g" id="keys-close-x" onclick="document.getElementById('keys-modal').hidden=true">âœ•</button>
+        <button class="g" id="keys-close-x" onclick="document.getElementById('keys-modal').hidden=true">✕</button>
       </div>
       <div class="note" style="margin-bottom: 10px;">
         Keys are automatically stripped of accidental quotes or <code>Token</code>/<code>Bearer</code> prefixes and verified live against Deepgram's authenticated REST &amp; Voice Agent WebSocket endpoints.
@@ -173,6 +188,6 @@
   </div>
 
   <input type="file" id="import-file" accept="application/json,.json" hidden />
-  <script src="./app.js?v=elite-2.14"></script>
+  <script src="./app.js?v=elite-2.15"></script>
 </body>
 </html>
