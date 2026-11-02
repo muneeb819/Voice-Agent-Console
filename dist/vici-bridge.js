@@ -184,10 +184,7 @@ class VicidialBridgeService {
     };
     constructor(opts = {}) {
         const st = (0, db_1.getConsoleState)();
-        this.host =
-            opts.host ||
-                process.env.BRIDGE_BIND_HOST ||
-                (process.env.VAC_DEBUG === '1' ? process.env.HOST || '0.0.0.0' : '127.0.0.1');
+        this.host = opts.host || process.env.BRIDGE_BIND_HOST || '127.0.0.1';
         this.audioSocketPort =
             opts.audioSocketPort !== undefined
                 ? opts.audioSocketPort
@@ -480,15 +477,29 @@ class VicidialBridgeService {
             });
         });
         await new Promise((resolve, reject) => {
-            this.tcpServer.once('error', reject);
-            this.tcpServer.listen(this.audioSocketPort, this.host, () => {
-                const addr = this.tcpServer.address();
-                if (addr && typeof addr === 'object') {
-                    this.audioSocketPort = addr.port;
-                }
-                this.stats.audioSocketListening = true;
-                resolve();
-            });
+            const tryListen = (candidatePort, retriesLeft) => {
+                const onErr = (err) => {
+                    this.tcpServer.removeListener('error', onErr);
+                    if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
+                        const nextPort = candidatePort + 1;
+                        console.warn(`[ViciBridge] AudioSocket TCP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);
+                        tryListen(nextPort, retriesLeft - 1);
+                        return;
+                    }
+                    reject(err);
+                };
+                this.tcpServer.once('error', onErr);
+                this.tcpServer.listen(candidatePort, this.host, () => {
+                    this.tcpServer.removeListener('error', onErr);
+                    const addr = this.tcpServer.address();
+                    if (addr && typeof addr === 'object') {
+                        this.audioSocketPort = addr.port;
+                    }
+                    this.stats.audioSocketListening = true;
+                    resolve();
+                });
+            };
+            tryListen(this.audioSocketPort, 100);
         });
     }
     // ==================== TRANSPORT 2: ASTERISK 13/16/18+ SIP + RTP (G.711 ULAW) ====================
@@ -771,15 +782,29 @@ class VicidialBridgeService {
             }
         });
         await new Promise((resolve, reject) => {
-            sock.once('error', reject);
-            sock.bind(this.sipPort, this.host, () => {
-                const addr = sock.address();
-                if (addr && typeof addr === 'object') {
-                    this.sipPort = addr.port;
-                }
-                this.stats.sipRtpListening = true;
-                resolve();
-            });
+            const tryBind = (candidatePort, retriesLeft) => {
+                const onErr = (err) => {
+                    sock.removeListener('error', onErr);
+                    if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
+                        const nextPort = candidatePort + 1;
+                        console.warn(`[ViciBridge] SIP UDP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);
+                        tryBind(nextPort, retriesLeft - 1);
+                        return;
+                    }
+                    reject(err);
+                };
+                sock.once('error', onErr);
+                sock.bind(candidatePort, this.host, () => {
+                    sock.removeListener('error', onErr);
+                    const addr = sock.address();
+                    if (addr && typeof addr === 'object') {
+                        this.sipPort = addr.port;
+                    }
+                    this.stats.sipRtpListening = true;
+                    resolve();
+                });
+            };
+            tryBind(this.sipPort, 100);
         });
     }
     // ==================== UNIFIED CALL LIFECYCLE ORCHESTRATOR ====================

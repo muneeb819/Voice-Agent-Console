@@ -731,7 +731,7 @@ if (require.main === module) {
                 (0, deepgram_catalog_1.fetchDeepgramVoiceCatalog)().catch(() => { });
             });
         };
-        listenWithFallback(initialPort, 15);
+        listenWithFallback(initialPort, 100);
     })().catch((err) => {
         console.error('[VoiceAgentConsole] Startup fatal error:', err);
         process.exit(1);
