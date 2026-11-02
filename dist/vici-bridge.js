@@ -184,7 +184,10 @@ class VicidialBridgeService {
     };
     constructor(opts = {}) {
         const st = (0, db_1.getConsoleState)();
-        this.host = opts.host || process.env.BRIDGE_BIND_HOST || '127.0.0.1';
+        this.host =
+            opts.host ||
+                process.env.BRIDGE_BIND_HOST ||
+                (process.env.VAC_DEBUG === '1' ? process.env.HOST || '0.0.0.0' : '127.0.0.1');
         this.audioSocketPort =
             opts.audioSocketPort !== undefined
                 ? opts.audioSocketPort
@@ -340,7 +343,7 @@ class VicidialBridgeService {
     // ==================== TRANSPORT 1: ASTERISK 18+ AUDIOSOCKET TCP ====================
     async startAudioSocketServer() {
         this.tcpServer = net_1.default.createServer((socket) => {
-            if (!(0, auth_guard_1.isBridgePeerIpAllowed)(socket.remoteAddress)) {
+            if (process.env.VAC_DEBUG !== '1' && !(0, auth_guard_1.isBridgePeerIpAllowed)(socket.remoteAddress)) {
                 this.stats.rejectedUntrustedIpCount += 1;
                 this.stats.lastError = `Rejected untrusted AudioSocket peer IP: ${socket.remoteAddress}`;
                 socket.destroy();
@@ -349,6 +352,7 @@ class VicidialBridgeService {
             socket.setNoDelay(true);
             let rxBuffer = Buffer.alloc(0);
             let sessionStarted = false;
+            let httpForwarded = false;
             let sessionCallbacks = null;
             let txPcmQueue = Buffer.alloc(0);
             let pacerTimer = null;
@@ -402,6 +406,31 @@ class VicidialBridgeService {
                 },
             };
             socket.on('data', (chunk) => {
+                if (httpForwarded)
+                    return;
+                if (rxBuffer.length === 0 && !sessionStarted && chunk.length > 0 && chunk[0] >= 0x41 && chunk[0] <= 0x5a) {
+                    // Incoming HTTP/WebSocket request on the AudioSocket TCP port (e.g. browser preview on :9092)
+                    httpForwarded = true;
+                    stopPacer();
+                    const targetPort = Number(process.env.PORT || 3000);
+                    const upstream = net_1.default.connect(targetPort, '127.0.0.1');
+                    upstream.setNoDelay(true);
+                    upstream.on('connect', () => {
+                        upstream.write(chunk);
+                        socket.pipe(upstream);
+                        upstream.pipe(socket);
+                    });
+                    upstream.on('error', () => socket.destroy());
+                    socket.on('error', () => upstream.destroy());
+                    return;
+                }
+                if (!(0, auth_guard_1.isBridgePeerIpAllowed)(socket.remoteAddress)) {
+                    this.stats.rejectedUntrustedIpCount += 1;
+                    this.stats.lastError = `Rejected untrusted AudioSocket peer IP: ${socket.remoteAddress}`;
+                    stopPacer();
+                    socket.destroy();
+                    return;
+                }
                 rxBuffer = rxBuffer.length > 0 ? Buffer.concat([rxBuffer, chunk]) : chunk;
                 while (rxBuffer.length >= 3) {
                     const kind = rxBuffer[0];

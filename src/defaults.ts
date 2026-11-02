@@ -1,4 +1,4 @@
-import { AgentBehavior, AgentFunction, ConsoleState, Provider } from './types';
+import { AgentBehavior, AgentFunction, Campaign, ConsoleState, Provider } from './types';
 
 // Deepgram Voice Agent listens with either Nova (general purpose) or Flux v2.
 // The Voice Agent's own verified baseline is Nova-3; Flux models remain available.
@@ -162,7 +162,7 @@ export function createDefaultState(): ConsoleState {
         'tts',
         'Deepgram TTS (Flux v2 & Aura v1)',
         'deepgram',
-        'flux-kit-en,flux-haley-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en'
+        'flux-kit-en,flux-haley-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en,aura-stella-en'
       ),
     ],
     functions: [
@@ -305,7 +305,7 @@ export function createDefaultState(): ConsoleState {
           '3) Speak verbatim:\n' +
           '   "All right, everything looks good on my end. Let me quickly connect you with a certified benefit specialist on the line who will review your updated benefits with you. Just hold for one moment, here you go!"',
         acceptViciCalls: true,
-        injectCampaignDisclosure: false,
+        injectCampaignDisclosure: true,
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
@@ -353,9 +353,10 @@ export function createDefaultState(): ConsoleState {
           '3) Universal General Q&A: Answer ANY general question — science, world facts, history, math, technology, travel, advice, definitions, or casual small talk — accurately, clearly, and conversationally.\n' +
           '4) Ultra-Fast Spoken Cadence: Lead with the direct answer or warm reaction in the very first words. Keep responses crisp (1–2 natural spoken sentences, around 15–35 words unless the caller asks for deeper detail).\n' +
           '5) Expressive Human Presence: Use natural spoken warmth, enthusiasm, empathy, and conversational micro-gestures ("Oh, great question!", "Gotcha — here is how that works:", "Haha, I love that one!") without ever writing bracketed stage directions.\n' +
-          '6) Call Control: If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.',
-        acceptViciCalls: false,
-        injectCampaignDisclosure: false,
+          '6) Live Specialist Transfer: Whenever the caller asks to speak with a live specialist, closer, or supervisor, or confirms qualification for a benefit/coverage review, call set_disposition with code "XFER" and call transfer_to_live_agent.\n' +
+          '7) Do-Not-Call (DNC) & Call Control: If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with code "DNC", and call end_call immediately. If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.',
+        acceptViciCalls: true,
+        injectCampaignDisclosure: true,
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
@@ -382,11 +383,11 @@ export function createDefaultState(): ConsoleState {
         },
         audio: {
           inEnc: 'linear16',
-          inRate: 16000,
+          inRate: 8000,
           outEnc: 'linear16',
-          outRate: 24000,
+          outRate: 8000,
         },
-        fnIds: ['fn_end'],
+        fnIds: ['fn_xfer', 'fn_dispo', 'fn_end'],
       },
     ],
     campaigns: [
@@ -427,6 +428,25 @@ export function createDefaultState(): ConsoleState {
         dnc: true,
         disclosure: 'This call may be recorded for quality and benefit verification.',
         dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK',
+      },
+      {
+        id: 'c_nova',
+        name: 'Nova — Live Concierge & General Q&A',
+        agentId: 'a_nova',
+        viciCampaign: 'NOVACONC',
+        lists: '3001',
+        start: '09:00',
+        end: '20:00',
+        tz: 'America/New_York',
+        attempts: 3,
+        retry: 120,
+        maxCalls: 10,
+        xferType: 'ingroup',
+        xferTarget: 'CONCIERGE_CLOSERS',
+        fallback: 'Dispo CALLBK',
+        dnc: true,
+        disclosure: 'This call may be recorded for quality and training purposes.',
+        dispos: 'XFER,NI,DNC,NA,CALLBK,DEC',
       },
     ],
     vici: {
@@ -675,6 +695,10 @@ export function normalizeState(raw: any): ConsoleState {
         : { providerId: '', model: '' };
     }
     const allowedModels = provider.models.split(',').map((entry) => entry.trim()).filter(Boolean);
+    if (!allowedModels.includes(model) && provider.type === 'deepgram' && /^(flux|aura)-/i.test(model)) {
+      allowedModels.push(model);
+      provider.models = allowedModels.join(',');
+    }
     return allowedModels.includes(model) ? { providerId: provider.id, model } : { providerId: '', model: '' };
   };
   const services: ConsoleState['services'] = {
@@ -687,6 +711,10 @@ export function normalizeState(raw: any): ConsoleState {
     const n = Number(val);
     return Number.isFinite(n) ? n : fallback;
   };
+
+  const xferFnId = fnNameMap.get('transfer_to_live_agent');
+  const dispoFnId = fnNameMap.get('set_disposition');
+  const endFnId = fnNameMap.get('end_call');
 
   const agents = Array.isArray(src.agents) && src.agents.length
     ? src.agents.map((a: any, idx: number) => {
@@ -703,6 +731,26 @@ export function normalizeState(raw: any): ConsoleState {
 
         const agentId = String(a.id || `a_${idx + 1}`);
         const agentName = String(a.name || `Agent ${idx + 1}`);
+        const isNovaAgent = agentId === 'a_nova' || /nova.*concierge/i.test(agentName);
+
+        if (isNovaAgent) {
+          for (const reqFnId of [xferFnId, dispoFnId, endFnId]) {
+            if (reqFnId && !fnIds.includes(reqFnId)) fnIds.push(reqFnId);
+          }
+        }
+
+        let cleanPrompt = String(a.prompt ?? '').replace(/When the call connects,\s*call accept_vicidial_call\.?\s*/gi, '').trim();
+        if (cleanPrompt.length > 0) {
+          if (xferFnId && fnIds.includes(xferFnId) && !/transfer_to_live_agent/i.test(cleanPrompt)) {
+            cleanPrompt +=
+              '\n- Live Specialist Transfer: Once the caller confirms qualification or asks to speak with a specialist, call set_disposition with code "XFER" and call transfer_to_live_agent.';
+          }
+          if (!/(dnc|do not call|take me off|stop)/i.test(cleanPrompt)) {
+            cleanPrompt +=
+              '\n- Do-Not-Call (DNC) Compliance: If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with code "DNC", and call end_call immediately.';
+          }
+        }
+
         const rawBeh = a.behavior && typeof a.behavior === 'object' ? a.behavior : {};
         const behavior: AgentBehavior = {
           bargeIn: ['instant', 'server', 'off'].includes(rawBeh.bargeIn) ? rawBeh.bargeIn : 'instant',
@@ -730,14 +778,17 @@ export function normalizeState(raw: any): ConsoleState {
               : defaultSelfIntroForAgent(agentId, agentName),
         };
 
+        const rawInRate = Math.round(num(a.audio?.inRate, 8000));
+        const rawOutRate = Math.round(num(a.audio?.outRate, 8000));
+
         return {
           id: agentId,
           name: agentName,
           mode: ['outbound', 'inbound', 'both'].includes(a.mode) ? a.mode : 'outbound',
           language: String(a.language || 'en'),
           greeting: String(a.greeting ?? ''),
-          prompt: String(a.prompt ?? '').replace(/When the call connects,\s*call accept_vicidial_call\.?\s*/gi, ''),
-          acceptViciCalls: a.acceptViciCalls !== undefined ? Boolean(a.acceptViciCalls) : hadLegacyAccept,
+          prompt: cleanPrompt,
+          acceptViciCalls: isNovaAgent ? true : a.acceptViciCalls !== undefined ? Boolean(a.acceptViciCalls) : hadLegacyAccept,
           injectCampaignDisclosure:
             a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : true,
           behavior,
@@ -761,36 +812,80 @@ export function normalizeState(raw: any): ConsoleState {
           },
           audio: {
             inEnc: ['linear16', 'mulaw', 'alaw'].includes(a.audio?.inEnc) ? a.audio.inEnc : 'linear16',
-            inRate: Math.round(num(a.audio?.inRate, 8000)),
+            inRate: rawInRate !== 8000 ? 8000 : rawInRate,
             outEnc: ['linear16', 'mulaw', 'alaw'].includes(a.audio?.outEnc) ? a.audio.outEnc : 'linear16',
-            outRate: Math.round(num(a.audio?.outRate, 8000)),
+            outRate: rawInRate !== 8000 ? 8000 : rawOutRate,
           },
           fnIds,
         };
       })
     : base.agents;
 
-  const campaigns = Array.isArray(src.campaigns) && src.campaigns.length
-    ? src.campaigns.map((c: any, idx: number) => ({
-        id: String(c.id || `c_${idx + 1}`),
-        name: String(c.name || `Campaign ${idx + 1}`),
-        agentId: String(c.agentId || agents[0].id),
-        viciCampaign: String(c.viciCampaign ?? ''),
-        lists: String(c.lists ?? ''),
-        start: String(c.start || '09:00'),
-        end: String(c.end || '20:00'),
-        tz: String(c.tz || 'America/New_York'),
-        attempts: Math.round(num(c.attempts, 3)),
-        retry: Math.round(num(c.retry, 120)),
-        maxCalls: Math.round(num(c.maxCalls, 10)),
-        xferType: ['ingroup', 'extension', 'number'].includes(c.xferType) ? c.xferType : 'ingroup',
-        xferTarget: String(c.xferTarget ?? ''),
-        fallback: String(c.fallback ?? ''),
-        dnc: Boolean(c.dnc),
-        disclosure: String(c.disclosure ?? ''),
-        dispos: String(c.dispos ?? 'XFER,NI,DNC,NA,CALLBK,DEC'),
-      }))
-    : base.campaigns;
+  const campaigns: Campaign[] = Array.isArray(src.campaigns) && src.campaigns.length
+    ? src.campaigns.map((c: any, idx: number) => {
+        const cName = String(c.name || `Campaign ${idx + 1}`);
+        const defaultDisclosure = /medicare/i.test(cName)
+          ? 'This call may be recorded for quality and benefit verification.'
+          : 'This call may be recorded for quality purposes.';
+        return {
+          id: String(c.id || `c_${idx + 1}`),
+          name: cName,
+          agentId: String(c.agentId || agents[0].id),
+          viciCampaign: String(c.viciCampaign ?? '').trim() || 'AUTOCAMP',
+          lists: String(c.lists ?? ''),
+          start: String(c.start || '09:00'),
+          end: String(c.end || '20:00'),
+          tz: String(c.tz || 'America/New_York'),
+          attempts: Math.round(num(c.attempts, 3)),
+          retry: Math.round(num(c.retry, 120)),
+          maxCalls: Math.round(num(c.maxCalls, 10)),
+          xferType: (['ingroup', 'extension', 'number'].includes(c.xferType) ? c.xferType : 'ingroup') as
+            | 'ingroup'
+            | 'extension'
+            | 'number',
+          xferTarget: String(c.xferTarget ?? '').trim() || (/medicare/i.test(cName) ? 'MED_CLOSERS' : 'FE_CLOSERS'),
+          fallback: String(c.fallback ?? ''),
+          dnc: c.dnc !== undefined ? Boolean(c.dnc) : true,
+          disclosure: String(c.disclosure ?? '').trim() || defaultDisclosure,
+          dispos: String(c.dispos ?? 'XFER,NI,DNC,NA,CALLBK,DEC'),
+        };
+      })
+    : base.campaigns.map((c) => ({ ...c }));
+
+  // Ensure every active bot agent (e.g. Nova or custom Medicare agents) is assigned to at least one campaign
+  for (const ag of agents) {
+    if (!campaigns.some((c) => c.agentId === ag.id) && !/^Untitled\b/i.test(ag.name)) {
+      const isNova = ag.id === 'a_nova' || /nova/i.test(ag.name);
+      const isMed = /medicare/i.test(ag.name);
+      campaigns.push({
+        id: isNova && !campaigns.some((c) => c.id === 'c_nova') ? 'c_nova' : `c_${ag.id}`,
+        name: isNova ? 'Nova — Live Concierge & General Q&A' : `${ag.name} — Outbound`,
+        agentId: ag.id,
+        viciCampaign: isNova
+          ? 'NOVACONC'
+          : isMed
+          ? 'MEDICARE'
+          : ag.name.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 8) || 'AUTOCAMP',
+        lists: isNova ? '3001' : isMed ? '2001,2002' : '1001',
+        start: '09:00',
+        end: '20:00',
+        tz: 'America/New_York',
+        attempts: 3,
+        retry: 120,
+        maxCalls: 10,
+        xferType: 'ingroup',
+        xferTarget: isNova ? 'CONCIERGE_CLOSERS' : isMed ? 'MED_CLOSERS' : 'FE_CLOSERS',
+        fallback: 'Dispo CALLBK',
+        dnc: true,
+        disclosure: isMed
+          ? 'This call may be recorded for quality and benefit verification.'
+          : isNova
+          ? 'This call may be recorded for quality and training purposes.'
+          : 'This call may be recorded for quality purposes.',
+        dispos: isMed ? 'XFER,DQ,LANG,DNC,NI,NA,CALLBK' : 'XFER,NI,DNC,NA,CALLBK,DEC',
+      });
+    }
+  }
 
   // Migrate legacy vici.apiUrl if present
   let viciBaseUrl = src.vici?.viciBaseUrl;

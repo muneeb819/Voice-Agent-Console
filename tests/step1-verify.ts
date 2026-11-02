@@ -9,6 +9,7 @@ import {
   parseJsonObject,
   parseJsonSchema,
   validateAgent,
+  validateState,
 } from '../src/settings-builder';
 
 const BASE = process.env.TEST_URL || 'http://127.0.0.1:3000';
@@ -81,15 +82,19 @@ async function run() {
     const emptyData: any = await emptyRes.json();
     assert.strictEqual(emptyData.code, 'EMPTY_TEXT');
 
-    // Live synthesis using Universal DEEPGRAM_API_KEY in .env
+    // Live synthesis using Universal DEEPGRAM_API_KEY in .env (or verify MISSING_DEEPGRAM_KEY when .env is absent in offline CI)
     const liveTtsRes = await fetch(`${BASE}/api/tts/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ providerType: 'deepgram', model: 'flux-haley-en', text: 'Hello Robert, this is Sarah!' }),
     });
-    assert.strictEqual(liveTtsRes.status, 200, 'Expected 200 OK live TTS audio from Deepgram');
-    const liveTtsBuf = Buffer.from(await liveTtsRes.arrayBuffer());
-    assert.ok(liveTtsBuf.length > 5000, `Expected >5KB synthesized MP3 audio, got ${liveTtsBuf.length}`);
+    if (liveTtsRes.status === 200) {
+      const liveTtsBuf = Buffer.from(await liveTtsRes.arrayBuffer());
+      assert.ok(liveTtsBuf.length > 5000, `Expected >5KB synthesized MP3 audio, got ${liveTtsBuf.length}`);
+    } else {
+      const errData: any = await liveTtsRes.json();
+      assert.strictEqual(errData.code, 'MISSING_DEEPGRAM_KEY', 'Expected 200 OK or MISSING_DEEPGRAM_KEY when .env has no key');
+    }
 
     // Unconfigured BYO provider still returns actionable missing-key guidance
     const noElevenRes = await fetch(`${BASE}/api/tts/preview`, {
@@ -146,7 +151,7 @@ async function run() {
     legacy.providers.find((p: any) => p.kind === 'stt').extra = '{"model":"nova-3","version":"v1","smart_format":true}';
     const migrated = normalizeState(legacy);
     assert.strictEqual((migrated.agents[0].stt as any).model, undefined, 'Per-agent STT model overrides are removed during migration');
-    assert.strictEqual(migrated.providers.find((p) => p.kind === 'stt')?.models, 'flux-general-en,flux-general-multi');
+    assert.strictEqual(migrated.providers.find((p) => p.kind === 'stt')?.models, 'nova-3,flux-general-en,flux-general-multi');
     assert.strictEqual(migrated.services.stt.providerId, '', 'Old per-agent values must not silently choose a global channel');
 
     const ready = configureTestServices(migrated);
@@ -260,6 +265,57 @@ async function run() {
     // Restore clean default state after test so UI starts crisp for user inspection
     const resetRes = await fetch(`${BASE}/api/state/reset`, { method: 'POST' });
     assert.strictEqual(resetRes.status, 200);
+  });
+
+  await check('13. Regression: Aura v1 (aura-stella-en), Jessica - Medicare, Nova Concierge & Medicare — Fronter Outbound pass with 0 errors/warnings', () => {
+    const raw: any = configureTestServices(createDefaultState());
+    raw.services.tts = { providerId: 't1', model: 'aura-stella-en' };
+    raw.agents.push({
+      id: 'a_jessica',
+      name: 'Jessica - Medicare',
+      mode: 'outbound',
+      language: 'en',
+      greeting: 'Hello! This is Jessica calling from the Medicare Benefits Department.',
+      prompt: 'You are Jessica, a Medicare advisor helping seniors review their Part A and Part B benefits.',
+      acceptViciCalls: true,
+      injectCampaignDisclosure: true,
+      stt: { keyterms: 'Medicare', eot: 0.55, eager: 0.35, eotms: 1800, smartFormat: false },
+      llm: { temp: 0.45, reasoning: 'low' },
+      tts: { speed: 1.0, expr: 0 },
+      audio: { inEnc: 'linear16', inRate: 16000, outEnc: 'linear16', outRate: 24000 },
+      fnIds: ['fn_xfer', 'fn_dispo', 'fn_end'],
+    });
+    raw.campaigns.push({
+      id: 'c_med_fronter',
+      name: 'Medicare — Fronter Outbound',
+      agentId: 'a_jessica',
+      viciCampaign: 'MEDFRONT',
+      lists: '2001',
+      start: '09:00',
+      end: '20:00',
+      tz: 'America/New_York',
+      attempts: 3,
+      retry: 120,
+      maxCalls: 10,
+      xferType: 'ingroup',
+      xferTarget: 'MED_CLOSERS',
+      fallback: 'Dispo CALLBK',
+      dnc: true,
+      disclosure: '',
+      dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK',
+    });
+
+    const normalized = normalizeState(raw);
+    const items = validateState(normalized);
+    const nonOk = items.filter((i) => i.level !== 'ok');
+    assert.deepStrictEqual(nonOk, [], `Expected 0 errors and 0 warnings, got: ${JSON.stringify(nonOk)}`);
+    const jessica = normalized.agents.find((a) => a.name === 'Jessica - Medicare')!;
+    const jessicaSettings = buildDeepgramSettings(normalized, jessica);
+    assert.deepStrictEqual(jessicaSettings.agent.speak.provider, {
+      type: 'deepgram',
+      version: 'v1',
+      model: 'aura-stella-en',
+    });
   });
 
   console.log(`\nALL ${results.length}/${results.length} STEP 1 VERIFICATION CHECKS PASSED!`);

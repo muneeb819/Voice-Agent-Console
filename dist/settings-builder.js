@@ -160,8 +160,11 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
         delete listenProvider.language_hints;
         delete listenProvider.keyterms;
     }
-    else if (sttModel !== 'flux-general-multi') {
-        delete listenProvider.language_hints;
+    else {
+        listenProvider.version = 'v2';
+        if (sttModel !== 'flux-general-multi') {
+            delete listenProvider.language_hints;
+        }
     }
     // 2. Think (LLM)
     const selectedLlmModel = String(state.services?.llm?.model || '').trim();
@@ -231,7 +234,10 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
     // 3. Speak (TTS)
     const selectedTtsModel = String(state.services?.tts?.model || '').trim();
     const availableTtsModels = String(tp.models || '').split(',').map((entry) => entry.trim()).filter(Boolean);
-    const ttsModel = tp.kind === 'tts' && availableTtsModels.includes(selectedTtsModel) ? selectedTtsModel : '';
+    const isDeepgramVoice = tp.type === 'deepgram' && /^(flux|aura)-/i.test(selectedTtsModel);
+    const ttsModel = tp.kind === 'tts' && (availableTtsModels.includes(selectedTtsModel) || isDeepgramVoice)
+        ? selectedTtsModel
+        : '';
     const speakProvider = {
         type: tp.kind === 'tts' ? tp.type || '' : '',
     };
@@ -248,22 +254,28 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
         speakProvider.speed = Number(agent.tts.speed);
     }
     const tpExtra = parseJsonObject(tp.extra || '{}');
-    if (tpExtra.ok) {
+    if (tpExtra.ok && tp.type !== 'deepgram') {
         const extraCopy = { ...tpExtra.value };
-        // Deepgram TTS rejects `language` with UNPARSABLE_CLIENT_MESSAGE
-        if (tp.type === 'deepgram') {
-            delete extraCopy.language;
-        }
         Object.assign(speakProvider, extraCopy);
     }
     // Plugin extras may add provider options, but the saved global choice is authoritative.
     speakProvider.type = tp.type || '';
     delete speakProvider.model;
     delete speakProvider.model_id;
-    if (tp.type && ttsModel && tp.type !== 'aws_polly')
+    if (tp.type === 'deepgram') {
+        for (const k of Object.keys(speakProvider))
+            delete speakProvider[k];
+        speakProvider.type = ttsModel ? 'deepgram' : '';
+        if (ttsModel) {
+            speakProvider.version = ttsModel.startsWith('flux') ? 'v2' : 'v1';
+            speakProvider.model = ttsModel;
+        }
+        else {
+            speakProvider.model = '';
+        }
+    }
+    else if (tp.type && ttsModel && tp.type !== 'aws_polly') {
         speakProvider[modelKey] = ttsModel;
-    if (tp.type === 'deepgram' && ttsModel) {
-        speakProvider.version = ttsModel.startsWith('flux') ? 'v2' : 'v1';
     }
     const speak = { provider: speakProvider };
     if (tp.endpoint && tp.endpoint.trim()) {
@@ -345,10 +357,24 @@ function validateAgent(state, agent) {
     // TTS validations
     const ttsNeedsEndpoint = Boolean(tp && !['deepgram', 'cartesia'].includes(tp.type));
     push(Boolean(tp && (!ttsNeedsEndpoint || tp.endpoint.trim())), `TTS endpoint configured where required (${tp?.type || 'no provider'})`);
-    push(Boolean(tp && ttsModel && tp.models.split(',').map((s) => s.trim()).includes(ttsModel)), `Selected global TTS model "${ttsModel || 'not selected'}" belongs to the chosen provider`);
+    const tpModelList = tp ? tp.models.split(',').map((s) => s.trim()).filter(Boolean) : [];
+    const ttsModelBelongs = Boolean(tp && ttsModel && (tpModelList.includes(ttsModel) || (tp.type === 'deepgram' && /^(flux|aura)-/i.test(ttsModel))));
+    push(ttsModelBelongs, `Selected global TTS model "${ttsModel || 'not selected'}" belongs to the chosen provider`);
     if (tp?.type === 'deepgram') {
-        push(Boolean(ttsModel.startsWith('flux-') || ttsModel.startsWith('aura-')), `Deepgram speak model "${ttsModel || 'not selected'}" is a recognized Flux/Aura voice`);
-        push(ttsModel.startsWith('flux-'), `Speak provider sends only {type:"deepgram", version:"v2", model:"${ttsModel || '…'}"}`, !ttsModel.startsWith('flux-'));
+        const isFluxOrAura = Boolean(ttsModel.startsWith('flux-') || ttsModel.startsWith('aura-'));
+        const speakVersion = ttsModel.startsWith('flux-') ? 'v2' : 'v1';
+        push(isFluxOrAura, `Deepgram speak model "${ttsModel || 'not selected'}" is a recognized Flux/Aura voice`);
+        push(isFluxOrAura, `Speak provider sends only {type:"deepgram", version:"${speakVersion}", model:"${ttsModel || '…'}"}`, !isFluxOrAura);
+        if (ttsModel.startsWith('flux-')) {
+            const spd = Number(agent.tts.speed);
+            push(isValidFluxSpeed(spd), `Flux TTS speed (${spd}) is in 0.5–1.5 (0.05 increments)`);
+            const expr = Number(agent.tts.expr);
+            push(Number.isInteger(expr) && expr >= -2 && expr <= 2, `Flux TTS expressivity (${expr}) is an integer in -2..+2`);
+        }
+        else if (ttsModel.startsWith('aura-')) {
+            const spd = Number(agent.tts.speed);
+            push(spd >= 0.7 && spd <= 1.5, `Aura TTS speed (${spd}) is within 0.7–1.5`);
+        }
     }
     const hasPlaceholderVoice = Boolean(tp && (tp.endpoint.includes('{voice_id}') || tp.extra.includes('"VOICE_ID"')));
     push(!hasPlaceholderVoice, 'TTS endpoint/extra has no unreplaced {voice_id} or VOICE_ID placeholder', true);

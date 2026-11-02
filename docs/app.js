@@ -711,6 +711,8 @@
     if (!state || !Array.isArray(state.agents)) return false;
     let mutated = false;
 
+    const xferFn = state.functions?.find((f) => f.name === 'transfer_to_live_agent')?.id;
+    const dispoFn = state.functions?.find((f) => f.name === 'set_disposition')?.id;
     const endFn = state.functions?.find((f) => f.name === 'end_call')?.id;
 
     // Global service channels are deliberately empty on migration; operators must select and save them.
@@ -734,6 +736,17 @@
         : kind === 'llm'
         ? provider ? dgLlmModelIdsForType(provider.type) : []
         : provider ? (provider.models || '').split(',').map((x) => x.trim()).filter(Boolean) : [];
+      if (
+        kind === 'tts' &&
+        provider &&
+        provider.type === 'deepgram' &&
+        /^(flux|aura)-/i.test(String(selection.model || '')) &&
+        !models.includes(String(selection.model || ''))
+      ) {
+        models.push(String(selection.model));
+        provider.models = models.join(',');
+        mutated = true;
+      }
       if (!provider || !models.includes(String(selection.model || ''))) {
         if (selection.providerId || selection.model) mutated = true;
         selection.providerId = '';
@@ -816,9 +829,10 @@
           '3) Universal General Q&A: Answer ANY general question — science, world facts, history, math, technology, travel, advice, definitions, or casual small talk — accurately, clearly, and conversationally.\n' +
           '4) Ultra-Fast Spoken Cadence: Lead with the direct answer or warm reaction in the very first words. Keep responses crisp (1–2 natural spoken sentences, around 15–35 words unless the caller asks for deeper detail).\n' +
           '5) Expressive Human Presence: Use natural spoken warmth, enthusiasm, empathy, and conversational micro-gestures ("Oh, great question!", "Gotcha — here is how that works:", "Haha, I love that one!") without ever writing bracketed stage directions.\n' +
-          '6) Call Control: If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.',
-        acceptViciCalls: false,
-        injectCampaignDisclosure: false,
+          '6) Live Specialist Transfer: Whenever the caller asks to speak with a live specialist, closer, or supervisor, or confirms qualification for a benefit/coverage review, call set_disposition with code "XFER" and call transfer_to_live_agent.\n' +
+          '7) Do-Not-Call (DNC) & Call Control: If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with code "DNC", and call end_call immediately. If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.',
+        acceptViciCalls: true,
+        injectCampaignDisclosure: true,
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
@@ -845,11 +859,11 @@
         },
         audio: {
           inEnc: 'linear16',
-          inRate: 16000,
+          inRate: 8000,
           outEnc: 'linear16',
-          outRate: 24000,
+          outRate: 8000,
         },
-        fnIds: endFn ? [endFn] : [],
+        fnIds: [xferFn, dispoFn, endFn].filter(Boolean),
       });
       if (!state.tests) state.tests = {};
       if (!Array.isArray(state.tests.a_nova)) {
@@ -908,6 +922,48 @@
     }
 
     for (const ag of state.agents) {
+      const isNova = ag.id === 'a_nova' || /nova.*concierge/i.test(ag.name || '');
+      if (!Array.isArray(ag.fnIds)) {
+        ag.fnIds = [xferFn, dispoFn, endFn].filter(Boolean);
+        mutated = true;
+      }
+      if (isNova) {
+        for (const reqFn of [xferFn, dispoFn, endFn]) {
+          if (reqFn && !ag.fnIds.includes(reqFn)) {
+            ag.fnIds.push(reqFn);
+            mutated = true;
+          }
+        }
+        if (!ag.acceptViciCalls) {
+          ag.acceptViciCalls = true;
+          mutated = true;
+        }
+      }
+
+      if (typeof ag.prompt === 'string' && ag.prompt.trim().length > 0) {
+        if (xferFn && ag.fnIds.includes(xferFn) && !/transfer_to_live_agent/i.test(ag.prompt)) {
+          ag.prompt =
+            ag.prompt.trim() +
+            '\n- Live Specialist Transfer: Once the caller confirms qualification or asks to speak with a specialist, call set_disposition with code "XFER" and call transfer_to_live_agent.';
+          mutated = true;
+        }
+        if (!/(dnc|do not call|take me off|stop)/i.test(ag.prompt)) {
+          ag.prompt =
+            ag.prompt.trim() +
+            '\n- Do-Not-Call (DNC) Compliance: If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with code "DNC", and call end_call immediately.';
+          mutated = true;
+        }
+      }
+
+      if (!ag.audio || typeof ag.audio !== 'object') {
+        ag.audio = { inEnc: 'linear16', inRate: 8000, outEnc: 'linear16', outRate: 8000 };
+        mutated = true;
+      } else if (Number(ag.audio.inRate) !== 8000) {
+        ag.audio.inRate = 8000;
+        ag.audio.outRate = 8000;
+        mutated = true;
+      }
+
       if (!ag.behavior || typeof ag.behavior !== 'object') {
         ag.behavior = {
           bargeIn: 'instant',
@@ -940,6 +996,63 @@
         if (ag.behavior.allowGeneralQa === undefined) ag.behavior.allowGeneralQa = true;
         if (!ag.behavior.selfIntro || !String(ag.behavior.selfIntro).trim()) {
           ag.behavior.selfIntro = defaultSelfIntroForClient(ag.id, ag.name);
+        }
+      }
+    }
+
+    if (Array.isArray(state.campaigns)) {
+      for (const cp of state.campaigns) {
+        if (!String(cp.disclosure || '').trim()) {
+          cp.disclosure = /medicare/i.test(cp.name || '')
+            ? 'This call may be recorded for quality and benefit verification.'
+            : 'This call may be recorded for quality purposes.';
+          mutated = true;
+        }
+        if (!String(cp.viciCampaign || '').trim()) {
+          cp.viciCampaign = 'AUTOCAMP';
+          mutated = true;
+        }
+        if (!String(cp.xferTarget || '').trim()) {
+          cp.xferTarget = /medicare/i.test(cp.name || '') ? 'MED_CLOSERS' : 'FE_CLOSERS';
+          mutated = true;
+        }
+        if (cp.dnc === undefined) {
+          cp.dnc = true;
+          mutated = true;
+        }
+      }
+      for (const ag of state.agents) {
+        if (!state.campaigns.some((c) => c.agentId === ag.id) && !/^Untitled\b/i.test(ag.name || '')) {
+          const isNova = ag.id === 'a_nova' || /nova/i.test(ag.name || '');
+          const isMed = /medicare/i.test(ag.name || '');
+          state.campaigns.push({
+            id: isNova && !state.campaigns.some((c) => c.id === 'c_nova') ? 'c_nova' : `c_${ag.id}`,
+            name: isNova ? 'Nova — Live Concierge & General Q&A' : `${ag.name} — Outbound`,
+            agentId: ag.id,
+            viciCampaign: isNova
+              ? 'NOVACONC'
+              : isMed
+              ? 'MEDICARE'
+              : (ag.name || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 8) || 'AUTOCAMP',
+            lists: isNova ? '3001' : isMed ? '2001,2002' : '1001',
+            start: '09:00',
+            end: '20:00',
+            tz: 'America/New_York',
+            attempts: 3,
+            retry: 120,
+            maxCalls: 10,
+            xferType: 'ingroup',
+            xferTarget: isNova ? 'CONCIERGE_CLOSERS' : isMed ? 'MED_CLOSERS' : 'FE_CLOSERS',
+            fallback: 'Dispo CALLBK',
+            dnc: true,
+            disclosure: isMed
+              ? 'This call may be recorded for quality and benefit verification.'
+              : isNova
+              ? 'This call may be recorded for quality and training purposes.'
+              : 'This call may be recorded for quality purposes.',
+            dispos: isMed ? 'XFER,DQ,LANG,DNC,NI,NA,CALLBK' : 'XFER,NI,DNC,NA,CALLBK,DEC',
+          });
+          mutated = true;
         }
       }
     }
@@ -1119,7 +1232,7 @@
   const C = () => S.campaigns.find((x) => x.id === cur.c) || S.campaigns[0];
   const prov = (id) => S.providers.find((x) => x.id === id);
 
-  const rootRefs = () => ({ a: A(), c: C(), v: S.vici, p: S.providers, f: S.functions });
+  const rootRefs = () => ({ a: A(), c: C(), v: S.vici, p: S.providers, f: S.functions, services: S.services });
 
   const getPath = (path) => {
     const keys = path.split('.');
@@ -1215,8 +1328,11 @@
       delete listenProvider.eot_timeout_ms;
       delete listenProvider.language_hints;
       delete listenProvider.keyterms;
-    } else if (sttModel !== 'flux-general-multi') {
-      delete listenProvider.language_hints;
+    } else {
+      listenProvider.version = 'v2';
+      if (sttModel !== 'flux-general-multi') {
+        delete listenProvider.language_hints;
+      }
     }
 
     const llmModel = String(S.services?.llm?.model || '').trim();
@@ -1266,17 +1382,24 @@
       speakProvider.speed = Number(agent.tts.speed);
     }
     const tpEx = parseJsonObject(tp.extra);
-    if (tpEx.ok) {
+    if (tpEx.ok && tp.type !== 'deepgram') {
       const copy = { ...tpEx.value };
-      if (tp.type === 'deepgram') delete copy.language;
       Object.assign(speakProvider, copy);
     }
     speakProvider.type = tp.type || '';
     delete speakProvider.model;
     delete speakProvider.model_id;
-    if (tp.type && ttsModel && tp.type !== 'aws_polly') speakProvider[mk] = ttsModel;
-    if (tp.type === 'deepgram' && ttsModel) {
-      speakProvider.version = ttsModel.startsWith('flux') ? 'v2' : 'v1';
+    if (tp.type === 'deepgram') {
+      for (const k of Object.keys(speakProvider)) delete speakProvider[k];
+      speakProvider.type = ttsModel ? 'deepgram' : '';
+      if (ttsModel) {
+        speakProvider.version = ttsModel.startsWith('flux') ? 'v2' : 'v1';
+        speakProvider.model = ttsModel;
+      } else {
+        speakProvider.model = '';
+      }
+    } else if (tp.type && ttsModel && tp.type !== 'aws_polly') {
+      speakProvider[mk] = ttsModel;
     }
     const speak = { provider: speakProvider };
     if ((tp.endpoint || '').trim()) {
@@ -1355,19 +1478,36 @@
 
     const ttsNeedsEp = Boolean(tp && !['deepgram', 'cartesia'].includes(tp.type));
     push(Boolean(tp && (!ttsNeedsEp || (tp.endpoint || '').trim())), `TTS endpoint configured where required (${tp?.type || 'no provider'})`);
-    push(Boolean(tp && ttsModel && (tp.models || '').split(',').map((s) => s.trim()).includes(ttsModel)),
-      `Selected global TTS model "${ttsModel || 'not selected'}" belongs to the chosen provider`);
+    const tpModelList = tp ? (tp.models || '').split(',').map((s) => s.trim()).filter(Boolean) : [];
+    const ttsModelBelongs = Boolean(
+      tp && ttsModel && (tpModelList.includes(ttsModel) || (tp.type === 'deepgram' && /^(flux|aura)-/i.test(ttsModel)))
+    );
+    push(
+      ttsModelBelongs,
+      `Selected global TTS model "${ttsModel || 'not selected'}" belongs to the chosen provider`
+    );
 
     if (tp?.type === 'deepgram') {
+      const isFluxOrAura = Boolean(ttsModel.startsWith('flux-') || ttsModel.startsWith('aura-'));
+      const speakVersion = ttsModel.startsWith('flux-') ? 'v2' : 'v1';
       push(
-        Boolean(ttsModel.startsWith('flux-') || ttsModel.startsWith('aura-')),
+        isFluxOrAura,
         `Deepgram speak model "${ttsModel || 'not selected'}" is a recognized Flux/Aura voice`
       );
       push(
-        ttsModel.startsWith('flux-'),
-        `Speak provider sends only {type:"deepgram", version:"v2", model:"${ttsModel || '…'}"}`,
-        !ttsModel.startsWith('flux-')
+        isFluxOrAura,
+        `Speak provider sends only {type:"deepgram", version:"${speakVersion}", model:"${ttsModel || '…'}"}`,
+        !isFluxOrAura
       );
+      if (ttsModel.startsWith('flux-')) {
+        const spd = Number(agent.tts.speed);
+        push(isValidFluxSpeed(spd), `Flux TTS speed (${spd}) is in 0.5–1.5 (0.05 increments)`);
+        const expr = Number(agent.tts.expr);
+        push(Number.isInteger(expr) && expr >= -2 && expr <= 2, `Flux TTS expressivity (${expr}) is an integer in -2..+2`);
+      } else if (ttsModel.startsWith('aura-')) {
+        const spd = Number(agent.tts.speed);
+        push(spd >= 0.7 && spd <= 1.5, `Aura TTS speed (${spd}) is within 0.7–1.5`);
+      }
     }
 
     const hasPlaceholder = Boolean(tp && ((tp.endpoint || '').includes('{voice_id}') || (tp.extra || '').includes('"VOICE_ID"')));
@@ -1387,7 +1527,7 @@
     );
     push(/(dnc|do not call|take me off|stop)/i.test(agent.prompt), 'System prompt handles Do-Not-Call requests');
     push(fnNames.includes('end_call'), 'end_call function enabled');
-    push(Number(agent.audio.inRate) === 8000, '8000 Hz input matches Asterisk/VICIdial telephony', true);
+    push(Number(agent.audio.inRate) === 8000, '8000 Hz input sample rate matches Asterisk/VICIdial telephony', true);
     push(S.campaigns.some((c) => c.agentId === agent.id), 'Assigned to at least one campaign', true);
 
     return items;
@@ -4498,9 +4638,9 @@
         const agChecks = S.agents.flatMap((ag) => validateAgentLocal(ag));
         const cpChecks = S.campaigns.flatMap((cp) => validateCampaignLocal(cp));
         const all = [...agChecks, ...cpChecks];
-        const ok = all.filter((x) => x.level === 'ok').length;
-        const wn = all.filter((x) => x.level === 'wn').length;
-        const er = all.filter((x) => x.level === 'er').length;
+        const ok = all.filter((x) => (x.level || x[0]) === 'ok').length;
+        const wn = all.filter((x) => (x.level || x[0]) === 'wn').length;
+        const er = all.filter((x) => (x.level || x[0]) === 'er').length;
         document.getElementById('vr').innerHTML = `
           <div class="card" style="border-left-color:${er ? 'var(--er)' : wn ? 'var(--wn)' : 'var(--ok)'}">
             <b>Saved in Browser Cloud Storage — Verification Report:</b>
