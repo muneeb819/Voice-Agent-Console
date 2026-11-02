@@ -1,4 +1,4 @@
-﻿# Dependencies (dist/ is committed pre-built so 'npm start' works out of the box!)
+# Dependencies (dist/ is committed pre-built so 'npm start' works out of the box!)
 node_modules/
 
 # Server secrets (never commit live API keys!)
