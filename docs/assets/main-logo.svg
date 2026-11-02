@@ -11,18 +11,48 @@
       <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
       <stop offset="0.4" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
-    <linearGradient id="cy" x1="0" y1="0" x2="1" y2="0">
+    <linearGradient id="cy" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#00F2FE"/>
+      <stop offset="0.55" stop-color="#38BDF8"/>
       <stop offset="1" stop-color="#7B2CBF"/>
     </linearGradient>
-    <linearGradient id="cy2" x1="1" y1="0" x2="0" y2="0">
+    <linearGradient id="cy2" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#00F2FE"/>
+      <stop offset="0.55" stop-color="#38BDF8"/>
       <stop offset="1" stop-color="#7B2CBF"/>
     </linearGradient>
     <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
       <feGaussianBlur stdDeviation="3.5" result="b"/>
       <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
+    <style>
+      @keyframes vPlayA {
+        0%, 100% { transform: scaleY(0.24); opacity: 0.72; }
+        22%      { transform: scaleY(0.96); opacity: 1; }
+        44%      { transform: scaleY(0.42); opacity: 0.84; }
+        68%      { transform: scaleY(1.06); opacity: 1; }
+        85%      { transform: scaleY(0.52); opacity: 0.88; }
+      }
+      @keyframes vPlayB {
+        0%, 100% { transform: scaleY(0.36); opacity: 0.78; }
+        18%      { transform: scaleY(0.88); opacity: 0.98; }
+        40%      { transform: scaleY(1.08); opacity: 1; }
+        62%      { transform: scaleY(0.28); opacity: 0.74; }
+        82%      { transform: scaleY(0.82); opacity: 0.95; }
+      }
+      @keyframes vPlayC {
+        0%, 100% { transform: scaleY(0.55); opacity: 0.86; }
+        26%      { transform: scaleY(0.22); opacity: 0.70; }
+        52%      { transform: scaleY(1.04); opacity: 1; }
+        76%      { transform: scaleY(0.64); opacity: 0.90; }
+      }
+      @keyframes mPulse {
+        0%, 100% { opacity: 0.88; }
+        50%      { opacity: 1; }
+      }
+      .wb { will-change: transform, opacity; }
+      .m-core { animation: mPulse 2.2s ease-in-out infinite; }
+    </style>
   </defs>
 
   <rect x="3" y="3" width="634" height="214" rx="16" fill="url(#steel)" stroke="#5d6773" stroke-width="2"/>
@@ -40,37 +70,39 @@
     <line x1="613" y1="188" x2="613" y2="198"/><line x1="608" y1="193" x2="618" y2="193"/>
   </g>
 
-  <g filter="url(#glow)" fill="url(#cy)" opacity="0.95">
-    <rect x="52"  y="96"  width="4" height="18" rx="2"/>
-    <rect x="62"  y="86"  width="4" height="38" rx="2"/>
-    <rect x="72"  y="72"  width="4" height="66" rx="2"/>
-    <rect x="82"  y="90"  width="4" height="30" rx="2"/>
-    <rect x="92"  y="80"  width="4" height="50" rx="2"/>
-    <rect x="102" y="64"  width="4" height="82" rx="2"/>
-    <rect x="112" y="88"  width="4" height="34" rx="2"/>
-    <rect x="122" y="76"  width="4" height="58" rx="2"/>
-    <rect x="132" y="96"  width="4" height="18" rx="2"/>
-    <rect x="142" y="82"  width="4" height="46" rx="2"/>
-    <rect x="152" y="70"  width="4" height="70" rx="2"/>
-    <rect x="162" y="92"  width="4" height="26" rx="2"/>
+  <!-- Left Active Playing Soundwave Equalizer -->
+  <g filter="url(#glow)" fill="url(#cy)">
+    <rect class="wb" x="52"  y="81" width="4.4" height="48" rx="2.2" style="transform-origin:54.2px 105px;animation:vPlayA 0.92s ease-in-out -0.10s infinite"/>
+    <rect class="wb" x="62"  y="75" width="4.4" height="60" rx="2.2" style="transform-origin:64.2px 105px;animation:vPlayB 0.78s ease-in-out -0.24s infinite"/>
+    <rect class="wb" x="72"  y="68" width="4.4" height="74" rx="2.2" style="transform-origin:74.2px 105px;animation:vPlayC 0.86s ease-in-out -0.38s infinite"/>
+    <rect class="wb" x="82"  y="73" width="4.4" height="64" rx="2.2" style="transform-origin:84.2px 105px;animation:vPlayA 0.71s ease-in-out -0.52s infinite"/>
+    <rect class="wb" x="92"  y="66" width="4.4" height="78" rx="2.2" style="transform-origin:94.2px 105px;animation:vPlayB 0.96s ease-in-out -0.17s infinite"/>
+    <rect class="wb" x="102" y="61" width="4.4" height="88" rx="2.2" style="transform-origin:104.2px 105px;animation:vPlayC 0.82s ease-in-out -0.45s infinite"/>
+    <rect class="wb" x="112" y="69" width="4.4" height="72" rx="2.2" style="transform-origin:114.2px 105px;animation:vPlayA 0.74s ease-in-out -0.63s infinite"/>
+    <rect class="wb" x="122" y="64" width="4.4" height="82" rx="2.2" style="transform-origin:124.2px 105px;animation:vPlayB 0.89s ease-in-out -0.29s infinite"/>
+    <rect class="wb" x="132" y="72" width="4.4" height="66" rx="2.2" style="transform-origin:134.2px 105px;animation:vPlayC 0.76s ease-in-out -0.55s infinite"/>
+    <rect class="wb" x="142" y="67" width="4.4" height="76" rx="2.2" style="transform-origin:144.2px 105px;animation:vPlayA 0.94s ease-in-out -0.14s infinite"/>
+    <rect class="wb" x="152" y="63" width="4.4" height="84" rx="2.2" style="transform-origin:154.2px 105px;animation:vPlayB 0.80s ease-in-out -0.41s infinite"/>
+    <rect class="wb" x="162" y="76" width="4.4" height="58" rx="2.2" style="transform-origin:164.2px 105px;animation:vPlayC 0.88s ease-in-out -0.68s infinite"/>
   </g>
 
-  <g filter="url(#glow)" fill="url(#cy2)" opacity="0.95">
-    <rect x="474" y="92"  width="4" height="26" rx="2"/>
-    <rect x="484" y="70"  width="4" height="70" rx="2"/>
-    <rect x="494" y="82"  width="4" height="46" rx="2"/>
-    <rect x="504" y="96"  width="4" height="18" rx="2"/>
-    <rect x="514" y="76"  width="4" height="58" rx="2"/>
-    <rect x="524" y="88"  width="4" height="34" rx="2"/>
-    <rect x="534" y="64"  width="4" height="82" rx="2"/>
-    <rect x="544" y="80"  width="4" height="50" rx="2"/>
-    <rect x="554" y="90"  width="4" height="30" rx="2"/>
-    <rect x="564" y="72"  width="4" height="66" rx="2"/>
-    <rect x="574" y="86"  width="4" height="38" rx="2"/>
-    <rect x="584" y="96"  width="4" height="18" rx="2"/>
+  <!-- Right Active Playing Soundwave Equalizer -->
+  <g filter="url(#glow)" fill="url(#cy2)">
+    <rect class="wb" x="474" y="76" width="4.4" height="58" rx="2.2" style="transform-origin:476.2px 105px;animation:vPlayB 0.84s ease-in-out -0.62s infinite"/>
+    <rect class="wb" x="484" y="63" width="4.4" height="84" rx="2.2" style="transform-origin:486.2px 105px;animation:vPlayC 0.79s ease-in-out -0.35s infinite"/>
+    <rect class="wb" x="494" y="67" width="4.4" height="76" rx="2.2" style="transform-origin:496.2px 105px;animation:vPlayA 0.91s ease-in-out -0.19s infinite"/>
+    <rect class="wb" x="504" y="72" width="4.4" height="66" rx="2.2" style="transform-origin:506.2px 105px;animation:vPlayB 0.73s ease-in-out -0.49s infinite"/>
+    <rect class="wb" x="514" y="64" width="4.4" height="82" rx="2.2" style="transform-origin:516.2px 105px;animation:vPlayC 0.87s ease-in-out -0.27s infinite"/>
+    <rect class="wb" x="524" y="69" width="4.4" height="72" rx="2.2" style="transform-origin:526.2px 105px;animation:vPlayA 0.77s ease-in-out -0.58s infinite"/>
+    <rect class="wb" x="534" y="61" width="4.4" height="88" rx="2.2" style="transform-origin:536.2px 105px;animation:vPlayB 0.83s ease-in-out -0.42s infinite"/>
+    <rect class="wb" x="544" y="66" width="4.4" height="78" rx="2.2" style="transform-origin:546.2px 105px;animation:vPlayC 0.95s ease-in-out -0.15s infinite"/>
+    <rect class="wb" x="554" y="73" width="4.4" height="64" rx="2.2" style="transform-origin:556.2px 105px;animation:vPlayA 0.72s ease-in-out -0.47s infinite"/>
+    <rect class="wb" x="564" y="68" width="4.4" height="74" rx="2.2" style="transform-origin:566.2px 105px;animation:vPlayB 0.85s ease-in-out -0.33s infinite"/>
+    <rect class="wb" x="574" y="75" width="4.4" height="60" rx="2.2" style="transform-origin:576.2px 105px;animation:vPlayC 0.76s ease-in-out -0.21s infinite"/>
+    <rect class="wb" x="584" y="81" width="4.4" height="48" rx="2.2" style="transform-origin:586.2px 105px;animation:vPlayA 0.90s ease-in-out -0.08s infinite"/>
   </g>
 
-  <g filter="url(#glow)">
+  <g class="m-core" filter="url(#glow)">
     <path d="M286 142 V78 L320 116 L354 78 V142" fill="none" stroke="#00F2FE" stroke-width="7"
           stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M286 142 V78 L320 116 L354 78 V142" fill="none" stroke="#7B2CBF" stroke-width="2.5"

@@ -8,14 +8,109 @@
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
   <link rel="alternate icon" href="/assets/favicon.svg" />
   <link rel="apple-touch-icon" href="/assets/monogram.svg" />
-  <link rel="stylesheet" href="/login.css" />
+  <link rel="stylesheet" href="/login.css?v=elite-2.17" />
 </head>
 <body>
   <div class="aurora" aria-hidden="true"></div>
 
   <main class="auth-shell">
     <header class="brand">
-      <img src="/assets/main-logo.svg" alt="MMA Digital Labs — Voice Agent Bots Console" class="brand-plaque" />
+      <div class="brand-plaque-wrap" title="MMA Digital Labs — Neural Voice Engine Active">
+        <svg class="brand-plaque is-playing" id="login-brand-plaque" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 220" role="img" aria-label="MMA Digital Labs — Voice Agent Bots Console (Active Soundwave)">
+          <defs>
+            <linearGradient id="plaqueSteel" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#f2f5f8"/>
+              <stop offset="0.35" stop-color="#c3ccd6"/>
+              <stop offset="0.52" stop-color="#98a3af"/>
+              <stop offset="0.7" stop-color="#c9d2db"/>
+              <stop offset="1" stop-color="#8e98a4"/>
+            </linearGradient>
+            <linearGradient id="plaqueSheen" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#ffffff" stop-opacity="0.58"/>
+              <stop offset="0.42" stop-color="#ffffff" stop-opacity="0"/>
+            </linearGradient>
+            <linearGradient id="plaqueWaveGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" style="stop-color: var(--cyan, #00F2FE)"/>
+              <stop offset="55%" style="stop-color: var(--cyan, #00F2FE); stop-opacity: 0.92"/>
+              <stop offset="100%" style="stop-color: var(--purple, #7B2CBF)"/>
+            </linearGradient>
+            <radialGradient id="plaqueAmbient" cx="50%" cy="48%" r="48%">
+              <stop offset="0%" style="stop-color: var(--cyan, #00F2FE); stop-opacity: 0.14"/>
+              <stop offset="58%" style="stop-color: var(--purple, #7B2CBF); stop-opacity: 0.06"/>
+              <stop offset="100%" stop-color="#0B0F14" stop-opacity="0"/>
+            </radialGradient>
+            <filter id="plaqueGlow" x="-60%" y="-60%" width="220%" height="220%">
+              <feGaussianBlur stdDeviation="3.6" result="b"/>
+              <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+          </defs>
+
+          <!-- Brushed Metallic Frame & Obsidian Acoustic Screen -->
+          <rect x="3" y="3" width="634" height="214" rx="16" fill="url(#plaqueSteel)" stroke="#5d6773" stroke-width="2"/>
+          <rect x="3" y="3" width="634" height="214" rx="16" fill="url(#plaqueSheen)"/>
+          <rect x="14" y="14" width="612" height="192" rx="11" fill="#0B0F14"/>
+          <rect x="14" y="14" width="612" height="192" rx="11" fill="url(#plaqueAmbient)" class="plaque-aura"/>
+
+          <!-- Precision Corner Rivets -->
+          <g fill="#c9d2db" opacity="0.86">
+            <circle cx="27" cy="27" r="4.5"/><circle cx="613" cy="27" r="4.5"/>
+            <circle cx="27" cy="193" r="4.5"/><circle cx="613" cy="193" r="4.5"/>
+          </g>
+          <g stroke="#7d8794" stroke-width="1.5" opacity="0.9">
+            <line x1="27" y1="22" x2="27" y2="32"/><line x1="22" y1="27" x2="32" y2="27"/>
+            <line x1="613" y1="22" x2="613" y2="32"/><line x1="608" y1="27" x2="618" y2="27"/>
+            <line x1="27" y1="188" x2="27" y2="198"/><line x1="22" y1="193" x2="32" y2="193"/>
+            <line x1="613" y1="188" x2="613" y2="198"/><line x1="608" y1="193" x2="618" y2="193"/>
+          </g>
+
+          <!-- Left 12-Channel Playing Soundwave Equalizer -->
+          <g filter="url(#plaqueGlow)" fill="url(#plaqueWaveGrad)" class="eq-group eq-left">
+            <rect class="eq-bar" data-ch="0"  data-side="L" x="52"  y="91" width="4.4" height="28" rx="2.2"/>
+            <rect class="eq-bar" data-ch="1"  data-side="L" x="62"  y="83" width="4.4" height="44" rx="2.2"/>
+            <rect class="eq-bar" data-ch="2"  data-side="L" x="72"  y="72" width="4.4" height="66" rx="2.2"/>
+            <rect class="eq-bar" data-ch="3"  data-side="L" x="82"  y="86" width="4.4" height="38" rx="2.2"/>
+            <rect class="eq-bar" data-ch="4"  data-side="L" x="92"  y="76" width="4.4" height="58" rx="2.2"/>
+            <rect class="eq-bar" data-ch="5"  data-side="L" x="102" y="64" width="4.4" height="82" rx="2.2"/>
+            <rect class="eq-bar" data-ch="6"  data-side="L" x="112" y="84" width="4.4" height="42" rx="2.2"/>
+            <rect class="eq-bar" data-ch="7"  data-side="L" x="122" y="73" width="4.4" height="64" rx="2.2"/>
+            <rect class="eq-bar" data-ch="8"  data-side="L" x="132" y="89" width="4.4" height="32" rx="2.2"/>
+            <rect class="eq-bar" data-ch="9"  data-side="L" x="142" y="78" width="4.4" height="54" rx="2.2"/>
+            <rect class="eq-bar" data-ch="10" data-side="L" x="152" y="68" width="4.4" height="74" rx="2.2"/>
+            <rect class="eq-bar" data-ch="11" data-side="L" x="162" y="87" width="4.4" height="36" rx="2.2"/>
+          </g>
+
+          <!-- Right 12-Channel Playing Soundwave Equalizer -->
+          <g filter="url(#plaqueGlow)" fill="url(#plaqueWaveGrad)" class="eq-group eq-right">
+            <rect class="eq-bar" data-ch="11" data-side="R" x="474" y="87" width="4.4" height="36" rx="2.2"/>
+            <rect class="eq-bar" data-ch="10" data-side="R" x="484" y="68" width="4.4" height="74" rx="2.2"/>
+            <rect class="eq-bar" data-ch="9"  data-side="R" x="494" y="78" width="4.4" height="54" rx="2.2"/>
+            <rect class="eq-bar" data-ch="8"  data-side="R" x="504" y="89" width="4.4" height="32" rx="2.2"/>
+            <rect class="eq-bar" data-ch="7"  data-side="R" x="514" y="73" width="4.4" height="64" rx="2.2"/>
+            <rect class="eq-bar" data-ch="6"  data-side="R" x="524" y="84" width="4.4" height="42" rx="2.2"/>
+            <rect class="eq-bar" data-ch="5"  data-side="R" x="534" y="64" width="4.4" height="82" rx="2.2"/>
+            <rect class="eq-bar" data-ch="4"  data-side="R" x="544" y="76" width="4.4" height="58" rx="2.2"/>
+            <rect class="eq-bar" data-ch="3"  data-side="R" x="554" y="86" width="4.4" height="38" rx="2.2"/>
+            <rect class="eq-bar" data-ch="2"  data-side="R" x="564" y="72" width="4.4" height="66" rx="2.2"/>
+            <rect class="eq-bar" data-ch="1"  data-side="R" x="574" y="83" width="4.4" height="44" rx="2.2"/>
+            <rect class="eq-bar" data-ch="0"  data-side="R" x="584" y="91" width="4.4" height="28" rx="2.2"/>
+          </g>
+
+          <!-- Acoustic Resonance Ring & Glowing Central M Monogram -->
+          <circle cx="320" cy="110" r="46" fill="none" style="stroke: var(--cyan, #00F2FE)" stroke-width="1.2" opacity="0.16" class="m-sonic-ring"/>
+          <g filter="url(#plaqueGlow)" class="m-emblem-core">
+            <path d="M286 142 V78 L320 116 L354 78 V142" fill="none" style="stroke: var(--cyan, #00F2FE)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M286 142 V78 L320 116 L354 78 V142" fill="none" style="stroke: var(--purple, #7B2CBF)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+          </g>
+          <g style="fill: var(--cyan, #00F2FE)" filter="url(#plaqueGlow)" opacity="0.95" class="m-emblem-nodes">
+            <circle cx="286" cy="78" r="3.4"/><circle cx="354" cy="78" r="3.4"/>
+            <circle cx="320" cy="116" r="3.4"/><circle cx="286" cy="142" r="3.4"/><circle cx="354" cy="142" r="3.4"/>
+          </g>
+
+          <text x="320" y="186" text-anchor="middle" fill="#dbe4ee" font-family="'Plus Jakarta Sans', 'Segoe UI', Arial, sans-serif" font-size="14.5" font-weight="600" letter-spacing="2.4">
+            MMA DIGITAL LABS  -  VOICE AGENT BOTS CONSOLE
+          </text>
+        </svg>
+      </div>
     </header>
 
     <section class="card" aria-labelledby="auth-title">
@@ -114,6 +209,6 @@
     </div>
   </div>
 
-  <script src="/login.js"></script>
+  <script src="/login.js?v=elite-2.17"></script>
 </body>
 </html>

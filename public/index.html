@@ -13,10 +13,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=elite-2.16" />
+  <link rel="stylesheet" href="./styles.css?v=elite-2.17" />
   <script>
     (function () {
-      var CURRENT_BUILD = 'elite-2.16';
+      var CURRENT_BUILD = 'elite-2.17';
       // Keep the browser URL bar permanently clean (strip any legacy ?v= or ?cb= query params)
       try {
         if (window.location.search && /^[?&](v|cb|_)=/.test(window.location.search)) {
@@ -45,46 +45,71 @@
     <div class="ambient-grid"></div>
   </div>
 
-  <header>
-    <button class="g rail-toggle-btn" id="btn-sidebar-toggle" type="button" title="Collapse Side Menu (Ctrl+B)" aria-label="Toggle Side Control Panel" aria-expanded="true">
-      <svg id="sidebar-toggle-svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="3" y="3" width="18" height="18" rx="3"></rect>
-        <line x1="9" y1="3" x2="9" y2="21"></line>
-        <polyline id="sidebar-toggle-chevron" points="16 9 13 12 16 15"></polyline>
-      </svg>
-    </button>
+  <header class="console-header" role="banner">
+    <!-- Zone 1: Navigation Trigger, Brand Identity & Active Workspace Capsule -->
+    <div class="hdr-zone hdr-zone-left">
+      <button class="g rail-toggle-btn" id="btn-sidebar-toggle" type="button" title="Collapse Side Menu (Ctrl+B)" aria-label="Toggle Side Control Panel" aria-expanded="true">
+        <svg id="sidebar-toggle-svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="3" width="18" height="18" rx="3"></rect>
+          <line x1="9" y1="3" x2="9" y2="21"></line>
+          <polyline id="sidebar-toggle-chevron" points="16 9 13 12 16 15"></polyline>
+        </svg>
+      </button>
 
-    <div class="brand">
-      <span class="brand-mark" id="brand-mark" aria-hidden="true"></span>
-      <div class="brand-copy">
-        <div class="brand-row">
-          <h1>MMA <span>Digital Labs</span></h1>
-          <span class="pill" id="db-pill" title="Backed by server SQLite + JSON mirror">SQLite Ready</span>
+      <div class="brand">
+        <span class="brand-mark" id="brand-mark" aria-hidden="true"></span>
+        <div class="brand-copy">
+          <div class="brand-row">
+            <h1>MMA <span>Digital Labs</span></h1>
+          </div>
+          <span class="brand-sub">Voice Agent Console &bull; Deepgram Flux &bull; VICIdial</span>
         </div>
-        <span class="brand-sub">Voice Agent Console &bull; Deepgram Flux &bull; VICIdial</span>
+      </div>
+
+      <span class="hdr-sep" aria-hidden="true"></span>
+
+      <div class="hdr-context-group" aria-label="Active Workspace and Storage Status">
+        <span class="pill nav-crumb" id="active-nav-crumb" title="Active Workspace View">Agents</span>
+        <span class="pill ok hdr-db-pill" id="db-pill" title="Backed by server SQLite WAL + JSON mirror">
+          <span class="hdr-live-led" aria-hidden="true"></span>
+          <span>SQLite Ready</span>
+        </span>
       </div>
     </div>
 
-    <span class="pill nav-crumb" id="active-nav-crumb">🤖 Agents</span>
+    <!-- Zone 2: Live Sync State & Client Demo Share Capsule -->
+    <div class="hdr-zone hdr-zone-center">
+      <span id="st" title="Configuration synchronization status">Loading…</span>
+      <button class="g hdr-share-btn" id="btn-share-demo" type="button" style="display:none" title="Copy public HTTPS Client Demo URL to clipboard">
+        <span class="hdr-share-led" aria-hidden="true"></span>
+        <span>Client Link</span>
+      </button>
+      <a class="g hdr-newtab-btn" id="btn-newtab" href="./" target="_blank" rel="noopener" style="text-decoration:none;display:none" title="Open console in a dedicated browser tab for unrestricted microphone access">↗ Open Tab</a>
+    </div>
 
-    <div class="header-actions">
-      <span id="st">Loading…</span>
-      <button class="g" id="btn-share-demo" type="button" style="display:none" title="Copy public HTTPS Client Demo URL to clipboard">🔗 Copy Client Link</button>
-      <a class="g" id="btn-newtab" href="./" target="_blank" rel="noopener" style="text-decoration:none;display:none" title="Open console in a dedicated browser tab for unrestricted microphone access">↗ Open Tab</a>
-      <button class="g theme-trigger" id="btn-theme" title="Open Appearance &amp; Theme Studio (10 Visual Systems + Exposure &amp; Glass Controls)">
-        <span class="theme-dot" id="theme-active-dot"></span>
-        <span id="theme-active-lbl">Theme</span>
-      </button>
-      <button class="g" id="btn-logout" style="display:none" title="Sign out of the console">
-        <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10.5" width="11" height="10" rx="2.2"/><path d="M7.5 10.5V7.8a4 4 0 0 1 7.4-2.1"/><circle cx="9.5" cy="15.5" r="1.1"/></svg>
-        <span>Sign Out</span>
-      </button>
-      <button class="g" id="btn-keys" title="Configure server-side .env API keys &amp; security">
-        <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="4.2"/><path d="m11 11 8.5 8.5M16 16l2.2-2.2M18.5 18.5 21 16"/></svg>
-        <span>API Keys</span>
-      </button>
-      <button class="g" id="dc" disabled>Discard</button>
-      <button class="b" id="sv" disabled>Save &amp; verify</button>
+    <!-- Zone 3: Precision Utility Dock & Transaction Commit Controls -->
+    <div class="hdr-zone hdr-zone-right header-actions">
+      <div class="hdr-tool-dock" role="group" aria-label="Appearance, Security and Account Controls">
+        <button class="g theme-trigger hdr-dock-btn" id="btn-theme" type="button" title="Open Appearance &amp; Theme Studio (10 Visual Systems + Exposure &amp; Glass Controls)">
+          <span class="theme-dot" id="theme-active-dot"></span>
+          <span class="hdr-btn-txt" id="theme-active-lbl">Theme</span>
+        </button>
+        <button class="g hdr-dock-btn" id="btn-keys" type="button" title="Configure server-side .env API keys &amp; security">
+          <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="4.2"/><path d="m11 11 8.5 8.5M16 16l2.2-2.2M18.5 18.5 21 16"/></svg>
+          <span class="hdr-btn-txt">API Keys</span>
+        </button>
+        <button class="g hdr-dock-btn hdr-logout-btn" id="btn-logout" type="button" style="display:none" title="Sign out of the console">
+          <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10.5" width="11" height="10" rx="2.2"/><path d="M7.5 10.5V7.8a4 4 0 0 1 7.4-2.1"/><circle cx="9.5" cy="15.5" r="1.1"/></svg>
+          <span class="hdr-btn-txt">Sign Out</span>
+        </button>
+      </div>
+
+      <span class="hdr-sep" aria-hidden="true"></span>
+
+      <div class="hdr-commit-group" role="group" aria-label="Save or Discard Changes">
+        <button class="g hdr-discard-btn" id="dc" type="button" disabled title="Discard unsaved local edits">Discard</button>
+        <button class="b hdr-save-btn" id="sv" type="button" disabled title="Save to SQLite &amp; run full pre-flight verification">Save &amp; Verify</button>
+      </div>
     </div>
   </header>
 
@@ -190,6 +215,6 @@
   </div>
 
   <input type="file" id="import-file" accept="application/json,.json" hidden />
-  <script src="./app.js?v=elite-2.16"></script>
+  <script src="./app.js?v=elite-2.17"></script>
 </body>
 </html>

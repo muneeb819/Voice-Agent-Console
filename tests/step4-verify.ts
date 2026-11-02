@@ -612,10 +612,16 @@ async function run() {
       '✓ [10/11] Users SignUp / SignIn First-Page Entry Gate (/ -> /signup, Create Account, Console unlock, Sign Out -> /login & Sign In) verified'
     );
 
-    // 11. Verify Executive Command & Console Quality Dashboard + Demo Tunnel Status API
+    // 11. Verify Executive Command & Console Quality Dashboard, 3-Zone Header, Login Playing Waves & Demo Tunnel API
     assert(
-      authedRootHtml.includes('id="cmd-deck"'),
-      'Expected authenticated index.html to include top-of-page #cmd-deck Executive Command Dashboard'
+      signupHtml.includes('id="login-brand-plaque"') && signupHtml.includes('class="eq-bar"'),
+      'Expected login/signup page to include active playing soundwave logo plaque (#login-brand-plaque + .eq-bar)'
+    );
+    assert(
+      authedRootHtml.includes('id="cmd-deck"') &&
+        authedRootHtml.includes('hdr-tool-dock') &&
+        authedRootHtml.includes('hdr-commit-group'),
+      'Expected authenticated index.html to include #cmd-deck and 3-zone strategic header (hdr-tool-dock + hdr-commit-group)'
     );
     const telemRes = await fetch(`${httpBase}/api/telemetry/overview`, {
       headers: { Cookie: signedInCookie },

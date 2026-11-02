@@ -5385,7 +5385,7 @@
           </div>`;
         render();
       } finally {
-        btn.textContent = 'Save & verify';
+        btn.textContent = 'Save & Verify';
         updateHeaderStatus();
       }
       return;
@@ -5438,7 +5438,7 @@
     } catch (err) {
       alert(`Save error: ${err.message}`);
     } finally {
-      btn.textContent = 'Save & verify';
+      btn.textContent = 'Save & Verify';
       updateHeaderStatus();
     }
   }
@@ -6206,12 +6206,13 @@
     }
     if (b.id === 'btn-share-demo') {
       const demoUrl = b.dataset.demoUrl || window.location.origin;
+      const lbl = b.querySelector('span:last-child') || b;
       try {
         await navigator.clipboard.writeText(demoUrl);
-        const orig = b.textContent;
-        b.textContent = '✓ Copied Client Link!';
+        const orig = lbl.textContent;
+        lbl.textContent = '✓ Link Copied';
         setTimeout(() => {
-          b.textContent = orig;
+          lbl.textContent = orig;
         }, 2200);
       } catch {
         window.prompt('Copy this public HTTPS link for your client:', demoUrl);
