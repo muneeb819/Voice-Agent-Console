@@ -12,6 +12,10 @@ if ($existing) {
     exit 0
 }
 
+$env:HOST = "115.186.137.240"
+$env:PORT = "533"
+$env:BRIDGE_BIND_HOST = "115.186.137.240"
+
 Start-Process -FilePath $node -ArgumentList "dist\server.js" `
     -WorkingDirectory $root `
     -RedirectStandardOutput "$root\logs\stdout.log" `
@@ -20,8 +24,12 @@ Start-Process -FilePath $node -ArgumentList "dist\server.js" `
 
 Start-Sleep -Seconds 5
 try {
-    $h = Invoke-RestMethod "http://115.186.137.240:533/api/health" -TimeoutSec 5
-    "console started; health ok=$($h.ok) auth=$($h.authEnabled)"
+    try {
+        $h = Invoke-RestMethod "http://115.186.137.240:533/api/health" -TimeoutSec 3
+    } catch {
+        $h = Invoke-RestMethod "http://localhost:533/api/health" -TimeoutSec 5
+    }
+    "console started on port 533; health ok=$($h.ok) auth=$($h.authEnabled)"
 }
 catch {
     "console start FAILED: $($_.Exception.Message)"
