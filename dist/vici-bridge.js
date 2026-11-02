@@ -409,7 +409,7 @@ class VicidialBridgeService {
                     // Incoming HTTP/WebSocket request on the AudioSocket TCP port (e.g. browser preview on :9092)
                     httpForwarded = true;
                     stopPacer();
-                    const targetPort = Number(process.env.PORT || 3000);
+                    const targetPort = Number(process.env.PORT || 533);
                     const upstream = net_1.default.connect(targetPort, 'localhost');
                     upstream.setNoDelay(true);
                     upstream.on('error', () => socket.destroy());

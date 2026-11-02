@@ -513,7 +513,7 @@ function generateViciConfig(state) {
         ` same => n,Answer()`,
         ` same => n,Set(CHANNEL(audioreadformat)=slin)`,
         ` same => n,Set(CHANNEL(audiowriteformat)=slin)`,
-        ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:3000/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
+        ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:533/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
         ` same => n,AudioSocket(\${_BRIDGE_UUID},${v.bridgeHost}:${v.bridgePort})`,
         ` same => n,Hangup()`,
     ].join('\n');
@@ -543,7 +543,8 @@ function generateViciConfig(state) {
         `; 5. Dispo/DNC  : Updates status via ${nonAgentUrl} (update_lead + add_dnc_phone) & releases Remote Agent via ${agentApiUrl} (stage=HANGUP)`,
         ``,
         `# === Bridge Server .env (Co-Located on ViciBox) ===`,
-        `PORT=3000`,
+        `PORT=533`,
+        `HOST=115.186.137.240`,
         `DEEPGRAM_API_KEY=***`,
         `VICI_API_PASS=***`,
         `AMI_SECRET=***`,

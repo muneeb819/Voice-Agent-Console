@@ -7,7 +7,7 @@
 
 | Component | Bind / Port | Purpose & Security |
 |---|---|---|
-| **Web Console, Wallboard & REST/WS API** | `0.0.0.0:3000` | Protected by `ADMIN_PASSWORD` (`HttpOnly` HMAC cookie / `Bearer` token). Local Asterisk `115.186.137.240` pre-call hooks (`/api/vici/register-call`) are automatically whitelisted. |
+| **Web Console, Wallboard & REST/WS API** | `0.0.0.0:533` | Protected by `ADMIN_PASSWORD` (`HttpOnly` HMAC cookie / `Bearer` token). Local Asterisk `115.186.137.240` pre-call hooks (`/api/vici/register-call`) are automatically whitelisted. |
 | **Universal SIP + RTP (G.711 μ-law 8 kHz)** | `115.186.137.240:5062` UDP | Works on **all ViciBox 8–12 (Asterisk 13, 16, 18+)** without compiling `app_audiosocket`. Uses `:5062` so it never collides with Asterisk on `:5060`. Restricted via `BRIDGE_ALLOWED_IPS=115.186.137.240,::1`. |
 | **Native Asterisk 18+ AudioSocket TCP** | `115.186.137.240:9092` TCP | Native `slin` 8 kHz TCP audio framing for Asterisk 18+ (`ViciBox 11/12`). Uses `CURL(/api/vici/register-call)` returning a canonical 36-char RFC 4122 UUID. |
 | **VICIdial Non-Agent & Agent HTTP APIs** | `http://115.186.137.240` | `/vicidial/non_agent_api.php` (`lead_all_info`, `update_lead`, `add_dnc_phone`) + `/agc/api.php` (`ra_call_control` `INGROUPTRANSFER`, `EXTENSIONTRANSFER`, `HANGUP`). |
@@ -36,7 +36,7 @@ What `vicibox-install.sh` does automatically:
 5. Registers and starts `voice-agent-bridge.service` under `systemd` (`Restart=always`).
 
 ### 2.2 Set Your API & ViciBox Credentials
-Edit `/opt/voice-agent-console/.env` (or sign in at `http://<VICIBOX_IP>:3000` and click **🔑 API Keys**):
+Edit `/opt/voice-agent-console/.env` (or sign in at `http://<VICIBOX_IP>:533` and click **🔑 API Keys**):
 
 ```bash
 sudo nano /opt/voice-agent-console/.env
@@ -60,12 +60,12 @@ Restart if edited via CLI:
 sudo systemctl restart voice-agent-bridge.service
 ```
 
-### 2.3 Open Firewall Port `:3000` (For Your Admin Browser Only)
-Keep `:5062` (UDP) and `:9092` (TCP) closed to the public internet since Asterisk talks to them locally over `115.186.137.240`. Open `:3000` TCP in ViciBox `firewalld` (ideally restricted to your office/VPN IP):
+### 2.3 Open Firewall Port `:533` (For Your Admin Browser Only)
+Keep `:5062` (UDP) and `:9092` (TCP) closed to the public internet since Asterisk talks to them locally over `115.186.137.240`. Open `:533` TCP in ViciBox `firewalld` (ideally restricted to your office/VPN IP):
 
 ```bash
-# Open :3000 to your office IP (recommended) or internal zone:
-sudo firewall-cmd --permanent --zone=external --add-rich-rule='rule family="ipv4" source address="YOUR_OFFICE_IP/32" port protocol="tcp" port="3000" accept'
+# Open :533 to your office IP (recommended) or internal zone:
+sudo firewall-cmd --permanent --zone=external --add-rich-rule='rule family="ipv4" source address="YOUR_OFFICE_IP/32" port protocol="tcp" port="533" accept'
 sudo firewall-cmd --reload
 ```
 
@@ -142,7 +142,7 @@ exten => _839X.,1,NoOp(VICIdial AI Bot SIP -> Ext ${EXTEN} | ViciCID: ${CALLERID
 
 ## 4. Pre-Dial Go-Live Smoke Test (Before Turning Campaign Active)
 
-1. Open `http://<VICIBOX_IP>:3000` and sign in with `ADMIN_PASSWORD`.
+1. Open `http://<VICIBOX_IP>:533` and sign in with `ADMIN_PASSWORD`.
 2. Open **`Dialer / Vici (Bridge)`** and click **🔌 Test ViciBox HTTP & AMI**:
    - Confirm **`✓ VERSION: 2.14-...`** on `/vicidial/non_agent_api.php` and **`✓ Pong`** on Asterisk AMI `:5038`.
 3. Click **📞 Simulate Full ViciBox Call** (`SIP + RTP G.711 μ-law` + `Live Deepgram Cloud`) to verify end-to-end 8 kHz audio + TTS + function execution.

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ==============================================================================
 # Co-Located ViciBox (OpenSUSE Leap / Ubuntu / Debian) One-Command Installer
-# Deploys the unified Voice Agent Console (:3000) + AudioSocket (:9092) + SIP/RTP (:5062)
+# Deploys the unified Voice Agent Console (:533) + AudioSocket (:9092) + SIP/RTP (:5062)
 # with Step 4 Production Hardening (ADMIN_PASSWORD + Localhost IP Allowlist + Recordings)
 # ==============================================================================
 
@@ -62,6 +62,12 @@ if ! grep -Eq '^ADMIN_PASSWORD=.+$' "${INSTALL_DIR}/.env"; then
   echo "Generated a strong ADMIN_PASSWORD in ${INSTALL_DIR}/.env."
 fi
 
+if grep -q '^PORT=' "${INSTALL_DIR}/.env"; then
+  sed -i 's/^PORT=.*/PORT=533/' "${INSTALL_DIR}/.env"
+else
+  printf '\nPORT=533\n' >> "${INSTALL_DIR}/.env"
+fi
+
 if grep -q '^HOST=' "${INSTALL_DIR}/.env"; then
   sed -i 's/^HOST=.*/HOST=0.0.0.0/' "${INSTALL_DIR}/.env"
 else
@@ -103,11 +109,11 @@ systemctl --no-pager --full status voice-agent-bridge.service || true
 
 echo ""
 echo "✓ Turnkey Step 4 Production Deployment Complete!"
-echo "  Console UI         : http://$(hostname -I | awk '{print $1}'):3000"
+echo "  Console UI         : http://$(hostname -I | awk '{print $1}'):533"
 echo "  AudioSocket TCP    : 115.186.137.240:9092 (Protected by BRIDGE_ALLOWED_IPS)"
 echo "  SIP + RTP (PCMU)   : 115.186.137.240:5062 (Protected by BRIDGE_ALLOWED_IPS)"
 echo "  Call Recordings    : ${INSTALL_DIR}/data/recordings/*.wav"
 if [ -n "${GENERATED_PASS}" ]; then
   echo "  Initial Admin Pass : ${GENERATED_PASS}  (saved in ${INSTALL_DIR}/.env)"
 fi
-echo "  Optional Firewall  : firewall-cmd --permanent --add-port=3000/tcp && firewall-cmd --reload"
+echo "  Optional Firewall  : firewall-cmd --permanent --add-port=533/tcp && firewall-cmd --reload"

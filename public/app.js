@@ -1738,7 +1738,7 @@
       ` same => n,Answer()`,
       ` same => n,Set(CHANNEL(audioreadformat)=slin)`,
       ` same => n,Set(CHANNEL(audiowriteformat)=slin)`,
-      ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:3000/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
+      ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:533/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
       ` same => n,AudioSocket(\${_BRIDGE_UUID},${v.bridgeHost}:${v.bridgePort})`,
       ` same => n,Hangup()`,
     ].join('\n');
@@ -1771,7 +1771,8 @@
       `; 5. Dispo/DNC  : Updates status via ${nonAgentUrl} (update_lead + add_dnc_phone) & releases Remote Agent via ${agentApiUrl} (stage=HANGUP)`,
       ``,
       `# === Bridge Server .env (Co-Located on ViciBox) ===`,
-      `PORT=3000`,
+      `PORT=533`,
+      `HOST=115.186.137.240`,
       `DEEPGRAM_API_KEY=***`,
       `VICI_API_PASS=***`,
       `AMI_SECRET=***`,
@@ -4586,7 +4587,7 @@
           <h2>Production Hardening Status</h2>
           <div class="ck">
             <span class="${secretsStatus?.ADMIN_PASSWORD?.configured ? 'ok' : 'wn'}">${secretsStatus?.ADMIN_PASSWORD?.configured ? '✓' : '!'}</span>
-            <span>Console Auth (<code>ADMIN_PASSWORD</code>): <b>${secretsStatus?.ADMIN_PASSWORD?.configured ? 'Enabled & Enforced' : 'Open (Set in 🔑 API Keys before exposing :3000 publicly)'}</b></span>
+            <span>Console Auth (<code>ADMIN_PASSWORD</code>): <b>${secretsStatus?.ADMIN_PASSWORD?.configured ? 'Enabled & Enforced' : 'Open (Set in 🔑 API Keys before exposing :533 publicly)'}</b></span>
           </div>
           <div class="ck">
             <span class="${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'ok' : 'wn'}">${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? '✓' : '!'}</span>
@@ -5027,7 +5028,7 @@
       ['VICI_API_PASS', 'VICIdial API Password (User 6666 pass on ViciBox)'],
       ['AMI_SECRET', 'Asterisk AMI Secret (cron pass in /etc/asterisk/manager.conf)'],
       ['CUSTOM_WEBHOOK_SECRET', 'Custom CRM / Webhook Secret (usable as {{CUSTOM_WEBHOOK_SECRET}} in Function headers)'],
-      ['ADMIN_PASSWORD', 'Console Admin Password (Step 4 — locks :3000 Web UI & WebSockets while keeping local Asterisk whitelisted)'],
+      ['ADMIN_PASSWORD', 'Console Admin Password (Step 4 — locks :533 Web UI & WebSockets while keeping local Asterisk whitelisted)'],
       ['BRIDGE_ALLOWED_IPS', 'Allowed Asterisk IPs/CIDRs for SIP :5062 & AudioSocket :9092 (e.g. 115.186.137.240,10.0.0.0/8)'],
     ];
 

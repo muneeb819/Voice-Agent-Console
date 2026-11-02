@@ -14,7 +14,7 @@ Unified production **Node.js + TypeScript** platform combining:
 ```text
 voice-agent-console/
 ├── src/
-│   ├── server.ts                 # Unified Express + WebSocket upgrade server (:3000)
+│   ├── server.ts                 # Unified Express + WebSocket upgrade server (:533)
 │   ├── types.ts                  # Shared TypeScript interfaces
 │   ├── defaults.ts               # Default console state & legacy vac-v2 state migration
 │   ├── settings-builder.ts       # Deepgram Settings builder, 18-rule validator & ViciBox dialplan generator
@@ -77,7 +77,7 @@ npm start
 # Or simply run ./start.sh (Linux/macOS) or start.bat (Windows)
 ```
 
-Open **`http://localhost:3000`**.
+Open **`http://115.186.137.240:533`**.
 
 Run all **37 end-to-end verification checks** across Steps 1–4. The runner uses a temporary data directory and loopback-only ports; live Deepgram checks use your configured API key:
 

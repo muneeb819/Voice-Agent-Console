@@ -684,7 +684,7 @@ function createServerWithSimulator(bridgeOpts) {
     return { app, server, viciBridge };
 }
 if (require.main === module) {
-    const initialPort = Number(process.env.PORT || 3000);
+    const initialPort = Number(process.env.PORT || 533);
     const host = process.env.HOST || '115.186.137.240';
     const debugMode = process.env.VAC_DEBUG === '1';
     if (!(0, auth_guard_1.isLoopbackIp)(host) && !(0, auth_guard_1.isAuthEnabled)() && !debugMode) {
@@ -715,8 +715,15 @@ if (require.main === module) {
                     listenWithFallback(candidatePort, retriesLeft);
                     return;
                 }
+                if (err.code === 'EACCES' && candidatePort < 1024 && retriesLeft > 0) {
+                    const nextPort = 3850;
+                    console.warn(`[VoiceAgentConsole] Privileged port ${candidatePort} requires CAP_NET_BIND_SERVICE (EACCES) — switching automatically to port ${nextPort}...`);
+                    server.removeListener('error', onError);
+                    listenWithFallback(nextPort, retriesLeft - 1);
+                    return;
+                }
                 if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
-                    const nextPort = candidatePort === 3000 ? 3850 : candidatePort + 1;
+                    const nextPort = candidatePort + 1;
                     console.warn(`[VoiceAgentConsole] Port ${candidatePort} is busy (EADDRINUSE) — switching automatically to port ${nextPort}...`);
                     server.removeListener('error', onError);
                     listenWithFallback(nextPort, retriesLeft - 1);
@@ -728,7 +735,7 @@ if (require.main === module) {
             onListening = () => {
                 server.removeListener('error', onError);
                 process.env.PORT = String(candidatePort);
-                console.log(`[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://localhost:${candidatePort} (bound ${bindHost}:${candidatePort}, allowed peer: 115.186.137.240)${debugMode ? ' [DEBUG MODE]' : ''}`);
+                console.log(`[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://115.186.137.240:${candidatePort} (bound ${bindHost}:${candidatePort}, allowed peer: 115.186.137.240)${debugMode ? ' [DEBUG MODE]' : ''}`);
                 if (debugMode) {
                     const currentState = (0, db_1.getConsoleState)();
                     const checks = (0, settings_builder_1.validateState)(currentState);

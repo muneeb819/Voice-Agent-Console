@@ -13,7 +13,7 @@ if ($existing) {
 }
 
 Start-Process -FilePath $cf `
-    -ArgumentList "tunnel", "--url", "http://115.186.137.240:3000", "--no-autoupdate" `
+    -ArgumentList "tunnel", "--url", "http://115.186.137.240:533", "--no-autoupdate" `
     -RedirectStandardOutput "$root\logs\cloudflared.log" `
     -RedirectStandardError $log `
     -WindowStyle Hidden
