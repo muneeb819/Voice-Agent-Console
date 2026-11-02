@@ -512,6 +512,9 @@
     renderBrandMark();
     updateThemeFavicon(meta);
     renderThemeStudioControls();
+    if (typeof renderExecutiveCommandDeck === 'function' && S) {
+      renderExecutiveCommandDeck();
+    }
   }
 
   // Each theme is a complete brand package: the favicon is drawn from that
@@ -3788,6 +3791,540 @@
     </div>`;
   }
 
+  // ==================== EXECUTIVE COMMAND & CONSOLE QUALITY DECK ====================
+
+  const CMD_DECK_COMPACT_KEY = 'vac_cmd_deck_compact_v1';
+  const cmdDeckState = {
+    serverTelemetry: null,
+    publicDemoUrl: null,
+    tunnelStarting: false,
+    syncing: false,
+    compact: (() => {
+      try {
+        return window.localStorage?.getItem(CMD_DECK_COMPACT_KEY) === '1';
+      } catch {
+        return false;
+      }
+    })(),
+  };
+
+  function syncPublicDemoButton(demoUrl) {
+    const cleanUrl = demoUrl
+      ? String(demoUrl).replace(/\/+$/, '')
+      : /\.trycloudflare\.com$/i.test(window.location.hostname)
+      ? window.location.origin
+      : null;
+    cmdDeckState.publicDemoUrl = cleanUrl;
+    const shareBtn = document.getElementById('btn-share-demo');
+    if (shareBtn) {
+      if (cleanUrl) {
+        const loginLink = `${cleanUrl}/login`;
+        shareBtn.style.display = 'inline-flex';
+        shareBtn.dataset.demoUrl = loginLink;
+        shareBtn.title = `Public Client Demo Login URL: ${loginLink} (click to copy)`;
+      } else {
+        shareBtn.style.display = 'none';
+      }
+    }
+  }
+
+  async function refreshTelemetryOverview(silent) {
+    if (serverlessCloudMode || cmdDeckState.syncing) return;
+    cmdDeckState.syncing = true;
+    if (!silent) renderExecutiveCommandDeck();
+    try {
+      const res = await fetch('/api/telemetry/overview', { credentials: 'same-origin' });
+      if (res.ok && (res.headers.get('content-type') || '').includes('application/json')) {
+        const data = await res.json();
+        if (data && data.ok && data.telemetry) {
+          cmdDeckState.serverTelemetry = data.telemetry;
+          const liveDemo = data.publicDemoUrl || data.telemetry.runtime?.publicDemoUrl;
+          if (liveDemo) {
+            syncPublicDemoButton(liveDemo);
+          }
+        }
+      }
+    } catch {
+      // Keep last known telemetry snapshot if offline
+    } finally {
+      cmdDeckState.syncing = false;
+      renderExecutiveCommandDeck();
+    }
+  }
+
+  function formatDurationCompact(sec) {
+    const s = Math.max(0, Math.floor(Number(sec) || 0));
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ${s % 60}s`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${m % 60}m`;
+  }
+
+  function computeLiveTelemetryView() {
+    const srv = cmdDeckState.serverTelemetry;
+    const agents = Array.isArray(S?.agents) ? S.agents : [];
+    const campaigns = Array.isArray(S?.campaigns) ? S.campaigns : [];
+    const providers = Array.isArray(S?.providers) ? S.providers : [];
+    const functions = Array.isArray(S?.functions) ? S.functions : [];
+
+    // Live per-entity pre-flight status (reflects unsaved form edits immediately)
+    const agentMatrix = agents.map((ag) => {
+      const cks = validateAgentLocal(ag);
+      const er = cks.filter((x) => (x.level || x[0]) === 'er').length;
+      const wn = cks.filter((x) => (x.level || x[0]) === 'wn').length;
+      return {
+        id: ag.id,
+        name: ag.name || 'Untitled Agent',
+        mode: ag.mode || 'outbound',
+        bargeIn: ag.behavior?.bargeIn || 'instant',
+        er,
+        wn,
+        status: er > 0 ? 'er' : wn > 0 ? 'wn' : 'ok',
+      };
+    });
+
+    const campaignMatrix = campaigns.map((cp) => {
+      const cks = validateCampaignLocal(cp);
+      const er = cks.filter((x) => (x.level || x[0]) === 'er').length;
+      const wn = cks.filter((x) => (x.level || x[0]) === 'wn').length;
+      return {
+        id: cp.id,
+        name: cp.name || 'Untitled Campaign',
+        active: Boolean(cp.active),
+        dialMode: cp.dialMode || 'RATIO',
+        exten: cp.exten || '8368',
+        er,
+        wn,
+        status: er > 0 ? 'er' : wn > 0 ? 'wn' : 'ok',
+      };
+    });
+
+    const allChecks = [
+      ...agents.flatMap((ag) => validateAgentLocal(ag)),
+      ...campaigns.flatMap((cp) => validateCampaignLocal(cp)),
+    ];
+    const okCount = allChecks.filter((x) => (x.level || x[0]) === 'ok').length;
+    const wnCount = allChecks.filter((x) => (x.level || x[0]) === 'wn').length;
+    const erCount = allChecks.filter((x) => (x.level || x[0]) === 'er').length;
+    const totalChecks = Math.max(1, allChecks.length);
+
+    let testsTotal = 0;
+    let testsPassed = 0;
+    let testsFailed = 0;
+    let testsPending = 0;
+    for (const list of Object.values(S?.tests || {})) {
+      if (!Array.isArray(list)) continue;
+      for (const row of list) {
+        testsTotal++;
+        if (row.r === 'ok') testsPassed++;
+        else if (row.r === 'f') testsFailed++;
+        else testsPending++;
+      }
+    }
+
+    const sttProv = globalServiceProvider('stt');
+    const llmProv = globalServiceProvider('llm');
+    const ttsProv = globalServiceProvider('tts');
+    const sttModel = S?.services?.stt?.model || '';
+    const llmModel = S?.services?.llm?.model || '';
+    const ttsModel = S?.services?.tts?.model || '';
+    const dgConfigured = Boolean(
+      secretsStatus?.DEEPGRAM_API_KEY?.configured || srv?.inventory?.deepgramConfigured
+    );
+
+    const instantCount = agents.filter((ag) => ag.behavior?.bargeIn === 'instant').length;
+    const rate8kCount = agents.filter((ag) => Number(ag.audio?.inRate) === 8000).length;
+    const viciAcceptCount = agents.filter((ag) => ag.acceptViciCalls !== false).length;
+    const discCount = campaigns.filter((cp) => String(cp.disclosure || '').trim().length >= 8).length;
+
+    const avgTtfb = Number(srv?.traffic?.avgTtfbMs || 0);
+    const ratioOk = okCount / totalChecks;
+    const preflightPts = Math.max(0, Math.min(30, Math.round(ratioOk * 30 - erCount * 8 - wnCount * 3)));
+    const aiStackPts = Math.min(
+      20,
+      (sttModel ? 5 : 0) + (llmModel ? 5 : 0) + (ttsModel ? 5 : 0) + (dgConfigured ? 5 : 3)
+    );
+    const instantRatio = agents.length ? instantCount / agents.length : 1;
+    const rate8kRatio = agents.length ? rate8kCount / agents.length : 1;
+    const ttfbPts = avgTtfb === 0 || avgTtfb <= 950 ? 4 : avgTtfb <= 1500 ? 2 : 1;
+    const realtimePts = Math.min(15, Math.round(instantRatio * 6) + Math.round(rate8kRatio * 5) + ttfbPts);
+
+    const discRatio = campaigns.length ? discCount / campaigns.length : 1;
+    const acceptRatio = agents.length ? viciAcceptCount / agents.length : 1;
+    const amiOrNonAgent = Boolean(
+      (S?.vici?.amiUser && S?.vici?.amiSecret) || (S?.vici?.apiUser && S?.vici?.apiPass)
+    );
+    const telephonyPts = Math.min(
+      15,
+      Math.round(discRatio * 5) + Math.round(acceptRatio * 5) + (amiOrNonAgent ? 5 : 3)
+    );
+    const qaPts =
+      testsTotal === 0
+        ? 5
+        : Math.max(
+            4,
+            Math.min(10, Math.round((testsPassed / testsTotal) * 7) + (testsFailed === 0 ? 3 : 0))
+          );
+
+    const usersCount = Number(srv?.inventory?.registeredUsers ?? 1);
+    const authRequired = true;
+    const opsPts = Math.min(10, 4 + (authRequired ? 3 : 2) + (usersCount > 0 ? 3 : 2));
+
+    const score = Math.max(
+      0,
+      Math.min(100, preflightPts + aiStackPts + realtimePts + telephonyPts + qaPts + opsPts)
+    );
+    const grade =
+      score >= 96
+        ? 'S+'
+        : score >= 90
+        ? 'A+'
+        : score >= 82
+        ? 'A'
+        : score >= 72
+        ? 'B+'
+        : score >= 60
+        ? 'B'
+        : 'C';
+
+    const pillars = [
+      { id: 'preflight', label: 'Pre-Flight Verification', score: preflightPts, max: 30, detail: `${okCount}/${totalChecks} checks` },
+      { id: 'ai_stack', label: 'Speech & LLM Pipeline', score: aiStackPts, max: 20, detail: `${sttModel || 'stt'} · ${llmModel || 'llm'}` },
+      { id: 'realtime_ux', label: 'Sub-Second Latency UX', score: realtimePts, max: 15, detail: `${instantCount}/${agents.length} <15ms VAD` },
+      { id: 'telephony', label: 'VICIdial & Compliance', score: telephonyPts, max: 15, detail: `${discCount}/${campaigns.length} disclosure` },
+      { id: 'qa_readiness', label: 'QA Scenario Coverage', score: qaPts, max: 10, detail: `${testsPassed}/${testsTotal} passed` },
+      { id: 'ops_security', label: 'Security, Auth & SQLite', score: opsPts, max: 10, detail: `${usersCount} user${usersCount === 1 ? '' : 's'} · WAL` },
+    ];
+
+    const simCalls = Number(srv?.traffic?.totalSimulatorCalls ?? (sim?.callLogs?.length || 0));
+    const simTurns = Number(srv?.traffic?.totalCallsAllChannels ?? simCalls);
+    const viciActive = Number(srv?.traffic?.activeCalls ?? (viciMon?.activeCalls?.length || 0));
+    const viciTotal = Number(srv?.traffic?.totalBridgeCalls ?? 0);
+    const viciXfers = Number(srv?.traffic?.closerTransfers ?? 0);
+    const viciXferRate = Number(srv?.traffic?.transferRatePct ?? 0);
+    const viciDnc = Number(srv?.traffic?.dncBlocked ?? 0);
+    const viciRecs = Number(srv?.traffic?.recordingsCount ?? 0);
+    const viciTalkSec = Math.round(Number(srv?.traffic?.avgDurationSec ?? 0) * Math.max(1, viciTotal));
+
+    const boundHost = srv?.runtime?.allowedPeerIp || S?.vici?.bridgePublicHost || '115.186.137.240';
+    const boundPort = srv?.runtime?.httpPort || window.location.port || 533;
+    const bridgePort = srv?.runtime?.audioSocketPort || S?.vici?.bridgePort || 9092;
+    const uptimeSec = Number(srv?.runtime?.uptimeSec ?? 0);
+    const memMb = Number(srv?.runtime?.rssMb ?? 0);
+    const revNum = latestRevisionId || revisions?.[0]?.id || 1;
+    const totalRevs = Number(srv?.inventory?.revisionsCount ?? (revisions?.length || 1));
+
+    const activeThemeLabel =
+      (typeof THEME_BY_ID === 'function' && THEME_BY_ID(appearance?.theme)?.name) ||
+      (document.documentElement.getAttribute('data-theme') || 'obsidian_prism')
+        .split('_')
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+
+    return {
+      score,
+      grade,
+      okCount,
+      wnCount,
+      erCount,
+      totalChecks,
+      pillars,
+      agents,
+      campaigns,
+      providers,
+      functions,
+      agentMatrix,
+      campaignMatrix,
+      sttProv,
+      llmProv,
+      ttsProv,
+      sttModel,
+      llmModel,
+      ttsModel,
+      dgConfigured,
+      instantCount,
+      rate8kCount,
+      discCount,
+      testsTotal,
+      testsPassed,
+      testsFailed,
+      testsPending,
+      simCalls,
+      simTurns,
+      avgTtfb,
+      viciActive,
+      viciTotal,
+      viciXfers,
+      viciXferRate,
+      viciDnc,
+      viciRecs,
+      viciTalkSec,
+      boundHost,
+      boundPort,
+      bridgePort,
+      uptimeSec,
+      memMb,
+      revNum,
+      totalRevs,
+      usersCount,
+      activeThemeLabel,
+    };
+  }
+
+  function renderExecutiveCommandDeck() {
+    const wrap = document.getElementById('cmd-deck');
+    if (!wrap || !S) return;
+
+    const T = computeLiveTelemetryView();
+    const healthClass = T.erCount > 0 ? 'er' : T.wnCount > 0 ? 'wn' : 'ok';
+    const certText =
+      T.erCount === 0 && T.wnCount === 0
+        ? `✓ ${T.okCount}/${T.totalChecks} PASSED · 0 WARN · 0 ERR`
+        : `${T.okCount} OK · ${T.wnCount} WARN · ${T.erCount} ERR`;
+
+    const demoBase = cmdDeckState.publicDemoUrl;
+    const demoLoginUrl = demoBase ? `${demoBase}/login` : '';
+
+    const demoControlHtml = demoBase
+      ? `<div class="cmd-demo-pill live" title="External internet HTTPS link active — share with clients on any network!">
+           <span>🌐</span>
+           <a class="cmd-demo-url" href="${esc(demoLoginUrl)}" target="_blank" rel="noopener">${esc(
+             demoBase.replace(/^https?:\/\//i, '')
+           )}/login</a>
+           <button type="button" class="b cmd-mini-btn" data-cmd-copy-demo="${esc(demoLoginUrl)}">📋 Copy Link</button>
+         </div>`
+      : !serverlessCloudMode
+      ? `<button type="button" class="g cmd-mini-btn" id="btn-cmd-start-tunnel" ${
+          cmdDeckState.tunnelStarting ? 'disabled' : ''
+        } title="Launch a free Cloudflare HTTPS Quick-Tunnel so external clients on any internet connection can access /login">
+           ${cmdDeckState.tunnelStarting ? '⏳ Starting HTTPS Tunnel…' : '🚀 Launch Public Client HTTPS Link'}
+         </button>`
+      : '';
+
+    const radius = 47;
+    const circumference = 2 * Math.PI * radius;
+    const dashOffset = circumference - (T.score / 100) * circumference;
+
+    const outboundCount = T.agents.filter((x) => x.mode === 'outbound').length;
+    const inboundCount = T.agents.filter((x) => x.mode === 'inbound').length;
+    const blendedCount = T.agents.filter((x) => x.mode === 'both').length;
+    const activeCampaignsCount = T.campaigns.filter((x) => x.active).length;
+
+    const kpiCards = [
+      {
+        tab: 'agents',
+        ico: '🤖',
+        title: 'Agent Fleet',
+        main: `${T.agents.length} Active Bot${T.agents.length === 1 ? '' : 's'}`,
+        sub: `${outboundCount} Out · ${inboundCount} In · ${blendedCount} Blend · ${T.instantCount}/${T.agents.length} <15ms Barge-In`,
+        foot: `Active: ${(A()?.name || 'Agent').slice(0, 20)} →`,
+      },
+      {
+        tab: 'plugins',
+        ico: '🧩',
+        title: 'AI & Speech Stack',
+        main: `${T.dgConfigured ? 'Deepgram Live' : 'Key Needed'}`,
+        sub: `STT ${T.sttModel || 'nova-3'} · LLM ${T.llmModel || 'managed'} · ${T.providers.length} Plug-ins · ${T.functions.length} Tools`,
+        foot: `${T.dgConfigured ? '✓ API Key Ready' : '⚠ Set Key in Header'} →`,
+      },
+      {
+        tab: 'campaigns',
+        ico: '📣',
+        title: 'Campaigns & DNC',
+        main: `${activeCampaignsCount}/${T.campaigns.length} Live`,
+        sub: `${T.discCount}/${T.campaigns.length} Recording Disclosure · ${
+          T.campaigns.filter((c) => c.dnc).length
+        }/${T.campaigns.length} DNC Scrub`,
+        foot: `Exten ${C()?.exten || '8368'} · ${C()?.dialMode || 'RATIO'} →`,
+      },
+      {
+        tab: 'voice',
+        ico: '🎙️',
+        title: 'Voice & Latency',
+        main: T.avgTtfb > 0 ? `${T.avgTtfb}ms TTFB` : `${T.rate8kCount}/${T.agents.length} 8kHz`,
+        sub: `TTS ${T.ttsModel || 'aura-2'} · Speed ${A()?.tts?.speed || 1}x · ${A()?.audio?.inEnc || 'linear16'}`,
+        foot: `Open Voice Studio →`,
+      },
+      {
+        tab: 'test',
+        ico: '🧪',
+        title: 'QA & Simulator',
+        main: `${T.testsPassed}/${T.testsTotal} QA Pass`,
+        sub: `${T.simCalls} Sim Call${T.simCalls === 1 ? '' : 's'} · ${T.simTurns} All-Ch · ${T.testsPending} Pending · ${T.testsFailed} Fail`,
+        foot: `Run Live Call Sim →`,
+      },
+      {
+        tab: 'vici',
+        ico: '☎️',
+        title: 'VICIdial Bridge',
+        main: `:${T.bridgePort} Ready`,
+        sub: `${T.viciTotal} Bridge Calls · ${T.viciXfers} Xfer (${T.viciXferRate}%) · ${T.viciDnc} DNC`,
+        foot: `Host ${T.boundHost} →`,
+      },
+      {
+        tab: 'wallboard',
+        ico: '📺',
+        title: 'Live Wallboard',
+        main: `${T.viciActive} Live Call${T.viciActive === 1 ? '' : 's'}`,
+        sub: `${T.viciRecs} WAV Recording${T.viciRecs === 1 ? '' : 's'} · ${formatDurationCompact(
+          T.viciTalkSec
+        )} Total Talk`,
+        foot: `Supervisor Controls →`,
+      },
+      {
+        tab: 'export',
+        ico: '🛡️',
+        title: 'Runtime, Auth & DB',
+        main: `Rev #${T.revNum} · ${T.usersCount} User${T.usersCount === 1 ? '' : 's'}`,
+        sub: `${T.boundHost}:${T.boundPort} · ${T.memMb ? `${T.memMb}MB RAM · ` : ''}Up ${formatDurationCompact(
+          T.uptimeSec
+        )}`,
+        foot: `${T.totalRevs} SQLite Snapshots →`,
+      },
+    ];
+
+    wrap.innerHTML = `
+      <div class="cmd-deck-shell">
+        <div class="cmd-topbar">
+          <div class="cmd-brand-cluster">
+            <span class="cmd-radar-dot ${healthClass === 'ok' ? '' : healthClass}"></span>
+            <div class="cmd-eyebrow">Executive Command <span>&amp; Console Quality</span></div>
+            <span class="cmd-cert-badge ${healthClass === 'ok' ? '' : healthClass}">${esc(certText)}</span>
+            <span class="cmd-sys-meta">
+              <span>${esc(String(T.boundHost))}:${esc(String(T.boundPort))}</span>
+              <span>·</span>
+              <span>Bridge :${esc(String(T.bridgePort))}</span>
+              <span>·</span>
+              <span>Theme: ${esc(T.activeThemeLabel)}</span>
+            </span>
+          </div>
+          <div class="cmd-actions-cluster">
+            ${demoControlHtml}
+            <button type="button" class="g cmd-mini-btn" id="btn-cmd-refresh" title="Refresh live server, simulator &amp; VICIdial telemetry">
+              ${cmdDeckState.syncing ? '↻ Syncing…' : '↻ Sync'}
+            </button>
+            <button type="button" class="g cmd-mini-btn" id="btn-cmd-compact" title="Toggle between Full Executive Dashboard and Compact Telemetry Strip">
+              ${cmdDeckState.compact ? '⊞ Full Dashboard' : '⊟ Compact'}
+            </button>
+          </div>
+        </div>
+
+        ${
+          cmdDeckState.compact
+            ? `<div class="cmd-compact-ribbon">
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="agents">Quality: <b>${T.score}/100 (${esc(T.grade)})</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="agents">Bots: <b>${T.agents.length}</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="campaigns">Campaigns: <b>${activeCampaignsCount}/${T.campaigns.length}</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="plugins">Stack: <b>${esc(T.sttModel || 'nova-3')} / ${esc(T.llmModel || 'llm')}</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="test">QA &amp; Sim: <b>${T.testsPassed}/${T.testsTotal} · ${T.simCalls} calls</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="wallboard">Vici Bridge: <b>${T.viciActive} live / ${T.viciTotal} total</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="export">SQLite: <b>Rev #${T.revNum} · ${T.usersCount} user${T.usersCount === 1 ? '' : 's'}</b></button>
+               </div>`
+            : `<div class="cmd-hero-grid">
+                 <div class="cmd-quality-card">
+                   <div class="cmd-quality-top">
+                     <div class="cmd-gauge-box">
+                       <svg class="cmd-gauge-svg" viewBox="0 0 118 118" aria-hidden="true">
+                         <defs>
+                           <linearGradient id="cmdGaugeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                             <stop offset="0%" stop-color="var(--ac)" />
+                             <stop offset="55%" stop-color="var(--ac-2)" />
+                             <stop offset="100%" stop-color="var(--ok)" />
+                           </linearGradient>
+                         </defs>
+                         <circle class="cmd-gauge-track" cx="59" cy="59" r="${radius}" />
+                         <circle
+                           class="cmd-gauge-arc"
+                           cx="59"
+                           cy="59"
+                           r="${radius}"
+                           stroke="url(#cmdGaugeGrad)"
+                           stroke-dasharray="${circumference.toFixed(2)}"
+                           stroke-dashoffset="${dashOffset.toFixed(2)}"
+                         />
+                       </svg>
+                       <div class="cmd-gauge-center">
+                         <div class="cmd-gauge-score">${T.score}</div>
+                         <div class="cmd-gauge-grade">GRADE ${esc(T.grade)}</div>
+                       </div>
+                     </div>
+                     <div class="cmd-pillars">
+                       ${T.pillars
+                         .map((p) => {
+                           const pct = Math.max(0, Math.min(100, Math.round((p.score / p.max) * 100)));
+                           return `<div class="cmd-pillar-row" title="${esc(p.detail)}">
+                             <div class="cmd-pillar-hdr">
+                               <span class="cmd-pillar-lbl">${esc(p.label)}</span>
+                               <span class="cmd-pillar-val">${p.score}/${p.max}</span>
+                             </div>
+                             <div class="cmd-pillar-bar"><div class="cmd-pillar-fill" style="width:${pct}%"></div></div>
+                           </div>`;
+                         })
+                         .join('')}
+                     </div>
+                   </div>
+                   <div class="cmd-quality-foot">
+                     <span>Console Quality Index: <b style="color:var(--tx)">${T.score}/100 (${esc(T.grade)})</b></span>
+                     <span>SQLite WAL · Rev #${T.revNum} · ${
+                       comparableSnapshot(S) === snap ? '✓ Synced' : '● Unsaved Edits'
+                     }</span>
+                   </div>
+                 </div>
+
+                 <div class="cmd-kpi-grid">
+                   ${kpiCards
+                     .map(
+                       (k) => `<button type="button" class="cmd-kpi-card ${
+                         tab === k.tab ? 'is-active-tab' : ''
+                       }" data-cmd-tab="${esc(k.tab)}">
+                         <div class="cmd-kpi-top">
+                           <span class="cmd-kpi-title">${esc(k.title)}</span>
+                           <span class="cmd-kpi-ico">${k.ico}</span>
+                         </div>
+                         <div class="cmd-kpi-main">${esc(k.main)}</div>
+                         <div class="cmd-kpi-sub">${esc(k.sub)}</div>
+                         <div class="cmd-kpi-foot"><span>${esc(k.foot)}</span></div>
+                       </button>`
+                     )
+                     .join('')}
+                 </div>
+               </div>
+
+               <div class="cmd-fleet-strip">
+                 <span class="cmd-fleet-lbl">Fleet Matrix:</span>
+                 ${T.agentMatrix
+                   .map(
+                     (ag) => `<button type="button" class="cmd-fleet-chip ${
+                       tab === 'agents' && cur.a === ag.id ? 'sel' : ''
+                     }" data-cmd-agent="${esc(ag.id)}" title="Agent ${esc(ag.name)} — ${
+                       ag.er ? `${ag.er} errors` : ag.wn ? `${ag.wn} warnings` : '0 errors · 0 warnings'
+                     }">
+                       <span class="cmd-fleet-dot ${ag.status === 'ok' ? '' : ag.status}"></span>
+                       <span>🤖 ${esc(ag.name)}</span>
+                       <span class="cmd-fleet-ext">${esc(ag.mode)}</span>
+                     </button>`
+                   )
+                   .join('')}
+                 ${T.campaignMatrix
+                   .map(
+                     (cp) => `<button type="button" class="cmd-fleet-chip ${
+                       tab === 'campaigns' && cur.c === cp.id ? 'sel' : ''
+                     }" data-cmd-campaign="${esc(cp.id)}" title="Campaign ${esc(cp.name)} — Exten ${esc(
+                       cp.exten
+                     )} (${cp.active ? 'Active' : 'Paused'})">
+                       <span class="cmd-fleet-dot ${cp.status === 'ok' ? '' : cp.status}"></span>
+                       <span>📣 ${esc(cp.name)}</span>
+                       <span class="cmd-fleet-ext">ext ${esc(cp.exten)}</span>
+                     </button>`
+                   )
+                   .join('')}
+               </div>`
+        }
+      </div>
+    `;
+  }
+
   // ==================== MAIN VIEW RENDERER ====================
 
   function render() {
@@ -3805,7 +4342,6 @@
       const isFluxTts = tp.type === 'deepgram' && String(S.services?.tts?.model || '').startsWith('flux');
 
       m.innerHTML = `
-        ${renderFeatureShowcase()}
         <div class="card">
           ${renderSelectorBar('a')}
           ${F('Agent name', 'a.name')}
@@ -3928,6 +4464,7 @@
           <h2>Quick Agent Pre-Flight</h2>
           <div id="agent-quick-ck"></div>
         </div>
+        ${renderFeatureShowcase()}
       `;
     } else if (tab === 'plugins') {
       m.innerHTML = `
@@ -4682,6 +5219,8 @@
 
     const cck = document.getElementById('ck');
     if (cck) cck.innerHTML = renderCheckList(validateCampaignLocal(C()));
+
+    renderExecutiveCommandDeck();
   }
 
   function updateTestSummary() {
@@ -4782,19 +5321,10 @@
     }
     const data = await res.json();
     S = data.state;
-    const shareBtn = document.getElementById('btn-share-demo');
-    const activeDemoUrl =
-      data.publicDemoUrl ||
-      (/\.trycloudflare\.com$/i.test(window.location.hostname) ? window.location.origin : null);
-    if (shareBtn) {
-      if (activeDemoUrl) {
-        shareBtn.style.display = 'inline-flex';
-        shareBtn.dataset.demoUrl = activeDemoUrl;
-        shareBtn.title = `Public Client Demo URL: ${activeDemoUrl} (click to copy)`;
-      } else {
-        shareBtn.style.display = 'none';
-      }
+    if (data.telemetry) {
+      cmdDeckState.serverTelemetry = data.telemetry;
     }
+    syncPublicDemoButton(data.publicDemoUrl || data.telemetry?.runtime?.publicDemoUrl || null);
     enforceDeepgramOnlyLlms(S);
     upgradeRealtimeAgentFeatures(S);
     snap = comparableSnapshot(S);
@@ -4870,6 +5400,9 @@
       if (!res.ok || !data.ok) throw new Error(data.error || 'Save failed');
 
       S = data.state;
+      if (data.telemetry) {
+        cmdDeckState.serverTelemetry = data.telemetry;
+      }
       snap = comparableSnapshot(S);
       revisions = data.revisions || [];
       secretsStatus = data.secrets || {};
@@ -5379,6 +5912,86 @@
       hideRailTooltip();
       if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
       render();
+      return;
+    }
+
+    // Executive Command & Console Quality Dashboard interactive controls
+    if (d.cmdTab) {
+      stopAllAudio();
+      tab = d.cmdTab;
+      if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
+      render();
+      return;
+    }
+    if (d.cmdAgent) {
+      stopAllAudio();
+      if (S.agents.some((x) => x.id === d.cmdAgent)) {
+        cur.a = d.cmdAgent;
+      }
+      tab = 'agents';
+      render();
+      return;
+    }
+    if (d.cmdCampaign) {
+      stopAllAudio();
+      if (S.campaigns.some((x) => x.id === d.cmdCampaign)) {
+        cur.c = d.cmdCampaign;
+      }
+      tab = 'campaigns';
+      render();
+      return;
+    }
+    if (b.id === 'btn-cmd-compact') {
+      cmdDeckState.compact = !cmdDeckState.compact;
+      try {
+        window.localStorage?.setItem(CMD_DECK_COMPACT_KEY, cmdDeckState.compact ? '1' : '0');
+      } catch {}
+      renderExecutiveCommandDeck();
+      return;
+    }
+    if (b.id === 'btn-cmd-refresh') {
+      await refreshTelemetryOverview(false);
+      return;
+    }
+    if (d.cmdCopyDemo) {
+      const link = d.cmdCopyDemo;
+      try {
+        await navigator.clipboard.writeText(link);
+        const orig = b.textContent;
+        b.textContent = '✓ Copied!';
+        setTimeout(() => {
+          b.textContent = orig;
+        }, 2000);
+      } catch {
+        window.prompt('Copy this external HTTPS link for your client:', link);
+      }
+      return;
+    }
+    if (b.id === 'btn-cmd-start-tunnel') {
+      cmdDeckState.tunnelStarting = true;
+      renderExecutiveCommandDeck();
+      try {
+        const res = await fetch('/api/demo-tunnel/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+        });
+        const out = await res.json();
+        const pubUrl = out.publicUrl || out.url;
+        if (!res.ok || !out.ok || !pubUrl) {
+          throw new Error(out.error || 'Could not start Cloudflare Quick-Tunnel.');
+        }
+        syncPublicDemoButton(pubUrl);
+        try {
+          await navigator.clipboard.writeText(`${pubUrl}/login`);
+        } catch {}
+        await refreshTelemetryOverview(true);
+      } catch (err) {
+        alert(`Public Demo Tunnel Error: ${err.message}`);
+      } finally {
+        cmdDeckState.tunnelStarting = false;
+        renderExecutiveCommandDeck();
+      }
       return;
     }
 
@@ -6166,4 +6779,9 @@
   });
 
   loadFromServer();
+  setInterval(() => {
+    if (!document.hidden && S && !serverlessCloudMode) {
+      refreshTelemetryOverview(true);
+    }
+  }, 15000);
 })();

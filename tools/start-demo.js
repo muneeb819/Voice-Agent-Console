@@ -227,42 +227,53 @@ async function main() {
   }
 
   const cfBin = await ensureCloudflaredBinary();
-  console.log(`[Demo] Opening encrypted HTTPS client demo tunnel -> http://localhost:${boundPort} ...`);
+  const lanIp = getLanIp();
+  const upstreamHost = process.platform === 'win32' && lanIp ? lanIp : 'localhost';
+  console.log(`[Demo] Opening encrypted HTTPS client demo tunnel -> http://${upstreamHost}:${boundPort} ...`);
 
   const tunnelProc = childProcess.spawn(
     cfBin,
-    ['tunnel', '--protocol', 'http2', '--url', `http://localhost:${boundPort}`, '--no-autoupdate'],
+    ['tunnel', '--protocol', 'http2', '--url', `http://${upstreamHost}:${boundPort}`, '--no-autoupdate'],
     {
       cwd: ROOT,
       stdio: ['ignore', 'pipe', 'pipe'],
     }
   );
 
-  let printedBanner = false;
+  let discoveredUrl = null;
+  let printedAfterConnect = false;
+
+  const printDemoBanner = (publicUrl) => {
+    console.log('\n========================================================================');
+    console.log('  CLIENT DEMO IS LIVE — ACCESSIBLE FROM ANY INTERNET CONNECTION');
+    console.log('========================================================================');
+    console.log(`  Client Demo URL (HTTPS + Mic) :  ${publicUrl}`);
+    console.log(`  Client Sign-Up Page           :  ${publicUrl}/signup`);
+    console.log(`  Client Sign-In Page           :  ${publicUrl}/login`);
+    console.log(`  Local Console URL             :  http://localhost:${boundPort}`);
+    if (lanIp) {
+      console.log(`  Office Wi-Fi / LAN URL        :  http://${lanIp}:${boundPort}`);
+    }
+    console.log('========================================================================');
+    console.log('  IMPORTANT: Share ONLY the https://....trycloudflare.com URL above');
+    console.log('  (NEVER share 192.168.x.x — private Wi-Fi IPs do not work outside!).');
+    console.log('  Keep this window open during the demo. Press Ctrl+C to stop.');
+    console.log('========================================================================\n');
+  };
+
   const handleTunnelOutput = (chunk) => {
     const text = chunk.toString('utf8');
     const match = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i.exec(text);
-    if (match && !printedBanner) {
-      printedBanner = true;
-      const publicUrl = match[0];
+    if (match && !discoveredUrl) {
+      discoveredUrl = match[0];
       try {
-        fs.writeFileSync(DEMO_URL_FILE, publicUrl + '\n', 'utf8');
+        fs.writeFileSync(DEMO_URL_FILE, discoveredUrl + '\n', 'utf8');
       } catch {}
-      const lanIp = getLanIp();
-      console.log('\n========================================================================');
-      console.log('  CLIENT DEMO IS LIVE — ACCESSIBLE FROM ANY INTERNET CONNECTION');
-      console.log('========================================================================');
-      console.log(`  Client Demo URL (HTTPS + Mic) :  ${publicUrl}`);
-      console.log(`  Client Sign-Up Page           :  ${publicUrl}/signup`);
-      console.log(`  Client Sign-In Page           :  ${publicUrl}/login`);
-      console.log(`  Local Console URL             :  http://localhost:${boundPort}`);
-      if (lanIp) {
-        console.log(`  Office Wi-Fi / LAN URL        :  http://${lanIp}:${boundPort}`);
-      }
-      console.log('========================================================================');
-      console.log('  Send the "Client Demo URL" above to your client on WhatsApp / Email.');
-      console.log('  Keep this window open during the demo. Press Ctrl+C to stop.');
-      console.log('========================================================================\n');
+      printDemoBanner(discoveredUrl);
+    }
+    if (discoveredUrl && !printedAfterConnect && /Registered tunnel connection/i.test(text)) {
+      printedAfterConnect = true;
+      setTimeout(() => printDemoBanner(discoveredUrl), 800);
     }
   };
 

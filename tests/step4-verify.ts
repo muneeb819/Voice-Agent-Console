@@ -607,11 +607,51 @@ async function run() {
       }),
     });
     assert(userSignInRes.status === 200, `Expected 200 from email /api/auth/login, got ${userSignInRes.status}`);
+    const signedInCookie = (userSignInRes.headers.get('set-cookie') || '').split(';')[0];
     console.log(
-      '✓ [10/10] Users SignUp / SignIn First-Page Entry Gate (/ -> /signup, Create Account, Console unlock, Sign Out -> /login & Sign In) verified'
+      '✓ [10/11] Users SignUp / SignIn First-Page Entry Gate (/ -> /signup, Create Account, Console unlock, Sign Out -> /login & Sign In) verified'
     );
 
-    console.log('\nALL 10 STEP 4 CHECKS PASSED SUCCESSFULLY!');
+    // 11. Verify Executive Command & Console Quality Dashboard + Demo Tunnel Status API
+    assert(
+      authedRootHtml.includes('id="cmd-deck"'),
+      'Expected authenticated index.html to include top-of-page #cmd-deck Executive Command Dashboard'
+    );
+    const telemRes = await fetch(`${httpBase}/api/telemetry/overview`, {
+      headers: { Cookie: signedInCookie },
+    });
+    assert(telemRes.status === 200, `Expected 200 from /api/telemetry/overview, got ${telemRes.status}`);
+    const telemJson = (await telemRes.json()) as any;
+    assert(telemJson.ok === true && telemJson.telemetry, 'Expected ok + telemetry object');
+    assert(
+      typeof telemJson.telemetry.quality?.score === 'number' && telemJson.telemetry.quality.score >= 85,
+      `Expected high Console Quality score (>=85), got ${telemJson.telemetry.quality?.score}`
+    );
+    assert(
+      Array.isArray(telemJson.telemetry.quality?.pillars) && telemJson.telemetry.quality.pillars.length === 6,
+      'Expected 6 Console Quality pillars'
+    );
+    assert(
+      Array.isArray(telemJson.telemetry.agentMatrix) && telemJson.telemetry.agentMatrix.length >= 1,
+      'Expected agentMatrix in telemetry overview'
+    );
+
+    const tunStatusRes = await fetch(`${httpBase}/api/demo-tunnel/status`, {
+      headers: { Cookie: signedInCookie },
+    });
+    assert(tunStatusRes.status === 200, `Expected 200 from /api/demo-tunnel/status, got ${tunStatusRes.status}`);
+    const tunStatusJson = (await tunStatusRes.json()) as any;
+    assert(
+      tunStatusJson.ok === true &&
+        typeof tunStatusJson.active === 'boolean' &&
+        (typeof tunStatusJson.lanIp === 'string' || tunStatusJson.lanIp === null),
+      'Expected ok + active + lanIp from /api/demo-tunnel/status'
+    );
+    console.log(
+      `✓ [11/11] Executive Command & Console Quality Dashboard (#cmd-deck, Score ${telemJson.telemetry.quality.score}/100 ${telemJson.telemetry.quality.grade}, 6 Pillars) + Demo Tunnel Auto-Discovery verified`
+    );
+
+    console.log('\nALL 11 STEP 4 CHECKS PASSED SUCCESSFULLY!');
   } finally {
     if (prevAdminPass === undefined) delete process.env.ADMIN_PASSWORD;
     else process.env.ADMIN_PASSWORD = prevAdminPass;
