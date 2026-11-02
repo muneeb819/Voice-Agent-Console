@@ -816,7 +816,9 @@ if (require.main === module) {
 
     let bindHost = host;
     const listenWithFallback = (candidatePort: number, retriesLeft: number) => {
+      let onListening: () => void;
       const onError = (err: NodeJS.ErrnoException) => {
+        server.removeListener('listening', onListening);
         if (err.code === 'EADDRNOTAVAIL' && bindHost !== '0.0.0.0') {
           console.warn(
             `[VoiceAgentConsole] Host ${bindHost} is not a local interface (EADDRNOTAVAIL) — binding 0.0.0.0:${candidatePort} to accept traffic from ${bindHost}...`
@@ -838,8 +840,7 @@ if (require.main === module) {
         console.error('[VoiceAgentConsole] HTTP listen error:', err);
         process.exit(1);
       };
-      server.once('error', onError);
-      server.listen(candidatePort, bindHost, () => {
+      onListening = () => {
         server.removeListener('error', onError);
         process.env.PORT = String(candidatePort);
         console.log(
@@ -856,7 +857,10 @@ if (require.main === module) {
           );
         }
         fetchDeepgramVoiceCatalog().catch(() => {});
-      });
+      };
+      server.once('error', onError);
+      server.once('listening', onListening);
+      server.listen(candidatePort, bindHost);
     };
 
     listenWithFallback(initialPort, 100);

@@ -705,7 +705,9 @@ if (require.main === module) {
         }
         let bindHost = host;
         const listenWithFallback = (candidatePort, retriesLeft) => {
+            let onListening;
             const onError = (err) => {
+                server.removeListener('listening', onListening);
                 if (err.code === 'EADDRNOTAVAIL' && bindHost !== '0.0.0.0') {
                     console.warn(`[VoiceAgentConsole] Host ${bindHost} is not a local interface (EADDRNOTAVAIL) — binding 0.0.0.0:${candidatePort} to accept traffic from ${bindHost}...`);
                     server.removeListener('error', onError);
@@ -723,8 +725,7 @@ if (require.main === module) {
                 console.error('[VoiceAgentConsole] HTTP listen error:', err);
                 process.exit(1);
             };
-            server.once('error', onError);
-            server.listen(candidatePort, bindHost, () => {
+            onListening = () => {
                 server.removeListener('error', onError);
                 process.env.PORT = String(candidatePort);
                 console.log(`[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://localhost:${candidatePort} (bound ${bindHost}:${candidatePort}, allowed peer: 115.186.137.240)${debugMode ? ' [DEBUG MODE]' : ''}`);
@@ -737,7 +738,10 @@ if (require.main === module) {
                     console.log(`[VAC:DEBUG] Active state loaded: ${currentState.agents.length} agents (${currentState.agents.map((a) => `"${a.name}"`).join(', ')}), ${currentState.campaigns.length} campaigns (${currentState.campaigns.map((c) => `"${c.name}"`).join(', ')}) | TTS=${currentState.services.tts.model || 'none'} | Pre-flight checks: ${okCount} passed, ${wnCount} warnings, ${erCount} errors`);
                 }
                 (0, deepgram_catalog_1.fetchDeepgramVoiceCatalog)().catch(() => { });
-            });
+            };
+            server.once('error', onError);
+            server.once('listening', onListening);
+            server.listen(candidatePort, bindHost);
         };
         listenWithFallback(initialPort, 100);
     })().catch((err) => {
