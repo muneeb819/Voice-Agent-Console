@@ -5,7 +5,7 @@ import { sanitizeSecretValue } from '../src/env-store';
 import { getConsoleState, saveConsoleState } from '../src/db';
 import { createServerWithSimulator } from '../src/server';
 
-const LIVE_HTTP = process.env.TEST_URL || 'http://127.0.0.1:3000';
+const LIVE_HTTP = process.env.TEST_URL || 'http://localhost:3000';
 const LIVE_WS = LIVE_HTTP.replace(/^http/, 'ws') + '/ws/simulator';
 
 function configureTestServices() {
@@ -197,16 +197,16 @@ async function run() {
       }, 30);
     });
 
-    await new Promise<void>((r) => dgHttp.listen(0, '127.0.0.1', () => r()));
+    await new Promise<void>((r) => dgHttp.listen(0, 'localhost', () => r()));
     const dgPort = (dgHttp.address() as any).port;
 
     const prevKey = process.env.DEEPGRAM_API_KEY;
     const prevUrl = process.env.DEEPGRAM_AGENT_URL;
     process.env.DEEPGRAM_API_KEY = 'dg_test_secret_token_999';
-    process.env.DEEPGRAM_AGENT_URL = `ws://127.0.0.1:${dgPort}/v1/agent/converse`;
+    process.env.DEEPGRAM_AGENT_URL = `ws://localhost:${dgPort}/v1/agent/converse`;
 
     const { server: appServer } = createServerWithSimulator();
-    await new Promise<void>((r) => appServer.listen(0, '127.0.0.1', () => r()));
+    await new Promise<void>((r) => appServer.listen(0, 'localhost', () => r()));
     const simPort = (appServer.address() as any).port;
 
     try {
@@ -214,7 +214,7 @@ async function run() {
       const waiters: Array<() => boolean> = [];
       let clientAudioBytes = 0;
 
-      const client = new WebSocket(`ws://127.0.0.1:${simPort}/ws/simulator`);
+      const client = new WebSocket(`ws://localhost:${simPort}/ws/simulator`);
       client.on('message', (data, isBinary) => {
         if (isBinary) {
           const b = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
@@ -425,22 +425,22 @@ async function run() {
       ws.send(JSON.stringify({ type: 'Welcome', request_id: 'req_silence_01' }));
     });
 
-    await new Promise<void>((r) => dgHttp.listen(0, '127.0.0.1', () => r()));
+    await new Promise<void>((r) => dgHttp.listen(0, 'localhost', () => r()));
     const dgPort = (dgHttp.address() as any).port;
 
     const prevKey = process.env.DEEPGRAM_API_KEY;
     const prevUrl = process.env.DEEPGRAM_AGENT_URL;
     process.env.DEEPGRAM_API_KEY = 'dg_test_silence_token';
-    process.env.DEEPGRAM_AGENT_URL = `ws://127.0.0.1:${dgPort}/v1/agent/converse`;
+    process.env.DEEPGRAM_AGENT_URL = `ws://localhost:${dgPort}/v1/agent/converse`;
 
     const { server: appServer } = createServerWithSimulator();
-    await new Promise<void>((r) => appServer.listen(0, '127.0.0.1', () => r()));
+    await new Promise<void>((r) => appServer.listen(0, 'localhost', () => r()));
     const simPort = (appServer.address() as any).port;
 
     try {
       const events: any[] = [];
       const waiters: Array<() => boolean> = [];
-      const client = new WebSocket(`ws://127.0.0.1:${simPort}/ws/simulator`);
+      const client = new WebSocket(`ws://localhost:${simPort}/ws/simulator`);
       client.on('message', (d, isBin) => {
         if (!isBin) events.push(JSON.parse(d.toString()));
         for (let i = waiters.length - 1; i >= 0; i--) {
@@ -476,22 +476,22 @@ async function run() {
       });
       res.end(JSON.stringify({ err_code: 'INVALID_AUTH', err_msg: 'Invalid credentials.' }));
     });
-    await new Promise<void>((r) => rejectHttp.listen(0, '127.0.0.1', () => r()));
+    await new Promise<void>((r) => rejectHttp.listen(0, 'localhost', () => r()));
     const rPort = (rejectHttp.address() as any).port;
 
     const prevKey = process.env.DEEPGRAM_API_KEY;
     const prevUrl = process.env.DEEPGRAM_AGENT_URL;
     process.env.DEEPGRAM_API_KEY = 'dg_bad_key';
-    process.env.DEEPGRAM_AGENT_URL = `ws://127.0.0.1:${rPort}/v1/agent/converse`;
+    process.env.DEEPGRAM_AGENT_URL = `ws://localhost:${rPort}/v1/agent/converse`;
 
     const { server: appServer } = createServerWithSimulator();
-    await new Promise<void>((r) => appServer.listen(0, '127.0.0.1', () => r()));
+    await new Promise<void>((r) => appServer.listen(0, 'localhost', () => r()));
     const simPort = (appServer.address() as any).port;
 
     try {
       const events: any[] = [];
       const waiters: Array<() => boolean> = [];
-      const client = new WebSocket(`ws://127.0.0.1:${simPort}/ws/simulator`);
+      const client = new WebSocket(`ws://localhost:${simPort}/ws/simulator`);
       client.on('message', (d, isBin) => {
         if (!isBin) events.push(JSON.parse(d.toString()));
         for (let i = waiters.length - 1; i >= 0; i--) {

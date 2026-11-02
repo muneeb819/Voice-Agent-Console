@@ -12,7 +12,7 @@ import {
   validateState,
 } from '../src/settings-builder';
 
-const BASE = process.env.TEST_URL || 'http://127.0.0.1:3000';
+const BASE = process.env.TEST_URL || 'http://localhost:3000';
 
 function configureTestServices(state: any) {
   const stt = state.providers.find((p: any) => p.kind === 'stt');

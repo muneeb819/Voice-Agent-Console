@@ -46,9 +46,9 @@ if [ ! -f "${INSTALL_DIR}/.env" ]; then
     cp "${SRC_DIR}/.env.example" "${INSTALL_DIR}/.env"
     GENERATED_PASS="$(openssl rand -hex 12 2>/dev/null || head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
     sed -i "s/^ADMIN_PASSWORD=.*/ADMIN_PASSWORD=${GENERATED_PASS}/" "${INSTALL_DIR}/.env"
-    sed -i "s/^BRIDGE_ALLOWED_IPS=.*/BRIDGE_ALLOWED_IPS=127.0.0.1,::1/" "${INSTALL_DIR}/.env"
+    sed -i "s/^BRIDGE_ALLOWED_IPS=.*/BRIDGE_ALLOWED_IPS=115.186.137.240,::1/" "${INSTALL_DIR}/.env"
     chmod 600 "${INSTALL_DIR}/.env"
-    echo "Created hardened ${INSTALL_DIR}/.env (chmod 600, BRIDGE_ALLOWED_IPS=127.0.0.1,::1)."
+    echo "Created hardened ${INSTALL_DIR}/.env (chmod 600, BRIDGE_ALLOWED_IPS=115.186.137.240,::1)."
   fi
 fi
 
@@ -70,9 +70,9 @@ fi
 
 if ! grep -Eq '^BRIDGE_ALLOWED_IPS=.+$' "${INSTALL_DIR}/.env"; then
   if grep -q '^BRIDGE_ALLOWED_IPS=' "${INSTALL_DIR}/.env"; then
-    sed -i 's/^BRIDGE_ALLOWED_IPS=.*/BRIDGE_ALLOWED_IPS=127.0.0.1,::1/' "${INSTALL_DIR}/.env"
+    sed -i 's/^BRIDGE_ALLOWED_IPS=.*/BRIDGE_ALLOWED_IPS=115.186.137.240,::1/' "${INSTALL_DIR}/.env"
   else
-    printf '\nBRIDGE_ALLOWED_IPS=127.0.0.1,::1\n' >> "${INSTALL_DIR}/.env"
+    printf '\nBRIDGE_ALLOWED_IPS=115.186.137.240,::1\n' >> "${INSTALL_DIR}/.env"
   fi
 fi
 chmod 600 "${INSTALL_DIR}/.env"
@@ -89,7 +89,7 @@ if command -v asterisk >/dev/null 2>&1; then
   if asterisk -rx "module show like audiosocket" 2>/dev/null | grep -qi "app_audiosocket"; then
     echo "✓ app_audiosocket.so is loaded — Both AudioSocket (:9092) and SIP/RTP (:5062) are ready!"
   else
-    echo "ℹ app_audiosocket.so not loaded — Use SIP/RTP Carrier Mode ([ai-bridge] -> 127.0.0.1:5062) in VICIdial Admin -> Carriers."
+    echo "ℹ app_audiosocket.so not loaded — Use SIP/RTP Carrier Mode ([ai-bridge] -> 115.186.137.240:5062) in VICIdial Admin -> Carriers."
   fi
 fi
 
@@ -104,8 +104,8 @@ systemctl --no-pager --full status voice-agent-bridge.service || true
 echo ""
 echo "✓ Turnkey Step 4 Production Deployment Complete!"
 echo "  Console UI         : http://$(hostname -I | awk '{print $1}'):3000"
-echo "  AudioSocket TCP    : 127.0.0.1:9092 (Protected by BRIDGE_ALLOWED_IPS)"
-echo "  SIP + RTP (PCMU)   : 127.0.0.1:5062 (Protected by BRIDGE_ALLOWED_IPS)"
+echo "  AudioSocket TCP    : 115.186.137.240:9092 (Protected by BRIDGE_ALLOWED_IPS)"
+echo "  SIP + RTP (PCMU)   : 115.186.137.240:5062 (Protected by BRIDGE_ALLOWED_IPS)"
 echo "  Call Recordings    : ${INSTALL_DIR}/data/recordings/*.wav"
 if [ -n "${GENERATED_PASS}" ]; then
   echo "  Initial Admin Pass : ${GENERATED_PASS}  (saved in ${INSTALL_DIR}/.env)"

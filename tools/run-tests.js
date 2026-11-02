@@ -19,7 +19,7 @@ function findAvailablePort() {
   return new Promise((resolve, reject) => {
     const probe = net.createServer();
     probe.once('error', reject);
-    probe.listen(0, '127.0.0.1', () => {
+    probe.listen(0, 'localhost', () => {
       const address = probe.address();
       if (!address || typeof address === 'string') {
         probe.close(() => reject(new Error('Could not reserve a local test port')));
@@ -59,17 +59,17 @@ async function main() {
 
   try {
     const port = await findAvailablePort();
-    const baseUrl = `http://127.0.0.1:${port}`;
+    const baseUrl = `http://localhost:${port}`;
     const env = {
       ...process.env,
       VAC_DATA_DIR: testDataDir,
       TEST_URL: baseUrl,
-      HOST: '127.0.0.1',
+      HOST: 'localhost',
       PORT: String(port),
       AUDIOSOCKET_PORT: '0',
       BRIDGE_SIP_PORT: '0',
       ADMIN_PASSWORD: '',
-      BRIDGE_ALLOWED_IPS: '127.0.0.1,::1',
+      BRIDGE_ALLOWED_IPS: 'localhost,::1',
     };
 
     server = childProcess.spawn(process.execPath, [tsxCli, 'src/server.ts'], {

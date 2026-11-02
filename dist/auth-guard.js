@@ -48,7 +48,7 @@ function normalizeIp(raw) {
 }
 function isLoopbackIp(raw) {
     const ip = normalizeIp(raw);
-    return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
+    return ip === '115.186.137.240' || ip === '::1' || ip === 'localhost';
 }
 function ipv4ToInt(ip) {
     const parts = ip.split('.');
@@ -93,8 +93,8 @@ function isTrustedDefaultIp(raw) {
 }
 /**
  * Checks whether an incoming SIP (:5062) or AudioSocket (:9092) peer IP is allowed.
- * When BRIDGE_ALLOWED_IPS is empty, allows loopback and default trusted IPs (115.186.137.240).
- * When BRIDGE_ALLOWED_IPS is configured (e.g. "127.0.0.1,::1,115.186.137.240,10.0.0.0/8"), enforces strict allowlist.
+ * When BRIDGE_ALLOWED_IPS is empty, allows trusted IPs (115.186.137.240).
+ * When BRIDGE_ALLOWED_IPS is configured (e.g. "115.186.137.240,10.0.0.0/8"), enforces strict allowlist.
  */
 function isBridgePeerIpAllowed(remoteAddress) {
     const ip = normalizeIp(remoteAddress);

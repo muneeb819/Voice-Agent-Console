@@ -29,7 +29,7 @@ voice-agent-console/
 │   ├── vici-loopback-tester.ts   # Binary SIP/RTP & AudioSocket hardware-loopback call simulator
 │   ├── call-recorder.ts          # Timeline-accurate 8 kHz Stereo WAV recorder (L=Caller, R=Bot)
 │   ├── webhook-executor.ts       # Custom Function HTTP Webhook executor (.env + lead template interpolation)
-│   └── auth-guard.ts             # HMAC cookie/Bearer auth + 127.0.0.1 Asterisk whitelist + IP allowlist
+│   └── auth-guard.ts             # HMAC cookie/Bearer auth + 115.186.137.240 Asterisk whitelist + IP allowlist
 ├── public/
 │   ├── index.html                # Single-Page Operator & Supervisor Console
 │   ├── styles.css                # Dark-mode responsive telemetry & studio styling
@@ -93,7 +93,7 @@ The full console requires a long-running Node service with WebSocket support. Co
 
 ## ☎️ Co-Located ViciBox Production Deployment (5 Minutes)
 
-See **[`VICIBOX-PRODUCTION-RUNBOOK.md`](./VICIBOX-PRODUCTION-RUNBOOK.md)** for full VICIdial Admin screenshots/settings (`User 6666`, `FE_CLOSERS` In-Group, `AIBRIDGE` Carrier on `127.0.0.1:5062`, and `Remote Agent 9001`).
+See **[`VICIBOX-PRODUCTION-RUNBOOK.md`](./VICIBOX-PRODUCTION-RUNBOOK.md)** for full VICIdial Admin screenshots/settings (`User 6666`, `FE_CLOSERS` In-Group, `AIBRIDGE` Carrier on `115.186.137.240:5062`, and `Remote Agent 9001`).
 
 ```bash
 git clone https://github.com/muneeb819/Voice-Agent-Console.git /tmp/voice-agent-console

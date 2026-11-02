@@ -18,7 +18,7 @@ else {
 }
 
 try {
-    $h = Invoke-RestMethod "http://127.0.0.1:3000/api/health" -TimeoutSec 5
+    $h = Invoke-RestMethod "http://115.186.137.240:3000/api/health" -TimeoutSec 5
     "health  : ok=$($h.ok) auth=$($h.authEnabled) storage=$($h.storage)"
 }
 catch {

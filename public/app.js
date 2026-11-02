@@ -1961,7 +1961,7 @@
         `f.${idx}.params`,
         'ta'
       )}
-      ${F('Server webhook URL (supports {{lead.lead_id}}, {{phone}}, {{caller_code}} & LAN http://127.0.0.1)', `f.${idx}.url`)}
+      ${F('Server webhook URL (supports {{lead.lead_id}}, {{phone}}, {{caller_code}} & http://115.186.137.240)', `f.${idx}.url`)}
       ${F('Headers JSON object (supports {{CUSTOM_WEBHOOK_SECRET}} & .env placeholders)', `f.${idx}.headers`)}
       ${F('Hold until turn confirmed (defer_until_eot — recommended for transfers & hang-ups)', `f.${idx}.defer`, 'chk')}
       <div class="bar" style="margin-top:8px;margin-bottom:0">
@@ -3398,7 +3398,7 @@
     if (serverlessCloudMode) {
       viciMon.verifyResult = {
         ok: false,
-        error: 'Cloud Browser Mode: Deploy on your ViciBox server (vicibox-install.sh) to probe local 127.0.0.1 Asterisk AMI (:5038) & VICIdial HTTP APIs.',
+        error: 'Cloud Browser Mode: Deploy on your ViciBox server (vicibox-install.sh) to probe 115.186.137.240 Asterisk AMI (:5038) & VICIdial HTTP APIs.',
       };
       render();
       return;
@@ -4430,7 +4430,7 @@
                       <div><b>VICIdial Non-Agent API (<code>${esc(S.vici.viciBaseUrl + S.vici.nonAgentApiPath)}</code>):</b> ${
                     viciMon.verifyResult.vicidialHttp?.ok
                       ? `<span class="ok">✓ ${esc(viciMon.verifyResult.vicidialHttp.versionText)}</span>`
-                      : `<span class="wn">! ${esc(viciMon.verifyResult.vicidialHttp?.versionText || 'Unreachable (expected until deployed onto ViciBox 127.0.0.1)')}</span>`
+                      : `<span class="wn">! ${esc(viciMon.verifyResult.vicidialHttp?.versionText || 'Unreachable (expected until deployed onto ViciBox 115.186.137.240)')}</span>`
                   }</div>
                       <div><b>Asterisk AMI (<code>${esc(S.vici.amiHost + ':' + S.vici.amiPort)}</code>):</b> ${
                     viciMon.verifyResult.asteriskAmi?.ok
@@ -4447,7 +4447,7 @@
           <div id="vici-cdr-box">${renderBridgeCdrList()}</div>
 
           <h2>VICIdial API Endpoints (Separated Non-Agent vs Agent API)</h2>
-          ${F('VICIdial Server Base URL (127.0.0.1 when co-located on ViciBox)', 'v.viciBaseUrl')}
+          ${F('VICIdial Server Base URL (115.186.137.240)', 'v.viciBaseUrl')}
           <div class="row">
             ${F('Non-Agent API Path (lead_all_info, add_dnc_phone, update_lead)', 'v.nonAgentApiPath')}
             ${F('Agent API Path (ra_call_control closer transfers & hangup)', 'v.agentApiPath')}
@@ -4590,11 +4590,11 @@
           </div>
           <div class="ck">
             <span class="${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'ok' : 'wn'}">${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? '✓' : '!'}</span>
-            <span>SIP/AudioSocket IP Allowlist (<code>BRIDGE_ALLOWED_IPS</code>): <b>${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'Restricted to Trusted IPs' : 'Open (vicibox-install.sh locks to 127.0.0.1,::1)'}</b></span>
+            <span>SIP/AudioSocket IP Allowlist (<code>BRIDGE_ALLOWED_IPS</code>): <b>${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'Restricted to Trusted IPs' : 'Restricted to 115.186.137.240'}</b></span>
           </div>
           <div class="ck">
             <span class="ok">✓</span>
-            <span>Local Asterisk <code>127.0.0.1</code> Pre-Call Hook Whitelisted</span>
+            <span>Asterisk <code>115.186.137.240</code> Pre-Call Hook Whitelisted</span>
           </div>
           <div class="ck">
             <span class="ok">✓</span>
@@ -5028,7 +5028,7 @@
       ['AMI_SECRET', 'Asterisk AMI Secret (cron pass in /etc/asterisk/manager.conf)'],
       ['CUSTOM_WEBHOOK_SECRET', 'Custom CRM / Webhook Secret (usable as {{CUSTOM_WEBHOOK_SECRET}} in Function headers)'],
       ['ADMIN_PASSWORD', 'Console Admin Password (Step 4 — locks :3000 Web UI & WebSockets while keeping local Asterisk whitelisted)'],
-      ['BRIDGE_ALLOWED_IPS', 'Allowed Asterisk IPs/CIDRs for SIP :5062 & AudioSocket :9092 (e.g. 127.0.0.1,::1,10.0.0.0/8)'],
+      ['BRIDGE_ALLOWED_IPS', 'Allowed Asterisk IPs/CIDRs for SIP :5062 & AudioSocket :9092 (e.g. 115.186.137.240,10.0.0.0/8)'],
     ];
 
     form.innerHTML = keySpecs

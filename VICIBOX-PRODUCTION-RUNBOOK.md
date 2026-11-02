@@ -3,15 +3,15 @@
 
 ---
 
-## 1. Architecture Summary (Co-Located on ViciBox `127.0.0.1`)
+## 1. Architecture Summary (Co-Located on ViciBox `115.186.137.240`)
 
 | Component | Bind / Port | Purpose & Security |
 |---|---|---|
-| **Web Console, Wallboard & REST/WS API** | `0.0.0.0:3000` | Protected by `ADMIN_PASSWORD` (`HttpOnly` HMAC cookie / `Bearer` token). Local Asterisk `127.0.0.1` pre-call hooks (`/api/vici/register-call`) are automatically whitelisted. |
-| **Universal SIP + RTP (G.711 μ-law 8 kHz)** | `127.0.0.1:5062` UDP | Works on **all ViciBox 8–12 (Asterisk 13, 16, 18+)** without compiling `app_audiosocket`. Uses `:5062` so it never collides with Asterisk on `:5060`. Restricted via `BRIDGE_ALLOWED_IPS=127.0.0.1,::1`. |
-| **Native Asterisk 18+ AudioSocket TCP** | `127.0.0.1:9092` TCP | Native `slin` 8 kHz TCP audio framing for Asterisk 18+ (`ViciBox 11/12`). Uses `CURL(/api/vici/register-call)` returning a canonical 36-char RFC 4122 UUID. |
-| **VICIdial Non-Agent & Agent HTTP APIs** | `http://127.0.0.1` | `/vicidial/non_agent_api.php` (`lead_all_info`, `update_lead`, `add_dnc_phone`) + `/agc/api.php` (`ra_call_control` `INGROUPTRANSFER`, `EXTENSIONTRANSFER`, `HANGUP`). |
-| **Asterisk Manager Interface (AMI)** | `127.0.0.1:5038` | `Ping` diagnostics + `Redirect` / `Hangup` fallback for direct non-Remote-Agent channels. |
+| **Web Console, Wallboard & REST/WS API** | `0.0.0.0:3000` | Protected by `ADMIN_PASSWORD` (`HttpOnly` HMAC cookie / `Bearer` token). Local Asterisk `115.186.137.240` pre-call hooks (`/api/vici/register-call`) are automatically whitelisted. |
+| **Universal SIP + RTP (G.711 μ-law 8 kHz)** | `115.186.137.240:5062` UDP | Works on **all ViciBox 8–12 (Asterisk 13, 16, 18+)** without compiling `app_audiosocket`. Uses `:5062` so it never collides with Asterisk on `:5060`. Restricted via `BRIDGE_ALLOWED_IPS=115.186.137.240,::1`. |
+| **Native Asterisk 18+ AudioSocket TCP** | `115.186.137.240:9092` TCP | Native `slin` 8 kHz TCP audio framing for Asterisk 18+ (`ViciBox 11/12`). Uses `CURL(/api/vici/register-call)` returning a canonical 36-char RFC 4122 UUID. |
+| **VICIdial Non-Agent & Agent HTTP APIs** | `http://115.186.137.240` | `/vicidial/non_agent_api.php` (`lead_all_info`, `update_lead`, `add_dnc_phone`) + `/agc/api.php` (`ra_call_control` `INGROUPTRANSFER`, `EXTENSIONTRANSFER`, `HANGUP`). |
+| **Asterisk Manager Interface (AMI)** | `115.186.137.240:5038` | `Ping` diagnostics + `Redirect` / `Hangup` fallback for direct non-Remote-Agent channels. |
 | **Stereo 8 kHz Call Recordings** | `data/recordings/*.wav` | Automatic 2-channel (`Left = Caller`, `Right = AI Bot`) WAV archive with in-browser playback and 200-call rolling retention. |
 
 ---
@@ -31,7 +31,7 @@ sudo bash deploy/vicibox-install.sh
 What `vicibox-install.sh` does automatically:
 1. Installs Node.js 20 LTS (supports OpenSUSE Leap `zypper` on ViciBox as well as Ubuntu/Debian `apt`).
 2. Copies the console & bridge into `/opt/voice-agent-console` and compiles TypeScript (`dist/`).
-3. Creates `/opt/voice-agent-console/.env` (`chmod 600`) with a generated `ADMIN_PASSWORD` and locks `BRIDGE_ALLOWED_IPS=127.0.0.1,::1`.
+3. Creates `/opt/voice-agent-console/.env` (`chmod 600`) with a generated `ADMIN_PASSWORD` and locks `BRIDGE_ALLOWED_IPS=115.186.137.240,::1`.
 4. Detects your Asterisk version and whether `app_audiosocket.so` is loaded.
 5. Registers and starts `voice-agent-bridge.service` under `systemd` (`Restart=always`).
 
@@ -48,8 +48,8 @@ DEEPGRAM_API_KEY=<SET_LOCALLY_DO_NOT_COMMIT>
 VICI_API_PASS=your_vicidial_6666_user_password
 AMI_SECRET=1234
 ADMIN_PASSWORD=your_strong_console_password
-BRIDGE_ALLOWED_IPS=127.0.0.1,::1
-BRIDGE_BIND_HOST=127.0.0.1
+BRIDGE_ALLOWED_IPS=115.186.137.240,::1
+BRIDGE_BIND_HOST=115.186.137.240
 ```
 *(Tip: On standard ViciBox installs, check `/etc/astguiclient.conf` or `/etc/asterisk/manager.conf` under `[cron]` to confirm `AMI_SECRET`.)*
 
@@ -61,7 +61,7 @@ sudo systemctl restart voice-agent-bridge.service
 ```
 
 ### 2.3 Open Firewall Port `:3000` (For Your Admin Browser Only)
-Keep `:5062` (UDP) and `:9092` (TCP) closed to the public internet since Asterisk talks to them locally over `127.0.0.1`. Open `:3000` TCP in ViciBox `firewalld` (ideally restricted to your office/VPN IP):
+Keep `:5062` (UDP) and `:9092` (TCP) closed to the public internet since Asterisk talks to them locally over `115.186.137.240`. Open `:3000` TCP in ViciBox `firewalld` (ideally restricted to your office/VPN IP):
 
 ```bash
 # Open :3000 to your office IP (recommended) or internal zone:
@@ -102,7 +102,7 @@ Go to **Admin $\rightarrow$ Carriers $\rightarrow$ Add A New Carrier**:
 disallow=all
 allow=ulaw
 type=friend
-host=127.0.0.1
+host=115.186.137.240
 port=5062
 dtmfmode=rfc2833
 context=trunkinbound

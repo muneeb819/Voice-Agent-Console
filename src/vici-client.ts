@@ -163,7 +163,7 @@ export class VicidialApiClient {
   }
 
   private get baseUrl(): string {
-    return String(this.cfg.viciBaseUrl || 'http://127.0.0.1').replace(/\/+$/, '');
+    return String(this.cfg.viciBaseUrl || 'http://115.186.137.240').replace(/\/+$/, '');
   }
 
   private get nonAgentUrl(): string {

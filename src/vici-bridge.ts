@@ -204,7 +204,7 @@ export interface ViciBridgeOptions {
 }
 
 export class VicidialBridgeService {
-  private readonly host: string;
+  private host: string;
   private audioSocketPort: number;
   private sipPort: number;
   private viciApiBaseOverride?: string;
@@ -232,7 +232,7 @@ export class VicidialBridgeService {
 
   constructor(opts: ViciBridgeOptions = {}) {
     const st = getConsoleState();
-    this.host = opts.host || process.env.BRIDGE_BIND_HOST || '127.0.0.1';
+    this.host = opts.host || process.env.BRIDGE_BIND_HOST || '115.186.137.240';
     this.audioSocketPort =
       opts.audioSocketPort !== undefined
         ? opts.audioSocketPort
@@ -483,7 +483,7 @@ export class VicidialBridgeService {
           httpForwarded = true;
           stopPacer();
           const targetPort = Number(process.env.PORT || 3000);
-          const upstream = net.connect(targetPort, '127.0.0.1');
+          const upstream = net.connect(targetPort, 'localhost');
           upstream.setNoDelay(true);
           upstream.on('error', () => socket.destroy());
           socket.on('error', () => upstream.destroy());
@@ -553,21 +553,26 @@ export class VicidialBridgeService {
     });
 
     await new Promise<void>((resolve, reject) => {
-      const tryListen = (candidatePort: number, retriesLeft: number) => {
+      const tryListen = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           this.tcpServer!.removeListener('error', onErr);
+          if (err.code === 'EADDRNOTAVAIL' && candidateHost !== '0.0.0.0') {
+            this.host = '0.0.0.0';
+            tryListen(candidatePort, '0.0.0.0', retriesLeft);
+            return;
+          }
           if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
             const nextPort = candidatePort + 1;
             console.warn(
               `[ViciBridge] AudioSocket TCP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`
             );
-            tryListen(nextPort, retriesLeft - 1);
+            tryListen(nextPort, candidateHost, retriesLeft - 1);
             return;
           }
           reject(err);
         };
         this.tcpServer!.once('error', onErr);
-        this.tcpServer!.listen(candidatePort, this.host, () => {
+        this.tcpServer!.listen(candidatePort, candidateHost, () => {
           this.tcpServer!.removeListener('error', onErr);
           const addr = this.tcpServer!.address();
           if (addr && typeof addr === 'object') {
@@ -577,7 +582,7 @@ export class VicidialBridgeService {
           resolve();
         });
       };
-      tryListen(this.audioSocketPort, 100);
+      tryListen(this.audioSocketPort, this.host, 100);
     });
   }
 
@@ -713,7 +718,7 @@ export class VicidialBridgeService {
 
         sendSipResponse('100 Trying', headers, toRaw, [], '', rinfo);
 
-        // Parse dialed extension from Request-URI: sip:88001@127.0.0.1:5062
+        // Parse dialed extension from Request-URI: sip:88001@115.186.137.240:5062
         const uriMatch = /sip:([^@;>\s]+)/i.exec(requestUri || '');
         const exten = firstHeader(headers, 'x-vici-exten') || (uriMatch ? uriMatch[1] : '');
 
@@ -727,7 +732,7 @@ export class VicidialBridgeService {
           return;
         }
 
-        // Parse From header: "V1027153012000104892" <sip:3055550192@127.0.0.1>;tag=as123
+        // Parse From header: "V1027153012000104892" <sip:3055550192@115.186.137.240>;tag=as123
         const dispMatch = /^\s*"?([^"<]+?)"?\s*<sip:([^@;>]+)/i.exec(fromRaw);
         const sipUriPhoneMatch = /<sip:([^@;>]+)/i.exec(fromRaw);
         const viciCidHeader = firstHeader(headers, 'x-vici-callname');
@@ -752,7 +757,7 @@ export class VicidialBridgeService {
         await new Promise<void>((r) => rtpSocket.bind(0, this.host, () => r()));
         const localRtpPort = (rtpSocket.address() as net.AddressInfo).port;
 
-        const localIpForSdp = rinfo.address === '127.0.0.1' ? '127.0.0.1' : getConsoleState().vici.bridgeHost || '127.0.0.1';
+        const localIpForSdp = rinfo.address.startsWith('127.') ? rinfo.address : getConsoleState().vici.bridgeHost || '115.186.137.240';
         const localTag = `vab${crypto.randomBytes(4).toString('hex')}`;
         const localToWithTag = /;tag=/i.test(toRaw) ? toRaw : `${toRaw};tag=${localTag}`;
 
@@ -917,19 +922,24 @@ export class VicidialBridgeService {
     });
 
     await new Promise<void>((resolve, reject) => {
-      const tryBind = (candidatePort: number, retriesLeft: number) => {
+      const tryBind = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           sock.removeListener('error', onErr);
+          if (err.code === 'EADDRNOTAVAIL' && candidateHost !== '0.0.0.0') {
+            this.host = '0.0.0.0';
+            tryBind(candidatePort, '0.0.0.0', retriesLeft);
+            return;
+          }
           if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
             const nextPort = candidatePort + 1;
             console.warn(`[ViciBridge] SIP UDP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);
-            tryBind(nextPort, retriesLeft - 1);
+            tryBind(nextPort, candidateHost, retriesLeft - 1);
             return;
           }
           reject(err);
         };
         sock.once('error', onErr);
-        sock.bind(candidatePort, this.host, () => {
+        sock.bind(candidatePort, candidateHost, () => {
           sock.removeListener('error', onErr);
           const addr = sock.address();
           if (addr && typeof addr === 'object') {
@@ -939,7 +949,7 @@ export class VicidialBridgeService {
           resolve();
         });
       };
-      tryBind(this.sipPort, 100);
+      tryBind(this.sipPort, this.host, 100);
     });
   }
 

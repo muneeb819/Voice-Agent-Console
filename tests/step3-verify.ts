@@ -67,7 +67,7 @@ async function startMockAmiServer(): Promise<{
     });
   });
 
-  await new Promise<void>((resolve) => amiSrv.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => amiSrv.listen(0, 'localhost', resolve));
   const port = (amiSrv.address() as net.AddressInfo).port;
   return {
     port,
@@ -81,7 +81,7 @@ async function run() {
   console.log('=== Step 3 Automated Verification Suite (Universal VICIdial Bridge) ===');
 
   // 1. Unit-test VICIdial CallerID parser (outbound V..., inbound Y..., manual M..., SIP quoted)
-  const outCid = parseVicidialCallerCode('"V1027153012000104892" <sip:3055550192@127.0.0.1>');
+  const outCid = parseVicidialCallerCode('"V1027153012000104892" <sip:3055550192@localhost>');
   assert(
     outCid.isVicidialCallId &&
       outCid.callType === 'outbound' &&
@@ -133,19 +133,20 @@ async function run() {
   console.log(`✓ [2/9] ITU-T G.711 μ-law LUT codec (max error ${maxErr}/32768), RFC 3550 RTP framing & 16k->8k downsampler verified`);
 
   // 3. Boot HTTP server + Universal Bridge (ephemeral ports so zero collision with running preview)
+  process.env.BRIDGE_ALLOWED_IPS = '*';
   const { server, viciBridge: maybeBridge } = createServerWithSimulator({
     enableBridge: true,
-    host: '127.0.0.1',
+    host: 'localhost',
     audioSocketPort: 0,
     sipPort: 0,
   });
   const viciBridge = maybeBridge!;
   await viciBridge.start();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  await new Promise<void>((resolve) => server.listen(0, 'localhost', () => resolve()));
   const addr = server.address();
   if (!addr || typeof addr === 'string') throw new Error('Failed to bind ephemeral HTTP server');
-  const httpBase = `http://127.0.0.1:${addr.port}`;
-  const wsBase = `ws://127.0.0.1:${addr.port}`;
+  const httpBase = `http://localhost:${addr.port}`;
+  const wsBase = `ws://localhost:${addr.port}`;
   let monWs: WebSocket | null = null;
 
   try {
@@ -317,7 +318,7 @@ async function run() {
       const amiClient = new AsteriskAmiClient(
         {
           ...getConsoleState().vici,
-          amiHost: '127.0.0.1',
+          amiHost: 'localhost',
           amiPort: mockAmi.port,
           amiUser: 'cron',
         },

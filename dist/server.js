@@ -685,7 +685,7 @@ function createServerWithSimulator(bridgeOpts) {
 }
 if (require.main === module) {
     const initialPort = Number(process.env.PORT || 3000);
-    const host = process.env.HOST || '127.0.0.1';
+    const host = process.env.HOST || '115.186.137.240';
     const debugMode = process.env.VAC_DEBUG === '1';
     if (!(0, auth_guard_1.isLoopbackIp)(host) && !(0, auth_guard_1.isAuthEnabled)() && !debugMode) {
         console.error('[VoiceAgentConsole] Refusing to bind to a non-loopback interface without ADMIN_PASSWORD.');
