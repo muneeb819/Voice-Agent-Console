@@ -3,6 +3,7 @@ import path from 'path';
 import { DeepgramVoice } from './types';
 import { getSecret } from './env-store';
 import { isValidFluxSpeed } from './settings-builder';
+import { synthesizeWithSpeechService } from './speech-service-client';
 
 const FEATURED_IDS = new Set([
   'flux-haley-en',
@@ -537,8 +538,24 @@ export async function synthesizeTtsPreview(
     };
   }
 
+  if (providerType === 'speech_service') {
+    const out = await synthesizeWithSpeechService({
+      text,
+      voice: req.voiceId || req.model || 'af_heart',
+      format: 'wav',
+      speed: req.speed,
+    });
+    return {
+      buffer: out.buffer,
+      contentType: out.contentType,
+      usedModel: out.usedVoice,
+    };
+  }
+
   throw Object.assign(
-    new Error(`Live preview synthesis is supported for Deepgram, ElevenLabs, and Cartesia (got "${providerType}").`),
+    new Error(
+      `Live preview synthesis is supported for Deepgram, Local Speech Service, ElevenLabs, and Cartesia (got "${providerType}").`
+    ),
     { statusCode: 400, code: 'UNSUPPORTED_PREVIEW_PROVIDER' }
   );
 }

@@ -1440,10 +1440,15 @@
     const tp = globalServiceProvider('tts') || {};
     const linkedCampaign = S.campaigns.find((c) => c.agentId === agent.id);
 
-    const sttModel = VOICE_AGENT_STT_MODELS.includes(String(S.services?.stt?.model || '')) ? S.services.stt.model : '';
-    const isFluxListen = sttModel.startsWith('flux-');
+    const isSpeechServiceStt = sp.type === 'speech_service';
+    const spModels = String(sp.models || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const rawSttModel = String(S.services?.stt?.model || '').trim();
+    const sttModel = isSpeechServiceStt
+      ? spModels.includes(rawSttModel) ? rawSttModel : ''
+      : VOICE_AGENT_STT_MODELS.includes(rawSttModel) ? rawSttModel : '';
+    const isFluxListen = !isSpeechServiceStt && sttModel.startsWith('flux-');
     const listenProvider = {
-      type: sttModel && sp.type === 'deepgram' ? 'deepgram' : '',
+      type: sttModel ? (isSpeechServiceStt ? 'speech_service' : sp.type === 'deepgram' ? 'deepgram' : '') : '',
       model: sttModel,
     };
     if (isFluxListen) {
@@ -1459,7 +1464,7 @@
     }
     const spEx = parseJsonObject(sp.extra);
     if (spEx.ok) Object.assign(listenProvider, spEx.value);
-    listenProvider.type = sttModel && sp.type === 'deepgram' ? 'deepgram' : '';
+    listenProvider.type = sttModel ? (isSpeechServiceStt ? 'speech_service' : sp.type === 'deepgram' ? 'deepgram' : '') : '';
     listenProvider.model = sttModel;
     delete listenProvider.language;
     delete listenProvider.smart_format;
@@ -1475,6 +1480,11 @@
       if (sttModel !== 'flux-general-multi') {
         delete listenProvider.language_hints;
       }
+    }
+    const listen = { provider: listenProvider };
+    if (isSpeechServiceStt && (sp.endpoint || '').trim()) {
+      const sh = parseJsonObject(sp.headers);
+      listen.endpoint = { url: sp.endpoint.trim(), headers: sh.ok ? sh.value : {} };
     }
 
     const llmModel = String(S.services?.llm?.model || '').trim();
@@ -1515,7 +1525,7 @@
 
     const ttsModel = String(S.services?.tts?.model || '').trim();
     const speakProvider = { type: tp.type || '' };
-    const mk = tp.type === 'deepgram' || tp.type === 'open_ai' ? 'model' : tp.mk || 'model_id';
+    const mk = tp.type === 'deepgram' || tp.type === 'open_ai' || tp.type === 'speech_service' ? 'model' : tp.mk || 'model_id';
     if (tp.type && ttsModel && tp.type !== 'aws_polly') speakProvider[mk] = ttsModel;
     if (tp.type === 'deepgram' && ttsModel) {
       // Voice Agent speak provider: exactly {type, version, model}.
@@ -1566,7 +1576,7 @@
         output: { encoding: agent.audio.outEnc, sample_rate: Number(agent.audio.outRate), container: 'none' },
       },
       agent: {
-        listen: { provider: listenProvider },
+        listen,
         think,
         speak,
         greeting: finalGreeting,
@@ -1589,10 +1599,19 @@
     push(Boolean(lp), 'One global LLM provider is selected in Plug-Ins');
     push(Boolean(tp), 'One global TTS provider is selected in Plug-Ins');
 
-    push(Boolean(sp && sp.type === 'deepgram'), 'Global STT provider is Deepgram (required by Deepgram Voice Agent API)');
+    const isLocalStt = Boolean(sp && sp.type === 'speech_service');
+    const spAllowedStt = sp ? (sp.models || '').split(',').map((s) => s.trim()).filter(Boolean) : [];
     push(
-      Boolean(sp && VOICE_AGENT_STT_MODELS.includes(sttModel)),
-      `Global STT model "${sttModel || 'not selected'}" is supported by Voice Agent (Nova-3 or Flux v2)`
+      Boolean(sp && (sp.type === 'deepgram' || sp.type === 'speech_service')),
+      isLocalStt
+        ? 'Global STT provider is Local Speech Service (Faster-Whisper)'
+        : 'Global STT provider is Deepgram (required by Deepgram Voice Agent API)'
+    );
+    push(
+      Boolean(sp && (isLocalStt ? spAllowedStt.includes(sttModel) : VOICE_AGENT_STT_MODELS.includes(sttModel))),
+      isLocalStt
+        ? `Global STT model "${sttModel || 'not selected'}" is supported by Local Speech Service`
+        : `Global STT model "${sttModel || 'not selected'}" is supported by Voice Agent (Nova-3 or Flux v2)`
     );
     push((agent.greeting || '').trim().length > 10, 'Greeting is set (> 10 chars)');
     const promptOk = (agent.prompt || '').trim().length > 0 && agent.prompt.length <= 25000;
@@ -1622,7 +1641,11 @@
     push(Boolean(tp && (!ttsNeedsEp || (tp.endpoint || '').trim())), `TTS endpoint configured where required (${tp?.type || 'no provider'})`);
     const tpModelList = tp ? (tp.models || '').split(',').map((s) => s.trim()).filter(Boolean) : [];
     const ttsModelBelongs = Boolean(
-      tp && ttsModel && (tpModelList.includes(ttsModel) || (tp.type === 'deepgram' && /^(flux|aura)-/i.test(ttsModel)))
+      tp &&
+        ttsModel &&
+        (tpModelList.includes(ttsModel) ||
+          (tp.type === 'deepgram' && /^(flux|aura)-/i.test(ttsModel)) ||
+          (tp.type === 'speech_service' && /^(clone:[0-9a-f]{32}|[a-z]{2}_[a-z0-9]+)$/.test(ttsModel)))
     );
     push(
       ttsModelBelongs,
@@ -1817,12 +1840,10 @@
 
   const providersByKind = (kind) => S.providers.filter((p) => p.kind === kind).map((p) => [p.id, p.name]);
 
-  // Only routes that actually work with the console's single server-side
-  // DEEPGRAM_API_KEY are offered in the UI.
   const SUPPORTED_PROVIDER_TYPES = {
-    stt: ['deepgram'],
+    stt: ['deepgram', 'speech_service'],
     llm: ['open_ai', 'anthropic', 'google', 'groq', 'nvidia'],
-    tts: ['deepgram'],
+    tts: ['deepgram', 'speech_service'],
   };
   const isSupportedProvider = (p) => (SUPPORTED_PROVIDER_TYPES[p.kind] || []).includes(p.type);
   const supportedProvidersByKind = (kind) =>
@@ -1833,7 +1854,7 @@
     if (p.kind === 'llm') {
       return dgLlmModelIdsForType(p.type);
     }
-    if (p.kind === 'stt') return VOICE_AGENT_STT_MODELS;
+    if (p.kind === 'stt' && p.type !== 'speech_service') return VOICE_AGENT_STT_MODELS;
     return (p.models || '')
       .split(',')
       .map((s) => s.trim())
@@ -1854,9 +1875,79 @@
     const placeholder = [['', 'Select a model…']];
     const p = globalServiceProvider(kind);
     if (!p) return placeholder;
-    if (kind === 'stt') return placeholder.concat(VOICE_AGENT_STT_MODELS.map((id) => [id, id]));
+    if (kind === 'stt') {
+      const sttIds = p.type === 'speech_service' ? modelsForProvider(p.id) : VOICE_AGENT_STT_MODELS;
+      return placeholder.concat(sttIds.map((id) => [id, id]));
+    }
     if (kind === 'llm') return placeholder.concat(dgLlmEntriesForType(p.type).map((m) => [m.id, `${m.name} (${m.id})`]));
     return placeholder.concat(modelsForProvider(p.id).map((id) => [id, id]));
+  }
+
+  let localSpeechUi = {
+    busy: false,
+    statusText: '',
+    statusTone: '',
+    audioDataUrl: '',
+    urlDraft: '',
+    voiceDraft: 'af_heart',
+  };
+
+  function renderLocalSpeechOneClickCard() {
+    const localTts = S.providers.find((p) => p.kind === 'tts' && p.type === 'speech_service');
+    const voices = localTts
+      ? (localTts.models || '').split(',').map((s) => s.trim()).filter(Boolean)
+      : ['af_heart', 'af_bella', 'af_nova', 'af_alloy', 'am_adam', 'bf_emma'];
+    const activeStt = globalServiceProvider('stt');
+    const activeTts = globalServiceProvider('tts');
+    const isLocalActive = activeStt?.type === 'speech_service' && activeTts?.type === 'speech_service';
+    const currentVoice = isLocalActive && S.services?.tts?.model ? S.services.tts.model : localSpeechUi.voiceDraft || 'af_heart';
+    const urlConfigured = secretsStatus?.SPEECH_SERVICE_URL?.configured;
+    const keyConfigured = secretsStatus?.SPEECH_SERVICE_API_KEY?.configured;
+
+    return `<div class="card" id="local-speech-card" style="border:1px solid var(--accent-soft,rgba(56,189,248,.35))">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+        <h2 style="margin:0">⚡ Self-Hosted Speech Service — 1-Click Local STT + TTS</h2>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <span class="pill ${isLocalActive ? 'ok' : ''}">${isLocalActive ? '● Active in Console' : '○ Standby'}</span>
+          <span class="pill">${urlConfigured ? 'URL Configured' : 'Auto Port :8000'}</span>
+          <span class="pill ${keyConfigured ? 'ok' : 'wn'}">${keyConfigured ? `Key ${esc(secretsStatus.SPEECH_SERVICE_API_KEY.masked)}` : 'Auth Key Optional/Dev'}</span>
+        </div>
+      </div>
+      <div class="note" style="margin-bottom:10px">
+        Connect your self-hosted <b>Faster-Whisper</b> (STT) + <b>Kokoro-82M</b> (TTS) + <b>Chatterbox</b> (consented voice cloning) microservice in one click — supports native 8 kHz G.711 &mu;-law for VICIdial/Asterisk and real-time WebSocket barge-in.
+      </div>
+      <div class="row r3">
+        <div>
+          <label>Speech Service URL (optional override)</label>
+          <input id="ss-url-input" type="text" placeholder="e.g. http://192.168.18.29:8000" value="${esc(localSpeechUi.urlDraft)}" autocomplete="off" />
+        </div>
+        <div>
+          <label>Speech Service API Key (Bearer / X-API-Key)</label>
+          <input id="ss-key-input" type="password" placeholder="${keyConfigured ? 'Saved in .env (enter to update)' : 'Enter SPEECH_API_KEY if enabled…'}" autocomplete="off" />
+        </div>
+        <div>
+          <label>Default Kokoro / Cloned Voice</label>
+          <select id="ss-voice-select">
+            ${voices.map((v) => `<option value="${esc(v)}" ${v === currentVoice ? 'selected' : ''}>${esc(v)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="bar" style="margin-top:10px;margin-bottom:4px">
+        <button class="b" id="btn-ss-activate" ${localSpeechUi.busy ? 'disabled' : ''}>⚡ 1-Click Activate Local STT + TTS</button>
+        <button class="g" id="btn-ss-test" ${localSpeechUi.busy ? 'disabled' : ''}>🔊 Test Round-Trip (TTS → STT)</button>
+        <button class="g" id="btn-ss-probe" ${localSpeechUi.busy ? 'disabled' : ''}>🔌 Check /readyz Status</button>
+      </div>
+      ${
+        localSpeechUi.statusText
+          ? `<div class="note ${esc(localSpeechUi.statusTone)}" id="ss-status-note" style="margin-top:8px;white-space:pre-line">${esc(localSpeechUi.statusText)}</div>`
+          : ''
+      }
+      ${
+        localSpeechUi.audioDataUrl
+          ? `<audio controls autoplay src="${esc(localSpeechUi.audioDataUrl)}" style="width:100%;margin-top:8px;height:36px"></audio>`
+          : ''
+      }
+    </div>`;
   }
 
   function renderGlobalServiceRouting() {
@@ -1866,9 +1957,10 @@
       ['tts', 'TTS — Speak', supportedProvidersByKind('tts')],
     ];
     const missing = kinds.filter(([kind]) => !S.services?.[kind]?.providerId || !S.services?.[kind]?.model);
-    return `<div class="card global-services-card">
+    return `${renderLocalSpeechOneClickCard()}
+    <div class="card global-services-card">
       <h2>Service Selection <button class="g" id="sync-llm" style="font-size:11px;padding:3px 8px;text-transform:none">↻ Refresh model list</button></h2>
-      <div class="note">Pick one provider and one model for each service, then press <b>Save &amp; verify</b>. The saved route applies to every bot.</div>
+      <div class="note">Pick one provider and one model for each service, then press <b>Save &amp; verify</b> — or use <b>⚡ 1-Click Activate Local STT + TTS</b> above.</div>
       <div class="row r3">${kinds.map(([kind, label, providers]) => `
         <div class="global-service-choice">
           <h3>${label}</h3>
@@ -1883,7 +1975,7 @@
               .join(', ')}</b>. Live sessions stay blocked until all three are saved.</div>`
           : '<div class="note ok" style="margin-top:10px">✓ All three services have a saved provider and model.</div>'
       }
-      <div class="note" style="margin-top:6px">Only Deepgram-backed routes that work with your server-side <code>DEEPGRAM_API_KEY</code> are listed.</div>
+      <div class="note" style="margin-top:6px">Supports both <b>Deepgram Cloud</b> (<code>DEEPGRAM_API_KEY</code>) and your <b>Self-Hosted Local Speech Service</b> (Faster-Whisper + Kokoro-82M + Chatterbox).</div>
     </div>`;
   }
 
@@ -5579,6 +5671,8 @@
 
     const keySpecs = [
       ['DEEPGRAM_API_KEY', 'Deepgram Universal API Key (powers Deepgram STT, all Deepgram-Managed LLMs, TTS & Voice Agent)'],
+      ['SPEECH_SERVICE_URL', 'Local Speech Service URL (e.g. http://192.168.18.29:8000 for Faster-Whisper + Kokoro)'],
+      ['SPEECH_SERVICE_API_KEY', 'Local Speech Service API Key (Bearer / X-API-Key secret from speech-service .env)'],
       ['ELEVENLABS_API_KEY', 'ElevenLabs API Key (optional — for BYO ElevenLabs TTS)'],
       ['CARTESIA_API_KEY', 'Cartesia API Key (optional — for BYO Cartesia TTS)'],
       ['VICI_API_PASS', 'VICIdial API Password (User 6666 pass on ViciBox)'],
@@ -5594,7 +5688,7 @@
         const badge = st?.configured
           ? `<span class="ok">Configured (${esc(st.masked)})</span>`
           : `<span class="wn">Not set</span>`;
-        const inputType = k === 'BRIDGE_ALLOWED_IPS' ? 'text' : 'password';
+        const inputType = k === 'BRIDGE_ALLOWED_IPS' || k === 'SPEECH_SERVICE_URL' ? 'text' : 'password';
         return `
           <label>${esc(desc)} — ${badge}</label>
           <input type="${inputType}" data-secret="${k}" placeholder="${st?.configured ? 'Leave blank to keep existing value, or enter new value' : `Enter ${k}…`}" autocomplete="off" />
@@ -6093,6 +6187,94 @@
     if (b.id === 'btn-trigger-intro') {
       if (sim.active) {
         injectCallerUtterance('Hi! Who are you? Please introduce yourself and tell me what you can help me with!');
+      }
+      return;
+    }
+
+    if (b.id === 'btn-ss-probe' || b.id === 'btn-ss-test' || b.id === 'btn-ss-activate') {
+      const urlInp = document.getElementById('ss-url-input');
+      const keyInp = document.getElementById('ss-key-input');
+      const voiceSel = document.getElementById('ss-voice-select');
+      const urlVal = urlInp ? urlInp.value.trim() : '';
+      const keyVal = keyInp ? keyInp.value.trim() : '';
+      const voiceVal = voiceSel ? voiceSel.value : 'af_heart';
+      if (urlVal) localSpeechUi.urlDraft = urlVal;
+      if (voiceVal) localSpeechUi.voiceDraft = voiceVal;
+      localSpeechUi.busy = true;
+      localSpeechUi.audioDataUrl = '';
+      localSpeechUi.statusTone = '';
+      localSpeechUi.statusText = '⏳ Contacting Local Speech Service…';
+      render();
+      try {
+        if (b.id === 'btn-ss-probe') {
+          const qs = urlVal ? `?url=${encodeURIComponent(urlVal)}` : '';
+          const r = await fetch(`/api/speech-service/status${qs}`);
+          const j = await r.json();
+          const dg = j.diagnostic || {};
+          if (j.ok) {
+            localSpeechUi.statusTone = 'ok';
+            localSpeechUi.statusText =
+              `✓ Ready at ${dg.baseUrl} (${dg.latencyMs}ms) · STT: ${dg.ready?.stt} · TTS: ${dg.ready?.tts} · Stock voices: ${(dg.stockVoices || []).length} · Cloned voices: ${(dg.clonedVoices || []).length}`;
+          } else {
+            localSpeechUi.statusTone = 'er';
+            localSpeechUi.statusText = `✗ ${dg.error || j.error || 'Speech Service unreachable'}`;
+          }
+        } else if (b.id === 'btn-ss-test') {
+          const r = await fetch('/api/speech-service/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...(urlVal ? { url: urlVal } : {}),
+              ...(keyVal ? { apiKey: keyVal } : {}),
+              voice: voiceVal,
+            }),
+          });
+          const j = await r.json();
+          if (j.ok) {
+            localSpeechUi.statusTone = 'ok';
+            localSpeechUi.statusText =
+              `✓ Round-Trip Verified (${j.baseUrl})\n` +
+              `• TTS (${j.ttsEngine}, voice=${j.voice}): ${j.ttsBytes} bytes WAV in ${j.ttsMs}ms\n` +
+              `• STT (${j.sttEngine}): "${j.sttText}" in ${j.sttMs}ms`;
+            if (j.audioBase64) {
+              localSpeechUi.audioDataUrl = `data:audio/wav;base64,${j.audioBase64}`;
+            }
+          } else {
+            localSpeechUi.statusTone = 'er';
+            localSpeechUi.statusText = `✗ ${j.error || 'Round-trip test failed'}`;
+          }
+        } else {
+          const r = await fetch('/api/speech-service/activate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...(urlVal ? { url: urlVal } : {}),
+              ...(keyVal ? { apiKey: keyVal } : {}),
+              voice: voiceVal,
+            }),
+          });
+          const j = await r.json();
+          if (j.ok && j.state) {
+            S = j.state;
+            snap = comparableSnapshot(S);
+            if (j.secrets) secretsStatus = j.secrets;
+            if (j.telemetry) telemetryOverview = j.telemetry;
+            if (Array.isArray(j.revisions) && j.revisions[0]) latestRevisionId = j.revisions[0].id;
+            localSpeechUi.statusTone = 'ok';
+            localSpeechUi.statusText =
+              `✓ Activated Local Speech Service (${j.diagnostic?.baseUrl}) — STT=${S.services.stt.model}, TTS=${S.services.tts.model}!`;
+            updateHeaderStatus();
+          } else {
+            localSpeechUi.statusTone = 'er';
+            localSpeechUi.statusText = `✗ ${j.error || 'Activation failed'}`;
+          }
+        }
+      } catch (err) {
+        localSpeechUi.statusTone = 'er';
+        localSpeechUi.statusText = `✗ ${err.message || 'Network error'}`;
+      } finally {
+        localSpeechUi.busy = false;
+        render();
       }
       return;
     }

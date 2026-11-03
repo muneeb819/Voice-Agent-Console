@@ -1,27 +1,37 @@
 ================================================================================
 MMA DIGITAL LABS — VOICE AGENT CONSOLE (FULL PRODUCTION & DEMO RELEASE)
-Build: elite-2.17 | Verification Suite: 40/40 E2E Checks Passing
+Build: elite-2.18 | Verification: 41/41 Node E2E + 19/19 Speech Service Pytest
 ================================================================================
 
 INCLUDED LATEST FEATURES & ARCHITECTURE:
-1. First-Page Users SignUp / SignIn Gate (/signup & /login):
+1. Self-Hosted Local Speech Service v1.1.0 (`./speech-service` + 1-Click Wiring):
+   - Faster-Whisper STT + Kokoro-82M TTS + isolated Chatterbox Turbo consented
+     voice-cloning worker, with all 5 production GPU/streaming fixes applied:
+     (1) BatchedInferencePipeline kwarg fix, (2) WebSocket barge-in semaphore
+     release (`contextlib.aclosing`), (3) stateful `soxr` resampler continuity,
+     (4) OpenAI voice aliases (`alloy`, `nova`, `echo`, `onyx`, `fable`, `shimmer`)
+     + speakable-text guard, and (5) thread-safe non-blocking Silero VAD +
+     portable `imageio-ffmpeg` + 8 kHz G.711 u-law Live STT input.
+   - Open the Console -> Plug-Ins -> click "1-Click Activate Local STT + TTS"
+     (or "Test Round-Trip (TTS -> STT)") to wire both STT & TTS immediately.
+2. First-Page Users SignUp / SignIn Gate (/signup & /login):
    - Scrypt password hashing, HttpOnly session cookies, multi-user SQLite store,
      and Active 24-Channel Playing Soundwave Acoustic Plaque SVG across all
      10 Theme Studio worlds.
-2. Strategic 3-Zone Precision Command Header:
+3. Strategic 3-Zone Precision Command Header:
    - Bounded responsive layout, recessed Utility Dock (Theme Studio, API Keys,
      Sign Out), live Client Link share pill, and Transaction Commit Dock.
-3. Global Executive Command & Console Quality Dashboard (#cmd-deck):
+4. Global Executive Command & Console Quality Dashboard (#cmd-deck):
    - Rendered at the top of all 8 workspace pages (Agents, Plug-Ins, Campaigns,
      Voice, QA & Call Sim, VICIdial Bridge, Wallboard, Export & Revisions).
    - Real-time 0-100 Console Quality Index radial gauge (S+/A+ certification),
      6 weighted quality pillars, 8 clickable subsystem KPI cards, live Fleet
      Readiness Matrix, and Full vs. Compact strip toggle.
-4. External Internet Client Demo HTTPS Link (Cloudflare Quick-Tunnel):
+5. External Internet Client Demo HTTPS Link (Cloudflare Quick-Tunnel):
    - Run `npm run demo` (or double-click `start-demo.bat` on Windows) OR click
      "Launch Public Client HTTPS Link" directly inside the top Command Dashboard.
    - Auto-targets active IPv4 LAN interface on Windows to avoid IPv6 [::1] 502s.
-5. Deepgram Voice Agent v1 + Universal VICIdial Bridge:
+6. Deepgram Voice Agent v1 + Universal VICIdial Bridge:
    - Configured for target IP 115.186.137.240:533 (100-port EADDRINUSE fallback),
      AudioSocket TCP + WebSocket multiplex (:9092), SIP/RTP G.711 u-law (:5062),
      <15ms Dual-Layer Barge-In, Stereo 8 kHz WAV recording, and SQLite WAL DB.

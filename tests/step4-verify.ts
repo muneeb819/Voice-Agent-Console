@@ -654,10 +654,133 @@ async function run() {
       'Expected ok + active + lanIp from /api/demo-tunnel/status'
     );
     console.log(
-      `✓ [11/11] Executive Command & Console Quality Dashboard (#cmd-deck, Score ${telemJson.telemetry.quality.score}/100 ${telemJson.telemetry.quality.grade}, 6 Pillars) + Demo Tunnel Auto-Discovery verified`
+      `✓ [11/12] Executive Command & Console Quality Dashboard (#cmd-deck, Score ${telemJson.telemetry.quality.score}/100 ${telemJson.telemetry.quality.grade}, 6 Pillars) + Demo Tunnel Auto-Discovery verified`
     );
 
-    console.log('\nALL 11 STEP 4 CHECKS PASSED SUCCESSFULLY!');
+    // 12. Verify One-Click Local Speech Service Integration (/api/speech-service/status, /test, /activate & /api/tts/preview)
+    const mockWav = Buffer.alloc(44 + 3200);
+    mockWav.write('RIFF', 0);
+    mockWav.writeUInt32LE(36 + 3200, 4);
+    mockWav.write('WAVEfmt ', 8);
+    mockWav.writeUInt32LE(16, 16);
+    mockWav.writeUInt16LE(1, 20);
+    mockWav.writeUInt16LE(1, 22);
+    mockWav.writeUInt32LE(24000, 24);
+    mockWav.writeUInt32LE(48000, 28);
+    mockWav.writeUInt16LE(2, 32);
+    mockWav.writeUInt16LE(16, 34);
+    mockWav.write('data', 36);
+    mockWav.writeUInt32LE(3200, 40);
+
+    const mockSpeechSrv = http.createServer((req, res) => {
+      const auth = req.headers.authorization || '';
+      if (req.url === '/readyz') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ready', stt: 'faster-whisper', tts: 'kokoro', clone: true }));
+        return;
+      }
+      if (auth !== 'Bearer local-ss-secret') {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'Invalid API key' }));
+        return;
+      }
+      if (req.url === '/v1/voices/stock') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ voices: ['af_heart', 'af_bella', 'af_nova', 'am_adam'] }));
+        return;
+      }
+      if (req.url === '/v1/voices') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            voices: [{ id: 'a'.repeat(32), name: 'custom_exec', speaker_name: 'Jane Doe', duration: 12.4 }],
+          })
+        );
+        return;
+      }
+      if (req.url === '/v1/audio/speech' && req.method === 'POST') {
+        res.writeHead(200, { 'Content-Type': 'audio/wav' });
+        res.end(mockWav);
+        return;
+      }
+      if (req.url === '/v1/audio/transcriptions' && req.method === 'POST') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ text: 'Hello from Voice Agent Console Local Kokoro and Faster-Whisper are ready.' }));
+        return;
+      }
+      res.writeHead(404);
+      res.end();
+    });
+
+    const prevSsUrl = process.env.SPEECH_SERVICE_URL;
+    const prevSsKey = process.env.SPEECH_SERVICE_API_KEY;
+    const preStateSnap = await (
+      await fetch(`${httpBase}/api/state`, { headers: { Cookie: signedInCookie } })
+    ).json() as any;
+
+    await new Promise<void>((resolve) => mockSpeechSrv.listen(0, '0.0.0.0', () => resolve()));
+    const ssPort = (mockSpeechSrv.address() as any).port;
+    const ssUrl = `http://localhost:${ssPort}`;
+
+    try {
+      const rtRes = await fetch(`${httpBase}/api/speech-service/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: signedInCookie },
+        body: JSON.stringify({ url: ssUrl, apiKey: 'local-ss-secret', voice: 'af_bella' }),
+      });
+      assert(rtRes.status === 200, `Expected 200 from /api/speech-service/test, got ${rtRes.status}`);
+      const rtJson = (await rtRes.json()) as any;
+      assert(
+        rtJson.ok === true && rtJson.ttsBytes === mockWav.length && rtJson.sttText.includes('Faster-Whisper'),
+        'Expected verified TTS->STT round-trip payload'
+      );
+
+      const actRes = await fetch(`${httpBase}/api/speech-service/activate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: signedInCookie },
+        body: JSON.stringify({ url: ssUrl, apiKey: 'local-ss-secret', voice: 'af_bella' }),
+      });
+      assert(actRes.status === 200, `Expected 200 from /api/speech-service/activate, got ${actRes.status}`);
+      const actJson = (await actRes.json()) as any;
+      assert(
+        actJson.ok === true &&
+          actJson.state?.services?.stt?.providerId === 's_local' &&
+          actJson.state?.services?.tts?.providerId === 't_local' &&
+          actJson.state?.services?.tts?.model === 'af_bella' &&
+          actJson.counts?.er === 0,
+        `Expected s_local + t_local (af_bella) with 0 validation errors, got er=${actJson.counts?.er}`
+      );
+
+      const prevRes = await fetch(`${httpBase}/api/tts/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: signedInCookie },
+        body: JSON.stringify({ providerType: 'speech_service', model: 'af_bella', text: 'Preview check.' }),
+      });
+      assert(prevRes.status === 200, `Expected 200 from /api/tts/preview (speech_service), got ${prevRes.status}`);
+      const prevWav = Buffer.from(await prevRes.arrayBuffer());
+      assert(prevWav.subarray(0, 4).toString('ascii') === 'RIFF', 'Expected RIFF WAV from speech_service preview');
+    } finally {
+      await fetch(`${httpBase}/api/state`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Cookie: signedInCookie },
+        body: JSON.stringify({ state: preStateSnap.state, summary: 'Restore test baseline state' }),
+      });
+      await fetch(`${httpBase}/api/secrets`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: signedInCookie },
+        body: JSON.stringify({ SPEECH_SERVICE_URL: prevSsUrl || '', SPEECH_SERVICE_API_KEY: prevSsKey || '' }),
+      });
+      if (prevSsUrl === undefined) delete process.env.SPEECH_SERVICE_URL;
+      else process.env.SPEECH_SERVICE_URL = prevSsUrl;
+      if (prevSsKey === undefined) delete process.env.SPEECH_SERVICE_API_KEY;
+      else process.env.SPEECH_SERVICE_API_KEY = prevSsKey;
+      await new Promise<void>((resolve) => mockSpeechSrv.close(() => resolve()));
+    }
+    console.log(
+      '✓ [12/12] One-Click Local Speech Service Integration (/api/speech-service/test, /activate, Clone Sync & /api/tts/preview) verified'
+    );
+
+    console.log('\nALL 12 STEP 4 CHECKS PASSED SUCCESSFULLY!');
   } finally {
     if (prevAdminPass === undefined) delete process.env.ADMIN_PASSWORD;
     else process.env.ADMIN_PASSWORD = prevAdminPass;

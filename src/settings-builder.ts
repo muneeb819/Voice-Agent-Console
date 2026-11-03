@@ -133,15 +133,23 @@ export function buildDeepgramSettings(
 
   const linkedCampaign = explicitCampaign || state.campaigns.find((c) => c.agentId === agent.id);
 
-  // 1. Listen (STT) — Nova-3 is the Voice Agent's verified baseline payload.
-  //    Flux v2 remains selectable and keeps its Flux-only tuning knobs.
+  // 1. Listen (STT) — Nova-3 / Flux v2 for Deepgram, or Faster-Whisper for Local Speech Service.
   const selectedSttModel = String(state.services?.stt?.model || '').trim();
-  const sttModel = VOICE_AGENT_STT_MODELS.includes(selectedSttModel as (typeof VOICE_AGENT_STT_MODELS)[number])
-    ? selectedSttModel
-    : '';
-  const isFluxListen = sttModel.startsWith('flux-');
+  const isSpeechServiceStt = sp.type === 'speech_service';
+  const spModels = String(sp.models || '')
+    .split(',')
+    .map((m) => m.trim())
+    .filter(Boolean);
+  const sttModel = isSpeechServiceStt
+    ? spModels.includes(selectedSttModel)
+      ? selectedSttModel
+      : ''
+    : VOICE_AGENT_STT_MODELS.includes(selectedSttModel as (typeof VOICE_AGENT_STT_MODELS)[number])
+      ? selectedSttModel
+      : '';
+  const isFluxListen = !isSpeechServiceStt && sttModel.startsWith('flux-');
   const listenProvider: Record<string, any> = {
-    type: sttModel && sp.type === 'deepgram' ? 'deepgram' : '',
+    type: sttModel ? (isSpeechServiceStt ? 'speech_service' : sp.type === 'deepgram' ? 'deepgram' : '') : '',
     model: sttModel,
   };
   if (isFluxListen) {
@@ -167,7 +175,7 @@ export function buildDeepgramSettings(
   // Plugin extras may add provider options, but never replace the saved
   // provider/model. Nova listen accepts only the provider/model pair, so
   // Flux-only fields are stripped there to keep the payload wire-exact.
-  listenProvider.type = sttModel && sp.type === 'deepgram' ? 'deepgram' : '';
+  listenProvider.type = sttModel ? (isSpeechServiceStt ? 'speech_service' : sp.type === 'deepgram' ? 'deepgram' : '') : '';
   listenProvider.model = sttModel;
   delete listenProvider.language;
   delete listenProvider.smart_format;
@@ -183,6 +191,14 @@ export function buildDeepgramSettings(
     if (sttModel !== 'flux-general-multi') {
       delete listenProvider.language_hints;
     }
+  }
+  const listen: Record<string, any> = { provider: listenProvider };
+  if (isSpeechServiceStt && sp.endpoint && sp.endpoint.trim()) {
+    const shdrs = parseJsonObject(sp.headers || '{}');
+    listen.endpoint = {
+      url: sp.endpoint.trim(),
+      headers: shdrs.ok ? shdrs.value : {},
+    };
   }
 
   // 2. Think (LLM)
@@ -257,14 +273,17 @@ export function buildDeepgramSettings(
   const selectedTtsModel = String(state.services?.tts?.model || '').trim();
   const availableTtsModels = String(tp.models || '').split(',').map((entry) => entry.trim()).filter(Boolean);
   const isDeepgramVoice = tp.type === 'deepgram' && /^(flux|aura)-/i.test(selectedTtsModel);
+  const isSpeechServiceVoice =
+    tp.type === 'speech_service' && /^(clone:[0-9a-f]{32}|[a-z]{2}_[a-z0-9]+)$/.test(selectedTtsModel);
   const ttsModel =
-    tp.kind === 'tts' && (availableTtsModels.includes(selectedTtsModel) || isDeepgramVoice)
+    tp.kind === 'tts' && (availableTtsModels.includes(selectedTtsModel) || isDeepgramVoice || isSpeechServiceVoice)
       ? selectedTtsModel
       : '';
   const speakProvider: Record<string, any> = {
     type: tp.kind === 'tts' ? tp.type || '' : '',
   };
-  const modelKey = tp.type === 'deepgram' || tp.type === 'open_ai' ? 'model' : tp.mk || 'model_id';
+  const modelKey =
+    tp.type === 'deepgram' || tp.type === 'open_ai' || tp.type === 'speech_service' ? 'model' : tp.mk || 'model_id';
   if (tp.type && ttsModel && tp.type !== 'aws_polly') {
     speakProvider[modelKey] = ttsModel;
   }
@@ -333,7 +352,7 @@ export function buildDeepgramSettings(
       },
     },
     agent: {
-      listen: { provider: listenProvider },
+      listen,
       think,
       speak,
       greeting: finalGreeting,
@@ -364,10 +383,24 @@ export function validateAgent(state: ConsoleState, agent: Agent): ValidationItem
   push(Boolean(tp), 'One global TTS provider is selected in Plug-Ins');
 
   // STT validations
-  push(Boolean(sp && sp.type === 'deepgram'), 'Global STT provider is Deepgram (required by Voice Agent API)');
+  const isLocalStt = Boolean(sp && sp.type === 'speech_service');
+  const spAllowedStt = sp ? sp.models.split(',').map((s) => s.trim()).filter(Boolean) : [];
   push(
-    Boolean(sp && VOICE_AGENT_STT_MODELS.includes(sttModel as (typeof VOICE_AGENT_STT_MODELS)[number])),
-    `Global STT model "${sttModel || 'not selected'}" is supported by Voice Agent (Nova-3 or Flux v2)`
+    Boolean(sp && (sp.type === 'deepgram' || sp.type === 'speech_service')),
+    isLocalStt
+      ? 'Global STT provider is Local Speech Service (Faster-Whisper)'
+      : 'Global STT provider is Deepgram (required by Voice Agent API)'
+  );
+  push(
+    Boolean(
+      sp &&
+        (isLocalStt
+          ? spAllowedStt.includes(sttModel)
+          : VOICE_AGENT_STT_MODELS.includes(sttModel as (typeof VOICE_AGENT_STT_MODELS)[number]))
+    ),
+    isLocalStt
+      ? `Global STT model "${sttModel || 'not selected'}" is supported by Local Speech Service`
+      : `Global STT model "${sttModel || 'not selected'}" is supported by Voice Agent (Nova-3 or Flux v2)`
   );
   push(agent.greeting.trim().length > 10, 'Greeting is set (> 10 chars)');
   const maxPromptOk = agent.prompt.trim().length > 0 && agent.prompt.length <= 25000;
@@ -401,7 +434,11 @@ export function validateAgent(state: ConsoleState, agent: Agent): ValidationItem
   push(Boolean(tp && (!ttsNeedsEndpoint || tp.endpoint.trim())), `TTS endpoint configured where required (${tp?.type || 'no provider'})`);
   const tpModelList = tp ? tp.models.split(',').map((s) => s.trim()).filter(Boolean) : [];
   const ttsModelBelongs = Boolean(
-    tp && ttsModel && (tpModelList.includes(ttsModel) || (tp.type === 'deepgram' && /^(flux|aura)-/i.test(ttsModel)))
+    tp &&
+      ttsModel &&
+      (tpModelList.includes(ttsModel) ||
+        (tp.type === 'deepgram' && /^(flux|aura)-/i.test(ttsModel)) ||
+        (tp.type === 'speech_service' && /^(clone:[0-9a-f]{32}|[a-z]{2}_[a-z0-9]+)$/.test(ttsModel)))
   );
   push(
     ttsModelBelongs,

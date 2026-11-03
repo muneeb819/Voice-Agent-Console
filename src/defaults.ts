@@ -5,6 +5,29 @@ import { AgentBehavior, AgentFunction, Campaign, ConsoleState, Provider } from '
 export const VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'] as const;
 export type VoiceAgentSttModel = (typeof VOICE_AGENT_STT_MODELS)[number];
 
+export const SPEECH_SERVICE_STT_MODELS = ['large-v3-turbo', 'whisper-1'] as const;
+export const SPEECH_SERVICE_DEFAULT_VOICES = [
+  'af_heart',
+  'af_bella',
+  'af_nova',
+  'af_alloy',
+  'af_sarah',
+  'af_kore',
+  'af_nicole',
+  'af_sky',
+  'am_adam',
+  'am_echo',
+  'am_michael',
+  'am_onyx',
+  'am_liam',
+  'bf_alice',
+  'bf_emma',
+  'bf_isabella',
+  'bm_daniel',
+  'bm_fable',
+  'bm_george',
+] as const;
+
 export function defaultVoiceAgentSttModel(language?: string): VoiceAgentSttModel {
   // Nova-3 is multilingual and is the Voice Agent API's default listen model.
   void language;
@@ -129,6 +152,17 @@ export function createDefaultState(): ConsoleState {
     providers: [
       makeProvider('s1', 'stt', 'Deepgram STT', 'deepgram', VOICE_AGENT_STT_MODELS.join(',')),
       makeProvider(
+        's_local',
+        'stt',
+        'Local Speech Service (Faster-Whisper)',
+        'speech_service',
+        SPEECH_SERVICE_STT_MODELS.join(','),
+        {
+          endpoint: '{{SPEECH_SERVICE_URL}}/v1/audio/transcriptions',
+          headers: '{"Authorization":"Bearer {{SPEECH_SERVICE_API_KEY}}"}',
+        }
+      ),
+      makeProvider(
         'l1',
         'llm',
         'OpenAI (Deepgram Managed)',
@@ -163,6 +197,17 @@ export function createDefaultState(): ConsoleState {
         'Deepgram TTS (Flux v2 & Aura v1)',
         'deepgram',
         'flux-kit-en,flux-haley-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en,aura-stella-en'
+      ),
+      makeProvider(
+        't_local',
+        'tts',
+        'Local Speech Service (Kokoro 82M + Clone)',
+        'speech_service',
+        SPEECH_SERVICE_DEFAULT_VOICES.join(','),
+        {
+          endpoint: '{{SPEECH_SERVICE_URL}}/v1/audio/speech',
+          headers: '{"Authorization":"Bearer {{SPEECH_SERVICE_API_KEY}}"}',
+        }
       ),
     ],
     functions: [
@@ -640,12 +685,18 @@ export function normalizeState(raw: any): ConsoleState {
             mk: 'model',
           };
         }
+        const isSpeechService = String(p.type || '') === 'speech_service';
         return {
           id: String(p.id || `p_${kind}_${idx + 1}`),
           kind,
           name: String(p.name || `Provider ${idx + 1}`),
-          type: kind === 'stt' ? 'deepgram' : String(p.type || 'deepgram'),
-          models: kind === 'stt' ? VOICE_AGENT_STT_MODELS.join(',') : String(p.models || ''),
+          type: kind === 'stt' ? (isSpeechService ? 'speech_service' : 'deepgram') : String(p.type || 'deepgram'),
+          models:
+            kind === 'stt'
+              ? isSpeechService
+                ? String(p.models || SPEECH_SERVICE_STT_MODELS.join(','))
+                : VOICE_AGENT_STT_MODELS.join(',')
+              : String(p.models || ''),
           endpoint: String(p.endpoint || ''),
           headers: typeof p.headers === 'string' ? p.headers : JSON.stringify(p.headers || {}),
           extra: typeof p.extra === 'string' ? p.extra : JSON.stringify(p.extra || {}),
@@ -663,20 +714,27 @@ export function normalizeState(raw: any): ConsoleState {
     }
   }
 
-  // Only Deepgram-backed TTS routes are supported by this console (it holds a
-  // single server-side DEEPGRAM_API_KEY). Drop legacy BYO TTS providers from
-  // saved state so the UI only offers routes that actually work.
+  // Keep Deepgram-backed and Local Speech Service TTS routes; drop unsupported legacy BYO TTS providers.
   for (let i = providers.length - 1; i >= 0; i -= 1) {
     const p = providers[i];
-    if (p.kind === 'tts' && p.type !== 'deepgram') providers.splice(i, 1);
+    if (p.kind === 'tts' && p.type !== 'deepgram' && p.type !== 'speech_service') providers.splice(i, 1);
   }
 
-  // Ensure at least one provider per kind exists
+  // Ensure at least one provider per kind exists, plus built-in Local Speech Service providers (s_local, t_local)
   for (const kind of ['stt', 'llm', 'tts'] as const) {
     if (!providers.some((p) => p.kind === kind)) {
       const fallback = base.providers.find((p) => p.kind === kind)!;
       providers.push({ ...fallback });
     }
+  }
+  const baseLocalStt = base.providers.find((p) => p.id === 's_local');
+  if (baseLocalStt && !providers.some((p) => p.kind === 'stt' && p.type === 'speech_service')) {
+    const firstSttIdx = providers.findIndex((p) => p.kind === 'stt');
+    providers.splice(firstSttIdx >= 0 ? firstSttIdx + 1 : 1, 0, { ...baseLocalStt });
+  }
+  const baseLocalTts = base.providers.find((p) => p.id === 't_local');
+  if (baseLocalTts && !providers.some((p) => p.kind === 'tts' && p.type === 'speech_service')) {
+    providers.push({ ...baseLocalTts });
   }
 
   const normalizeSelection = (kind: Provider['kind']) => {
@@ -685,6 +743,14 @@ export function normalizeState(raw: any): ConsoleState {
     const model = String(rawSelection.model || '').trim();
     if (!provider || !model) return { providerId: '', model: '' };
     if (kind === 'stt') {
+      if (provider.type === 'speech_service') {
+        const sttModels = provider.models.split(',').map((m) => m.trim()).filter(Boolean);
+        if (!sttModels.includes(model) && (SPEECH_SERVICE_STT_MODELS as readonly string[]).includes(model)) {
+          sttModels.push(model);
+          provider.models = sttModels.join(',');
+        }
+        return sttModels.includes(model) ? { providerId: provider.id, model } : { providerId: '', model: '' };
+      }
       return provider.type === 'deepgram' && VOICE_AGENT_STT_MODELS.includes(model as VoiceAgentSttModel)
         ? { providerId: provider.id, model }
         : { providerId: '', model: '' };
@@ -696,6 +762,14 @@ export function normalizeState(raw: any): ConsoleState {
     }
     const allowedModels = provider.models.split(',').map((entry) => entry.trim()).filter(Boolean);
     if (!allowedModels.includes(model) && provider.type === 'deepgram' && /^(flux|aura)-/i.test(model)) {
+      allowedModels.push(model);
+      provider.models = allowedModels.join(',');
+    }
+    if (
+      !allowedModels.includes(model) &&
+      provider.type === 'speech_service' &&
+      /^(clone:[0-9a-f]{32}|[a-z]{2}_[a-z0-9]+)$/.test(model)
+    ) {
       allowedModels.push(model);
       provider.models = allowedModels.join(',');
     }

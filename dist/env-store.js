@@ -24,6 +24,8 @@ if (typeof net_1.default.setDefaultAutoSelectFamily === 'function') {
 const ENV_PATH = path_1.default.resolve(__dirname, '..', '.env');
 exports.MANAGED_SECRET_KEYS = [
     'DEEPGRAM_API_KEY',
+    'SPEECH_SERVICE_URL',
+    'SPEECH_SERVICE_API_KEY',
     'ELEVENLABS_API_KEY',
     'CARTESIA_API_KEY',
     'OPENAI_API_KEY',

@@ -43,6 +43,7 @@ const db_1 = require("./db");
 const defaults_1 = require("./defaults");
 const env_store_1 = require("./env-store");
 const settings_builder_1 = require("./settings-builder");
+const speech_service_client_1 = require("./speech-service-client");
 const webhook_executor_1 = require("./webhook-executor");
 function interpolateEnvPlaceholders(obj) {
     if (typeof obj === 'string') {
@@ -124,6 +125,8 @@ function attachLiveSimulator(server, noServer = false) {
         let settingsApplied = false;
         let upstreamMode = 'deepgram';
         let dgWs = null;
+        let localSttWs = null;
+        let localTtsHandle = null;
         let keepAliveTimer = null;
         let comfortSilenceTimer = null;
         let pendingEndTimer = null;
@@ -320,6 +323,17 @@ function attachLiveSimulator(server, noServer = false) {
                 }
                 dgWs.send(JSON.stringify(fnResp));
             }
+        };
+        const speakLocalOrSandbox = (text, fallbackMs = 380, fallbackHz = 523.25) => {
+            if (upstreamMode === 'speech_service' && localTtsHandle) {
+                localTtsHandle.speak(text);
+                return;
+            }
+            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, fallbackMs, fallbackHz));
+            setTimeout(() => {
+                if (!closed)
+                    sendClientJson({ type: 'agent_state', state: 'listening' });
+            }, Math.min(300, fallbackMs));
         };
         let sandboxMedicareConfirmed = false;
         const handleSandboxUtterance = (userText) => {
@@ -624,11 +638,7 @@ function attachLiveSimulator(server, noServer = false) {
                     }
                     sendClientJson({ type: 'agent_state', state: 'speaking' });
                     recordTranscript('assistant', reply);
-                    sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 440, 523.25));
-                    setTimeout(() => {
-                        if (!closed)
-                            sendClientJson({ type: 'agent_state', state: 'listening' });
-                    }, 300);
+                    speakLocalOrSandbox(reply, 440, 523.25);
                 }, 95);
             }, 45);
         };
@@ -655,6 +665,16 @@ function attachLiveSimulator(server, noServer = false) {
                     dgWs.close(1000, 'Call ended');
                 }
                 catch { }
+            }
+            if (localSttWs && (localSttWs.readyState === ws_1.default.OPEN || localSttWs.readyState === ws_1.default.CONNECTING)) {
+                try {
+                    localSttWs.close(1000, 'Call ended');
+                }
+                catch { }
+            }
+            if (localTtsHandle) {
+                localTtsHandle.close();
+                localTtsHandle = null;
             }
             const endedAtIso = new Date().toISOString();
             const durationMs = Math.max(1, Date.now() - startedAtMs);
@@ -711,6 +731,12 @@ function attachLiveSimulator(server, noServer = false) {
                 const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
                 txAudioBytes += buf.length;
                 lastBrowserAudioAt = Date.now();
+                if (upstreamMode === 'speech_service') {
+                    if (localSttWs && localSttWs.readyState === ws_1.default.OPEN) {
+                        localSttWs.send(buf, { binary: true });
+                    }
+                    return;
+                }
                 if (upstreamMode === 'sandbox') {
                     if (buf.length >= 4) {
                         let sumSq = 0;
@@ -762,6 +788,8 @@ function attachLiveSimulator(server, noServer = false) {
             if (msg.type === 'client_barge_in') {
                 if (activeAgent?.behavior?.bargeIn !== 'off') {
                     suppressStaleAgentAudio = true;
+                    if (localTtsHandle)
+                        localTtsHandle.bargeInCancel();
                     sendClientJson({ type: 'barge_in', source: 'client_vad' });
                     sendClientJson({ type: 'agent_state', state: 'user_speaking' });
                 }
@@ -772,14 +800,10 @@ function attachLiveSimulator(server, noServer = false) {
                 if (!content)
                     return;
                 suppressStaleAgentAudio = false;
-                if (upstreamMode === 'sandbox') {
+                if (upstreamMode === 'sandbox' || upstreamMode === 'speech_service') {
                     sendClientJson({ type: 'agent_state', state: 'speaking' });
                     recordTranscript('assistant', content);
-                    sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 320, 523.25));
-                    setTimeout(() => {
-                        if (!closed)
-                            sendClientJson({ type: 'agent_state', state: 'listening' });
-                    }, 260);
+                    speakLocalOrSandbox(content, 320, 523.25);
                     return;
                 }
                 if (dgWs && dgWs.readyState === ws_1.default.OPEN && settingsApplied) {
@@ -792,7 +816,9 @@ function attachLiveSimulator(server, noServer = false) {
                 if (!content)
                     return;
                 suppressStaleAgentAudio = false;
-                if (upstreamMode === 'sandbox') {
+                if (upstreamMode === 'sandbox' || upstreamMode === 'speech_service') {
+                    if (localTtsHandle)
+                        localTtsHandle.bargeInCancel();
                     handleSandboxUtterance(content);
                     return;
                 }
@@ -856,9 +882,75 @@ function attachLiveSimulator(server, noServer = false) {
                 const hydration = hydrateLeadIntoPromptAndGreeting(rawSettings, activeAgent, activeCampaign, startMsg.lead || {});
                 hydrateLeadIntoPromptAndGreeting(displaySettings, activeAgent, activeCampaign, startMsg.lead || {});
                 const wireSettings = interpolateEnvPlaceholders(rawSettings);
-                const requestedMode = startMsg.upstreamMode || 'deepgram';
+                const activeSttProv = activeState.providers.find((p) => p.kind === 'stt' && p.id === activeState.services?.stt?.providerId);
+                const activeTtsProv = activeState.providers.find((p) => p.kind === 'tts' && p.id === activeState.services?.tts?.providerId);
+                const usesLocalSpeechService = activeSttProv?.type === 'speech_service' || activeTtsProv?.type === 'speech_service';
+                const requestedMode = startMsg.upstreamMode || (usesLocalSpeechService ? 'speech_service' : 'deepgram');
                 const customAgentUrl = (process.env.DEEPGRAM_AGENT_URL || '').trim();
                 const dgApiKey = (0, env_store_1.getSecret)('DEEPGRAM_API_KEY');
+                if (requestedMode === 'speech_service') {
+                    upstreamMode = 'speech_service';
+                    settingsApplied = true;
+                    const activeVoice = String(activeState.services?.tts?.model || 'af_heart');
+                    localTtsHandle = (0, speech_service_client_1.openSpeechServiceTtsStream)({
+                        voice: activeVoice,
+                        speed: Number(activeAgent.tts?.speed || 1.0),
+                        format: 'pcm',
+                        sampleRate: sampleRateOut,
+                        onAudioChunk: (chunk) => {
+                            if (!suppressStaleAgentAudio)
+                                sendClientAudio(chunk);
+                        },
+                        onDone: () => {
+                            if (!closed)
+                                sendClientJson({ type: 'agent_state', state: 'listening' });
+                        },
+                        onError: (err) => {
+                            sendClientJson({ type: 'warning', message: `Local Speech TTS: ${err}` });
+                        },
+                    });
+                    localSttWs = (0, speech_service_client_1.openSpeechServiceSttStream)({
+                        sampleRate: (sampleRateIn === 8000 ? 8000 : 16000),
+                        encoding: 'pcm',
+                        language: (activeAgent.language || 'en').split(',')[0].trim() || 'en',
+                        endpointMs: 500,
+                        onPartial: (partialText) => {
+                            if (activeAgent?.behavior?.bargeIn !== 'off' && localTtsHandle) {
+                                localTtsHandle.bargeInCancel();
+                            }
+                            sendClientJson({ type: 'partial_transcript', role: 'user', content: partialText });
+                        },
+                        onFinal: (finalText) => {
+                            suppressStaleAgentAudio = false;
+                            handleSandboxUtterance(finalText);
+                        },
+                        onError: (err) => {
+                            sendClientJson({ type: 'warning', message: `Local Speech STT: ${err}` });
+                        },
+                    });
+                    sendClientJson({
+                        type: 'session_started',
+                        callId,
+                        upstreamMode: 'speech_service',
+                        targetUrl: (0, speech_service_client_1.getSpeechServiceBaseUrl)(),
+                        sampleRateIn,
+                        sampleRateOut,
+                        hydratedLead: hydration.hydrated ? hydration.leadSummary : null,
+                        settings: displaySettings,
+                    });
+                    if (hydration.hydrated) {
+                        recordTranscript('system', `Bridge hydrated VICIdial lead #${hydration.leadSummary.lead_id} (${hydration.leadSummary.first_name}, ${hydration.leadSummary.state}, age ${hydration.leadSummary.age})`);
+                    }
+                    if (displaySettings.agent.greeting) {
+                        sendClientJson({ type: 'agent_state', state: 'speaking' });
+                        recordTranscript('assistant', displaySettings.agent.greeting);
+                        localTtsHandle.speak(displaySettings.agent.greeting, 'greeting');
+                    }
+                    else {
+                        sendClientJson({ type: 'agent_state', state: 'listening' });
+                    }
+                    return;
+                }
                 if (requestedMode === 'sandbox') {
                     upstreamMode = 'sandbox';
                     settingsApplied = true;

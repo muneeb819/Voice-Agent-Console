@@ -1,0 +1,7 @@
+{$SPEECH_DOMAIN:localhost} {
+	@internal path /metrics /readyz
+	respond @internal 403
+	reverse_proxy api:8000 {
+		flush_interval -1
+	}
+}

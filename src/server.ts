@@ -81,6 +81,11 @@ import {
   startPublicDemoTunnel,
   stopPublicDemoTunnel,
 } from './demo-tunnel';
+import {
+  getSpeechServiceBaseUrl,
+  runSpeechServiceRoundTripSmoke,
+  verifySpeechServiceConnection,
+} from './speech-service-client';
 
 loadEnv();
 
@@ -334,7 +339,10 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     const hasPipelineModels = Boolean(
       state.services?.stt?.model && state.services?.llm?.model && state.services?.tts?.model
     );
-    const pipelineScore = hasPipelineModels ? (dgConfigured ? 100 : 92) : 55;
+    const activeSttProv = state.providers.find((p) => p.kind === 'stt' && p.id === state.services?.stt?.providerId);
+    const activeTtsProv = state.providers.find((p) => p.kind === 'tts' && p.id === state.services?.tts?.providerId);
+    const localSpeechActive = activeSttProv?.type === 'speech_service' && activeTtsProv?.type === 'speech_service';
+    const pipelineScore = hasPipelineModels ? (dgConfigured || localSpeechActive ? 100 : 92) : 55;
     const bridgeScore =
       bridgeStatus?.audioSocketListening && bridgeStatus?.sipRtpListening
         ? 100
@@ -377,7 +385,16 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         checks: { passed: okChecks, warnings: wnChecks, errors: erChecks, total: validations.length },
         pillars: [
           { id: 'preflight', label: 'Pre-Flight Schema Audit', score: preflightScore, detail: `${okChecks}/${validations.length} checks` },
-          { id: 'pipeline', label: 'Deepgram Neural Pipeline', score: pipelineScore, detail: dgConfigured ? 'Live API Key Ready' : 'Models Synced' },
+          {
+            id: 'pipeline',
+            label: 'Neural Speech Pipeline',
+            score: pipelineScore,
+            detail: localSpeechActive
+              ? 'Local Whisper + Kokoro Active'
+              : dgConfigured
+                ? 'Live API Key Ready'
+                : 'Models Synced',
+          },
           { id: 'bridge', label: 'VICIdial Dual Bridge', score: bridgeScore, detail: bridgeStatus?.audioSocketListening ? `TCP :${bridgeStatus.audioSocketPort} · UDP :${bridgeStatus.sipPort}` : 'Standby' },
           { id: 'security', label: 'Auth Gate & IP Shield', score: securityScore, detail: 'SignUp Gate + 115.186.137.240' },
           { id: 'storage', label: 'SQLite WAL + JSON Mirror', score: storageScore, detail: `${revs.length} revisions` },
@@ -983,6 +1000,117 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         ok: false,
         code: err?.code || 'TTS_PREVIEW_FAILED',
         error: err?.message || 'Failed to synthesize TTS preview',
+      });
+    }
+  });
+
+  // ==================== LOCAL SPEECH SERVICE (1-CLICK STT + TTS) ====================
+
+  app.get('/api/speech-service/status', async (req: Request, res: Response) => {
+    try {
+      const explicitUrl = typeof req.query.url === 'string' ? req.query.url : undefined;
+      const diagnostic = await verifySpeechServiceConnection(explicitUrl);
+      const state = getConsoleState();
+      const activeStt = state.providers.find((p) => p.kind === 'stt' && p.id === state.services?.stt?.providerId);
+      const activeTts = state.providers.find((p) => p.kind === 'tts' && p.id === state.services?.tts?.providerId);
+      res.json({
+        ok: diagnostic.ok,
+        activeInConsole: activeStt?.type === 'speech_service' && activeTts?.type === 'speech_service',
+        configuredUrl: getSpeechServiceBaseUrl(explicitUrl),
+        diagnostic,
+        secrets: getSecretsStatus(),
+      });
+    } catch (err: any) {
+      res.status(400).json({
+        ok: false,
+        error: err?.message || 'Failed to query Speech Service status',
+      });
+    }
+  });
+
+  app.post('/api/speech-service/test', async (req: Request, res: Response) => {
+    try {
+      const result = await runSpeechServiceRoundTripSmoke({
+        url: typeof req.body?.url === 'string' ? req.body.url : undefined,
+        apiKey: typeof req.body?.apiKey === 'string' ? req.body.apiKey : undefined,
+        voice: typeof req.body?.voice === 'string' ? req.body.voice : undefined,
+        text: typeof req.body?.text === 'string' ? req.body.text : undefined,
+      });
+      res.status(result.ok ? 200 : 400).json(result);
+    } catch (err: any) {
+      res.status(400).json({
+        ok: false,
+        error: err?.message || 'Speech Service round-trip test failed',
+      });
+    }
+  });
+
+  app.post('/api/speech-service/activate', async (req: Request, res: Response) => {
+    try {
+      const secretUpdates: Partial<Record<SecretKeyName, string>> = {};
+      if (typeof req.body?.url === 'string' && req.body.url.trim()) {
+        secretUpdates.SPEECH_SERVICE_URL = req.body.url.trim();
+      }
+      if (typeof req.body?.apiKey === 'string') {
+        secretUpdates.SPEECH_SERVICE_API_KEY = req.body.apiKey;
+      }
+      if (Object.keys(secretUpdates).length > 0) {
+        updateSecrets(secretUpdates);
+      }
+
+      const diagnostic = await verifySpeechServiceConnection();
+      if (!diagnostic.ok) {
+        res.status(400).json({
+          ok: false,
+          error: diagnostic.error || `Speech Service not ready at ${diagnostic.baseUrl}`,
+          diagnostic,
+          secrets: getSecretsStatus(),
+        });
+        return;
+      }
+
+      const state = getConsoleState();
+      const localStt = state.providers.find((p) => p.kind === 'stt' && p.type === 'speech_service');
+      const localTts = state.providers.find((p) => p.kind === 'tts' && p.type === 'speech_service');
+      if (!localStt || !localTts) {
+        res.status(500).json({ ok: false, error: 'Local Speech Service plug-in entries missing from state' });
+        return;
+      }
+
+      const cloneVoiceIds = diagnostic.clonedVoices.map((v) => `clone:${v.id}`);
+      const mergedVoices = Array.from(new Set([...diagnostic.stockVoices, ...cloneVoiceIds]));
+      if (mergedVoices.length > 0) {
+        localTts.models = mergedVoices.join(',');
+      }
+
+      const chosenSttModel =
+        typeof req.body?.sttModel === 'string' && req.body.sttModel.trim()
+          ? req.body.sttModel.trim()
+          : 'large-v3-turbo';
+      const chosenVoice =
+        typeof req.body?.voice === 'string' && req.body.voice.trim() ? req.body.voice.trim() : 'af_heart';
+
+      state.services.stt = { providerId: localStt.id, model: chosenSttModel };
+      state.services.tts = { providerId: localTts.id, model: chosenVoice };
+      if (!state.services.llm?.providerId || !state.services.llm?.model) {
+        const defaultLlm = state.providers.find((p) => p.kind === 'llm' && p.type === 'open_ai') || state.providers.find((p) => p.kind === 'llm');
+        if (defaultLlm) {
+          state.services.llm = { providerId: defaultLlm.id, model: 'gpt-4o-mini' };
+        }
+      }
+
+      const saved = saveConsoleState(state, `1-Click Activated Local Speech Service (${chosenSttModel} + ${chosenVoice})`);
+      res.json({
+        ok: true,
+        diagnostic,
+        revisionId: saved.revisionId,
+        changes: saved.changes,
+        ...buildPayload(saved.state),
+      });
+    } catch (err: any) {
+      res.status(400).json({
+        ok: false,
+        error: err?.message || 'Failed to activate Local Speech Service',
       });
     }
   });
