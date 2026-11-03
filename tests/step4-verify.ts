@@ -711,6 +711,36 @@ async function run() {
       res.writeHead(404);
       res.end();
     });
+    const mockSpeechWss = new WebSocketServer({ noServer: true });
+    mockSpeechSrv.on('upgrade', (req, socket, head) => {
+      const p = (req.url || '').split('?')[0];
+      if (p === '/v1/stream/tts' || p === '/v1/stream/stt') {
+        mockSpeechWss.handleUpgrade(req, socket, head, (ws) => {
+          if (p === '/v1/stream/stt') {
+            ws.once('message', () => {
+              ws.send(JSON.stringify({ type: 'ready', sample_rate: 16000, encoding: 'pcm' }));
+            });
+          } else {
+            ws.on('message', (raw) => {
+              try {
+                const m = JSON.parse(raw.toString());
+                if (m.type === 'config') {
+                  ws.send(JSON.stringify({ type: 'configured' }));
+                } else if (m.type === 'speak') {
+                  ws.send(JSON.stringify({ type: 'start', id: m.id, sample_rate: 24000, format: 'pcm' }));
+                  ws.send(Buffer.alloc(960, 7), { binary: true });
+                  ws.send(JSON.stringify({ type: 'done', id: m.id }));
+                } else if (m.type === 'cancel') {
+                  ws.send(JSON.stringify({ type: 'cancelled' }));
+                }
+              } catch {}
+            });
+          }
+        });
+      } else {
+        socket.destroy();
+      }
+    });
 
     const prevSsUrl = process.env.SPEECH_SERVICE_URL;
     const prevSsKey = process.env.SPEECH_SERVICE_API_KEY;
@@ -759,6 +789,104 @@ async function run() {
       assert(prevRes.status === 200, `Expected 200 from /api/tts/preview (speech_service), got ${prevRes.status}`);
       const prevWav = Buffer.from(await prevRes.arrayBuffer());
       assert(prevWav.subarray(0, 4).toString('ascii') === 'RIFF', 'Expected RIFF WAV from speech_service preview');
+      console.log(
+        '✓ [12/13] One-Click Local Speech Service Integration (/api/speech-service/test, /activate, Clone Sync & /api/tts/preview) verified'
+      );
+
+      // 13. Verify Cross-Site HTTPS Iframe Cookie (CHIPS), Cookie-Blocked Bearer/?vac_token/?token Auth, & Live WS Simulator speech_service Audio
+      const iframeLoginRes = await fetch(`${httpBase}/api/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Forwarded-Proto': 'https',
+        },
+        body: JSON.stringify({
+          email: 'muneeb@mmadigitallabs.com',
+          password: 'StrongUserPass#2026',
+        }),
+      });
+      assert(iframeLoginRes.status === 200, `Expected 200 on HTTPS iframe login, got ${iframeLoginRes.status}`);
+      const iframeSetCookie = iframeLoginRes.headers.get('set-cookie') || '';
+      assert(
+        iframeSetCookie.includes('SameSite=None') &&
+          iframeSetCookie.includes('Secure') &&
+          iframeSetCookie.includes('Partitioned'),
+        `Expected SameSite=None; Secure; Partitioned on HTTPS proxy login, got: ${iframeSetCookie}`
+      );
+      const iframeLoginJson = (await iframeLoginRes.json()) as any;
+      assert(
+        typeof iframeLoginJson.token === 'string' && iframeLoginJson.token.length > 16,
+        'Expected session token in /api/auth/login JSON response for cookie-blocked iframes'
+      );
+
+      // Zero-cookie document handoff (?vac_token=...) + Bearer API + ?token= WS Simulator streaming speech_service audio
+      const tokenOnlyRootRes = await fetch(
+        `${httpBase}/?vac_token=${encodeURIComponent(iframeLoginJson.token)}`,
+        { redirect: 'manual' }
+      );
+      assert(
+        tokenOnlyRootRes.status === 200,
+        `Expected 200 on cookie-less GET /?vac_token=..., got ${tokenOnlyRootRes.status}`
+      );
+      const bearerStateRes = await fetch(`${httpBase}/api/state`, {
+        headers: { Authorization: `Bearer ${iframeLoginJson.token}` },
+      });
+      assert(bearerStateRes.status === 200, `Expected 200 on Bearer /api/state, got ${bearerStateRes.status}`);
+
+      const simStreamCheck = await new Promise<{ startedMode: string; audioBytes: number; replyTranscript: boolean }>(
+        (resolve, reject) => {
+          const ws = new WebSocket(`${wsBase}/ws/simulator?token=${encodeURIComponent(iframeLoginJson.token)}`);
+          let startedMode = '';
+          let audioBytes = 0;
+          let replyTranscript = false;
+          let injected = false;
+          const timer = setTimeout(() => {
+            try { ws.close(); } catch {}
+            reject(new Error(`Simulator speech_service timeout (mode=${startedMode}, bytes=${audioBytes}, reply=${replyTranscript})`));
+          }, 5000);
+          ws.on('open', () => {
+            ws.send(JSON.stringify({ type: 'start', agentId: 'a_medicare', bandwidth: 'wideband' }));
+          });
+          ws.on('message', (data, isBinary) => {
+            if (isBinary) {
+              audioBytes += (data as Buffer).length;
+              if (!injected) {
+                injected = true;
+                ws.send(JSON.stringify({ type: 'inject_user_message', content: 'Are you a robot or a real human?' }));
+              } else if (replyTranscript && audioBytes >= 1920) {
+                clearTimeout(timer);
+                ws.close();
+                resolve({ startedMode, audioBytes, replyTranscript });
+              }
+              return;
+            }
+            const m = JSON.parse(data.toString());
+            if (m.type === 'session_started') {
+              startedMode = m.upstreamMode;
+            } else if (m.type === 'transcript' && m.role === 'assistant' && /not a robot/i.test(m.content || '')) {
+              replyTranscript = true;
+              if (audioBytes >= 1920) {
+                clearTimeout(timer);
+                ws.close();
+                resolve({ startedMode, audioBytes, replyTranscript });
+              }
+            }
+          });
+          ws.on('error', (err) => {
+            clearTimeout(timer);
+            reject(err);
+          });
+        }
+      );
+      assert(
+        simStreamCheck.startedMode === 'speech_service' &&
+          simStreamCheck.audioBytes >= 1920 &&
+          simStreamCheck.replyTranscript,
+        `Expected live speech_service WS call with >=1920 PCM bytes, got ${JSON.stringify(simStreamCheck)}`
+      );
+      console.log(
+        '✓ [13/13] Cross-Site HTTPS Iframe Auth (SameSite=None+Partitioned + Cookie-less Bearer/?vac_token) & Live speech_service WS Call verified'
+      );
     } finally {
       await fetch(`${httpBase}/api/state`, {
         method: 'PUT',
@@ -774,13 +902,13 @@ async function run() {
       else process.env.SPEECH_SERVICE_URL = prevSsUrl;
       if (prevSsKey === undefined) delete process.env.SPEECH_SERVICE_API_KEY;
       else process.env.SPEECH_SERVICE_API_KEY = prevSsKey;
+      mockSpeechWss.clients.forEach((c) => {
+        try { c.terminate(); } catch {}
+      });
       await new Promise<void>((resolve) => mockSpeechSrv.close(() => resolve()));
     }
-    console.log(
-      '✓ [12/12] One-Click Local Speech Service Integration (/api/speech-service/test, /activate, Clone Sync & /api/tts/preview) verified'
-    );
 
-    console.log('\nALL 12 STEP 4 CHECKS PASSED SUCCESSFULLY!');
+    console.log('\nALL 13 STEP 4 CHECKS PASSED SUCCESSFULLY!');
   } finally {
     if (prevAdminPass === undefined) delete process.env.ADMIN_PASSWORD;
     else process.env.ADMIN_PASSWORD = prevAdminPass;

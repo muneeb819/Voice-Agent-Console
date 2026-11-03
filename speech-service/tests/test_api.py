@@ -9,6 +9,11 @@ from tests.conftest import H, KEY, wav_bytes
 
 
 def test_health_and_ready(client):
+    root_json = client.get("/", headers={"Accept": "application/json", "Origin": "https://muneeb819.github.io"})
+    assert root_json.status_code == 200 and root_json.json()["service"] == "speech-service"
+    assert root_json.headers.get("access-control-allow-origin") == "*"
+    root_html = client.get("/", headers={"Accept": "text/html"})
+    assert root_html.status_code == 200 and "Self-Hosted Speech Service" in root_html.text
     assert client.get("/healthz").status_code == 200
     r = client.get("/readyz")
     assert r.status_code == 200 and r.json()["status"] == "ready"

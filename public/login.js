@@ -1,7 +1,87 @@
 /* MMA Digital Labs — Voice Agent Console
-   Sign in / Create account controller. No secrets are stored client-side. */
+   Sign in / Create account controller (Node Backend + Iframe CHIPS/Bearer Handoff + Static Cloud Mode). */
 (function () {
   'use strict';
+
+  var AUTH_TOKEN_KEY = 'vac_auth_token';
+  var CLOUD_USERS_KEY = 'vac_cloud_users_v1';
+  var CLOUD_SESSION_KEY = 'vac_cloud_session_v1';
+
+  var rawPath = String(location.pathname || '/');
+  var isStaticHtmlPath = /\.html$/i.test(rawPath);
+  var basePrefix = rawPath.replace(/\/(login(?:\.html)?|signup(?:\.html)?)$/i, '');
+  if (basePrefix === '/') basePrefix = '';
+
+  function apiPath(rel) {
+    return (basePrefix || '') + rel;
+  }
+
+  function saveAuthToken(token) {
+    if (!token) return;
+    try { sessionStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e) {}
+    try { localStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e) {}
+  }
+
+  function readAuthToken() {
+    try {
+      return sessionStorage.getItem(AUTH_TOKEN_KEY) || localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function clearAuthToken() {
+    try { sessionStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
+    try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
+  }
+
+  async function sha256Hex(input) {
+    if (window.crypto && window.crypto.subtle && window.TextEncoder) {
+      var bytes = new TextEncoder().encode(input);
+      var digest = await window.crypto.subtle.digest('SHA-256', bytes);
+      return Array.prototype.map.call(new Uint8Array(digest), function (b) {
+        return ('00' + b.toString(16)).slice(-2);
+      }).join('');
+    }
+    // Deterministic fallback hash if non-secure context lacks WebCrypto
+    var h = 2166136261;
+    for (var i = 0; i < input.length; i++) {
+      h ^= input.charCodeAt(i);
+      h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(16);
+  }
+
+  function readCloudUsers() {
+    try {
+      var parsed = JSON.parse(localStorage.getItem(CLOUD_USERS_KEY) || '[]');
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function writeCloudUsers(users) {
+    try { localStorage.setItem(CLOUD_USERS_KEY, JSON.stringify(users)); } catch (e) {}
+  }
+
+  function writeCloudSession(user) {
+    try {
+      localStorage.setItem(CLOUD_SESSION_KEY, JSON.stringify({
+        user: user,
+        signedInAt: new Date().toISOString()
+      }));
+    } catch (e) {}
+  }
+
+  function readCloudSession() {
+    try {
+      var parsed = JSON.parse(localStorage.getItem(CLOUD_SESSION_KEY) || 'null');
+      return parsed && parsed.user ? parsed : null;
+    } catch (e) {
+      return null;
+    }
+  }
 
   try {
     var savedApp = JSON.parse(localStorage.getItem('vac_appearance_v2') || localStorage.getItem('vac_appearance_v1') || '{}');
@@ -111,10 +191,16 @@
     var first = panes[mode].querySelector('input');
     if (first && window.matchMedia('(min-width: 720px)').matches) first.focus();
     try {
-      // Keep ?next= so a deep link survives a tab switch.
       var nextParam = new URLSearchParams(location.search).get('next');
-      var suffix = nextParam ? '?next=' + encodeURIComponent(nextParam) : '';
-      history.replaceState(null, '', (mode === 'signup' ? '/signup' : '/login') + suffix);
+      if (isStaticHtmlPath) {
+        var qsParts = [];
+        if (mode === 'signup') qsParts.push('mode=signup');
+        if (nextParam) qsParts.push('next=' + encodeURIComponent(nextParam));
+        history.replaceState(null, '', location.pathname + (qsParts.length ? '?' + qsParts.join('&') : ''));
+      } else {
+        var suffix = nextParam ? '?next=' + encodeURIComponent(nextParam) : '';
+        history.replaceState(null, '', apiPath(mode === 'signup' ? '/signup' : '/login') + suffix);
+      }
     } catch (e) { /* ignore */ }
   }
 
@@ -160,7 +246,6 @@
     if (loaderText) loaderText.textContent = text || 'CONNECTING TO MODEL...';
     if (progressBar) progressBar.style.width = '0%';
     loader.hidden = false;
-    // Animate to 80%, then hold until the request resolves.
     window.setTimeout(function () { if (progressBar) progressBar.style.width = '80%'; }, 40);
   }
 
@@ -181,21 +266,38 @@
     else input.removeAttribute('aria-invalid');
   }
 
-  async function postJson(url, body) {
-    var res = await fetch(url, {
+  async function postJson(relUrl, body) {
+    var headers = { 'Content-Type': 'application/json' };
+    var existingTok = readAuthToken();
+    if (existingTok) headers['Authorization'] = 'Bearer ' + existingTok;
+    var res = await fetch(apiPath(relUrl), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: headers,
       credentials: 'same-origin',
       body: JSON.stringify(body)
     });
+    var ct = String(res.headers.get('content-type') || '').toLowerCase();
+    var isJson = ct.indexOf('application/json') !== -1;
     var data = {};
-    try { data = await res.json(); } catch (e) { /* ignore */ }
-    return { res: res, data: data };
+    if (isJson) {
+      try { data = await res.json(); } catch (e) { /* ignore */ }
+    }
+    return {
+      res: res,
+      data: data,
+      isStaticHost: res.status === 404 || res.status === 405 || !isJson
+    };
   }
 
-  function goHome() {
+  function goHome(handoffToken) {
     var next = new URLSearchParams(location.search).get('next');
-    var target = next && next.charAt(0) === '/' && next.charAt(1) !== '/' ? next : '/';
+    var defaultHome = (basePrefix || '') + '/';
+    var target = next && next.charAt(0) === '/' && next.charAt(1) !== '/' ? next : defaultHome;
+    if (handoffToken) {
+      saveAuthToken(handoffToken);
+      var sep = target.indexOf('?') === -1 ? '?' : '&';
+      target = target + sep + 'vac_token=' + encodeURIComponent(handoffToken);
+    }
     location.replace(target);
   }
 
@@ -232,6 +334,35 @@
     showLoader('AUTHENTICATING...');
     try {
       var out = await postJson('/api/auth/login', { email: emailVal, password: pwVal });
+      if (out.isStaticHost) {
+        // Static Cloud Mode (GitHub Pages / Static CDN)
+        var users = readCloudUsers();
+        var emailLower = emailVal.toLowerCase();
+        var matched = null;
+        for (var i = 0; i < users.length; i++) {
+          if (users[i].email === emailLower) { matched = users[i]; break; }
+        }
+        if (!matched) {
+          finishLoader();
+          setMsg(msg, 'No account found for this email in this browser yet — click "Create Account" above to register.');
+          markInvalid(email, true);
+          return;
+        }
+        var checkHash = await sha256Hex(matched.salt + ':' + pwVal);
+        if (checkHash !== matched.passwordHash) {
+          finishLoader();
+          setMsg(msg, 'Invalid email or password.');
+          markInvalid(password, true);
+          password.select();
+          return;
+        }
+        writeCloudSession({ id: matched.id, fullName: matched.fullName, email: matched.email });
+        if (progressBar) progressBar.style.width = '100%';
+        if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
+        window.setTimeout(function () { goHome(''); }, 320);
+        return;
+      }
+
       if (!out.res.ok || !out.data.ok) {
         finishLoader();
         setMsg(msg, out.data.error || 'Sign in failed.');
@@ -239,9 +370,10 @@
         password.select();
         return;
       }
+      if (out.data.token) saveAuthToken(out.data.token);
       if (progressBar) progressBar.style.width = '100%';
       if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
-      window.setTimeout(goHome, 380);
+      window.setTimeout(function () { goHome(out.data.token || ''); }, 320);
     } catch (err) {
       finishLoader();
       setMsg(msg, 'Network error. Check your connection and try again.');
@@ -284,9 +416,10 @@
           input.select();
           return;
         }
+        if (out.data.token) saveAuthToken(out.data.token);
         if (progressBar) progressBar.style.width = '100%';
         if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
-        window.setTimeout(goHome, 380);
+        window.setTimeout(function () { goHome(out.data.token || ''); }, 320);
       } catch (err) {
         finishLoader();
         setMsg(msg, 'Network error. Check your connection and try again.');
@@ -331,6 +464,38 @@
         email: emailVal,
         password: pwVal
       });
+      if (out.isStaticHost) {
+        // Static Cloud Mode (GitHub Pages / Static CDN)
+        var users = readCloudUsers();
+        var emailLower = emailVal.toLowerCase();
+        for (var i = 0; i < users.length; i++) {
+          if (users[i].email === emailLower) {
+            finishLoader();
+            setMsg(msg, 'An account with this email already exists — switch to Sign In above.');
+            markInvalid(email, true);
+            email.focus();
+            return;
+          }
+        }
+        var salt = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        var pwHash = await sha256Hex(salt + ':' + pwVal);
+        var newUser = {
+          id: 'usr_' + Date.now().toString(36),
+          fullName: nameVal,
+          email: emailLower,
+          salt: salt,
+          passwordHash: pwHash,
+          createdAt: new Date().toISOString()
+        };
+        users.push(newUser);
+        writeCloudUsers(users);
+        writeCloudSession({ id: newUser.id, fullName: newUser.fullName, email: newUser.email });
+        if (progressBar) progressBar.style.width = '100%';
+        if (loaderText) loaderText.textContent = 'ACCOUNT READY';
+        window.setTimeout(function () { goHome(''); }, 360);
+        return;
+      }
+
       if (!out.res.ok || !out.data.ok) {
         finishLoader();
         setMsg(msg, out.data.error || 'Could not create the account.');
@@ -340,9 +505,10 @@
         if (field === 'password') { markInvalid(password, true); password.focus(); }
         return;
       }
+      if (out.data.token) saveAuthToken(out.data.token);
       if (progressBar) progressBar.style.width = '100%';
       if (loaderText) loaderText.textContent = 'ACCOUNT READY';
-      window.setTimeout(goHome, 420);
+      window.setTimeout(function () { goHome(out.data.token || ''); }, 360);
     } catch (err) {
       finishLoader();
       setMsg(msg, 'Network error. Check your connection and try again.');
@@ -353,19 +519,44 @@
 
   // ------------------------------------------------------------ entry point
   (async function init() {
-    if (location.pathname === '/signup') setMode('signup');
+    var modeParam = new URLSearchParams(location.search).get('mode');
+    if (/\/signup(?:\.html)?$/i.test(rawPath) || modeParam === 'signup') {
+      setMode('signup');
+    }
     try {
-      var res = await fetch('/api/auth/status', { credentials: 'same-origin' });
-      if (res.ok) {
+      var headers = {};
+      var savedTok = readAuthToken();
+      if (savedTok) headers['Authorization'] = 'Bearer ' + savedTok;
+      var res = await fetch(apiPath('/api/auth/status'), {
+        headers: headers,
+        credentials: 'same-origin'
+      });
+      var ct = String(res.headers.get('content-type') || '').toLowerCase();
+      if (res.ok && ct.indexOf('application/json') !== -1) {
         var data = await res.json();
-        if (data.authenticated) { goHome(); return; }
+        if (data.authenticated) { goHome(savedTok); return; }
+        if (savedTok) clearAuthToken();
         if (adminToggle && data.adminPasswordConfigured === false) {
           adminToggle.style.display = 'none';
         }
-        if (data.hasUsers === false && location.pathname !== '/login') {
+        if (data.hasUsers === false && !/\/login$/i.test(rawPath)) {
           setMode('signup');
         }
+        return;
       }
-    } catch (e) { /* offline: leave the form usable */ }
+      // Static Cloud Mode (GitHub Pages)
+      if (adminToggle) adminToggle.style.display = 'none';
+      var cloudSess = readCloudSession();
+      if (cloudSess && cloudSess.user) {
+        goHome('');
+        return;
+      }
+      if (readCloudUsers().length === 0 && modeParam !== 'signin') {
+        setMode('signup');
+      }
+    } catch (e) {
+      if (adminToggle) adminToggle.style.display = 'none';
+      if (readCloudUsers().length === 0) setMode('signup');
+    }
   })();
 })();

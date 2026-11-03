@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     backend: str = "real"  # real | fake (fake = CPU test doubles, never use in production)
     data_dir: Path = Path("/data")
     log_level: str = "INFO"
-    cors_origins: str = ""  # comma separated; empty = CORS disabled
+    cors_origins: str = "*"  # comma separated; "*" enables browser CORS; empty disables CORS
 
     # --- auth / limits ---
     api_keys: str = ""  # "name:secret,name2:secret2" or bare secrets

@@ -63,11 +63,13 @@ function createApp(viciBridge) {
         });
     }
     // ==================== STEP 4: AUTHENTICATION ROUTES & GUARD ====================
-    const rateKey = (req) => {
+    const rateKey = (req, subKey = '') => {
         const cfIp = String(req.headers['cf-connecting-ip'] || '').trim();
-        if (cfIp)
-            return cfIp;
-        return String(req.socket?.remoteAddress || req.ip || 'unknown');
+        const xff = String(req.headers['x-forwarded-for'] || '')
+            .split(',')[0]
+            .trim();
+        const baseIp = cfIp || xff || String(req.socket?.remoteAddress || req.ip || 'unknown');
+        return subKey ? `${baseIp}:${subKey}` : baseIp;
     };
     const rateLimited = (key, bucket = loginAttempts, limit = loginAttemptLimit) => {
         const now = Date.now();
@@ -143,24 +145,25 @@ function createApp(viciBridge) {
         (0, auth_guard_1.invalidateUserCountCache)();
         (0, user_store_1.purgeExpiredSessions)();
         const token = (0, user_store_1.createUserSession)(result.user.id);
-        (0, auth_guard_1.setAuthCookie)(res, token);
+        (0, auth_guard_1.setAuthCookie)(res, token, req);
         res.status(201).json({
             ok: true,
             authEnabled: true,
             authenticated: true,
             user: result.user,
+            token,
         });
     });
     app.post('/api/auth/login', (req, res) => {
-        const key = rateKey(req);
+        const email = String(req.body?.email ?? '').trim();
+        const candidate = String(req.body?.password ?? '');
+        const key = rateKey(req, email ? email.toLowerCase() : 'admin');
         const gate = rateLimited(key);
         if (gate.limited) {
             res.setHeader('Retry-After', String(gate.retryAfter));
             res.status(429).json({ ok: false, code: 'LOGIN_RATE_LIMITED', error: 'Too many failed sign-in attempts. Try again later.' });
             return;
         }
-        const email = String(req.body?.email ?? '').trim();
-        const candidate = String(req.body?.password ?? '');
         // --- Email/password account sign-in ---
         if (email) {
             const user = (0, user_store_1.authenticateUser)(email, candidate);
@@ -171,8 +174,8 @@ function createApp(viciBridge) {
             }
             loginAttempts.delete(key);
             const token = (0, user_store_1.createUserSession)(user.id);
-            (0, auth_guard_1.setAuthCookie)(res, token);
-            res.json({ ok: true, authEnabled: true, authenticated: true, user });
+            (0, auth_guard_1.setAuthCookie)(res, token, req);
+            res.json({ ok: true, authEnabled: true, authenticated: true, user, token });
             return;
         }
         // --- Legacy admin password sign-in ---
@@ -191,12 +194,12 @@ function createApp(viciBridge) {
         }
         loginAttempts.delete(key);
         const token = (0, auth_guard_1.createSessionToken)();
-        (0, auth_guard_1.setAuthCookie)(res, token);
+        (0, auth_guard_1.setAuthCookie)(res, token, req);
         res.json({ ok: true, authEnabled: true, authenticated: true, token });
     });
     app.post('/api/auth/logout', (req, res) => {
         (0, user_store_1.destroyUserSession)((0, auth_guard_1.getRequestSessionToken)(req));
-        (0, auth_guard_1.clearAuthCookie)(res);
+        (0, auth_guard_1.clearAuthCookie)(res, req);
         res.json({ ok: true, authEnabled: true, authenticated: false });
     });
     app.use('/api', auth_guard_1.apiAuthMiddleware);
@@ -974,6 +977,7 @@ function createApp(viciBridge) {
         res.sendFile(path_1.default.join(publicDir, 'login.html'));
     };
     app.get('/login', serveAuthShell);
+    app.get('/login.html', serveAuthShell);
     app.get('/signup', serveAuthShell);
     // Gate the web console entry point so Sign Up / Sign In is always the very first page
     const serveConsoleEntry = (req, res) => {

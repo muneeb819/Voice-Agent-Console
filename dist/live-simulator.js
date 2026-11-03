@@ -324,8 +324,9 @@ function attachLiveSimulator(server, noServer = false) {
                 dgWs.send(JSON.stringify(fnResp));
             }
         };
+        let localTtsFailed = false;
         const speakLocalOrSandbox = (text, fallbackMs = 380, fallbackHz = 523.25) => {
-            if (upstreamMode === 'speech_service' && localTtsHandle) {
+            if (upstreamMode === 'speech_service' && localTtsHandle && !localTtsFailed) {
                 localTtsHandle.speak(text);
                 return;
             }
@@ -376,7 +377,7 @@ function attachLiveSimulator(server, noServer = false) {
                             const langReply = 'Apologies, have a great day.';
                             sendClientJson({ type: 'agent_state', state: 'speaking' });
                             recordTranscript('assistant', langReply);
-                            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 280, 392));
+                            speakLocalOrSandbox(langReply, 280, 392);
                             if (enabledFnNames.includes('end_call')) {
                                 executeClientFunction({
                                     id: `fc_sbx_${Date.now()}_end`,
@@ -385,7 +386,6 @@ function attachLiveSimulator(server, noServer = false) {
                                     client_side: true,
                                 });
                             }
-                            sendClientJson({ type: 'agent_state', state: 'listening' });
                             return;
                         }
                         // Scenario B: Hostility / Do-Not-Call Resistance
@@ -401,7 +401,7 @@ function attachLiveSimulator(server, noServer = false) {
                             const dncReply = 'I completely understand, and I apologize for the intrusion. I will remove your number from our active outreach list immediately. Have a great day.';
                             sendClientJson({ type: 'agent_state', state: 'speaking' });
                             recordTranscript('assistant', dncReply);
-                            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 360, 392));
+                            speakLocalOrSandbox(dncReply, 360, 392);
                             if (enabledFnNames.includes('end_call')) {
                                 executeClientFunction({
                                     id: `fc_sbx_${Date.now()}_end`,
@@ -410,7 +410,6 @@ function attachLiveSimulator(server, noServer = false) {
                                     client_side: true,
                                 });
                             }
-                            sendClientJson({ type: 'agent_state', state: 'listening' });
                             return;
                         }
                         // Human Persona check ("Are you a robot / AI?")
@@ -418,11 +417,7 @@ function attachLiveSimulator(server, noServer = false) {
                             const humanReply = "Yes, I'm a human, not a robot! I'm strictly tied to my profession, that's why I might sound a little bit robotic—but I'm a human!";
                             sendClientJson({ type: 'agent_state', state: 'speaking' });
                             recordTranscript('assistant', humanReply);
-                            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 380, 523.25));
-                            setTimeout(() => {
-                                if (!closed)
-                                    sendClientJson({ type: 'agent_state', state: 'listening' });
-                            }, 260);
+                            speakLocalOrSandbox(humanReply, 380, 523.25);
                             return;
                         }
                         // Scenario C: Skepticism / "Is this a scam?"
@@ -430,11 +425,7 @@ function attachLiveSimulator(server, noServer = false) {
                             const scamReply = "I understand your caution! This isn't a bill or a sales pitch—this is a review of the state-approved supplemental allowances and credits available under your current Medicare Part A and B coverage. It takes less than a minute to verify if your zip code is approved. Do you currently have Medicare Part A and B?";
                             sendClientJson({ type: 'agent_state', state: 'speaking' });
                             recordTranscript('assistant', scamReply);
-                            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 440, 493.88));
-                            setTimeout(() => {
-                                if (!closed)
-                                    sendClientJson({ type: 'agent_state', state: 'listening' });
-                            }, 300);
+                            speakLocalOrSandbox(scamReply, 440, 493.88);
                             return;
                         }
                         // Explicit No Medicare
@@ -450,7 +441,7 @@ function attachLiveSimulator(server, noServer = false) {
                             const dqReply = 'Thank you for letting me know! Right now this state allowance release requires active Medicare Part A or B, so we cannot release the card today. Have a wonderful rest of your day!';
                             sendClientJson({ type: 'agent_state', state: 'speaking' });
                             recordTranscript('assistant', dqReply);
-                            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 360, 392));
+                            speakLocalOrSandbox(dqReply, 360, 392);
                             if (enabledFnNames.includes('end_call')) {
                                 executeClientFunction({
                                     id: `fc_sbx_${Date.now()}_end`,
@@ -459,7 +450,6 @@ function attachLiveSimulator(server, noServer = false) {
                                     client_side: true,
                                 });
                             }
-                            sendClientJson({ type: 'agent_state', state: 'listening' });
                             return;
                         }
                         if (/(yes|yeah|i think so|part a|part b|both|i have medicare)/i.test(lower)) {
@@ -483,7 +473,7 @@ function attachLiveSimulator(server, noServer = false) {
                                 const ageDqReply = 'Thank you for confirming! Right now this state allowance update is strictly for beneficiaries between ages 65 and 85, so we cannot activate the card today. Have a wonderful day!';
                                 sendClientJson({ type: 'agent_state', state: 'speaking' });
                                 recordTranscript('assistant', ageDqReply);
-                                sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 360, 392));
+                                speakLocalOrSandbox(ageDqReply, 360, 392);
                                 if (enabledFnNames.includes('end_call')) {
                                     executeClientFunction({
                                         id: `fc_sbx_${Date.now()}_end`,
@@ -492,7 +482,6 @@ function attachLiveSimulator(server, noServer = false) {
                                         client_side: true,
                                     });
                                 }
-                                sendClientJson({ type: 'agent_state', state: 'listening' });
                                 return;
                             }
                             // Age is strictly 65-85!
@@ -525,11 +514,7 @@ function attachLiveSimulator(server, noServer = false) {
                             const xferReply = 'All right, everything looks good on my end. Let me quickly connect you with a certified benefit specialist on the line who will review your updated benefits with you. Just hold for one moment, here you go!';
                             sendClientJson({ type: 'agent_state', state: 'speaking' });
                             recordTranscript('assistant', xferReply);
-                            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 440, 523.25));
-                            setTimeout(() => {
-                                if (!closed)
-                                    sendClientJson({ type: 'agent_state', state: 'listening' });
-                            }, 300);
+                            speakLocalOrSandbox(xferReply, 440, 523.25);
                             return;
                         }
                         const phase2Reply = sandboxMedicareConfirmed
@@ -537,11 +522,7 @@ function attachLiveSimulator(server, noServer = false) {
                             : 'To release your Food and OTC card immediately, could you confirm if you currently have Medicare Part A or Part B?';
                         sendClientJson({ type: 'agent_state', state: 'speaking' });
                         recordTranscript('assistant', phase2Reply);
-                        sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 420, 466.16));
-                        setTimeout(() => {
-                            if (!closed)
-                                sendClientJson({ type: 'agent_state', state: 'listening' });
-                        }, 300);
+                        speakLocalOrSandbox(phase2Reply, 420, 466.16);
                         return;
                     }
                     let reply = "That's great to hear! Just to confirm before I bring on our licensed specialist, are you between 50 and 85 and looking for coverage options today?";
@@ -550,11 +531,7 @@ function attachLiveSimulator(server, noServer = false) {
                             "Yes, I'm a human, not a robot! I'm strictly tied to my profession, that's why I might sound a little bit robotic—but I'm a human!";
                         sendClientJson({ type: 'agent_state', state: 'speaking' });
                         recordTranscript('assistant', reply);
-                        sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 380, 523.25));
-                        setTimeout(() => {
-                            if (!closed)
-                                sendClientJson({ type: 'agent_state', state: 'listening' });
-                        }, 260);
+                        speakLocalOrSandbox(reply, 380, 523.25);
                         return;
                     }
                     if (/(introduce yourself|who are you|what is your name|what's your name|what can you do)/i.test(lower)) {
@@ -563,11 +540,7 @@ function attachLiveSimulator(server, noServer = false) {
                                 `Hi there! I'm ${activeAgent?.name || 'Nova'}, your expressive, ultra-fast AI voice assistant. I can chat naturally with instant barge-in and answer any general or specialist questions you have!`;
                         sendClientJson({ type: 'agent_state', state: 'speaking' });
                         recordTranscript('assistant', reply);
-                        sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 360, 523.25));
-                        setTimeout(() => {
-                            if (!closed)
-                                sendClientJson({ type: 'agent_state', state: 'listening' });
-                        }, 260);
+                        speakLocalOrSandbox(reply, 360, 523.25);
                         return;
                     }
                     if (/(capital of|speed of light|sky blue|times|plus|weather|joke|how far|moon)/i.test(lower)) {
@@ -578,11 +551,7 @@ function attachLiveSimulator(server, noServer = false) {
                                 : "Great question! In live Deepgram mode I answer any general knowledge, science, or math question in under half a second — add your DEEPGRAM_API_KEY in API Keys to hear full live neural answers!";
                         sendClientJson({ type: 'agent_state', state: 'speaking' });
                         recordTranscript('assistant', reply);
-                        sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 340, 493.88));
-                        setTimeout(() => {
-                            if (!closed)
-                                sendClientJson({ type: 'agent_state', state: 'listening' });
-                        }, 260);
+                        speakLocalOrSandbox(reply, 340, 493.88);
                         return;
                     }
                     if (/(take me off|do not call|dnc|stop calling|not interested)/i.test(lower)) {
@@ -598,7 +567,7 @@ function attachLiveSimulator(server, noServer = false) {
                         reply = "I completely understand — I've updated our records so you won't be called again. Have a wonderful day, goodbye.";
                         sendClientJson({ type: 'agent_state', state: 'speaking' });
                         recordTranscript('assistant', reply);
-                        sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 360, 392));
+                        speakLocalOrSandbox(reply, 360, 392);
                         if (enabledFnNames.includes('end_call')) {
                             executeClientFunction({
                                 id: `fc_sbx_${Date.now()}_2`,
@@ -607,7 +576,6 @@ function attachLiveSimulator(server, noServer = false) {
                                 client_side: true,
                             });
                         }
-                        sendClientJson({ type: 'agent_state', state: 'listening' });
                         return;
                     }
                     if (/(how much|price|cost|dollar|quote amount)/i.test(lower)) {
@@ -906,7 +874,10 @@ function attachLiveSimulator(server, noServer = false) {
                                 sendClientJson({ type: 'agent_state', state: 'listening' });
                         },
                         onError: (err) => {
+                            localTtsFailed = true;
                             sendClientJson({ type: 'warning', message: `Local Speech TTS: ${err}` });
+                            if (!closed)
+                                sendClientJson({ type: 'agent_state', state: 'listening' });
                         },
                     });
                     localSttWs = (0, speech_service_client_1.openSpeechServiceSttStream)({

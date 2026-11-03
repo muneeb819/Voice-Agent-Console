@@ -200,9 +200,19 @@ async function runSpeechServiceRoundTripSmoke(opts) {
         return out;
     }
 }
+function normalizeSpeechServiceVoice(raw) {
+    const v = String(raw || '').trim();
+    if (!v)
+        return 'af_heart';
+    if (/^(clone:[0-9a-f]{32}|[a-z]{2}_[a-z0-9]+)$/i.test(v))
+        return v;
+    if (/^(alloy|ash|ballad|coral|echo|fable|nova|onyx|sage|shimmer|verse)$/i.test(v))
+        return v.toLowerCase();
+    return 'af_heart';
+}
 async function synthesizeWithSpeechService(opts) {
     const baseUrl = getSpeechServiceBaseUrl(opts.explicitUrl);
-    const voice = (opts.voice || 'af_heart').trim();
+    const voice = normalizeSpeechServiceVoice(opts.voice);
     const res = await fetch(`${baseUrl}/v1/audio/speech`, {
         method: 'POST',
         headers: { ...getSpeechServiceHeaders(opts.explicitKey), 'Content-Type': 'application/json' },
@@ -275,7 +285,7 @@ function openSpeechServiceTtsStream(opts) {
     ws.on('open', () => {
         ws.send(JSON.stringify({
             type: 'config',
-            voice: opts.voice || 'af_heart',
+            voice: normalizeSpeechServiceVoice(opts.voice),
             speed: opts.speed ?? 1.0,
             format: opts.format,
             ...(opts.sampleRate ? { sample_rate: opts.sampleRate } : {}),

@@ -7,19 +7,27 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>MMA Digital Labs | Voice Agent Console — AI Telephony &amp; VICIdial Studio</title>
-  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
-  <link rel="apple-touch-icon" href="/assets/monogram.svg" />
+  <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
+  <link rel="apple-touch-icon" href="./assets/monogram.svg" />
   <meta name="theme-color" content="#0B0F14" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=elite-2.17" />
+  <link rel="stylesheet" href="./styles.css?v=elite-2.19" />
   <script>
     (function () {
-      var CURRENT_BUILD = 'elite-2.17';
-      // Keep the browser URL bar permanently clean (strip any legacy ?v= or ?cb= query params)
+      var CURRENT_BUILD = 'elite-2.19';
+      // Capture cross-site iframe auth handoff token (?vac_token=...) into storage & clean URL bar
       try {
-        if (window.location.search && /^[?&](v|cb|_)=/.test(window.location.search)) {
+        var sp = new URLSearchParams(window.location.search || '');
+        var handoffTok = sp.get('vac_token');
+        if (handoffTok) {
+          try { sessionStorage.setItem('vac_auth_token', handoffTok); } catch (e) {}
+          try { localStorage.setItem('vac_auth_token', handoffTok); } catch (e) {}
+          sp.delete('vac_token');
+          var rest = sp.toString();
+          window.history.replaceState(null, '', window.location.pathname + (rest ? '?' + rest : '') + window.location.hash);
+        } else if (window.location.search && /^[?&](v|cb|_)=/.test(window.location.search)) {
           window.history.replaceState(null, '', window.location.pathname + window.location.hash);
         }
       } catch (e) {}
@@ -215,6 +223,6 @@
   </div>
 
   <input type="file" id="import-file" accept="application/json,.json" hidden />
-  <script src="./app.js?v=elite-2.17"></script>
+  <script src="./app.js?v=elite-2.19"></script>
 </body>
 </html>
