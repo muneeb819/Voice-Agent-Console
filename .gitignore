@@ -20,5 +20,6 @@ data/recordings/*.wav
 tools/cloudflared
 tools/cloudflared.exe
 
-# Runtime logs
+# Runtime logs & generated download archives
 logs/
+*.zip

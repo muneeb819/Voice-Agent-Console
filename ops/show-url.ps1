@@ -5,17 +5,33 @@ $node = Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction Sil
     Where-Object { $_.CommandLine -like "*dist\server.js*" }
 $cf = Get-CimInstance Win32_Process -Filter "Name='cloudflared.exe'" -ErrorAction SilentlyContinue
 
-"console : " + $(if ($node) { "running (pid $($node.ProcessId))" } else { "STOPPED" })
-"tunnel  : " + $(if ($cf) { "running (pid $($cf.ProcessId))" } else { "STOPPED" })
+"console : " + $(if ($node) { "running (pid $($node[0].ProcessId))" } else { "STOPPED" })
+"tunnel  : " + $(if ($cf) { "running (pid $($cf[0].ProcessId))" } else { "STOPPED" })
 
-$txt = (Get-Content "$root\logs\public-demo-url.txt" -Raw -ErrorAction SilentlyContinue) +
-       (Get-Content "$root\logs\cloudflared.err.log" -Raw -ErrorAction SilentlyContinue) +
-       (Get-Content "$root\logs\cloudflared.log" -Raw -ErrorAction SilentlyContinue)
-if ($txt -match 'https://[a-z0-9-]+\.trycloudflare\.com') {
-    "public  : $($Matches[0])"
+$pubUrl = $null
+foreach ($mp in 20241..20249) {
+    try {
+        $qt = Invoke-RestMethod -Uri "http://localhost:$mp/quicktunnel" -TimeoutSec 1 -ErrorAction Stop
+        if ($qt -and $qt.hostname -and ($qt.hostname -match '\.trycloudflare\.com$')) {
+            $pubUrl = "https://" + ($qt.hostname -replace '^https?://', '').TrimEnd('/')
+            break
+        }
+    } catch {}
 }
-else {
-    "public  : (no URL found in logs)"
+
+if (-not $pubUrl) {
+    $txt = (Get-Content "$root\logs\public-demo-url.txt" -Raw -ErrorAction SilentlyContinue) +
+           (Get-Content "$root\logs\cloudflared.err.log" -Raw -ErrorAction SilentlyContinue) +
+           (Get-Content "$root\logs\cloudflared.log" -Raw -ErrorAction SilentlyContinue)
+    if ($txt -match 'https://[a-z0-9-]+\.trycloudflare\.com') {
+        $pubUrl = $Matches[0]
+    }
+}
+
+if ($pubUrl) {
+    "public  : $pubUrl/login"
+} else {
+    "public  : (no active tunnel URL detected — run 'npm run demo' or .\ops\start-tunnel.ps1)"
 }
 
 try {
