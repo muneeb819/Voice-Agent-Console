@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.VOICE_AGENT_STT_MODELS = void 0;
+exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.SPEECH_SERVICE_DEFAULT_VOICES = exports.SPEECH_SERVICE_STT_MODELS = exports.VOICE_AGENT_STT_MODELS = void 0;
 exports.defaultVoiceAgentSttModel = defaultVoiceAgentSttModel;
 exports.normalizeVoiceAgentSttModel = normalizeVoiceAgentSttModel;
 exports.defaultSelfIntroForAgent = defaultSelfIntroForAgent;
@@ -10,6 +10,28 @@ exports.normalizeState = normalizeState;
 // Deepgram Voice Agent listens with either Nova (general purpose) or Flux v2.
 // The Voice Agent's own verified baseline is Nova-3; Flux models remain available.
 exports.VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'];
+exports.SPEECH_SERVICE_STT_MODELS = ['large-v3-turbo', 'whisper-1'];
+exports.SPEECH_SERVICE_DEFAULT_VOICES = [
+    'af_heart',
+    'af_bella',
+    'af_nova',
+    'af_alloy',
+    'af_sarah',
+    'af_kore',
+    'af_nicole',
+    'af_sky',
+    'am_adam',
+    'am_echo',
+    'am_michael',
+    'am_onyx',
+    'am_liam',
+    'bf_alice',
+    'bf_emma',
+    'bf_isabella',
+    'bm_daniel',
+    'bm_fable',
+    'bm_george',
+];
 function defaultVoiceAgentSttModel(language) {
     // Nova-3 is multilingual and is the Voice Agent API's default listen model.
     void language;
@@ -111,12 +133,20 @@ function createDefaultState() {
         },
         providers: [
             makeProvider('s1', 'stt', 'Deepgram STT', 'deepgram', exports.VOICE_AGENT_STT_MODELS.join(',')),
+            makeProvider('s_local', 'stt', 'Local Speech Service (Faster-Whisper)', 'speech_service', exports.SPEECH_SERVICE_STT_MODELS.join(','), {
+                endpoint: '{{SPEECH_SERVICE_URL}}/v1/audio/transcriptions',
+                headers: '{"Authorization":"Bearer {{SPEECH_SERVICE_API_KEY}}"}',
+            }),
             makeProvider('l1', 'llm', 'OpenAI (Deepgram Managed)', 'open_ai', 'gpt-4o-mini,gpt-4.1-mini,gpt-4.1-nano,gpt-4.1,gpt-4o,gpt-5-mini,gpt-5-nano,gpt-5,gpt-5.1,gpt-5.2,gpt-5.4-mini,gpt-5.4-nano,gpt-5.4,gpt-5.5,gpt-5.6-luna,gpt-5.6-terra,gpt-6-luna'),
             makeProvider('l2', 'llm', 'Anthropic Claude (Deepgram Managed)', 'anthropic', 'claude-haiku-4-5,claude-haiku-5-5,claude-sonnet-4-5,claude-sonnet-4-6,claude-sonnet-5,claude-sonnet-5-5'),
             makeProvider('l3', 'llm', 'Google Gemini (Deepgram Managed)', 'google', 'gemini-2.5-flash,gemini-2.5-flash-lite,gemini-3-flash-preview,gemini-3.1-flash-lite,gemini-3.1-pro-preview,gemini-3.5-flash,gemini-3.8-flash'),
             makeProvider('l4', 'llm', 'Groq OSS (Deepgram Managed)', 'groq', 'openai/gpt-oss-20b'),
             makeProvider('l5', 'llm', 'NVIDIA Nemotron (Deepgram Managed)', 'nvidia', 'nvidia/nemotron-3.5-lightning-30b-a3b'),
             makeProvider('t1', 'tts', 'Deepgram TTS (Flux v2 & Aura v1)', 'deepgram', 'flux-kit-en,flux-haley-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en,aura-stella-en'),
+            makeProvider('t_local', 'tts', 'Local Speech Service (Kokoro 82M + Clone)', 'speech_service', exports.SPEECH_SERVICE_DEFAULT_VOICES.join(','), {
+                endpoint: '{{SPEECH_SERVICE_URL}}/v1/audio/speech',
+                headers: '{"Authorization":"Bearer {{SPEECH_SERVICE_API_KEY}}"}',
+            }),
         ],
         functions: [
             makeFn('fn_xfer', 'transfer_to_live_agent', 'Transfer the call to a live licensed specialist/closer once eligibility criteria are verified, passing structured metadata (Name, Age, Medicare Status, Hook Type)', objSchema({
@@ -560,12 +590,17 @@ function normalizeState(raw) {
                     mk: 'model',
                 };
             }
+            const isSpeechService = String(p.type || '') === 'speech_service';
             return {
                 id: String(p.id || `p_${kind}_${idx + 1}`),
                 kind,
                 name: String(p.name || `Provider ${idx + 1}`),
-                type: kind === 'stt' ? 'deepgram' : String(p.type || 'deepgram'),
-                models: kind === 'stt' ? exports.VOICE_AGENT_STT_MODELS.join(',') : String(p.models || ''),
+                type: kind === 'stt' ? (isSpeechService ? 'speech_service' : 'deepgram') : String(p.type || 'deepgram'),
+                models: kind === 'stt'
+                    ? isSpeechService
+                        ? String(p.models || exports.SPEECH_SERVICE_STT_MODELS.join(','))
+                        : exports.VOICE_AGENT_STT_MODELS.join(',')
+                    : String(p.models || ''),
                 endpoint: String(p.endpoint || ''),
                 headers: typeof p.headers === 'string' ? p.headers : JSON.stringify(p.headers || {}),
                 extra: typeof p.extra === 'string' ? p.extra : JSON.stringify(p.extra || {}),
@@ -583,20 +618,27 @@ function normalizeState(raw) {
                 providers.push({ ...baseLlm });
         }
     }
-    // Only Deepgram-backed TTS routes are supported by this console (it holds a
-    // single server-side DEEPGRAM_API_KEY). Drop legacy BYO TTS providers from
-    // saved state so the UI only offers routes that actually work.
+    // Keep Deepgram-backed and Local Speech Service TTS routes; drop unsupported legacy BYO TTS providers.
     for (let i = providers.length - 1; i >= 0; i -= 1) {
         const p = providers[i];
-        if (p.kind === 'tts' && p.type !== 'deepgram')
+        if (p.kind === 'tts' && p.type !== 'deepgram' && p.type !== 'speech_service')
             providers.splice(i, 1);
     }
-    // Ensure at least one provider per kind exists
+    // Ensure at least one provider per kind exists, plus built-in Local Speech Service providers (s_local, t_local)
     for (const kind of ['stt', 'llm', 'tts']) {
         if (!providers.some((p) => p.kind === kind)) {
             const fallback = base.providers.find((p) => p.kind === kind);
             providers.push({ ...fallback });
         }
+    }
+    const baseLocalStt = base.providers.find((p) => p.id === 's_local');
+    if (baseLocalStt && !providers.some((p) => p.kind === 'stt' && p.type === 'speech_service')) {
+        const firstSttIdx = providers.findIndex((p) => p.kind === 'stt');
+        providers.splice(firstSttIdx >= 0 ? firstSttIdx + 1 : 1, 0, { ...baseLocalStt });
+    }
+    const baseLocalTts = base.providers.find((p) => p.id === 't_local');
+    if (baseLocalTts && !providers.some((p) => p.kind === 'tts' && p.type === 'speech_service')) {
+        providers.push({ ...baseLocalTts });
     }
     const normalizeSelection = (kind) => {
         const rawSelection = src.services?.[kind] || {};
@@ -605,6 +647,14 @@ function normalizeState(raw) {
         if (!provider || !model)
             return { providerId: '', model: '' };
         if (kind === 'stt') {
+            if (provider.type === 'speech_service') {
+                const sttModels = provider.models.split(',').map((m) => m.trim()).filter(Boolean);
+                if (!sttModels.includes(model) && exports.SPEECH_SERVICE_STT_MODELS.includes(model)) {
+                    sttModels.push(model);
+                    provider.models = sttModels.join(',');
+                }
+                return sttModels.includes(model) ? { providerId: provider.id, model } : { providerId: '', model: '' };
+            }
             return provider.type === 'deepgram' && exports.VOICE_AGENT_STT_MODELS.includes(model)
                 ? { providerId: provider.id, model }
                 : { providerId: '', model: '' };
@@ -616,6 +666,12 @@ function normalizeState(raw) {
         }
         const allowedModels = provider.models.split(',').map((entry) => entry.trim()).filter(Boolean);
         if (!allowedModels.includes(model) && provider.type === 'deepgram' && /^(flux|aura)-/i.test(model)) {
+            allowedModels.push(model);
+            provider.models = allowedModels.join(',');
+        }
+        if (!allowedModels.includes(model) &&
+            provider.type === 'speech_service' &&
+            /^(clone:[0-9a-f]{32}|[a-z]{2}_[a-z0-9]+)$/.test(model)) {
             allowedModels.push(model);
             provider.models = allowedModels.join(',');
         }

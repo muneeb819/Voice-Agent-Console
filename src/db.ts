@@ -82,7 +82,7 @@ export interface SimulatorCallLogRecord {
   agentId: string;
   agentName: string;
   campaignId: string | null;
-  upstreamMode: 'deepgram' | 'sandbox';
+  upstreamMode: 'deepgram' | 'sandbox' | 'speech_service';
   sampleRateIn: number;
   sampleRateOut: number;
   startedAt: string;

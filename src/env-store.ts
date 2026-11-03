@@ -14,6 +14,8 @@ const ENV_PATH = path.resolve(__dirname, '..', '.env');
 
 export const MANAGED_SECRET_KEYS = [
   'DEEPGRAM_API_KEY',
+  'SPEECH_SERVICE_URL',
+  'SPEECH_SERVICE_API_KEY',
   'ELEVENLABS_API_KEY',
   'CARTESIA_API_KEY',
   'OPENAI_API_KEY',

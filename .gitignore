@@ -23,3 +23,10 @@ tools/cloudflared.exe
 # Runtime logs & generated download archives
 logs/
 *.zip
+
+# Python test caches & local speech-service runtime state
+__pycache__/
+*.pyc
+.pytest_cache/
+speech-service/.dev-data/
+speech-service/data/
