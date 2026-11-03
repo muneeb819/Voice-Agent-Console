@@ -10,7 +10,7 @@ from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field, field_validator
 
@@ -81,6 +81,85 @@ def _lang(request: Request, language: str | None) -> str | None:
 
 
 # ------------------------------------------------------------------ health & discovery
+@router.get("/", include_in_schema=False)
+async def root_status(request: Request):
+    r = rt(request)
+    is_ready = bool(r.ready and await r.clone.healthy())
+    stock = r.tts.voices() if r.ready else []
+    payload = {
+        "service": "speech-service",
+        "status": "ready" if is_ready else "starting",
+        "stt": r.stt.name,
+        "tts": r.tts.name,
+        "clone": r.clone.enabled,
+        "stock_voices_count": len(stock),
+        "endpoints": [
+            "GET /healthz",
+            "GET /readyz",
+            "GET /v1/models",
+            "GET /v1/voices/stock",
+            "GET /v1/voices",
+            "POST /v1/audio/speech",
+            "POST /v1/audio/transcriptions",
+            "WS /v1/stream/stt",
+            "WS /v1/stream/tts",
+        ],
+    }
+    accept = (request.headers.get("accept") or "").lower()
+    if "text/html" in accept:
+        voices_pills = "".join(
+            f'<span style="display:inline-block;padding:3px 9px;border-radius:999px;background:#132030;border:1px solid #243b55;font-size:12px;margin:3px">{v}</span>'
+            for v in stock[:28]
+        )
+        html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Self-Hosted Speech Service — Live Engine Status</title>
+<style>
+  body{{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#0b0f14;color:#e6edf3;padding:28px}}
+  .wrap{{max-width:860px;margin:0 auto}}
+  .card{{background:#111822;border:1px solid #1f2d3d;border-radius:14px;padding:22px;margin-bottom:16px}}
+  .badge{{display:inline-block;padding:4px 11px;border-radius:999px;font-size:12px;font-weight:700;background:{"#0d3321" if is_ready else "#3b260b"};color:{"#3fb950" if is_ready else "#f0ad4e"};border:1px solid {"#238636" if is_ready else "#9e6a03"}}}
+  code{{background:#0d1117;padding:2px 7px;border-radius:6px;color:#58a6ff;font-size:13px}}
+  .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:14px}}
+  .kpi{{background:#0d131c;border:1px solid #1e2a3a;border-radius:10px;padding:12px}}
+  .kpi b{{display:block;font-size:18px;margin-top:4px;color:#00f2fe}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <h1 style="margin:0;font-size:20px">⚡ MMA Digital Labs — Self-Hosted Speech Service</h1>
+      <span class="badge">● {"ONLINE & READY" if is_ready else "STARTING"}</span>
+    </div>
+    <p style="color:#8b949e;margin:8px 0 0;font-size:14px">OpenAI-compatible REST &amp; Low-Latency WebSocket STT/TTS Microservice (linked to Voice Agent Console on port 5533).</p>
+    <div class="grid">
+      <div class="kpi"><span style="font-size:12px;color:#8b949e">STT Engine</span><b>{r.stt.name}</b></div>
+      <div class="kpi"><span style="font-size:12px;color:#8b949e">TTS Engine</span><b>{r.tts.name}</b></div>
+      <div class="kpi"><span style="font-size:12px;color:#8b949e">Stock Voices</span><b>{len(stock)} Ready</b></div>
+      <div class="kpi"><span style="font-size:12px;color:#8b949e">Voice Cloning</span><b>{"Enabled" if r.clone.enabled else "Isolated/Off"}</b></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2 style="margin:0 0 10px;font-size:15px">Available Stock Voices ({len(stock)})</h2>
+    <div>{voices_pills}</div>
+  </div>
+  <div class="card">
+    <h2 style="margin:0 0 10px;font-size:15px">Active REST &amp; WebSocket Endpoints</h2>
+    <div style="line-height:1.9;font-size:13.5px">
+      {"<br>".join(f"• <code>{ep}</code>" for ep in payload["endpoints"])}
+    </div>
+  </div>
+</div>
+</body>
+</html>"""
+        return HTMLResponse(html)
+    return payload
+
+
 @router.get("/healthz", include_in_schema=False)
 async def healthz():
     return {"status": "ok"}

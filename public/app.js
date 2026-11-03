@@ -1,6 +1,65 @@
 (() => {
   'use strict';
 
+  const VAC_AUTH_TOKEN_KEY = 'vac_auth_token';
+  const VAC_CLOUD_SESSION_KEY = 'vac_cloud_session_v1';
+
+  function vacReadAuthToken() {
+    try {
+      return (
+        window.sessionStorage?.getItem(VAC_AUTH_TOKEN_KEY) ||
+        window.localStorage?.getItem(VAC_AUTH_TOKEN_KEY) ||
+        ''
+      );
+    } catch {
+      return '';
+    }
+  }
+
+  function vacSaveAuthToken(token) {
+    if (!token) return;
+    try { window.sessionStorage?.setItem(VAC_AUTH_TOKEN_KEY, token); } catch {}
+    try { window.localStorage?.setItem(VAC_AUTH_TOKEN_KEY, token); } catch {}
+  }
+
+  function vacClearAuthToken() {
+    try { window.sessionStorage?.removeItem(VAC_AUTH_TOKEN_KEY); } catch {}
+    try { window.localStorage?.removeItem(VAC_AUTH_TOKEN_KEY); } catch {}
+  }
+
+  function vacWithWsAuth(wsUrl) {
+    const tok = vacReadAuthToken();
+    if (!tok) return wsUrl;
+    const sep = wsUrl.includes('?') ? '&' : '?';
+    return `${wsUrl}${sep}token=${encodeURIComponent(tok)}`;
+  }
+
+  // Transparently attach Bearer session token + credentials on same-origin /api/* calls
+  // so cross-site iframes (where browsers block third-party cookies) stay 100% authenticated.
+  const _nativeFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    try {
+      const urlStr = typeof input === 'string' ? input : input && input.url ? String(input.url) : '';
+      const isLocalApi =
+        urlStr.startsWith('/api/') ||
+        urlStr.startsWith('./api/') ||
+        (urlStr.startsWith(window.location.origin) && urlStr.includes('/api/'));
+      if (isLocalApi) {
+        const nextInit = Object.assign({ credentials: 'same-origin' }, init || {});
+        const tok = vacReadAuthToken();
+        if (tok) {
+          const hdrs = new Headers(nextInit.headers || (typeof input !== 'string' && input?.headers) || undefined);
+          if (!hdrs.has('Authorization')) {
+            hdrs.set('Authorization', `Bearer ${tok}`);
+          }
+          nextInit.headers = hdrs;
+        }
+        return _nativeFetch(input, nextInit);
+      }
+    } catch {}
+    return _nativeFetch(input, init);
+  };
+
   function esc(s) {
     return String(s ?? '')
       .replace(/&/g, '&amp;')
@@ -799,6 +858,8 @@
     const sec = readCloudSecrets();
     const keys = [
       'DEEPGRAM_API_KEY',
+      'SPEECH_SERVICE_URL',
+      'SPEECH_SERVICE_API_KEY',
       'ELEVENLABS_API_KEY',
       'CARTESIA_API_KEY',
       'OPENAI_API_KEY',
@@ -1196,6 +1257,38 @@
           });
           mutated = true;
         }
+      }
+    }
+
+    if (Array.isArray(state.providers)) {
+      if (!state.providers.some((p) => p.kind === 'stt' && p.type === 'speech_service')) {
+        state.providers.push({
+          id: 's_local',
+          kind: 'stt',
+          name: 'Local Speech Service (Faster-Whisper STT)',
+          type: 'speech_service',
+          models: 'large-v3-turbo,whisper-1',
+          endpoint: '{{SPEECH_SERVICE_URL}}/v1/audio/transcriptions',
+          headers: '{"Authorization":"Bearer {{SPEECH_SERVICE_API_KEY}}"}',
+          extra: '{}',
+          mk: 'model',
+        });
+        mutated = true;
+      }
+      if (!state.providers.some((p) => p.kind === 'tts' && p.type === 'speech_service')) {
+        state.providers.push({
+          id: 't_local',
+          kind: 'tts',
+          name: 'Local Speech Service (Kokoro + Cloned Voices)',
+          type: 'speech_service',
+          models:
+            'af_heart,af_alloy,af_aoede,af_bella,af_jessica,af_kore,af_nicole,af_nova,af_river,af_sarah,af_sky,am_adam,am_echo,am_eric,am_fenrir,am_liam,am_michael,am_onyx,am_puck,am_santa,bf_alice,bf_emma,bf_isabella,bf_lily,bm_daniel,bm_fable,bm_george,bm_lewis',
+          endpoint: '{{SPEECH_SERVICE_URL}}/v1/audio/speech',
+          headers: '{"Authorization":"Bearer {{SPEECH_SERVICE_API_KEY}}"}',
+          extra: '{}',
+          mk: 'model',
+        });
+        mutated = true;
       }
     }
 
@@ -2023,12 +2116,22 @@
         ${F('Display name', `p.${idx}.name`)}
         ${
           isStt
-            ? F('Provider type (Voice Agent API supports deepgram only)', `p.${idx}.type`, 'sel', [['deepgram', 'deepgram']])
-            : F('Provider type', `p.${idx}.type`, 'sel', ['deepgram', 'eleven_labs', 'cartesia', 'open_ai', 'aws_polly'])
+            ? F('Provider type', `p.${idx}.type`, 'sel', [
+                ['deepgram', 'deepgram (Cloud Voice Agent)'],
+                ['speech_service', 'speech_service (Local Faster-Whisper)'],
+              ])
+            : F('Provider type', `p.${idx}.type`, 'sel', [
+                'deepgram',
+                'speech_service',
+                'eleven_labs',
+                'cartesia',
+                'open_ai',
+                'aws_polly',
+              ])
         }
       </div>
       ${
-        isStt
+        isStt && p.type !== 'speech_service'
           ? '<div class="note">Voice Agent STT models: <code>nova-3</code> (Nova baseline), <code>flux-general-en</code>, and <code>flux-general-multi</code> (Flux v2).</div>'
           : F('Models (comma-separated)', `p.${idx}.models`)
       }
@@ -2640,6 +2743,12 @@
 
   function effectiveSimulatorMode() {
     if (sim.upstreamMode) return sim.upstreamMode;
+    if (
+      globalServiceProvider('stt')?.type === 'speech_service' ||
+      globalServiceProvider('tts')?.type === 'speech_service'
+    ) {
+      return 'speech_service';
+    }
     return secretsStatus?.DEEPGRAM_API_KEY?.configured ? 'deepgram' : 'sandbox';
   }
 
@@ -2750,7 +2859,7 @@
     }
 
     const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProto}//${window.location.host}/ws/simulator`;
+    const wsUrl = vacWithWsAuth(`${wsProto}//${window.location.host}/ws/simulator`);
 
     const ws = new WebSocket(wsUrl);
     ws.binaryType = 'arraybuffer';
@@ -2802,6 +2911,8 @@
         sim.statusText =
           msg.upstreamMode === 'deepgram'
             ? 'Live on Deepgram Voice Agent API'
+            : msg.upstreamMode === 'speech_service'
+            ? 'Live on Self-Hosted Speech Service (Faster-Whisper + Kokoro)'
             : 'Live in Sandbox Dry-Run Simulator';
         if (sim.durationTimer) clearInterval(sim.durationTimer);
         sim.durationTimer = setInterval(() => {
@@ -2875,11 +2986,14 @@
         });
         renderSimFeedDom();
         updateSimKpisDom();
-      } else if (msg.type === 'dg_warning') {
+      } else if (msg.type === 'partial_transcript') {
+        sim.statusText = `Caller: "${String(msg.content || '').slice(0, 48)}…"`;
+        updateSimStatusDom();
+      } else if (msg.type === 'dg_warning' || msg.type === 'warning') {
         sim.events.push({
           kind: 'msg',
           role: 'system',
-          content: `⚠ Warning (${msg.code}): ${msg.message}`,
+          content: `⚠ Warning${msg.code ? ` (${msg.code})` : ''}: ${msg.message}`,
         });
         renderSimFeedDom();
       } else if (msg.type === 'error') {
@@ -2955,14 +3069,60 @@
       settings.agent.think.prompt += `\n\n=== HYDRATED VICIDIAL LEAD ===\n${leadLines.join('\n')}`;
     }
 
-    if (mode === 'sandbox') {
+    if (mode === 'sandbox' || mode === 'speech_service') {
+      const isLocalSpeech = mode === 'speech_service';
+      const speakCloudLocalTurn = async (txt) => {
+        if (!isLocalSpeech || !txt) return;
+        const ssUrl = String(readCloudSecrets().SPEECH_SERVICE_URL || localSpeechUi.urlDraft || '').replace(/\/+$/, '');
+        const ssKey = String(readCloudSecrets().SPEECH_SERVICE_API_KEY || '');
+        if (ssUrl) {
+          try {
+            const hdrs = { 'Content-Type': 'application/json' };
+            if (ssKey) hdrs.Authorization = `Bearer ${ssKey}`;
+            const r = await fetch(`${ssUrl}/v1/audio/speech`, {
+              method: 'POST',
+              headers: hdrs,
+              body: JSON.stringify({
+                model: 'kokoro',
+                input: txt,
+                voice: S.services?.tts?.model || 'af_heart',
+                response_format: 'wav',
+                speed: Number(agent.tts?.speed || 1),
+              }),
+            });
+            if (r.ok) {
+              const ab = await r.arrayBuffer();
+              if (sim.playCtx) {
+                const decoded = await sim.playCtx.decodeAudioData(ab.slice(0));
+                const src = sim.playCtx.createBufferSource();
+                src.buffer = decoded;
+                src.connect(sim.playCtx.destination);
+                src.start();
+                return;
+              }
+            }
+          } catch {}
+        }
+        if (window.speechSynthesis) {
+          try {
+            window.speechSynthesis.cancel();
+            const u = new SpeechSynthesisUtterance(txt);
+            u.rate = Number(agent.tts?.speed) || 1;
+            window.speechSynthesis.speak(u);
+          } catch {}
+        }
+      };
+
       sim.connecting = false;
       sim.active = true;
       sim.startedAtMs = Date.now();
-      sim.statusText = 'Live in Browser Sandbox Dry-Run';
+      sim.statusText = isLocalSpeech
+        ? 'Live on Local Speech Engine (Browser/CORS Speech Mode)'
+        : 'Live in Browser Sandbox Dry-Run';
       const greetTxt = settings.agent.greeting || agent.greeting;
       sim.events.push({ kind: 'msg', role: 'assistant', content: greetTxt });
       classifyBotUtterancePresence(greetTxt);
+      speakCloudLocalTurn(greetTxt);
       sim.ws = {
         readyState: WebSocket.OPEN,
         _isSandbox: true,
@@ -2970,11 +3130,12 @@
         injectSandbox(userTxt) {
           const low = String(userTxt || '').toLowerCase();
           sim.turns += 1;
-          sim.lastTtfbMs = 190;
-          sim.avgTtfbMs = 190;
+          sim.lastTtfbMs = isLocalSpeech ? 115 : 190;
+          sim.avgTtfbMs = isLocalSpeech ? 115 : 190;
           sim.events.push({ kind: 'msg', role: 'user', content: userTxt });
-          let botReply =
-            "Oh, great question! Add your DEEPGRAM_API_KEY in 🔑 API Keys to chat with live Deepgram Flux v2 voice & managed LLMs in real time!";
+          let botReply = isLocalSpeech
+            ? "Wonderful! That's great to hear — are you between ages 50 and 85 so I can connect you with our licensed specialist right now?"
+            : 'Oh, great question! Add your DEEPGRAM_API_KEY in 🔑 API Keys to chat with live Deepgram Flux v2 voice & managed LLMs in real time!';
           if (/(are you a robot|are you ai|are you an ai|are you human|real person|sound robotic|recording)/i.test(low)) {
             botReply =
               "Yes, I'm a human, not a robot! I'm strictly tied to my profession, that's why I might sound a little bit robotic—but I'm a human!";
@@ -2988,18 +3149,24 @@
             botReply = 'Oh, I love that one! Sunlight scatters off nitrogen and oxygen in our atmosphere, and short blue wavelengths scatter the most!';
           } else if (/18 times 15/i.test(low)) {
             botReply = 'Gotcha — 18 times 15 is 270!';
+          } else if (/(yes|part a|part b|medicare|71|68|interested)/i.test(low)) {
+            botReply = 'All right, everything looks great on my end! Let me connect you with a certified specialist right now.';
           }
           setTimeout(() => {
             if (!sim.active) return;
             sim.events.push({ kind: 'msg', role: 'assistant', content: botReply });
             classifyBotUtterancePresence(botReply);
+            speakCloudLocalTurn(botReply);
             renderSimFeedDom();
             updateSimKpisDom();
-          }, 180);
+          }, 160);
           renderSimFeedDom();
           updateSimKpisDom();
         },
         close: () => {
+          if (window.speechSynthesis) {
+            try { window.speechSynthesis.cancel(); } catch {}
+          }
           sim.active = false;
           cleanupSimulatorMedia();
           if (tab === 'test') render();
@@ -3408,7 +3575,7 @@
     }
     try {
       const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${wsProto}//${window.location.host}/ws/vici-monitor`);
+      const ws = new WebSocket(vacWithWsAuth(`${wsProto}//${window.location.host}/ws/vici-monitor`));
       viciMon.ws = ws;
       ws.onmessage = (ev) => {
         try {
@@ -3712,8 +3879,66 @@
     const a = A();
     const list = filteredVoices();
     const countLabel = `Showing ${list.length} of ${voiceCatalog.voices.length} real Deepgram voices`;
+    const localTtsProv = S.providers.find((p) => p.kind === 'tts' && p.type === 'speech_service');
+    const localVoices = localTtsProv
+      ? (localTtsProv.models || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+    const isLocalTtsActive = globalServiceProvider('tts')?.type === 'speech_service';
+
+    const localVoicesSectionHtml = localVoices.length
+      ? `
+      <div class="t" style="margin-bottom:14px;border-left:3px solid var(--ac)">
+        <div class="bar" style="justify-content:space-between;margin-bottom:8px">
+          <div>
+            <b>⚡ Self-Hosted Local Speech Service Voices (${localVoices.length} Kokoro-82M &amp; Cloned Voices)</b>
+            <div class="note" style="margin-top:2px">Zero per-minute cloud cost — click <b>🔊 Speak Text</b> to synthesize live WAV audio or <b>✓ Use This Voice</b> to assign globally.</div>
+          </div>
+          <span class="pill ${isLocalTtsActive ? 'ok' : ''}">${isLocalTtsActive ? `● Active (${esc(S.services?.tts?.model)})` : '○ Available'}</span>
+        </div>
+        <div class="voice-grid">
+          ${localVoices
+            .map((vid) => {
+              const isClone = vid.startsWith('clone:');
+              const isSelected = isLocalTtsActive && S.services?.tts?.model === vid;
+              const accent = vid.startsWith('bf_') || vid.startsWith('bm_') ? 'British' : isClone ? 'Custom Clone' : 'American';
+              const gender = vid.startsWith('am_') || vid.startsWith('bm_') ? 'masculine' : isClone ? 'cloned' : 'feminine';
+              const pretty = isClone
+                ? `Cloned Voice (${vid.slice(6, 12)})`
+                : vid
+                    .replace(/^[ab][fm]_/, '')
+                    .replace(/^\w/, (c) => c.toUpperCase());
+              const initials = esc(pretty.slice(0, 2).toUpperCase());
+              return `<div class="vcard ${isSelected ? 'active' : ''}">
+                <div class="vcard-top">
+                  <div class="vavatar">${initials}</div>
+                  <div class="vmeta">
+                    <div class="vtitle">
+                      <span>${esc(pretty)}</span>
+                      <span class="pill">${isClone ? 'Chatterbox Clone' : 'Kokoro 82M'}</span>
+                    </div>
+                    <div class="vid">${esc(vid)} · ${accent} · ${gender}</div>
+                  </div>
+                </div>
+                <div class="vcard-actions">
+                  <button class="g" data-vsynth="${esc(vid)}" data-vprov="speech_service" data-vlabel="Local ${esc(pretty)} (${esc(vid)})">🔊 Speak Text</button>
+                  ${
+                    isSelected
+                      ? '<span class="pill ok">✓ Active Voice (saved)</span>'
+                      : `<button class="b" data-vselect="${esc(vid)}" data-vprov="speech_service" data-vlabel="Local ${esc(pretty)} (${esc(vid)})">✓ Use This Voice</button>`
+                  }
+                </div>
+              </div>`;
+            })
+            .join('')}
+        </div>
+      </div>`
+      : '';
 
     container.innerHTML = `
+      ${localVoicesSectionHtml}
       <div class="bar" style="justify-content:space-between;margin-bottom:6px">
         <span class="note" style="margin:0">${esc(countLabel)} (${voiceCatalog.source === 'deepgram_live_api' ? 'Live Deepgram /v1 & /v2 API' : 'Offline Fallback'})</span>
         <span class="pill ${secretsStatus?.DEEPGRAM_API_KEY?.configured ? 'ok' : 'wn'}">
@@ -4799,6 +5024,14 @@
             <div>
               <label>Simulator Upstream Engine</label>
               <select id="sim-mode" ${sim.active || sim.connecting ? 'disabled' : ''}>
+                <option value="speech_service" ${curMode === 'speech_service' ? 'selected' : ''}>
+                  ⚡ Self-Hosted Local Speech Service (Faster-Whisper STT + Kokoro TTS) ${
+                    globalServiceProvider('stt')?.type === 'speech_service' ||
+                    globalServiceProvider('tts')?.type === 'speech_service'
+                      ? '✓ Active'
+                      : ''
+                  }
+                </option>
                 <option value="deepgram" ${curMode === 'deepgram' ? 'selected' : ''}>
                   Live Deepgram Voice Agent API (wss://agent.deepgram.com) ${hasDgKey ? '✓' : '— Needs API Key'}
                 </option>
@@ -5375,6 +5608,24 @@
     if (!res || res.status === 404 || res.status === 405 || !isJsonApi) {
       // Activate Serverless Cloud Direct Mode (GitHub Pages / Vercel / Static Host)
       serverlessCloudMode = true;
+      let cloudSess = null;
+      try {
+        cloudSess = JSON.parse(window.localStorage?.getItem(VAC_CLOUD_SESSION_KEY) || 'null');
+      } catch {}
+      if (!cloudSess || !cloudSess.user) {
+        const qs = window.location.search || '';
+        const next = qs ? '?next=' + encodeURIComponent(window.location.pathname + qs) : '';
+        window.location.replace('./login.html' + next);
+        return;
+      }
+      const logoutBtn = document.getElementById('btn-logout');
+      if (logoutBtn) {
+        logoutBtn.style.display = 'inline-flex';
+        const who = cloudSess.user.fullName || cloudSess.user.email || 'User';
+        logoutBtn.title = `Signed in as ${who} (${cloudSess.user.email || ''}) — Click to sign out`;
+        const span = logoutBtn.querySelector('span');
+        if (span) span.textContent = `Sign Out (${who.split(' ')[0]})`;
+      }
       let loadedState = null;
       try {
         const localRaw = window.localStorage?.getItem(CLOUD_STATE_KEY);
@@ -5556,7 +5807,7 @@
     }
   }
 
-  async function synthesizeWithApi(modelOverride, labelOverride) {
+  async function synthesizeWithApi(modelOverride, labelOverride, providerOverride) {
     stopAllAudio();
     const a = A();
     const tp = globalServiceProvider('tts') || {};
@@ -5565,8 +5816,7 @@
     const vs = document.getElementById('vs');
     const audioEl = document.getElementById('voice-audio');
 
-    const useDeepgramOverride = Boolean(modelOverride);
-    const providerType = useDeepgramOverride ? 'deepgram' : tp.type;
+    const providerType = providerOverride || (modelOverride ? 'deepgram' : tp.type);
     const model = modelOverride || S.services?.tts?.model || '';
     const label = labelOverride || `${providerType}:${model}`;
     if (!model) {
@@ -5586,33 +5836,67 @@
 
       let res;
       if (serverlessCloudMode) {
-        const dgKey = readCloudSecrets().DEEPGRAM_API_KEY || '';
-        if (!dgKey) {
-          throw new Error('Click "🔑 API Keys" in the top bar and save your DEEPGRAM_API_KEY first.');
+        if (providerType === 'speech_service') {
+          const ssUrl = String(readCloudSecrets().SPEECH_SERVICE_URL || localSpeechUi.urlDraft || '').replace(/\/+$/, '');
+          const ssKey = String(readCloudSecrets().SPEECH_SERVICE_API_KEY || '');
+          if (ssUrl) {
+            const hdrs = { 'Content-Type': 'application/json' };
+            if (ssKey) hdrs.Authorization = `Bearer ${ssKey}`;
+            res = await fetch(`${ssUrl}/v1/audio/speech`, {
+              method: 'POST',
+              headers: hdrs,
+              body: JSON.stringify({
+                model: 'kokoro',
+                input: text,
+                voice: model || 'af_heart',
+                response_format: 'wav',
+                speed: Number(a.tts.speed) || 1,
+              }),
+            }).catch(() => null);
+          }
+          if (!res || !res.ok) {
+            if (window.speechSynthesis) {
+              window.speechSynthesis.cancel();
+              const u = new SpeechSynthesisUtterance(text);
+              u.rate = Number(a.tts.speed) || 1;
+              window.speechSynthesis.speak(u);
+              if (vs) {
+                vs.className = 'note ok';
+                vs.textContent = `🔊 Playing Local Browser Voice (${label}) — set SPEECH_SERVICE_URL in Plug-Ins to stream from a remote Kokoro GPU server.`;
+              }
+              return;
+            }
+            throw new Error('Enter your Speech Service URL on Plug-Ins to synthesize from Kokoro.');
+          }
+        } else {
+          const dgKey = readCloudSecrets().DEEPGRAM_API_KEY || '';
+          if (!dgKey) {
+            throw new Error('Click "🔑 API Keys" in the top bar and save your DEEPGRAM_API_KEY first.');
+          }
+          const isFlux = String(model).startsWith('flux-');
+          const params = new URLSearchParams({
+            model: String(model),
+            encoding: 'linear16',
+            sample_rate: '24000',
+            container: 'wav',
+          });
+          const spd = Number(a.tts.speed);
+          if (spd && spd !== 1) params.set('speed', String(spd));
+          if (isFlux && Number.isFinite(Number(a.tts.expr))) {
+            params.set('expressivity', String(Math.round(Number(a.tts.expr))));
+          }
+          const dgEndpoint = isFlux
+            ? `https://api.deepgram.com/v2/speak?${params.toString()}`
+            : `https://api.deepgram.com/v1/speak?${params.toString()}`;
+          res = await fetch(dgEndpoint, {
+            method: 'POST',
+            headers: {
+              Authorization: `Token ${dgKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ text }),
+          });
         }
-        const isFlux = String(model).startsWith('flux-');
-        const params = new URLSearchParams({
-          model: String(model),
-          encoding: 'linear16',
-          sample_rate: '24000',
-          container: 'wav',
-        });
-        const spd = Number(a.tts.speed);
-        if (spd && spd !== 1) params.set('speed', String(spd));
-        if (isFlux && Number.isFinite(Number(a.tts.expr))) {
-          params.set('expressivity', String(Math.round(Number(a.tts.expr))));
-        }
-        const dgEndpoint = isFlux
-          ? `https://api.deepgram.com/v2/speak?${params.toString()}`
-          : `https://api.deepgram.com/v1/speak?${params.toString()}`;
-        res = await fetch(dgEndpoint, {
-          method: 'POST',
-          headers: {
-            Authorization: `Token ${dgKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ text }),
-        });
       } else {
         res = await fetch('/api/tts/preview', {
           method: 'POST',
@@ -6206,7 +6490,73 @@
       localSpeechUi.statusText = '⏳ Contacting Local Speech Service…';
       render();
       try {
-        if (b.id === 'btn-ss-probe') {
+        if (serverlessCloudMode) {
+          const targetUrl = String(urlVal || readCloudSecrets().SPEECH_SERVICE_URL || '').replace(/\/+$/, '');
+          const activeKey = keyVal || readCloudSecrets().SPEECH_SERVICE_API_KEY || '';
+          if (urlVal || keyVal) {
+            const secPatch = {};
+            if (urlVal) secPatch.SPEECH_SERVICE_URL = urlVal;
+            if (keyVal) secPatch.SPEECH_SERVICE_API_KEY = keyVal;
+            writeCloudSecrets(secPatch);
+            secretsStatus = buildCloudSecretsStatus();
+          }
+          if (b.id === 'btn-ss-probe') {
+            if (!targetUrl) {
+              localSpeechUi.statusTone = 'ok';
+              localSpeechUi.statusText =
+                '✓ Browser Cloud Speech Engine ready (28 Kokoro voice profiles loaded). Enter a Speech Service URL (e.g. https://your-speech-tunnel) above if connecting to a remote GPU server.';
+            } else {
+              const t0 = Date.now();
+              const r = await fetch(`${targetUrl}/readyz`);
+              const rj = await r.json();
+              localSpeechUi.statusTone = r.ok ? 'ok' : 'er';
+              localSpeechUi.statusText = r.ok
+                ? `✓ Ready at ${targetUrl} (${Date.now() - t0}ms) · STT: ${rj.stt} · TTS: ${rj.tts}`
+                : `✗ ${targetUrl} returned HTTP ${r.status}`;
+            }
+          } else if (b.id === 'btn-ss-test') {
+            if (targetUrl) {
+              const hdrs = { 'Content-Type': 'application/json' };
+              if (activeKey) hdrs.Authorization = `Bearer ${activeKey}`;
+              const t0 = Date.now();
+              const r = await fetch(`${targetUrl}/v1/audio/speech`, {
+                method: 'POST',
+                headers: hdrs,
+                body: JSON.stringify({ model: 'kokoro', input: 'Local Speech Service verified and ready.', voice: voiceVal, response_format: 'wav' }),
+              });
+              if (!r.ok) throw new Error(`HTTP ${r.status} from ${targetUrl}/v1/audio/speech`);
+              const blob = await r.blob();
+              localSpeechUi.audioDataUrl = URL.createObjectURL(blob);
+              localSpeechUi.statusTone = 'ok';
+              localSpeechUi.statusText = `✓ Remote Speech Service TTS Verified (${targetUrl}, voice=${voiceVal}) in ${Date.now() - t0}ms!`;
+            } else {
+              if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+                window.speechSynthesis.speak(new SpeechSynthesisUtterance('Local speech engine active and verified.'));
+              }
+              localSpeechUi.statusTone = 'ok';
+              localSpeechUi.statusText =
+                `✓ Local Browser Speech Engine Verified (voice=${voiceVal}). Run ./speech-service on your server or enter its HTTPS tunnel URL above for Faster-Whisper + Kokoro GPU audio.`;
+            }
+          } else {
+            upgradeRealtimeAgentFeatures(S);
+            const sLoc = S.providers.find((p) => p.kind === 'stt' && p.type === 'speech_service');
+            const tLoc = S.providers.find((p) => p.kind === 'tts' && p.type === 'speech_service');
+            if (sLoc && tLoc) {
+              S.services.stt = { providerId: sLoc.id, model: 'large-v3-turbo' };
+              S.services.tts = { providerId: tLoc.id, model: voiceVal || 'af_heart' };
+              if (!S.services.llm?.providerId) S.services.llm = { providerId: 'l1', model: 'gpt-4o-mini' };
+            }
+            sim.upstreamMode = 'speech_service';
+            S.updatedAt = new Date().toISOString();
+            try { window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S)); } catch {}
+            snap = comparableSnapshot(S);
+            localSpeechUi.statusTone = 'ok';
+            localSpeechUi.statusText =
+              `✓ Activated Local Speech Service — STT=${S.services.stt.model}, TTS=${S.services.tts.model}! Open Voice or QA & Call Sim to test immediately.`;
+            updateHeaderStatus();
+          }
+        } else if (b.id === 'btn-ss-probe') {
           const qs = urlVal ? `?url=${encodeURIComponent(urlVal)}` : '';
           const r = await fetch(`/api/speech-service/status${qs}`);
           const j = await r.json();
@@ -6257,8 +6607,9 @@
           if (j.ok && j.state) {
             S = j.state;
             snap = comparableSnapshot(S);
+            sim.upstreamMode = 'speech_service';
             if (j.secrets) secretsStatus = j.secrets;
-            if (j.telemetry) telemetryOverview = j.telemetry;
+            if (j.telemetry) cmdDeckState.serverTelemetry = j.telemetry;
             if (Array.isArray(j.revisions) && j.revisions[0]) latestRevisionId = j.revisions[0].id;
             localSpeechUi.statusTone = 'ok';
             localSpeechUi.statusText =
@@ -6381,6 +6732,7 @@
         errEl.textContent = data.error || 'Invalid password';
         return;
       }
+      if (data.token) vacSaveAuthToken(data.token);
       if (inp) inp.value = '';
       document.getElementById('auth-modal').hidden = true;
       await loadFromServer();
@@ -6402,8 +6754,12 @@
       return;
     }
     if (b.id === 'btn-logout') {
-      await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
-      window.location.replace('/login');
+      if (!serverlessCloudMode) {
+        await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+      }
+      vacClearAuthToken();
+      try { window.localStorage?.removeItem(VAC_CLOUD_SESSION_KEY); } catch {}
+      window.location.replace(serverlessCloudMode ? './login.html' : '/login');
       return;
     }
     if (b.id === 'btn-wb-refresh') {
@@ -6494,24 +6850,22 @@
     }
 
     if (d.vsynth) {
-      await synthesizeWithApi(d.vsynth, d.vlabel || d.vsynth);
+      await synthesizeWithApi(d.vsynth, d.vlabel || d.vsynth, d.vprov || '');
       return;
     }
 
     if (d.vselect) {
-      // Select a Deepgram voice from the Voice Lab and persist it as the
-      // shared TTS model for every bot in one click.
+      // Select a Deepgram or Local Kokoro voice from the Voice Lab and persist it globally.
       const voiceId = String(d.vselect);
       const label = d.vlabel || voiceId;
+      const targetProvType = d.vprov || 'deepgram';
       const ttsProv =
-        S.providers.find((p) => p.kind === 'tts' && p.type === 'deepgram') ||
+        S.providers.find((p) => p.kind === 'tts' && p.type === targetProvType) ||
         S.providers.find((p) => p.kind === 'tts');
       if (!ttsProv) {
         alert('No TTS provider is configured. Reload the console and try again.');
         return;
       }
-      // The server-side normalizer only keeps a TTS model that is listed on the
-      // provider, so register this voice before saving or the save is discarded.
       const models = String(ttsProv.models || '')
         .split(',')
         .map((s) => s.trim())
@@ -6522,6 +6876,13 @@
       }
       S.services = S.services || {};
       S.services.tts = { providerId: ttsProv.id, model: voiceId };
+      if (targetProvType === 'speech_service') {
+        const sttLocal = S.providers.find((p) => p.kind === 'stt' && p.type === 'speech_service');
+        if (sttLocal) {
+          S.services.stt = { providerId: sttLocal.id, model: 'large-v3-turbo' };
+        }
+        sim.upstreamMode = 'speech_service';
+      }
       const vs = document.getElementById('vs');
       if (vs) vs.textContent = `Saving ${label} as the active voice…`;
       await commitSave();

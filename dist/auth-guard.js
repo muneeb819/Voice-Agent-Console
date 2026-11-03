@@ -182,13 +182,30 @@ function constantTimePasswordMatch(candidate) {
         return false;
     return crypto_1.default.timingSafeEqual(a, b);
 }
+function extractQueryToken(req) {
+    const rawUrl = String(req.url || '');
+    const qIdx = rawUrl.indexOf('?');
+    if (qIdx < 0)
+        return null;
+    try {
+        const params = new URLSearchParams(rawUrl.slice(qIdx + 1));
+        const tok = (params.get('vac_token') || params.get('token') || '').trim();
+        return tok || null;
+    }
+    catch {
+        return null;
+    }
+}
 function getRequestSessionToken(req) {
     const authHdr = String(req.headers.authorization || '').trim();
     if (/^Bearer\s+/i.test(authHdr)) {
         return authHdr.replace(/^Bearer\s+/i, '').trim() || null;
     }
     const cookies = parseCookies(req.headers.cookie);
-    return cookies[SESSION_COOKIE_NAME] || null;
+    if (cookies[SESSION_COOKIE_NAME]) {
+        return cookies[SESSION_COOKIE_NAME];
+    }
+    return extractQueryToken(req);
 }
 /**
  * Resolves a signed-in end user (email/password account) from the request.
@@ -230,12 +247,16 @@ function hasActiveAuthSession(req) {
             catch { }
         }
     }
-    // 2. Check signed HttpOnly session cookie (admin password session)
+    // 2. Check signed HttpOnly session cookie or query handoff token (admin password session)
     const cookies = parseCookies(req.headers.cookie);
     if (cookies[SESSION_COOKIE_NAME] && verifySessionToken(cookies[SESSION_COOKIE_NAME])) {
         return true;
     }
-    // 3. Check email/password user session (cookie or bearer token)
+    const queryTok = extractQueryToken(req);
+    if (queryTok && (constantTimePasswordMatch(queryTok) || verifySessionToken(queryTok))) {
+        return true;
+    }
+    // 3. Check email/password user session (cookie, bearer token, or query handoff token)
     if (getAuthenticatedUser(req)) {
         return true;
     }
@@ -249,12 +270,29 @@ function isRequestAuthorized(req) {
         return true;
     return hasActiveAuthSession(req);
 }
-function setAuthCookie(res, token) {
-    const maxAgeSec = Math.floor(SESSION_TTL_MS / 1000);
-    res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`);
+function isHttpsRequest(req) {
+    if (!req)
+        return false;
+    if (req.secure === true)
+        return true;
+    const proto = String(req.headers?.['x-forwarded-proto'] || '')
+        .split(',')[0]
+        .trim()
+        .toLowerCase();
+    return proto === 'https';
 }
-function clearAuthCookie(res) {
-    res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+function setAuthCookie(res, token, req) {
+    const maxAgeSec = Math.floor(SESSION_TTL_MS / 1000);
+    const cookiePolicy = isHttpsRequest(req)
+        ? 'SameSite=None; Secure; Partitioned'
+        : 'SameSite=Lax';
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; ${cookiePolicy}; Max-Age=${maxAgeSec}`);
+}
+function clearAuthCookie(res, req) {
+    const cookiePolicy = isHttpsRequest(req)
+        ? 'SameSite=None; Secure; Partitioned'
+        : 'SameSite=Lax';
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; ${cookiePolicy}; Max-Age=0`);
 }
 /**
  * Express middleware protecting /api/* routes when ADMIN_PASSWORD is set,

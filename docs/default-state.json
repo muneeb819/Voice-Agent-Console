@@ -28,6 +28,17 @@
       "mk": "model"
     },
     {
+      "id": "s_local",
+      "kind": "stt",
+      "name": "Local Speech Service (Faster-Whisper STT)",
+      "type": "speech_service",
+      "models": "large-v3-turbo,whisper-1",
+      "endpoint": "{{SPEECH_SERVICE_URL}}/v1/audio/transcriptions",
+      "headers": "{\"Authorization\":\"Bearer {{SPEECH_SERVICE_API_KEY}}\"}",
+      "extra": "{}",
+      "mk": "model"
+    },
+    {
       "id": "l1",
       "kind": "llm",
       "name": "OpenAI (Deepgram Managed)",
@@ -90,6 +101,17 @@
       "models": "flux-kit-en,flux-haley-en,flux-alexis-en,flux-sienna-en,flux-miles-en,aura-2-thalia-en,aura-2-andromeda-en,aura-2-apollo-en,aura-stella-en",
       "endpoint": "",
       "headers": "{}",
+      "extra": "{}",
+      "mk": "model"
+    },
+    {
+      "id": "t_local",
+      "kind": "tts",
+      "name": "Local Speech Service (Kokoro + Cloned Voices)",
+      "type": "speech_service",
+      "models": "af_heart,af_alloy,af_aoede,af_bella,af_jessica,af_kore,af_nicole,af_nova,af_river,af_sarah,af_sky,am_adam,am_echo,am_eric,am_fenrir,am_liam,am_michael,am_onyx,am_puck,am_santa,bf_alice,bf_emma,bf_isabella,bf_lily,bm_daniel,bm_fable,bm_george,bm_lewis",
+      "endpoint": "{{SPEECH_SERVICE_URL}}/v1/audio/speech",
+      "headers": "{\"Authorization\":\"Bearer {{SPEECH_SERVICE_API_KEY}}\"}",
       "extra": "{}",
       "mk": "model"
     }

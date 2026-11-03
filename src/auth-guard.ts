@@ -163,13 +163,29 @@ export function constantTimePasswordMatch(candidate: string): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
+function extractQueryToken(req: http.IncomingMessage): string | null {
+  const rawUrl = String(req.url || '');
+  const qIdx = rawUrl.indexOf('?');
+  if (qIdx < 0) return null;
+  try {
+    const params = new URLSearchParams(rawUrl.slice(qIdx + 1));
+    const tok = (params.get('vac_token') || params.get('token') || '').trim();
+    return tok || null;
+  } catch {
+    return null;
+  }
+}
+
 export function getRequestSessionToken(req: http.IncomingMessage): string | null {
   const authHdr = String(req.headers.authorization || '').trim();
   if (/^Bearer\s+/i.test(authHdr)) {
     return authHdr.replace(/^Bearer\s+/i, '').trim() || null;
   }
   const cookies = parseCookies(req.headers.cookie);
-  return cookies[SESSION_COOKIE_NAME] || null;
+  if (cookies[SESSION_COOKIE_NAME]) {
+    return cookies[SESSION_COOKIE_NAME];
+  }
+  return extractQueryToken(req);
 }
 
 /**
@@ -208,13 +224,17 @@ export function hasActiveAuthSession(req: http.IncomingMessage): boolean {
     }
   }
 
-  // 2. Check signed HttpOnly session cookie (admin password session)
+  // 2. Check signed HttpOnly session cookie or query handoff token (admin password session)
   const cookies = parseCookies(req.headers.cookie);
   if (cookies[SESSION_COOKIE_NAME] && verifySessionToken(cookies[SESSION_COOKIE_NAME])) {
     return true;
   }
+  const queryTok = extractQueryToken(req);
+  if (queryTok && (constantTimePasswordMatch(queryTok) || verifySessionToken(queryTok))) {
+    return true;
+  }
 
-  // 3. Check email/password user session (cookie or bearer token)
+  // 3. Check email/password user session (cookie, bearer token, or query handoff token)
   if (getAuthenticatedUser(req)) {
     return true;
   }
@@ -230,18 +250,34 @@ export function isRequestAuthorized(req: http.IncomingMessage): boolean {
   return hasActiveAuthSession(req);
 }
 
-export function setAuthCookie(res: Response, token: string): void {
+function isHttpsRequest(req?: http.IncomingMessage): boolean {
+  if (!req) return false;
+  if ((req as any).secure === true) return true;
+  const proto = String(req.headers?.['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  return proto === 'https';
+}
+
+export function setAuthCookie(res: Response, token: string, req?: http.IncomingMessage): void {
   const maxAgeSec = Math.floor(SESSION_TTL_MS / 1000);
+  const cookiePolicy = isHttpsRequest(req)
+    ? 'SameSite=None; Secure; Partitioned'
+    : 'SameSite=Lax';
   res.setHeader(
     'Set-Cookie',
-    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSec}`
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; ${cookiePolicy}; Max-Age=${maxAgeSec}`
   );
 }
 
-export function clearAuthCookie(res: Response): void {
+export function clearAuthCookie(res: Response, req?: http.IncomingMessage): void {
+  const cookiePolicy = isHttpsRequest(req)
+    ? 'SameSite=None; Secure; Partitioned'
+    : 'SameSite=Lax';
   res.setHeader(
     'Set-Cookie',
-    `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
+    `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; ${cookiePolicy}; Max-Age=0`
   );
 }
 

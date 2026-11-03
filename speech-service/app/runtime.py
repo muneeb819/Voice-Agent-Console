@@ -128,6 +128,19 @@ class Runtime:
     # ---- TTS ----
     async def tts_chunks(self, text: str, voice: str, speed: float, owner: str):
         """Async iterator of (float32 chunk, sample_rate). Handles stock Kokoro voices and clone:<id> voices."""
+        voice = {
+            "alloy": "af_alloy",
+            "ash": "am_adam",
+            "ballad": "bm_george",
+            "coral": "af_kore",
+            "echo": "am_echo",
+            "fable": "bm_fable",
+            "nova": "af_nova",
+            "onyx": "am_onyx",
+            "sage": "af_sarah",
+            "shimmer": "af_bella",
+            "verse": "am_liam",
+        }.get(voice.strip().lower(), voice.strip())
         if voice.startswith("clone:"):
             vid = voice[6:]
             self.voices.get(vid, owner)  # KeyError if missing / not owned

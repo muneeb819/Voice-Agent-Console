@@ -198,9 +198,11 @@ async def stream_tts(ws: WebSocket):
     s = rt.settings
     cfg = {"voice": s.tts_voice, "speed": 1.0, "format": "pcm", "sample_rate": None}
     queue: asyncio.Queue = asyncio.Queue(maxsize=32)
-    current: dict = {"task": None}
+    current: dict = {"task": None, "epoch": 0}
 
     async def speak(item: dict) -> None:
+        if item["epoch"] != current["epoch"]:
+            return
         sid = item.get("id")
         try:
             enc: StreamEncoder | None = None
@@ -211,10 +213,12 @@ async def stream_tts(ws: WebSocket):
                 rt.tts_chunks(item["text"], cfg["voice"], float(cfg["speed"]), p.key_id)
             ) as gen:
                 async for chunk, sr in gen:
+                    if item["epoch"] != current["epoch"]:
+                        return
                     if enc is None or enc_sr != sr:
                         if enc is not None:
                             flushed = enc.finish()
-                            if flushed:
+                            if flushed and item["epoch"] == current["epoch"]:
                                 await ws.send_bytes(flushed)
                         enc = StreamEncoder(cfg["format"], sr, cfg["sample_rate"])
                         enc_sr = sr
@@ -227,8 +231,10 @@ async def stream_tts(ws: WebSocket):
                             })
                             started = True
                     out = enc.feed(chunk)
-                    if out:
+                    if out and item["epoch"] == current["epoch"]:
                         await ws.send_bytes(out)
+            if item["epoch"] != current["epoch"]:
+                return
             tail = enc.finish() if (started and enc is not None) else b""
             if tail:
                 await ws.send_bytes(tail)
@@ -243,6 +249,8 @@ async def stream_tts(ws: WebSocket):
     async def consumer() -> None:
         while True:
             item = await queue.get()
+            if item["epoch"] != current["epoch"]:
+                continue
             current["task"] = asyncio.create_task(speak(item))
             try:
                 await current["task"]
@@ -268,12 +276,18 @@ async def stream_tts(ws: WebSocket):
                 elif queue.full():
                     await ws.send_json({"type": "error", "message": "too many queued requests"})
                 else:
-                    queue.put_nowait({"id": req.get("id"), "text": text})
+                    queue.put_nowait({"id": req.get("id"), "text": text, "epoch": current["epoch"]})
             elif t == "cancel":  # barge-in: drop queued speech and stop the current utterance now
+                current["epoch"] += 1
                 while not queue.empty():
                     queue.get_nowait()
-                if current["task"]:
-                    current["task"].cancel()
+                task = current["task"]
+                if task:
+                    task.cancel()
+                    try:
+                        await task
+                    except BaseException:  # noqa: BLE001
+                        pass
                 await ws.send_json({"type": "cancelled"})
             elif t == "close":
                 break

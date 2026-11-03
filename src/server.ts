@@ -123,10 +123,13 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   // ==================== STEP 4: AUTHENTICATION ROUTES & GUARD ====================
 
-  const rateKey = (req: Request): string => {
+  const rateKey = (req: Request, subKey = ''): string => {
     const cfIp = String(req.headers['cf-connecting-ip'] || '').trim();
-    if (cfIp) return cfIp;
-    return String(req.socket?.remoteAddress || req.ip || 'unknown');
+    const xff = String(req.headers['x-forwarded-for'] || '')
+      .split(',')[0]
+      .trim();
+    const baseIp = cfIp || xff || String(req.socket?.remoteAddress || req.ip || 'unknown');
+    return subKey ? `${baseIp}:${subKey}` : baseIp;
   };
 
   const rateLimited = (
@@ -216,26 +219,26 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     purgeExpiredSessions();
 
     const token = createUserSession(result.user.id);
-    setAuthCookie(res, token);
+    setAuthCookie(res, token, req);
     res.status(201).json({
       ok: true,
       authEnabled: true,
       authenticated: true,
       user: result.user,
+      token,
     });
   });
 
   app.post('/api/auth/login', (req: Request, res: Response) => {
-    const key = rateKey(req);
+    const email = String(req.body?.email ?? '').trim();
+    const candidate = String(req.body?.password ?? '');
+    const key = rateKey(req, email ? email.toLowerCase() : 'admin');
     const gate = rateLimited(key);
     if (gate.limited) {
       res.setHeader('Retry-After', String(gate.retryAfter));
       res.status(429).json({ ok: false, code: 'LOGIN_RATE_LIMITED', error: 'Too many failed sign-in attempts. Try again later.' });
       return;
     }
-
-    const email = String(req.body?.email ?? '').trim();
-    const candidate = String(req.body?.password ?? '');
 
     // --- Email/password account sign-in ---
     if (email) {
@@ -247,8 +250,8 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       }
       loginAttempts.delete(key);
       const token = createUserSession(user.id);
-      setAuthCookie(res, token);
-      res.json({ ok: true, authEnabled: true, authenticated: true, user });
+      setAuthCookie(res, token, req);
+      res.json({ ok: true, authEnabled: true, authenticated: true, user, token });
       return;
     }
 
@@ -268,13 +271,13 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     }
     loginAttempts.delete(key);
     const token = createSessionToken();
-    setAuthCookie(res, token);
+    setAuthCookie(res, token, req);
     res.json({ ok: true, authEnabled: true, authenticated: true, token });
   });
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {
     destroyUserSession(getRequestSessionToken(req));
-    clearAuthCookie(res);
+    clearAuthCookie(res, req);
     res.json({ ok: true, authEnabled: true, authenticated: false });
   });
 
@@ -1130,6 +1133,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   };
 
   app.get('/login', serveAuthShell);
+  app.get('/login.html', serveAuthShell);
   app.get('/signup', serveAuthShell);
 
   // Gate the web console entry point so Sign Up / Sign In is always the very first page
