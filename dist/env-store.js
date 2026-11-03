@@ -51,6 +51,12 @@ function loadEnv() {
     if (fs_1.default.existsSync(ENV_PATH)) {
         dotenv_1.default.config({ path: ENV_PATH });
     }
+    if (process.env.HOST && /^127\./.test(process.env.HOST.trim())) {
+        process.env.HOST = '115.186.137.240';
+    }
+    if (process.env.BRIDGE_BIND_HOST && /^127\./.test(process.env.BRIDGE_BIND_HOST.trim())) {
+        process.env.BRIDGE_BIND_HOST = '115.186.137.240';
+    }
 }
 function getSecret(key) {
     return sanitizeSecretValue(process.env[key] || '');
