@@ -1028,8 +1028,8 @@ header::after {
   width: 248px;
   flex-shrink: 0;
   position: sticky;
-  top: 62px;
-  height: calc(100vh - 62px);
+  top: var(--console-header-height, 62px);
+  height: calc(100vh - var(--console-header-height, 62px));
   display: flex;
   flex-direction: column;
   background: var(--sf);
@@ -1303,7 +1303,7 @@ nav.side-nav button.nav-item.on .nav-live-dot {
 
 .rail-backdrop {
   position: fixed;
-  top: 62px;
+  top: var(--console-header-height, 62px);
   left: 0;
   right: 0;
   bottom: 0;
@@ -1329,15 +1329,31 @@ nav.side-nav button.nav-item.on .nav-live-dot {
   .hdr-dock-btn .hdr-btn-txt {
     max-width: 72px;
   }
+
+  .hdr-zone-right {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .hdr-tool-dock {
+    width: 100%;
+    height: auto;
+    flex-wrap: wrap;
+  }
+
+  .hdr-commit-group {
+    margin-left: auto;
+  }
 }
 
 @media (max-width: 860px) {
   .side-rail {
     position: fixed;
-    top: 62px;
+    top: var(--console-header-height, 62px);
     left: 0;
     bottom: 0;
-    height: calc(100vh - 62px);
+    height: calc(100vh - var(--console-header-height, 62px));
     width: 268px;
     z-index: 38;
     transform: translateX(-104%);
@@ -1565,19 +1581,20 @@ main.wide {
 
 @media (max-width: 1080px) {
   .app-shell:not(.rail-collapsed) main {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
 @media (max-width: 960px) {
   main {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     padding: 14px;
   }
 }
 
 .card {
   position: relative;
+  min-width: 0;
   background: var(--sf);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
@@ -1747,23 +1764,23 @@ pre {
 
 .row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
 .r3 {
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .r4 {
-  grid-template-columns: 1.4fr 1fr 1fr 1fr 0.8fr;
+  grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr)) minmax(0, 0.8fr);
 }
 
 @media (max-width: 740px) {
   .row,
   .r3,
   .r4 {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -1845,13 +1862,13 @@ pre {
 
 @media (max-width: 920px) {
   .voice-workbench {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
 .voice-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(292px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 292px), 1fr));
   gap: 14px;
   margin-top: 14px;
 }
@@ -3338,7 +3355,7 @@ audio {
 
 @media (max-width: 1180px) {
   .cmd-hero-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

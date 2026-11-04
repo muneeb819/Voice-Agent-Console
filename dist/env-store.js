@@ -21,7 +21,10 @@ dns_1.default.setDefaultResultOrder('ipv4first');
 if (typeof net_1.default.setDefaultAutoSelectFamily === 'function') {
     net_1.default.setDefaultAutoSelectFamily(false);
 }
-const ENV_PATH = path_1.default.resolve(__dirname, '..', '.env');
+// Tests and isolated installations can point secret writes at a dedicated file.
+const ENV_PATH = process.env.VAC_ENV_FILE
+    ? path_1.default.resolve(process.env.VAC_ENV_FILE)
+    : path_1.default.resolve(__dirname, '..', '.env');
 exports.MANAGED_SECRET_KEYS = [
     'DEEPGRAM_API_KEY',
     'SPEECH_SERVICE_URL',
@@ -51,12 +54,6 @@ function loadEnv() {
     if (fs_1.default.existsSync(ENV_PATH)) {
         dotenv_1.default.config({ path: ENV_PATH });
     }
-    if (process.env.HOST && /^127\./.test(process.env.HOST.trim())) {
-        process.env.HOST = '115.186.137.240';
-    }
-    if (process.env.BRIDGE_BIND_HOST && /^127\./.test(process.env.BRIDGE_BIND_HOST.trim())) {
-        process.env.BRIDGE_BIND_HOST = '115.186.137.240';
-    }
 }
 function getSecret(key) {
     return sanitizeSecretValue(process.env[key] || '');
@@ -82,24 +79,61 @@ function getSecretsStatus() {
     return out;
 }
 function updateSecrets(updates) {
-    let content = fs_1.default.existsSync(ENV_PATH) ? fs_1.default.readFileSync(ENV_PATH, 'utf8') : '';
+    const content = fs_1.default.existsSync(ENV_PATH) ? fs_1.default.readFileSync(ENV_PATH, 'utf8') : '';
     const lines = content.split(/\r?\n/);
+    const normalized = {};
+    const formattedLines = {};
+    // Validate the whole update before changing either the file or process.env.
     for (const key of exports.MANAGED_SECRET_KEYS) {
         if (updates[key] === undefined)
             continue;
-        const newVal = sanitizeSecretValue(String(updates[key] ?? ''));
-        process.env[key] = newVal;
-        const regex = new RegExp(`^\\s*${key}\\s*=`);
-        const idx = lines.findIndex((line) => regex.test(line));
-        const formatted = `${key}=${newVal}`;
-        if (idx >= 0) {
-            lines[idx] = formatted;
-        }
-        else {
-            lines.push(formatted);
-        }
+        const raw = String(updates[key] ?? '');
+        if (/[\r\n\0]/.test(raw))
+            throw new Error(`${key} must not contain newlines or NUL characters`);
+        const value = sanitizeSecretValue(raw);
+        normalized[key] = value;
+        // Select a form that the actual dotenv parser round-trips exactly. Quotes,
+        // backslashes and # interact in non-obvious ways; reject combinations that
+        // cannot be represented instead of silently saving a different secret.
+        const candidates = value ? ["'", '`', '"'].map((q) => `${key}=${q}${value}${q}`) : [`${key}=`];
+        const formatted = candidates.find((line) => dotenv_1.default.parse(line)[key] === value);
+        if (!formatted)
+            throw new Error(`${key} contains characters that cannot be stored safely`);
+        formattedLines[key] = formatted;
     }
-    fs_1.default.writeFileSync(ENV_PATH, lines.join('\n').replace(/\n+$/, '\n'), 'utf8');
+    for (const key of exports.MANAGED_SECRET_KEYS) {
+        const formatted = formattedLines[key];
+        if (formatted === undefined)
+            continue;
+        const regex = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`);
+        const indexes = lines.map((line, index) => regex.test(line) ? index : -1).filter((index) => index >= 0);
+        if (indexes.length) {
+            lines[indexes[0]] = formatted;
+            // A later duplicate would otherwise override the new value on restart.
+            for (const index of indexes.slice(1).reverse())
+                lines.splice(index, 1);
+        }
+        else
+            lines.push(formatted);
+    }
+    // Do not expose newly written credentials to other local users, and do not
+    // leave a partially written .env if the process is interrupted.
+    const tmpPath = `${ENV_PATH}.tmp-${process.pid}-${Date.now()}`;
+    try {
+        fs_1.default.writeFileSync(tmpPath, lines.join('\n').replace(/\n+$/, '\n'), { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+        fs_1.default.renameSync(tmpPath, ENV_PATH);
+        fs_1.default.chmodSync(ENV_PATH, 0o600);
+    }
+    finally {
+        try {
+            fs_1.default.unlinkSync(tmpPath);
+        }
+        catch { }
+    }
+    for (const key of exports.MANAGED_SECRET_KEYS) {
+        if (normalized[key] !== undefined)
+            process.env[key] = normalized[key];
+    }
 }
 /**
  * Verifies DEEPGRAM_API_KEY against:

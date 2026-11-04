@@ -10,5 +10,5 @@ fi
 echo "Building TypeScript..."
 npm run build
 
-echo "Starting Voice Agent Console + Live Simulator + VICIdial Bridge on http://115.186.137.240:533 ..."
+echo "Starting Voice Agent Console (default http://127.0.0.1:533; see server output for the actual listener)..."
 exec npm start

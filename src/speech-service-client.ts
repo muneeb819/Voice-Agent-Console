@@ -1,5 +1,4 @@
 import WebSocket from 'ws';
-import { getPreferredLanIpv4 } from './demo-tunnel';
 import { getSecret } from './env-store';
 
 export const KOKORO_STOCK_VOICES = [
@@ -40,8 +39,7 @@ export function getSpeechServiceBaseUrl(explicitUrl?: string): string {
     explicitUrl || getSecret('SPEECH_SERVICE_URL') || process.env.SPEECH_SERVICE_URL || ''
   ).trim();
   if (raw) return raw.replace(/\/+$/, '');
-  const lanIp = getPreferredLanIpv4() || 'localhost';
-  return `http://${lanIp}:8000`;
+  return 'http://127.0.0.1:8000';
 }
 
 export function getSpeechServiceWsBaseUrl(explicitUrl?: string): string {

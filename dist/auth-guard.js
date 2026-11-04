@@ -13,6 +13,7 @@ exports.hasRegisteredUsers = hasRegisteredUsers;
 exports.isAuthEnabled = isAuthEnabled;
 exports.createSessionToken = createSessionToken;
 exports.verifySessionToken = verifySessionToken;
+exports.invalidateAdminSession = invalidateAdminSession;
 exports.constantTimePasswordMatch = constantTimePasswordMatch;
 exports.getRequestSessionToken = getRequestSessionToken;
 exports.getAuthenticatedUser = getAuthenticatedUser;
@@ -22,6 +23,7 @@ exports.setAuthCookie = setAuthCookie;
 exports.clearAuthCookie = clearAuthCookie;
 exports.apiAuthMiddleware = apiAuthMiddleware;
 const crypto_1 = __importDefault(require("crypto"));
+const net_1 = __importDefault(require("net"));
 const env_store_1 = require("./env-store");
 const user_store_1 = require("./user-store");
 const SESSION_COOKIE_NAME = 'vac_session';
@@ -34,7 +36,9 @@ function cachedUserCount() {
             userCountCache = { value: (0, user_store_1.countUsers)(), at: now };
         }
         catch {
-            userCountCache = { value: 0, at: now };
+            // If the account store is unavailable, fail closed rather than treating
+            // the installation as a fresh, unauthenticated one.
+            userCountCache = { value: 1, at: now };
         }
     }
     return userCountCache.value;
@@ -49,8 +53,8 @@ function normalizeIp(raw) {
     return s;
 }
 function isLoopbackIp(raw) {
-    const ip = normalizeIp(raw);
-    return ip === '115.186.137.240' || ip === '::1' || ip === 'localhost';
+    const ip = normalizeIp(raw).toLowerCase();
+    return ip === 'localhost' || ip === '::1' || (net_1.default.isIP(ip) === 4 && ip.startsWith('127.'));
 }
 function ipv4ToInt(ip) {
     const parts = ip.split('.');
@@ -88,15 +92,14 @@ function matchesIpRule(ip, rule) {
     }
     return normalizeIp(cleanRule) === ip;
 }
-exports.DEFAULT_TRUSTED_IPS = ['115.186.137.240'];
+exports.DEFAULT_TRUSTED_IPS = [];
 function isTrustedDefaultIp(raw) {
-    const ip = normalizeIp(raw);
-    return isLoopbackIp(ip) || exports.DEFAULT_TRUSTED_IPS.includes(ip);
+    return isLoopbackIp(raw);
 }
 /**
- * Checks whether an incoming SIP (:5062) or AudioSocket (:9092) peer IP is allowed.
- * When BRIDGE_ALLOWED_IPS is empty, allows trusted IPs (115.186.137.240).
- * When BRIDGE_ALLOWED_IPS is configured (e.g. "115.186.137.240,10.0.0.0/8"), enforces strict allowlist.
+ * Checks whether an incoming SIP or AudioSocket peer IP is allowed.
+ * An empty allowlist permits loopback only. Remote PBX addresses must be
+ * explicitly configured with BRIDGE_ALLOWED_IPS.
  */
 function isBridgePeerIpAllowed(remoteAddress) {
     const ip = normalizeIp(remoteAddress);
@@ -131,28 +134,41 @@ function signTimestamp(ts, password) {
 }
 function createSessionToken(passwordOverride) {
     const pwd = passwordOverride ?? (0, env_store_1.getSecret)('ADMIN_PASSWORD');
-    const ts = String(Date.now());
-    return `${ts}.${signTimestamp(ts, pwd)}`;
+    // A nonce prevents simultaneous logins from sharing the same revocable token.
+    const payload = `${Date.now()}-${crypto_1.default.randomBytes(16).toString('hex')}`;
+    return `${payload}.${signTimestamp(payload, pwd)}`;
 }
 function verifySessionToken(token) {
     const pwd = (0, env_store_1.getSecret)('ADMIN_PASSWORD');
-    if (!pwd)
-        return false;
-    if (!token)
+    if (!pwd || !token)
         return false;
     const dot = token.indexOf('.');
     if (dot <= 0)
         return false;
-    const ts = token.slice(0, dot);
+    const payload = token.slice(0, dot);
     const sig = token.slice(dot + 1);
-    const tsNum = Number(ts);
+    // Accept older timestamp-only sessions until they expire, too.
+    if (!/^\d+(?:-[0-9a-f]{32})?$/.test(payload) || !/^[0-9a-f]{64}$/.test(sig))
+        return false;
+    const tsNum = Number(payload.split('-')[0]);
     if (!Number.isFinite(tsNum) || Date.now() - tsNum > SESSION_TTL_MS || tsNum > Date.now() + 60_000) {
         return false;
     }
-    const expected = signTimestamp(ts, pwd);
-    if (sig.length !== expected.length)
+    const expected = signTimestamp(payload, pwd);
+    if (!crypto_1.default.timingSafeEqual(Buffer.from(sig), Buffer.from(expected)))
         return false;
-    return crypto_1.default.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
+    try {
+        return !(0, user_store_1.isAdminSessionRevoked)(token);
+    }
+    catch {
+        return false; // An unavailable revocation store must not authorize a session.
+    }
+}
+function invalidateAdminSession(token) {
+    if (!token || !verifySessionToken(token))
+        return;
+    const issuedAt = Number(token.slice(0, token.indexOf('.')).split('-')[0]);
+    (0, user_store_1.revokeAdminSession)(token, issuedAt + SESSION_TTL_MS);
 }
 function parseCookies(cookieHeader) {
     const out = {};
@@ -262,24 +278,40 @@ function hasActiveAuthSession(req) {
     }
     return false;
 }
+function hasForwardingHeaders(req) {
+    return ['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-real-ip', 'cf-connecting-ip']
+        .some((name) => Boolean(req.headers[name]));
+}
+// A browser can resolve an attacker-controlled hostname to loopback (DNS
+// rebinding). Socket address alone is therefore insufficient for exemptions.
+function hasLoopbackHost(req) {
+    try {
+        const url = new URL(`http://${String(req.headers.host || '')}`);
+        if (url.username || url.password || url.pathname !== '/' || url.search || url.hash)
+            return false;
+        return isLoopbackIp(url.hostname.replace(/^\[|\]$/g, ''));
+    }
+    catch {
+        return false;
+    }
+}
 /**
  * Verifies an HTTP Request or WebSocket Upgrade IncomingMessage.
  */
 function isRequestAuthorized(req) {
-    if (!isAuthEnabled())
-        return true;
+    if (!isAuthEnabled()) {
+        // Fresh installations may be initialized directly on loopback only.
+        // A reverse proxy/tunnel can also connect from loopback, so reject proxy
+        // hints during bootstrap rather than mistaking its remote clients for local.
+        return isLoopbackIp(req.socket?.remoteAddress) && hasLoopbackHost(req) && !hasForwardingHeaders(req);
+    }
     return hasActiveAuthSession(req);
 }
 function isHttpsRequest(req) {
     if (!req)
         return false;
-    if (req.secure === true)
-        return true;
-    const proto = String(req.headers?.['x-forwarded-proto'] || '')
-        .split(',')[0]
-        .trim()
-        .toLowerCase();
-    return proto === 'https';
+    // Express only considers X-Forwarded-Proto when its proxy is trusted.
+    return req.secure === true || Boolean(req.socket?.encrypted);
 }
 function setAuthCookie(res, token, req) {
     const maxAgeSec = Math.floor(SESSION_TTL_MS / 1000);
@@ -300,10 +332,6 @@ function clearAuthCookie(res, req) {
  * pre-call hooks (/api/vici/register-call & /api/vici/precall).
  */
 function apiAuthMiddleware(req, res, next) {
-    if (!isAuthEnabled()) {
-        next();
-        return;
-    }
     const p = req.path;
     if (p === '/health' ||
         p.startsWith('/auth/')) {
@@ -313,7 +341,10 @@ function apiAuthMiddleware(req, res, next) {
     // Co-located Asterisk dialplan CURL() pre-call registration whitelist
     if (p === '/vici/register-call' || p === '/vici/precall') {
         const peerIp = req.socket?.remoteAddress || req.ip;
-        if (isTrustedDefaultIp(peerIp) || ((0, env_store_1.getSecret)('BRIDGE_ALLOWED_IPS') && isBridgePeerIpAllowed(peerIp))) {
+        // Proxy requests must authenticate; a public reverse proxy may itself
+        // connect from loopback and must not inherit the local PBX exemption.
+        if (!hasForwardingHeaders(req) && isBridgePeerIpAllowed(peerIp) &&
+            (!isLoopbackIp(peerIp) || hasLoopbackHost(req))) {
             next();
             return;
         }

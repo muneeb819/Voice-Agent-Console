@@ -173,6 +173,30 @@ export function getCachedTunnelUrlSync(): string | null {
   return null;
 }
 
+function tunnelUpstreamHost(): string {
+  const host = String(process.env.HOST || '').trim();
+  return host && /^[a-z0-9.-]+$/i.test(host) && !['0.0.0.0', 'localhost'].includes(host)
+    ? host : '127.0.0.1';
+}
+
+// Probe the same listener used by cloudflared. The origin guard only accepts
+// this forwarded HTTPS origin when the connecting address is a trusted proxy.
+export async function isTunnelProxyReady(localPort: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://${tunnelUpstreamHost()}:${localPort}/api/health`, {
+      headers: {
+        Origin: 'https://vac-proxy-probe.invalid',
+        'X-Forwarded-Host': 'vac-proxy-probe.invalid',
+        'X-Forwarded-Proto': 'https',
+      },
+      signal: AbortSignal.timeout(2000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function startPublicDemoTunnel(
   localPort: number
 ): Promise<{ ok: boolean; publicUrl: string | null; error?: string }> {
@@ -187,9 +211,8 @@ export async function startPublicDemoTunnel(
       const cfBin = await ensureCloudflaredBin();
       fs.mkdirSync(LOGS_DIR, { recursive: true });
 
-      const upstreamHost =
-        process.platform === 'win32' ? getPreferredLanIpv4() || 'localhost' : 'localhost';
-      const upstreamUrl = `http://${upstreamHost}:${localPort}`;
+      // Match the listener; use IPv4 loopback for wildcard/local defaults.
+      const upstreamUrl = `http://${tunnelUpstreamHost()}:${localPort}`;
 
       const proc = childProcess.spawn(
         cfBin,

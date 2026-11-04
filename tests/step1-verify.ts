@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { createDefaultState, normalizeState } from '../src/defaults';
 import { DATA_DIR } from '../src/data-paths';
+import { fetchAllowedSampleAudio } from '../src/deepgram-catalog';
 import {
   buildDeepgramSettings,
   generateViciConfig,
@@ -44,7 +45,7 @@ async function run() {
   });
 
   let sampleVoiceUrl = '';
-  await check('2. Live Deepgram Voice Catalog (Flux v2 + Aura-2/v1) & filtering', async () => {
+  await check('2. Deepgram voice catalog (cached or live) & filtering', async () => {
     const res = await fetch(`${BASE}/api/deepgram/voices`);
     assert.strictEqual(res.status, 200);
     const data: any = await res.json();
@@ -61,18 +62,32 @@ async function run() {
     sampleVoiceUrl = withSample.sampleUrl;
   });
 
-  await check('3. Studio Sample Audio Proxy (WAV stream + SSRF block)', async () => {
+  await check('3. Studio Sample Audio Proxy (mocked upstream, unavailable response + SSRF block)', async () => {
+    const originalFetch = globalThis.fetch;
+    try {
+      globalThis.fetch = (async (_url: any, options: any) => {
+        assert.strictEqual(options.redirect, 'error');
+        return new Response(Buffer.from('RIFF-mocked-sample'), { headers: { 'Content-Type': 'audio/wav' } });
+      }) as typeof fetch;
+      const sample = await fetchAllowedSampleAudio('https://static.deepgram.com/sample.wav');
+      assert.strictEqual(sample.buffer.toString(), 'RIFF-mocked-sample');
+      globalThis.fetch = (async () => { throw new Error('offline'); }) as typeof fetch;
+      await assert.rejects(fetchAllowedSampleAudio('https://static.deepgram.com/sample.wav'), /Voice sample unavailable/);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
     const res = await fetch(`${BASE}/api/deepgram/sample?url=${encodeURIComponent(sampleVoiceUrl)}`);
-    assert.strictEqual(res.status, 200);
-    const buf = Buffer.from(await res.arrayBuffer());
-    assert.ok(buf.length > 5000, `Expected audio payload > 5KB, got ${buf.length}`);
-    assert.strictEqual(buf.subarray(0, 4).toString('ascii'), 'RIFF', 'Expected valid RIFF WAV header');
-
+    if (res.status === 200) {
+      assert.ok((await res.arrayBuffer()).byteLength > 0, 'A real upstream response must contain audio');
+    } else {
+      assert.strictEqual(res.status, 502, 'Unavailable samples must not be replaced with fake audio');
+      assert.strictEqual((await res.json() as any).code, 'SAMPLE_UNAVAILABLE');
+    }
     const blocked = await fetch(`${BASE}/api/deepgram/sample?url=${encodeURIComponent('https://evil.example.com/x.wav')}`);
     assert.strictEqual(blocked.status, 400, 'Expected SSRF host allowlist to reject untrusted domain');
   });
 
-  await check('4. Live Deepgram Flux v2 TTS Synthesis (/api/tts/preview) & validation', async () => {
+  await check('4. TTS preview validation (live synthesis only when configured)', async () => {
     const emptyRes = await fetch(`${BASE}/api/tts/preview`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

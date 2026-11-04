@@ -24,7 +24,8 @@ tools/cloudflared.exe
 logs/
 *.zip
 
-# Python test caches & local speech-service runtime state
+# Python environments, test caches & local speech-service runtime state
+.venv/
 __pycache__/
 *.pyc
 .pytest_cache/

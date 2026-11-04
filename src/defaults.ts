@@ -495,19 +495,19 @@ export function createDefaultState(): ConsoleState {
       },
     ],
     vici: {
-      viciBaseUrl: 'http://115.186.137.240',
+      viciBaseUrl: 'http://127.0.0.1',
       nonAgentApiPath: '/vicidial/non_agent_api.php',
       agentApiPath: '/agc/api.php',
       apiUser: '6666',
       source: 'aibot',
       transport: 'sip_trunk',
-      bridgeHost: '115.186.137.240',
+      bridgeHost: '127.0.0.1',
       bridgePort: 9092,
       sipPort: 5062,
       aiExten: '8800',
       remoteAgentUser: '9001',
       inIngroup: 'AI_INBOUND',
-      amiHost: '115.186.137.240',
+      amiHost: '127.0.0.1',
       amiPort: 5038,
       amiUser: 'cron',
     },
@@ -972,15 +972,9 @@ export function normalizeState(raw: any): ConsoleState {
     }
   }
 
-  if (viciBaseUrl === 'https://dialer.example.com' || /^https?:\/\/127\./.test(viciBaseUrl)) {
-    viciBaseUrl = 'http://115.186.137.240';
-  }
-  const rawBridgeHost =
-    src.vici?.bridgeHost === 'bridge.example.com' || /^127\./.test(String(src.vici?.bridgeHost || ''))
-      ? '115.186.137.240'
-      : src.vici?.bridgeHost;
-  const rawAmiHost =
-    /^127\./.test(String(src.vici?.amiHost || '')) ? '115.186.137.240' : src.vici?.amiHost;
+  if (viciBaseUrl === 'https://dialer.example.com') viciBaseUrl = base.vici.viciBaseUrl;
+  const rawBridgeHost = src.vici?.bridgeHost === 'bridge.example.com' ? base.vici.bridgeHost : src.vici?.bridgeHost;
+  const rawAmiHost = src.vici?.amiHost;
   const rawSipPort = num(src.vici?.sipPort, 5062);
 
   const vici = {
@@ -992,7 +986,7 @@ export function normalizeState(raw: any): ConsoleState {
     transport: src.vici?.transport === 'audiosocket' ? ('audiosocket' as const) : ('sip_trunk' as const),
     bridgeHost: String(rawBridgeHost || base.vici.bridgeHost),
     bridgePort: Math.round(num(src.vici?.bridgePort, 9092)),
-    sipPort: Math.round(rawSipPort === 5060 && (!rawBridgeHost || rawBridgeHost === '115.186.137.240') ? 5062 : rawSipPort),
+    sipPort: Math.round(rawSipPort),
     aiExten: String(src.vici?.aiExten || base.vici.aiExten),
     remoteAgentUser: String(src.vici?.remoteAgentUser || base.vici.remoteAgentUser),
     inIngroup: String(src.vici?.inIngroup || base.vici.inIngroup),

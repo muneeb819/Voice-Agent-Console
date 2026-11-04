@@ -27,6 +27,18 @@
     try { window.localStorage?.removeItem(VAC_AUTH_TOKEN_KEY); } catch {}
   }
 
+  // A cookie-less iframe handoff needs a token on the initial navigation.
+  // Remove it from the address bar/history as soon as the console loads.
+  try {
+    const current = new URL(window.location.href);
+    const handoff = current.searchParams.get('vac_token');
+    if (handoff) {
+      vacSaveAuthToken(handoff);
+      current.searchParams.delete('vac_token');
+      history.replaceState(history.state, '', `${current.pathname}${current.search}${current.hash}`);
+    }
+  } catch {}
+
   function vacWithWsAuth(wsUrl) {
     const tok = vacReadAuthToken();
     if (!tok) return wsUrl;
@@ -794,6 +806,16 @@
 
   renderSideNav();
   applySidebarState(false);
+
+  // The sticky header wraps on small screens. Keep the navigation rail below
+  // its actual height, rather than covering its first items with the header.
+  const consoleHeader = document.querySelector('header.console-header');
+  const syncHeaderHeight = () => {
+    if (consoleHeader) document.documentElement.style.setProperty('--console-header-height', `${Math.ceil(consoleHeader.getBoundingClientRect().height)}px`);
+  };
+  syncHeaderHeight();
+  window.addEventListener('resize', syncHeaderHeight);
+  if (consoleHeader && typeof ResizeObserver === 'function') new ResizeObserver(syncHeaderHeight).observe(consoleHeader);
 
   const railBackdropEl = document.getElementById('rail-backdrop');
   if (railBackdropEl) {
@@ -1891,7 +1913,8 @@
       ``,
       `# === Bridge Server .env (Co-Located on ViciBox) ===`,
       `PORT=533`,
-      `HOST=115.186.137.240`,
+      `# Set HOST explicitly for remote access after configuring authentication`,
+      `HOST=127.0.0.1`,
       `DEEPGRAM_API_KEY=***`,
       `VICI_API_PASS=***`,
       `AMI_SECRET=***`,
@@ -1903,9 +1926,11 @@
   const renderCheckList = (arr) =>
     arr.map((x) => `<div class="ck"><span class="${x[0]}">${x[1]}</span><span>${x[2]}</span></div>`).join('');
 
+  let fieldSerial = 0;
   const F = (label, path, type = 'text', opts = [], attrs = '') => {
     const val = getPath(path);
-    const dp = `data-p="${path}"`;
+    const fieldId = `vac-field-${++fieldSerial}`;
+    const dp = `data-p="${path}" id="${fieldId}"`;
     if (type === 'chk') {
       return `<label class="chk-label"><input type="checkbox" style="width:auto" ${dp} ${val ? 'checked' : ''}>${label}</label>`;
     }
@@ -1928,7 +1953,7 @@
       const stepAttr = type === 'number' && !attrs.includes('step=') ? 'step="any"' : '';
       fieldHtml = `<input type="${type}" ${dp} ${stepAttr} ${attrs} value="${esc(val ?? '')}">`;
     }
-    return `<label>${label}</label>${fieldHtml}`;
+    return `<label for="${fieldId}">${label}</label>${fieldHtml}`;
   };
 
   const providersByKind = (kind) => S.providers.filter((p) => p.kind === kind).map((p) => [p.id, p.name]);
@@ -2011,15 +2036,15 @@
       </div>
       <div class="row r3">
         <div>
-          <label>Speech Service URL (optional override)</label>
+          <label for="ss-url-input">Speech Service URL (optional override)</label>
           <input id="ss-url-input" type="text" placeholder="e.g. http://192.168.18.29:8000" value="${esc(localSpeechUi.urlDraft)}" autocomplete="off" />
         </div>
         <div>
-          <label>Speech Service API Key (Bearer / X-API-Key)</label>
+          <label for="ss-key-input">Speech Service API Key (Bearer / X-API-Key)</label>
           <input id="ss-key-input" type="password" placeholder="${keyConfigured ? 'Saved in .env (enter to update)' : 'Enter SPEECH_API_KEY if enabled…'}" autocomplete="off" />
         </div>
         <div>
-          <label>Default Kokoro / Cloned Voice</label>
+          <label for="ss-voice-select">Default Kokoro / Cloned Voice</label>
           <select id="ss-voice-select">
             ${voices.map((v) => `<option value="${esc(v)}" ${v === currentVoice ? 'selected' : ''}>${esc(v)}</option>`).join('')}
           </select>
@@ -2075,7 +2100,7 @@
   const renderSelectorBar = (kind) => {
     const arr = kind === 'a' ? S.agents : S.campaigns;
     return `<div class="bar">
-      <select id="sel-${kind}" ${sim.active ? 'disabled title="Hang up active call before switching agent"' : ''}>
+      <select aria-label="${kind === 'a' ? 'Select agent' : 'Select campaign'}" id="sel-${kind}" ${sim.active ? 'disabled title="Hang up active call before switching agent"' : ''}>
         ${arr.map((x) => `<option value="${esc(x.id)}" ${x.id === cur[kind] ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
       </select>
       <button class="g" id="new-${kind}" ${sim.active ? 'disabled' : ''}>+ New</button>
@@ -3942,7 +3967,7 @@
       <div class="bar" style="justify-content:space-between;margin-bottom:6px">
         <span class="note" style="margin:0">${esc(countLabel)} (${voiceCatalog.source === 'deepgram_live_api' ? 'Live Deepgram /v1 & /v2 API' : 'Offline Fallback'})</span>
         <span class="pill ${secretsStatus?.DEEPGRAM_API_KEY?.configured ? 'ok' : 'wn'}">
-          ${secretsStatus?.DEEPGRAM_API_KEY?.configured ? '✓ DEEPGRAM_API_KEY Ready for Live Synthesis' : '! Sample Audio Active — Add DEEPGRAM_API_KEY for Custom Text TTS'}
+          ${secretsStatus?.DEEPGRAM_API_KEY?.configured ? '✓ DEEPGRAM_API_KEY configured (connection not confirmed)' : '! Samples require network access — add DEEPGRAM_API_KEY for custom text TTS'}
         </span>
       </div>
       <div class="voice-grid">
@@ -4284,9 +4309,9 @@
             Math.min(10, Math.round((testsPassed / testsTotal) * 7) + (testsFailed === 0 ? 3 : 0))
           );
 
-    const usersCount = Number(srv?.inventory?.registeredUsers ?? 1);
-    const authRequired = true;
-    const opsPts = Math.min(10, 4 + (authRequired ? 3 : 2) + (usersCount > 0 ? 3 : 2));
+    const usersCount = Number(srv?.inventory?.registeredUsers ?? 0);
+    const authRequired = srv?.inventory?.authEnforced === true;
+    const opsPts = Math.min(10, 4 + (authRequired ? 3 : 0) + (usersCount > 0 ? 3 : 0));
 
     const score = Math.max(
       0,
@@ -4311,7 +4336,7 @@
       { id: 'realtime_ux', label: 'Sub-Second Latency UX', score: realtimePts, max: 15, detail: `${instantCount}/${agents.length} <15ms VAD` },
       { id: 'telephony', label: 'VICIdial & Compliance', score: telephonyPts, max: 15, detail: `${discCount}/${campaigns.length} disclosure` },
       { id: 'qa_readiness', label: 'QA Scenario Coverage', score: qaPts, max: 10, detail: `${testsPassed}/${testsTotal} passed` },
-      { id: 'ops_security', label: 'Security, Auth & SQLite', score: opsPts, max: 10, detail: `${usersCount} user${usersCount === 1 ? '' : 's'} · WAL` },
+      { id: 'ops_security', label: 'Auth & Storage Configuration', score: opsPts, max: 10, detail: `${authRequired ? 'Auth enforced' : 'Auth not confirmed'} · ${usersCount} user${usersCount === 1 ? '' : 's'}` },
     ];
 
     const simCalls = Number(srv?.traffic?.totalSimulatorCalls ?? (sim?.callLogs?.length || 0));
@@ -4324,7 +4349,7 @@
     const viciRecs = Number(srv?.traffic?.recordingsCount ?? 0);
     const viciTalkSec = Math.round(Number(srv?.traffic?.avgDurationSec ?? 0) * Math.max(1, viciTotal));
 
-    const boundHost = srv?.runtime?.allowedPeerIp || S?.vici?.bridgePublicHost || '115.186.137.240';
+    const boundHost = srv?.runtime?.httpHost || window.location.hostname;
     const boundPort = srv?.runtime?.httpPort || window.location.port || 533;
     const bridgePort = srv?.runtime?.audioSocketPort || S?.vici?.bridgePort || 9092;
     const uptimeSec = Number(srv?.runtime?.uptimeSec ?? 0);
@@ -4535,7 +4560,7 @@
                  <button type="button" class="cmd-compact-pill" data-cmd-tab="campaigns">Campaigns: <b>${activeCampaignsCount}/${T.campaigns.length}</b></button>
                  <button type="button" class="cmd-compact-pill" data-cmd-tab="plugins">Stack: <b>${esc(T.sttModel || 'nova-3')} / ${esc(T.llmModel || 'llm')}</b></button>
                  <button type="button" class="cmd-compact-pill" data-cmd-tab="test">QA &amp; Sim: <b>${T.testsPassed}/${T.testsTotal} · ${T.simCalls} calls</b></button>
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="wallboard">Vici Bridge: <b>${T.viciActive} live / ${T.viciTotal} total</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="wallboard">Vici Bridge: <b>${T.viciActive} live / ${T.viciTotal} retained</b></button>
                  <button type="button" class="cmd-compact-pill" data-cmd-tab="export">SQLite: <b>Rev #${T.revNum} · ${T.usersCount} user${T.usersCount === 1 ? '' : 's'}</b></button>
                </div>`
             : `<div class="cmd-hero-grid">
@@ -4582,7 +4607,7 @@
                      </div>
                    </div>
                    <div class="cmd-quality-foot">
-                     <span>Console Quality Index: <b style="color:var(--tx)">${T.score}/100 (${esc(T.grade)})</b></span>
+                     <span>Configuration estimate (not a security audit or certification): <b style="color:var(--tx)">${T.score}/100 (${esc(T.grade)})</b></span>
                      <span>SQLite WAL · Rev #${T.revNum} · ${
                        comparableSnapshot(S) === snap ? '✓ Synced' : '● Unsaved Edits'
                      }</span>
@@ -4748,7 +4773,7 @@
                     [1, '+1 (Animated)'],
                     [2, '+2 (Most Expressive)'],
                   ])
-                : `<div><label>Expressivity</label><input disabled value="Flux v2 voices only"></div>`
+                : `<div><label>Expressivity</label><input aria-label="Expressivity" disabled value="Flux v2 voices only"></div>`
             }
           </div>
 
@@ -4870,7 +4895,7 @@
                   [2, '+2 (Expressive)'],
                 ])}
               </div>
-              <label>Greeting / Script to Synthesize</label>
+              <label for="vt">Greeting / Script to Synthesize</label>
               <textarea id="vt">${esc(voiceCatalog.previewText)}</textarea>
               <div class="bar" style="margin-top:10px;margin-bottom:4px">
                 <button class="b" id="btn-synth-active">🔊 Synthesize with Real TTS API</button>
@@ -4893,11 +4918,11 @@
           <h2>Deepgram Real Voice Catalog (Flux v2 &amp; Aura-2) <button class="g" id="btn-refresh-voices" style="font-size:11px;padding:3px 8px;text-transform:none">↻ Refresh from Deepgram API</button></h2>
           <div class="row r4" style="margin-bottom:10px">
             <div>
-              <label>Search name, model, trait, use-case</label>
+              <label for="vf-q">Search name, model, trait, use-case</label>
               <input id="vf-q" placeholder="e.g. Haley, British, empathetic, financial…" value="${esc(voiceCatalog.filters.q)}">
             </div>
             <div>
-              <label>Model Family</label>
+              <label for="vf-family">Model Family</label>
               <select id="vf-family">
                 <option value="">All Families (Flux + Aura)</option>
                 <option value="flux-v2" ${voiceCatalog.filters.family === 'flux-v2' ? 'selected' : ''}>Flux TTS (v2 — Turn-Based)</option>
@@ -4906,21 +4931,21 @@
               </select>
             </div>
             <div>
-              <label>Language</label>
+              <label for="vf-lang">Language</label>
               <select id="vf-lang">
                 <option value="">All Languages</option>
                 ${langs.map((lg) => `<option value="${esc(lg)}" ${voiceCatalog.filters.language === lg ? 'selected' : ''}>${esc(lg)}</option>`).join('')}
               </select>
             </div>
             <div>
-              <label>Accent</label>
+              <label for="vf-accent">Accent</label>
               <select id="vf-accent">
                 <option value="">All Accents</option>
                 ${accents.map((ac) => `<option value="${esc(ac)}" ${voiceCatalog.filters.accent === ac ? 'selected' : ''}>${esc(ac)}</option>`).join('')}
               </select>
             </div>
             <div>
-              <label>Gender</label>
+              <label for="vf-gender">Gender</label>
               <select id="vf-gender">
                 <option value="">All</option>
                 <option value="feminine" ${voiceCatalog.filters.gender === 'feminine' ? 'selected' : ''}>Feminine</option>
@@ -5022,7 +5047,7 @@
 
           <div class="row">
             <div>
-              <label>Simulator Upstream Engine</label>
+              <label for="sim-mode">Simulator Upstream Engine</label>
               <select id="sim-mode" ${sim.active || sim.connecting ? 'disabled' : ''}>
                 <option value="speech_service" ${curMode === 'speech_service' ? 'selected' : ''}>
                   ⚡ Self-Hosted Local Speech Service (Faster-Whisper STT + Kokoro TTS) ${
@@ -5041,7 +5066,7 @@
               </select>
             </div>
             <div>
-              <label>Audio Stream Bandwidth</label>
+              <label for="sim-bw">Audio Stream Bandwidth</label>
               <select id="sim-bw" ${sim.active || sim.connecting ? 'disabled' : ''}>
                 <option value="wideband" ${sim.bandwidth === 'wideband' ? 'selected' : ''}>Wideband Browser Mic (16 kHz In / 24 kHz Out)</option>
                 <option value="telephony" ${sim.bandwidth === 'telephony' ? 'selected' : ''}>VICIdial Telephony Rate (8 kHz In / 8 kHz Out)</option>
@@ -5052,7 +5077,7 @@
           <div class="row" style="margin-top:8px">
             <div>
               <label>🎙️ Microphone Input Device <button class="g" id="btn-refresh-mics" style="font-size:10.5px;padding:1px 6px;margin-left:6px;text-transform:none">↻ Refresh Mics</button></label>
-              <select id="sim-mic-device">
+              <select id="sim-mic-device" aria-label="Microphone input device">
                 <option value="">System Default Microphone</option>
                 ${sim.micDevices
                   .filter((d) => d.deviceId && d.deviceId !== 'default')
@@ -5064,7 +5089,7 @@
               </select>
             </div>
             <div>
-              <label>🎚️ Mic Input Volume Boost (Helps Quiet Laptop Mics)</label>
+              <label for="sim-mic-gain">🎚️ Mic Input Volume Boost (Helps Quiet Laptop Mics)</label>
               <select id="sim-mic-gain">
                 <option value="1" ${Number(sim.micGain) === 1 ? 'selected' : ''}>1.0x — Normal Studio / Headset Mic</option>
                 <option value="2" ${Number(sim.micGain) === 2 ? 'selected' : ''}>2.0x — Laptop / PC Mic Boost (Recommended)</option>
@@ -5076,13 +5101,13 @@
           <div class="t" style="margin-top:10px">
             <label style="margin-top:0">Simulated VICIdial Lead Record (Hydrated by Bridge on Connect)</label>
             <div class="row r3">
-              <div><label>Lead ID</label><input data-simlead="lead_id" value="${esc(sim.lead.lead_id)}" ${sim.active ? 'disabled' : ''}></div>
-              <div><label>First Name</label><input data-simlead="first_name" value="${esc(sim.lead.first_name)}" ${sim.active ? 'disabled' : ''}></div>
-              <div><label>Phone</label><input data-simlead="phone_number" value="${esc(sim.lead.phone_number)}" ${sim.active ? 'disabled' : ''}></div>
+              <div><label>Lead ID</label><input aria-label="Lead ID" data-simlead="lead_id" value="${esc(sim.lead.lead_id)}" ${sim.active ? 'disabled' : ''}></div>
+              <div><label>First Name</label><input aria-label="First name" data-simlead="first_name" value="${esc(sim.lead.first_name)}" ${sim.active ? 'disabled' : ''}></div>
+              <div><label>Phone</label><input aria-label="Phone" data-simlead="phone_number" value="${esc(sim.lead.phone_number)}" ${sim.active ? 'disabled' : ''}></div>
             </div>
             <div class="row">
-              <div><label>State</label><input data-simlead="state" value="${esc(sim.lead.state)}" ${sim.active ? 'disabled' : ''}></div>
-              <div><label>Listed Age</label><input data-simlead="age" value="${esc(sim.lead.age)}" ${sim.active ? 'disabled' : ''}></div>
+              <div><label>State</label><input aria-label="State" data-simlead="state" value="${esc(sim.lead.state)}" ${sim.active ? 'disabled' : ''}></div>
+              <div><label>Listed Age</label><input aria-label="Listed age" data-simlead="age" value="${esc(sim.lead.age)}" ${sim.active ? 'disabled' : ''}></div>
             </div>
           </div>
 
@@ -5123,7 +5148,7 @@
           <div class="sim-feed" id="sim-feed"></div>
 
           <div class="bar" style="margin-top:10px;margin-bottom:0">
-            <input id="sim-inject-input" style="flex:1" placeholder="${sim.active ? 'Type any general question, self-intro prompt, or campaign reply & press Enter…' : 'Start a call above to speak, barge-in, or inject utterances…'}" ${sim.active ? '' : 'disabled'}>
+            <input aria-label="Caller utterance" id="sim-inject-input" style="flex:1" placeholder="${sim.active ? 'Type any general question, self-intro prompt, or campaign reply & press Enter…' : 'Start a call above to speak, barge-in, or inject utterances…'}" ${sim.active ? '' : 'disabled'}>
             <button class="b" id="btn-sim-inject" ${sim.active ? '' : 'disabled'}>Send Utterance</button>
           </div>
           <div class="chip-row">
@@ -5163,13 +5188,13 @@
                   <label style="margin:0">Scenario / Caller Utterance</label>
                   <button class="g" style="font-size:11.5px;padding:3px 8px" data-inject="${esc(x.s)}" ${sim.active ? '' : 'disabled title="Start a live call to inject this scenario"'}>▶ Send in Live Call</button>
                 </div>
-                <input data-ti="${i}" data-tk="s" value="${esc(x.s)}">
+                <input aria-label="Scenario ${i + 1}: caller utterance" data-ti="${i}" data-tk="s" value="${esc(x.s)}">
                 <label>Expected Bot Behaviour &amp; Function Calls</label>
-                <input data-ti="${i}" data-tk="e" value="${esc(x.e)}">
+                <input aria-label="Scenario ${i + 1}: expected behavior" data-ti="${i}" data-tk="e" value="${esc(x.e)}">
                 <div class="row">
                   <div>
                     <label>Result</label>
-                    <select data-ti="${i}" data-tk="r">
+                    <select aria-label="Scenario ${i + 1}: result" data-ti="${i}" data-tk="r">
                       ${[
                         ['p', 'Pending'],
                         ['ok', 'Pass'],
@@ -5181,7 +5206,7 @@
                   </div>
                   <div>
                     <label>QA Notes</label>
-                    <input data-ti="${i}" data-tk="n" value="${esc(x.n)}">
+                    <input aria-label="Scenario ${i + 1}: notes" data-ti="${i}" data-tk="n" value="${esc(x.n)}">
                   </div>
                 </div>
                 <button class="g danger" data-rm="${i}" style="margin-top:8px">Remove Scenario</button>
@@ -5245,14 +5270,14 @@
             </div>
             <div class="row r3">
               <div>
-                <label>Asterisk Media Transport</label>
+                <label for="vsim-transport">Asterisk Media Transport</label>
                 <select id="vsim-transport" ${viciMon.simRunning ? 'disabled' : ''}>
                   <option value="sip_rtp" ${viciMon.simTransport === 'sip_rtp' ? 'selected' : ''}>SIP + RTP G.711 μ-law (:${bs?.sipPort || S.vici.sipPort} — Universal ViciBox)</option>
                   <option value="audiosocket" ${viciMon.simTransport === 'audiosocket' ? 'selected' : ''}>AudioSocket TCP (:${bs?.audioSocketPort || S.vici.bridgePort} — Asterisk 18+)</option>
                 </select>
               </div>
               <div>
-                <label>Caller Scenario &amp; Campaign</label>
+                <label for="vsim-scenario">Caller Scenario &amp; Campaign</label>
                 <select id="vsim-scenario" ${viciMon.simRunning ? 'disabled' : ''}>
                   <option value="medicare_qualified_xfer" ${viciMon.simScenario === 'medicare_qualified_xfer' ? 'selected' : ''}>[MEDICARE] Part A&amp;B + Age 71 -> MED_CLOSERS Xfer (XFER)</option>
                   <option value="medicare_underage_dq" ${viciMon.simScenario === 'medicare_underage_dq' ? 'selected' : ''}>[MEDICARE] Underage 61 -> Hard Stop Disqualify (DQ)</option>
@@ -5263,7 +5288,7 @@
                 </select>
               </div>
               <div>
-                <label>AI Upstream Engine</label>
+                <label for="vsim-upstream">AI Upstream Engine</label>
                 <select id="vsim-upstream" ${viciMon.simRunning ? 'disabled' : ''}>
                   <option value="deepgram" ${viciMon.simUpstream === 'deepgram' ? 'selected' : ''}>Live Deepgram Cloud (8 kHz Real Audio)</option>
                   <option value="mock_ai" ${viciMon.simUpstream === 'mock_ai' ? 'selected' : ''}>Fast Local Mock AI (&lt; 0.5s Protocol Check)</option>
@@ -5372,8 +5397,9 @@
             </div>
           </div>
 
+          <p class="note">Analytics use retained logs only: up to 200 bridge calls and 100 simulator calls, not lifetime totals.</p>
           <div class="sim-kpis">
-            <div class="kpi"><div class="kpi-lbl">Total Bridge Calls</div><div class="kpi-val">${ana.totalBridgeCalls ?? 0}</div></div>
+            <div class="kpi"><div class="kpi-lbl">Retained Bridge Calls (max 200)</div><div class="kpi-val">${ana.totalBridgeCalls ?? 0}</div></div>
             <div class="kpi"><div class="kpi-lbl">Closer Transfer Rate</div><div class="kpi-val ok">${ana.transferRatePct ?? 0}% (${ana.transfersCount ?? 0})</div></div>
             <div class="kpi"><div class="kpi-lbl">Avg / P95 Turn TTFB</div><div class="kpi-val">${ana.avgTtfbMs ? `${ana.avgTtfbMs}ms / ${ana.p95TtfbMs || ana.avgTtfbMs}ms` : '—'}</div></div>
             <div class="kpi"><div class="kpi-lbl">Stereo .wav Recordings</div><div class="kpi-val ok">${ana.recordedCount ?? 0}</div></div>
@@ -5448,16 +5474,16 @@
 
           <h2>Production Hardening Status</h2>
           <div class="ck">
-            <span class="${secretsStatus?.ADMIN_PASSWORD?.configured ? 'ok' : 'wn'}">${secretsStatus?.ADMIN_PASSWORD?.configured ? '✓' : '!'}</span>
-            <span>Console Auth (<code>ADMIN_PASSWORD</code>): <b>${secretsStatus?.ADMIN_PASSWORD?.configured ? 'Enabled & Enforced' : 'Open (Set in 🔑 API Keys before exposing :533 publicly)'}</b></span>
+            <span class="${cmdDeckState.serverTelemetry?.inventory?.authEnforced ? 'ok' : 'wn'}">${cmdDeckState.serverTelemetry?.inventory?.authEnforced ? '✓' : '!'}</span>
+            <span>Console Auth: <b>${cmdDeckState.serverTelemetry?.inventory?.authEnforced ? 'Enforced (password or account)' : 'Not confirmed; configure before public exposure'}</b></span>
           </div>
           <div class="ck">
             <span class="${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'ok' : 'wn'}">${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? '✓' : '!'}</span>
-            <span>SIP/AudioSocket IP Allowlist (<code>BRIDGE_ALLOWED_IPS</code>): <b>${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'Restricted to Trusted IPs' : 'Restricted to 115.186.137.240'}</b></span>
+            <span>SIP/AudioSocket IP Allowlist (<code>BRIDGE_ALLOWED_IPS</code>): <b>${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'Configured (check rules for wildcards)' : 'Loopback only by default'}</b></span>
           </div>
           <div class="ck">
             <span class="ok">✓</span>
-            <span>Asterisk <code>115.186.137.240</code> Pre-Call Hook Whitelisted</span>
+            <span>Direct pre-call hooks use the configured peer allowlist; proxied requests require authentication.</span>
           </div>
           <div class="ck">
             <span class="ok">✓</span>
@@ -5586,12 +5612,14 @@
       const authJson = await authRes.json().catch(() => ({}));
       const logoutBtn = document.getElementById('btn-logout');
       if (!authJson.authenticated) {
-        const entry = authJson.hasUsers === false ? '/signup' : '/login';
+        const entry = authJson.signupOpen && authJson.hasUsers === false ? '/signup' : '/login';
         const qs = window.location.search || '';
         const next = window.location.pathname === '/' && !qs ? '' : '?next=' + encodeURIComponent(window.location.pathname + qs);
         window.location.replace(entry + next);
         return;
       }
+      const createAccountBtn = document.getElementById('btn-create-account');
+      if (createAccountBtn && authJson.signupOpen) createAccountBtn.style.display = 'inline-flex';
       if (logoutBtn) {
         logoutBtn.style.display = 'inline-flex';
         if (authJson.user && (authJson.user.fullName || authJson.user.email)) {
@@ -5794,15 +5822,21 @@
       ? sampleUrl
       : `/api/deepgram/sample?url=${encodeURIComponent(sampleUrl)}`;
     voiceCatalog.previewAudioUrl = proxied;
-    voiceCatalog.playingLabel = `▶ Playing studio sample: ${label}`;
-    if (vs) vs.textContent = voiceCatalog.playingLabel;
+    if (vs) vs.textContent = `Loading studio sample: ${label}…`;
     if (audioEl) {
+      audioEl.onerror = () => {
+        if (vs) vs.textContent = `Sample unavailable for ${label}. Check the connection and try again.`;
+      };
+      audioEl.onplaying = () => {
+        voiceCatalog.playingLabel = `▶ Playing studio sample: ${label}`;
+        if (vs) vs.textContent = voiceCatalog.playingLabel;
+      };
       audioEl.src = proxied;
       activeAudioEl = audioEl;
       try {
         await audioEl.play();
       } catch {
-        if (vs) vs.textContent = `Sample loaded (${label}) — press Play on the audio bar below.`;
+        if (vs && !audioEl.error) vs.textContent = `Press Play on the audio bar to hear ${label}.`;
       }
     }
   }
@@ -5944,6 +5978,8 @@
     if (audioEl) {
       audioEl.pause();
       audioEl.currentTime = 0;
+      audioEl.onerror = null;
+      audioEl.onplaying = null;
     }
   }
 
@@ -5974,8 +6010,8 @@
           : `<span class="wn">Not set</span>`;
         const inputType = k === 'BRIDGE_ALLOWED_IPS' || k === 'SPEECH_SERVICE_URL' ? 'text' : 'password';
         return `
-          <label>${esc(desc)} — ${badge}</label>
-          <input type="${inputType}" data-secret="${k}" placeholder="${st?.configured ? 'Leave blank to keep existing value, or enter new value' : `Enter ${k}…`}" autocomplete="off" />
+          <label for="secret-${k}">${esc(desc)} — ${badge}</label>
+          <input id="secret-${k}" type="${inputType}" data-secret="${k}" placeholder="${st?.configured ? 'Leave blank to keep existing value, or enter new value' : `Enter ${k}…`}" autocomplete="off" />
         `;
       })
       .join('');

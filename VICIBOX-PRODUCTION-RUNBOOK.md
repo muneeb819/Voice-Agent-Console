@@ -1,6 +1,8 @@
 # ViciBox Co-Located Production Go-Live Runbook
 **Unified Voice Agent Console + Deepgram Voice Agent API + Universal VICIdial Bridge (Step 4 Release)**
 
+> **Legacy topology examples, not a verified deployment recipe.** The public IP addresses and dialplan values below describe an old environment and are not defaults or automatically trusted peers. Do not copy them or example credentials into production. Current installation requires Node.js 22.5+, defaults to loopback-only listeners and PBX peers, preserves an existing `.env`, and requires explicit proxy trust. Review the current [README](README.md), firewall/TLS configuration, and your own VICIdial/Asterisk setup; validate in staging before handling real calls.
+
 ---
 
 ## 1. Architecture Summary (Co-Located on ViciBox `115.186.137.240`)
@@ -29,9 +31,9 @@ sudo bash deploy/vicibox-install.sh
 ```
 
 What `vicibox-install.sh` does automatically:
-1. Installs Node.js 20 LTS (supports OpenSUSE Leap `zypper` on ViciBox as well as Ubuntu/Debian `apt`).
+1. Requires Node.js 22.5+; attempts to install Node 22 if it is missing (package availability varies by OS).
 2. Copies the console & bridge into `/opt/voice-agent-console` and compiles TypeScript (`dist/`).
-3. Creates `/opt/voice-agent-console/.env` (`chmod 600`) with a generated `ADMIN_PASSWORD` and locks `BRIDGE_ALLOWED_IPS=115.186.137.240,::1`.
+3. Preserves an existing `/opt/voice-agent-console/.env`, or creates one (`chmod 600`) with a generated `ADMIN_PASSWORD` and loopback-only defaults.
 4. Detects your Asterisk version and whether `app_audiosocket.so` is loaded.
 5. Registers and starts `voice-agent-bridge.service` under `systemd` (`Restart=always`).
 
@@ -46,8 +48,8 @@ Fill in:
 ```ini
 DEEPGRAM_API_KEY=<SET_LOCALLY_DO_NOT_COMMIT>
 VICI_API_PASS=your_vicidial_6666_user_password
-AMI_SECRET=1234
-ADMIN_PASSWORD=your_strong_console_password
+AMI_SECRET=<YOUR_ASTERISK_AMI_SECRET>
+ADMIN_PASSWORD=<YOUR_STRONG_CONSOLE_PASSWORD>
 BRIDGE_ALLOWED_IPS=115.186.137.240,::1
 BRIDGE_BIND_HOST=115.186.137.240
 ```

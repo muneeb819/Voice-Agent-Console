@@ -34,12 +34,16 @@ if ($pubUrl) {
     "public  : (no active tunnel URL detected — run 'npm run demo' or .\ops\start-tunnel.ps1)"
 }
 
-try {
-    try {
-        $h = Invoke-RestMethod "http://115.186.137.240:533/api/health" -TimeoutSec 3
-    } catch {
-        $h = Invoke-RestMethod "http://localhost:533/api/health" -TimeoutSec 5
+$port = if ($env:PORT) { $env:PORT } else {
+    # Match the server's dotenv-based PORT when it is not exported in the shell.
+    $envFile = if ($env:VAC_ENV_FILE) { $env:VAC_ENV_FILE } else { Join-Path $root ".env" }
+    $portLine = if (Test-Path $envFile) {
+        Get-Content $envFile | Select-String -Pattern '^\s*(?:export\s+)?PORT\s*=\s*["'']?([0-9]+)["'']?\s*(?:#.*)?$' | Select-Object -Last 1
     }
+    if ($portLine) { $portLine.Matches[0].Groups[1].Value } else { "533" }
+}
+try {
+    $h = Invoke-RestMethod "http://127.0.0.1:${port}/api/health" -TimeoutSec 5
     "health  : ok=$($h.ok) auth=$($h.authEnabled) storage=$($h.storage)"
 }
 catch {

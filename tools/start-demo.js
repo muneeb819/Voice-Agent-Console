@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
  * One-Command Public Client Demo Launcher (`npm run demo`)
- * 1. Starts (or attaches to) Voice Agent Console on port 533 (HOST=115.186.137.240).
+ * 1. Starts (or attaches to) Voice Agent Console on loopback port 533.
  * 2. Auto-downloads official `cloudflared` binary if not yet present in `tools/`.
  * 3. Opens an encrypted HTTPS + WSS tunnel (`https://*.trycloudflare.com`) over TCP/HTTP2
  *    so external clients on ANY internet connection get:
- *      - Sign Up / Sign In entry screen first (`/signup` & `/login`)
+ *      - Sign In entry screen first (`/login`)
  *      - Browser Microphone permission (requires HTTPS for remote visitors)
  *      - Live Deepgram Voice Agent WebSocket (`wss://`) streaming
  */
@@ -17,6 +17,9 @@ const os = require('os');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
+// Respect an operator's .env (without overriding explicitly supplied variables),
+// just as the server does, before choosing its bind and tunnel upstream.
+require('dotenv').config({ path: process.env.VAC_ENV_FILE || path.join(ROOT, '.env') });
 const LOGS_DIR = path.join(ROOT, 'logs');
 const TOOLS_DIR = path.join(ROOT, 'tools');
 const DEMO_URL_FILE = path.join(LOGS_DIR, 'public-demo-url.txt');
@@ -130,9 +133,9 @@ async function ensureCloudflaredBinary() {
   return localBin;
 }
 
-async function isConsoleHealthy(port) {
+async function isConsoleHealthy(port, host = '127.0.0.1') {
   try {
-    const res = await fetch(`http://localhost:${port}/api/health`, {
+    const res = await fetch(`http://${host}:${port}/api/health`, {
       signal: AbortSignal.timeout(1200),
     });
     if (!res.ok) return false;
@@ -177,10 +180,13 @@ async function main() {
   } catch {}
 
   const targetPort = Number(process.env.PORT || 533);
+  const configuredHost = String(process.env.HOST || '').trim();
+  const upstreamHost = configuredHost && /^[a-z0-9.-]+$/i.test(configuredHost) && !['0.0.0.0', 'localhost'].includes(configuredHost)
+    ? configuredHost : '127.0.0.1';
   let boundPort = targetPort;
   let serverProc = null;
 
-  if (await isConsoleHealthy(targetPort)) {
+  if (await isConsoleHealthy(targetPort, upstreamHost)) {
     console.log(`[Demo] Attached to running Voice Agent Console on port ${targetPort}.`);
   } else {
     console.log(`[Demo] Starting Voice Agent Console on port ${targetPort}...`);
@@ -188,11 +194,10 @@ async function main() {
       cwd: ROOT,
       env: {
         ...process.env,
-        VAC_DEBUG: process.env.VAC_DEBUG || '1',
-        HOST: process.env.HOST || '115.186.137.240',
+        HOST: process.env.HOST || '127.0.0.1',
         PORT: String(targetPort),
-        BRIDGE_BIND_HOST: process.env.BRIDGE_BIND_HOST || '115.186.137.240',
-        BRIDGE_ALLOWED_IPS: process.env.BRIDGE_ALLOWED_IPS || '115.186.137.240',
+        BRIDGE_BIND_HOST: process.env.BRIDGE_BIND_HOST || '127.0.0.1',
+        BRIDGE_ALLOWED_IPS: process.env.BRIDGE_ALLOWED_IPS || '127.0.0.1,::1',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -200,7 +205,7 @@ async function main() {
     serverProc.stdout.on('data', (chunk) => {
       const txt = chunk.toString('utf8');
       process.stdout.write(txt);
-      const m = /bound\s+[^:]+:(\d+)/i.exec(txt);
+      const m = /Server listening on .*:(\d+)/i.exec(txt);
       if (m) boundPort = Number(m[1]);
     });
     serverProc.stderr.on('data', (chunk) => {
@@ -214,7 +219,7 @@ async function main() {
         console.error(`[Demo] Server exited early with code ${serverProc.exitCode}`);
         process.exit(serverProc.exitCode || 1);
       }
-      if (await isConsoleHealthy(boundPort)) {
+      if (await isConsoleHealthy(boundPort, upstreamHost)) {
         ready = true;
         break;
       }
@@ -226,9 +231,31 @@ async function main() {
     }
   }
 
+  // A tunnel makes even a loopback listener public. Do not expose the fresh,
+  // unauthenticated bootstrap state to the internet.
+  const health = await fetch(`http://${upstreamHost}:${boundPort}/api/health`, { signal: AbortSignal.timeout(3000) })
+    .then((res) => res.json());
+  if (!health.authEnabled) {
+    if (serverProc && serverProc.exitCode === null) serverProc.kill();
+    throw new Error('Configure ADMIN_PASSWORD or create the first local account before starting a public demo tunnel.');
+  }
+  // Check the running server's actual trust policy, including when attaching
+  // to an existing process, before advertising a public HTTPS URL.
+  const proxyReady = await fetch(`http://${upstreamHost}:${boundPort}/api/health`, {
+    headers: {
+      Origin: 'https://vac-proxy-probe.invalid',
+      'X-Forwarded-Host': 'vac-proxy-probe.invalid',
+      'X-Forwarded-Proto': 'https',
+    },
+    signal: AbortSignal.timeout(3000),
+  }).then((res) => res.ok).catch(() => false);
+  if (!proxyReady) {
+    if (serverProc && serverProc.exitCode === null) serverProc.kill();
+    throw new Error('Configure TRUST_PROXY for the local cloudflared connection and restart the console before opening a tunnel.');
+  }
+
   const cfBin = await ensureCloudflaredBinary();
   const lanIp = getLanIp();
-  const upstreamHost = process.platform === 'win32' && lanIp ? lanIp : 'localhost';
   console.log(`[Demo] Opening encrypted HTTPS client demo tunnel -> http://${upstreamHost}:${boundPort} ...`);
 
   const tunnelProc = childProcess.spawn(
@@ -248,10 +275,9 @@ async function main() {
     console.log('  CLIENT DEMO IS LIVE — ACCESSIBLE FROM ANY INTERNET CONNECTION');
     console.log('========================================================================');
     console.log(`  Client Demo URL (HTTPS + Mic) :  ${publicUrl}`);
-    console.log(`  Client Sign-Up Page           :  ${publicUrl}/signup`);
     console.log(`  Client Sign-In Page           :  ${publicUrl}/login`);
-    console.log(`  Local Console URL             :  http://localhost:${boundPort}`);
-    if (lanIp) {
+    console.log(`  Console Upstream URL          :  http://${upstreamHost}:${boundPort}`);
+    if (lanIp && (configuredHost === '0.0.0.0' || configuredHost === lanIp)) {
       console.log(`  Office Wi-Fi / LAN URL        :  http://${lanIp}:${boundPort}`);
     }
     console.log('========================================================================');

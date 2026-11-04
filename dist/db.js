@@ -381,6 +381,8 @@ function getBridgeAnalyticsSummary() {
         c.avgDurationSec = c.total ? Number((c.avgDurationSec / c.total).toFixed(1)) : 0;
     }
     return {
+        // Counts and rates cover retained logs only, not lifetime call volume.
+        retentionLimits: { bridgeCalls: 200, simulatorCalls: 100 },
         totalBridgeCalls: totalCalls,
         totalSimulatorCalls: simLogs.length,
         transfersCount: xferCount,

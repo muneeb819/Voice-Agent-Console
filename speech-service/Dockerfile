@@ -26,7 +26,7 @@ CMD ["uvicorn", "--factory", "app.main:app_factory", "--host", "0.0.0.0", "--por
 FROM base AS clone
 ARG CHATTERBOX_SPEC="chatterbox-tts"
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cu124 torch==2.5.1 torchaudio==2.5.1 \
-    && pip install --no-cache-dir fastapi==0.115.6 "uvicorn[standard]==0.34.0" numpy soundfile "${CHATTERBOX_SPEC}"
+    && pip install --no-cache-dir fastapi==0.162.0 starlette==1.10.0 "uvicorn[standard]==0.34.0" numpy soundfile "${CHATTERBOX_SPEC}"
 COPY clone_service ./clone_service
 RUN mkdir -p /data /models && chown -R speech:speech /data /models /srv
 USER speech

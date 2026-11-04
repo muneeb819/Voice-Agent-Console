@@ -42,6 +42,11 @@ function ensureSchema(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_user_sessions_expiry ON user_sessions(expires_at);
+    CREATE TABLE IF NOT EXISTS revoked_admin_sessions (
+      token_hash TEXT PRIMARY KEY,
+      expires_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_revoked_admin_sessions_expiry ON revoked_admin_sessions(expires_at);
   `);
   schemaReady = true;
 }
@@ -238,5 +243,23 @@ export function destroyUserSession(token?: string | null): void {
 
 export function purgeExpiredSessions(): void {
   ensureSchema();
-  getDb().prepare('DELETE FROM user_sessions WHERE expires_at <= ?').run(new Date().toISOString());
+  const now = new Date().toISOString();
+  getDb().prepare('DELETE FROM user_sessions WHERE expires_at <= ?').run(now);
+  getDb().prepare('DELETE FROM revoked_admin_sessions WHERE expires_at <= ?').run(now);
+}
+
+function sessionTokenHash(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+export function isAdminSessionRevoked(token: string): boolean {
+  ensureSchema();
+  return Boolean(getDb().prepare('SELECT 1 FROM revoked_admin_sessions WHERE token_hash = ?').get(sessionTokenHash(token)));
+}
+
+export function revokeAdminSession(token: string, expiresAt: number): void {
+  ensureSchema();
+  getDb()
+    .prepare('INSERT OR REPLACE INTO revoked_admin_sessions (token_hash, expires_at) VALUES (?, ?)')
+    .run(sessionTokenHash(token), new Date(expiresAt).toISOString());
 }

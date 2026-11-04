@@ -387,19 +387,19 @@
     }
   ],
   "vici": {
-    "viciBaseUrl": "http://115.186.137.240",
+    "viciBaseUrl": "http://127.0.0.1",
     "nonAgentApiPath": "/vicidial/non_agent_api.php",
     "agentApiPath": "/agc/api.php",
     "apiUser": "6666",
     "source": "aibot",
     "transport": "sip_trunk",
-    "bridgeHost": "115.186.137.240",
+    "bridgeHost": "127.0.0.1",
     "bridgePort": 9092,
     "sipPort": 5062,
     "aiExten": "8800",
     "remoteAgentUser": "9001",
     "inIngroup": "AI_INBOUND",
-    "amiHost": "115.186.137.240",
+    "amiHost": "127.0.0.1",
     "amiPort": 5038,
     "amiUser": "cron"
   },

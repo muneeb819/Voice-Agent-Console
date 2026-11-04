@@ -184,7 +184,7 @@ class VicidialBridgeService {
     };
     constructor(opts = {}) {
         const st = (0, db_1.getConsoleState)();
-        this.host = opts.host || process.env.BRIDGE_BIND_HOST || '115.186.137.240';
+        this.host = opts.host || process.env.BRIDGE_BIND_HOST || '127.0.0.1';
         this.audioSocketPort =
             opts.audioSocketPort !== undefined
                 ? opts.audioSocketPort
@@ -340,7 +340,7 @@ class VicidialBridgeService {
     // ==================== TRANSPORT 1: ASTERISK 18+ AUDIOSOCKET TCP ====================
     async startAudioSocketServer() {
         this.tcpServer = net_1.default.createServer((socket) => {
-            if (process.env.VAC_DEBUG !== '1' && !(0, auth_guard_1.isBridgePeerIpAllowed)(socket.remoteAddress)) {
+            if (!(0, auth_guard_1.isBridgePeerIpAllowed)(socket.remoteAddress)) {
                 this.stats.rejectedUntrustedIpCount += 1;
                 this.stats.lastError = `Rejected untrusted AudioSocket peer IP: ${socket.remoteAddress}`;
                 socket.destroy();
@@ -480,11 +480,6 @@ class VicidialBridgeService {
             const tryListen = (candidatePort, candidateHost, retriesLeft) => {
                 const onErr = (err) => {
                     this.tcpServer.removeListener('error', onErr);
-                    if (err.code === 'EADDRNOTAVAIL' && candidateHost !== '0.0.0.0') {
-                        this.host = '0.0.0.0';
-                        tryListen(candidatePort, '0.0.0.0', retriesLeft);
-                        return;
-                    }
                     if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
                         const nextPort = candidatePort + 1;
                         console.warn(`[ViciBridge] AudioSocket TCP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);
@@ -632,7 +627,7 @@ class VicidialBridgeService {
                 const rtpSocket = dgram_1.default.createSocket('udp4');
                 await new Promise((r) => rtpSocket.bind(0, this.host, () => r()));
                 const localRtpPort = rtpSocket.address().port;
-                const localIpForSdp = rinfo.address.startsWith('127.') ? rinfo.address : (0, db_1.getConsoleState)().vici.bridgeHost || '115.186.137.240';
+                const localIpForSdp = rinfo.address.startsWith('127.') ? rinfo.address : (0, db_1.getConsoleState)().vici.bridgeHost || '127.0.0.1';
                 const localTag = `vab${crypto_1.default.randomBytes(4).toString('hex')}`;
                 const localToWithTag = /;tag=/i.test(toRaw) ? toRaw : `${toRaw};tag=${localTag}`;
                 const contactHeaderRaw = firstHeader(headers, 'contact', 'm');
@@ -790,11 +785,6 @@ class VicidialBridgeService {
             const tryBind = (candidatePort, candidateHost, retriesLeft) => {
                 const onErr = (err) => {
                     sock.removeListener('error', onErr);
-                    if (err.code === 'EADDRNOTAVAIL' && candidateHost !== '0.0.0.0') {
-                        this.host = '0.0.0.0';
-                        tryBind(candidatePort, '0.0.0.0', retriesLeft);
-                        return;
-                    }
                     if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
                         const nextPort = candidatePort + 1;
                         console.warn(`[ViciBridge] SIP UDP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);

@@ -13,7 +13,6 @@ exports.synthesizeWithSpeechService = synthesizeWithSpeechService;
 exports.openSpeechServiceSttStream = openSpeechServiceSttStream;
 exports.openSpeechServiceTtsStream = openSpeechServiceTtsStream;
 const ws_1 = __importDefault(require("ws"));
-const demo_tunnel_1 = require("./demo-tunnel");
 const env_store_1 = require("./env-store");
 exports.KOKORO_STOCK_VOICES = [
     'af_heart',
@@ -50,8 +49,7 @@ function getSpeechServiceBaseUrl(explicitUrl) {
     const raw = String(explicitUrl || (0, env_store_1.getSecret)('SPEECH_SERVICE_URL') || process.env.SPEECH_SERVICE_URL || '').trim();
     if (raw)
         return raw.replace(/\/+$/, '');
-    const lanIp = (0, demo_tunnel_1.getPreferredLanIpv4)() || 'localhost';
-    return `http://${lanIp}:8000`;
+    return 'http://127.0.0.1:8000';
 }
 function getSpeechServiceWsBaseUrl(explicitUrl) {
     return getSpeechServiceBaseUrl(explicitUrl)

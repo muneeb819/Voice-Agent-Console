@@ -536,6 +536,8 @@ export function getBridgeAnalyticsSummary() {
   }
 
   return {
+    // Counts and rates cover retained logs only, not lifetime call volume.
+    retentionLimits: { bridgeCalls: 200, simulatorCalls: 100 },
     totalBridgeCalls: totalCalls,
     totalSimulatorCalls: simLogs.length,
     transfersCount: xferCount,

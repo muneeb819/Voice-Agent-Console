@@ -29,7 +29,7 @@ voice-agent-console/
 │   ├── vici-loopback-tester.ts   # Binary SIP/RTP & AudioSocket hardware-loopback call simulator
 │   ├── call-recorder.ts          # Timeline-accurate 8 kHz Stereo WAV recorder (L=Caller, R=Bot)
 │   ├── webhook-executor.ts       # Custom Function HTTP Webhook executor (.env + lead template interpolation)
-│   └── auth-guard.ts             # HMAC cookie/Bearer auth + 115.186.137.240 Asterisk whitelist + IP allowlist
+│   └── auth-guard.ts             # HMAC cookie/Bearer auth + explicit PBX peer allowlist
 ├── public/
 │   ├── index.html                # Single-Page Operator & Supervisor Console
 │   ├── styles.css                # Dark-mode responsive telemetry & studio styling
@@ -77,17 +77,26 @@ npm start
 # Or simply run ./start.sh (Linux/macOS) or start.bat (Windows)
 ```
 
-Open **`http://115.186.137.240:533`**.
+Open **`http://127.0.0.1:533`**. With no admin password or users, create the first account directly on loopback; proxied bootstrap is intentionally blocked. Once authentication is enabled, only a signed-in operator can create another account. All accounts currently have full operator privileges; there is no role separation.
 
-Run all **37 end-to-end verification checks** across Steps 1–4. The runner uses a temporary data directory and loopback-only ports; live Deepgram checks use your configured API key:
+The tests use temporary data and environment files, loopback ports, synthetic credentials and mocked services. External `fetch` calls are blocked by default and the live Deepgram test is reported as skipped. A live run may incur provider charges and requires explicit opt-in with `VAC_TEST_LIVE=1` and a test key:
 
 ```bash
+npm run build
 npm test
+# Only with permission and a dedicated test key:
+# VAC_TEST_LIVE=1 DEEPGRAM_API_KEY=... npm test
 ```
 
 ## Docker / Render Deployment
 
-The full console requires a long-running Node service with WebSocket support. Configure a strong `ADMIN_PASSWORD` and `DEEPGRAM_API_KEY` in the host's secret manager. The server refuses to bind to a non-loopback interface without `ADMIN_PASSWORD`. For Docker, pass your environment file and override `HOST=0.0.0.0`; keep the SIP and AudioSocket bridge ports private. The `vercel.json` configuration only serves static assets and does not provide the API, WebSocket simulator, or telephony bridge.
+The full console needs a long-running Node 22.5+ service with WebSocket support. Configure a strong `ADMIN_PASSWORD` or create a local account before binding to a non-loopback address or opening a public demo tunnel. For Docker, set `HOST=0.0.0.0`, supply credentials through your deployment's secret manager, and keep SIP and AudioSocket ports private. For a remote PBX, explicitly set `BRIDGE_BIND_HOST` and a restrictive `BRIDGE_ALLOWED_IPS`; the defaults allow loopback only. Set `TRUST_PROXY` only to the addresses/CIDRs of a trusted reverse proxy which overwrites forwarded headers; it is needed for correct client-IP throttling, secure cookies, and same-origin HTTP/WebSocket checks behind TLS termination. Incorrect proxy trust can prevent browser API and WebSocket access. Never expose an unauthenticated bootstrap instance through a reverse proxy.
+
+Browser API calls and WebSocket upgrades with an `Origin` must be same-origin; the console no longer advertises wildcard CORS. Non-browser clients may omit `Origin`. Local unauthenticated bootstrap and local PBX exemptions also require a loopback Host (`localhost`, `127.0.0.1`, or `[::1]`) to reduce DNS-rebinding risk. Deployments that need cross-origin access should use a same-origin reverse proxy rather than opening CORS. For a local cloudflared demo, configure an appropriate `TRUST_PROXY` (for example `loopback` when cloudflared connects directly from loopback) and restart the console; the launcher checks authentication and proxy readiness before opening the tunnel.
+
+The ViciBox installer preserves existing `.env` settings and creates a loopback-only configuration for a new installation. Review all listener, PBX, TLS and firewall settings before allowing remote traffic. The `vercel.json`/GitHub Pages deployment is a static demo only: its browser-local accounts do **not** secure a server, and it provides no API, WebSocket backend or telephony bridge.
+
+The release bundle contains only files listed in `tools/release-manifest.json`; add new release files to that manifest. Runtime data, credentials and symlinks are excluded. Analytics describe the retained 200 bridge and 100 simulator calls, not lifetime totals.
 
 ---
 

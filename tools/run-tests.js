@@ -6,7 +6,7 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-const allSteps = ['step1', 'step2', 'step3', 'step4'];
+const allSteps = ['step1', 'step2', 'step3', 'step4', 'security'];
 const requestedSteps = process.argv.slice(2);
 const steps = requestedSteps.length ? requestedSteps : allSteps;
 
@@ -63,14 +63,33 @@ async function main() {
     const env = {
       ...process.env,
       VAC_DATA_DIR: testDataDir,
+      VAC_ENV_FILE: path.join(testDataDir, '.env'),
       TEST_URL: baseUrl,
       HOST: 'localhost',
       PORT: String(port),
+      BRIDGE_BIND_HOST: 'localhost',
       AUDIOSOCKET_PORT: '0',
       BRIDGE_SIP_PORT: '0',
       ADMIN_PASSWORD: '',
       BRIDGE_ALLOWED_IPS: 'localhost,::1',
+      // Offline by default: test runs must not spend or modify real accounts.
+      DEEPGRAM_API_KEY: process.env.VAC_TEST_LIVE === '1' ? (process.env.DEEPGRAM_API_KEY || '') : '',
+      SPEECH_SERVICE_API_KEY: '',
+      SPEECH_SERVICE_URL: '',
+      ELEVENLABS_API_KEY: '',
+      CARTESIA_API_KEY: '',
+      OPENAI_API_KEY: '',
+      GROQ_API_KEY: '',
+      VICI_API_PASS: '',
+      AMI_SECRET: '',
+      CUSTOM_WEBHOOK_SECRET: '',
+      DEEPGRAM_AGENT_URL: '',
+      TRUST_PROXY: '',
     };
+    if (process.env.VAC_TEST_LIVE !== '1') {
+      const preload = path.join(root, 'tests', 'offline-fetch.cjs');
+      env.NODE_OPTIONS = `${process.env.NODE_OPTIONS || ''} --require="${preload.replace(/"/g, '\\"')}"`.trim();
+    }
 
     server = childProcess.spawn(process.execPath, [tsxCli, 'src/server.ts'], {
       cwd: root,
@@ -81,10 +100,17 @@ async function main() {
 
     for (const step of steps) {
       console.log(`\n=== Running ${step} verification ===`);
+      // Security tests create their own server and need a fresh account store.
+      const stepEnv = { ...env };
+      if (step === 'security') {
+        stepEnv.VAC_DATA_DIR = path.join(testDataDir, 'security');
+        fs.mkdirSync(stepEnv.VAC_DATA_DIR, { recursive: true });
+        stepEnv.VAC_ENV_FILE = path.join(stepEnv.VAC_DATA_DIR, '.env');
+      }
       const result = childProcess.spawnSync(
         process.execPath,
         [tsxCli, path.join('tests', `${step}-verify.ts`)],
-        { cwd: root, env, stdio: 'inherit' }
+        { cwd: root, env: stepEnv, stdio: 'inherit' }
       );
       if (result.error) throw result.error;
       if (result.status !== 0) {

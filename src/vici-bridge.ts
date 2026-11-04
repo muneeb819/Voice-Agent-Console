@@ -232,7 +232,7 @@ export class VicidialBridgeService {
 
   constructor(opts: ViciBridgeOptions = {}) {
     const st = getConsoleState();
-    this.host = opts.host || process.env.BRIDGE_BIND_HOST || '115.186.137.240';
+    this.host = opts.host || process.env.BRIDGE_BIND_HOST || '127.0.0.1';
     this.audioSocketPort =
       opts.audioSocketPort !== undefined
         ? opts.audioSocketPort
@@ -409,7 +409,7 @@ export class VicidialBridgeService {
 
   private async startAudioSocketServer(): Promise<void> {
     this.tcpServer = net.createServer((socket) => {
-      if (process.env.VAC_DEBUG !== '1' && !isBridgePeerIpAllowed(socket.remoteAddress)) {
+      if (!isBridgePeerIpAllowed(socket.remoteAddress)) {
         this.stats.rejectedUntrustedIpCount += 1;
         this.stats.lastError = `Rejected untrusted AudioSocket peer IP: ${socket.remoteAddress}`;
         socket.destroy();
@@ -556,11 +556,6 @@ export class VicidialBridgeService {
       const tryListen = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           this.tcpServer!.removeListener('error', onErr);
-          if (err.code === 'EADDRNOTAVAIL' && candidateHost !== '0.0.0.0') {
-            this.host = '0.0.0.0';
-            tryListen(candidatePort, '0.0.0.0', retriesLeft);
-            return;
-          }
           if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
             const nextPort = candidatePort + 1;
             console.warn(
@@ -757,7 +752,7 @@ export class VicidialBridgeService {
         await new Promise<void>((r) => rtpSocket.bind(0, this.host, () => r()));
         const localRtpPort = (rtpSocket.address() as net.AddressInfo).port;
 
-        const localIpForSdp = rinfo.address.startsWith('127.') ? rinfo.address : getConsoleState().vici.bridgeHost || '115.186.137.240';
+        const localIpForSdp = rinfo.address.startsWith('127.') ? rinfo.address : getConsoleState().vici.bridgeHost || '127.0.0.1';
         const localTag = `vab${crypto.randomBytes(4).toString('hex')}`;
         const localToWithTag = /;tag=/i.test(toRaw) ? toRaw : `${toRaw};tag=${localTag}`;
 
@@ -925,11 +920,6 @@ export class VicidialBridgeService {
       const tryBind = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           sock.removeListener('error', onErr);
-          if (err.code === 'EADDRNOTAVAIL' && candidateHost !== '0.0.0.0') {
-            this.host = '0.0.0.0';
-            tryBind(candidatePort, '0.0.0.0', retriesLeft);
-            return;
-          }
           if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
             const nextPort = candidatePort + 1;
             console.warn(`[ViciBridge] SIP UDP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);

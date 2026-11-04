@@ -52,8 +52,13 @@ function waitForEvent<T = any>(
 async function run() {
   configureTestServices();
   const results: string[] = [];
-  const check = async (name: string, fn: () => Promise<void> | void) => {
-    await fn();
+  const skipped: string[] = [];
+  const check = async (name: string, fn: () => Promise<void | 'skip'> | void | 'skip') => {
+    if ((await fn()) === 'skip') {
+      skipped.push(name);
+      console.log(`⏭ SKIPPED ${name} (no live Deepgram key)`);
+      return;
+    }
     results.push(name);
     console.log(`✓ ${name}`);
   };
@@ -386,7 +391,7 @@ async function run() {
     await fetch(`${LIVE_HTTP}/api/simulator/logs`, { method: 'DELETE' });
   });
 
-  await check('4. Secret Sanitization (Token/Bearer/Quotes) & Real Deepgram Auth Verification on /api/secrets', async () => {
+  await check('4. Secret sanitization and Deepgram auth rejection/failure response', async () => {
     assert.strictEqual(sanitizeSecretValue('  "Token dg_abc123"  '), 'dg_abc123');
     assert.strictEqual(sanitizeSecretValue("'Bearer dg_xyz987'"), 'dg_xyz987');
     assert.strictEqual(sanitizeSecretValue('dg_raw_key\r\n'), 'dg_raw_key');
@@ -527,7 +532,7 @@ async function run() {
       // No DEEPGRAM_API_KEY in .env (offline CI/sandbox environment)
       assert.strictEqual(verifyRes.status, 400);
       assert.strictEqual(verifyData.ok, false);
-      return;
+      return 'skip';
     }
     assert.strictEqual(verifyRes.status, 200);
     assert.strictEqual(verifyData.ok, true);
@@ -587,7 +592,7 @@ async function run() {
     await fetch(`${LIVE_HTTP}/api/simulator/logs`, { method: 'DELETE' });
   });
 
-  console.log(`\nALL ${results.length}/${results.length} STEP 2 VERIFICATION CHECKS PASSED!`);
+  console.log(`\nSTEP 2: ${results.length} passed, ${skipped.length} skipped.`);
 }
 
 run().catch((err) => {
