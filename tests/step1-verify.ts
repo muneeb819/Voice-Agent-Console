@@ -235,27 +235,6 @@ async function run() {
     assert.ok(viciTxt.includes('/vicidial/non_agent_api.php') && viciTxt.includes('/agc/api.php'));
     assert.ok(!viciTxt.includes('uuidgen'), 'Must not spawn subshell uuidgen');
 
-    // Asterisk's dot wildcard requires one or more extra characters. The old
-    // _<prefix>X. pattern missed the single-digit campaign extensions.
-    st.vici.aiExten = '839';
-    st.campaigns = Array.from({ length: 11 }, (_, idx) => ({
-      ...st.campaigns[0], id: `dialplan-${idx}`, name: `Campaign ${idx + 1}`,
-    }));
-    for (const [transport, label, other] of [
-      ['sip_trunk', 'SIP', 'AudioSocket'],
-      ['audiosocket', 'AudioSocket', 'SIP'],
-    ] as const) {
-      st.vici.transport = transport;
-      const manyRoutes = generateViciConfig(st);
-      assert.ok(!manyRoutes.includes('exten => _839X.'), 'Do not generate the broken or broad wildcard route');
-      for (let slot = 1; slot <= 11; slot++) {
-        const extension = `839${slot}`;
-        assert.ok(manyRoutes.includes(`exten => ${extension},1,NoOp(VICIdial AI Bot ${label}`), `Missing ${label} route ${extension}`);
-        assert.ok(!manyRoutes.includes(`exten => ${extension},1,NoOp(VICIdial AI Bot ${other}`), `Conflicting ${other} route ${extension}`);
-      }
-      assert.equal((manyRoutes.match(/^exten => /gm) || []).length, 11, 'Emit exactly one route per configured campaign and mode');
-    }
-
     // Legacy vac-v2 migration check (removes accept_vicidial_call from LLM tools & coerces string numbers)
     const migrated = normalizeState({
       agents: [

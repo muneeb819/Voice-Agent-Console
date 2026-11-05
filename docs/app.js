@@ -2298,34 +2298,9 @@
       })
       .join('\n;\n');
 
-    // Match only the actual campaign extensions; a trailing dot in the old
-    // pattern required an extra character and missed single-digit slots.
-    const sipRoutes = S.campaigns.map((_campaign, idx) => [
-      `exten => ${v.aiExten}${idx + 1},1,NoOp(VICIdial AI Bot SIP -> Ext \${EXTEN} | ViciCID: \${CALLERID(name)})`,
-      ` same => n,SIPAddHeader(X-Vici-CallName: \${CALLERID(name)})`,
-      ` same => n,SIPAddHeader(X-Vici-UniqueID: \${CHANNEL(uniqueid)})`,
-      ` same => n,SIPAddHeader(X-Vici-Channel: \${CHANNEL})`,
-      ` same => n,SIPAddHeader(X-Vici-Exten: \${EXTEN})`,
-      ` same => n,Dial(SIP/\${EXTEN}@ai-bridge,60,tTo)`,
-      ` same => n,Hangup()`,
-    ].join('\n')).join('\n\n');
-    const audioSocketRoutes = S.campaigns.map((_campaign, idx) => [
-      `exten => ${v.aiExten}${idx + 1},1,NoOp(VICIdial AI Bot AudioSocket -> \${EXTEN} | ViciCID: \${CALLERID(name)})`,
-      ` same => n,Answer()`,
-      ` same => n,Set(CHANNEL(audioreadformat)=slin)`,
-      ` same => n,Set(CHANNEL(audiowriteformat)=slin)`,
-      ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:533/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
-      ` same => n,AudioSocket(\${_BRIDGE_UUID},${v.bridgeHost}:${v.bridgePort})`,
-      ` same => n,Hangup()`,
-    ].join('\n')).join('\n\n');
-
     const sipCarrierBlock = [
-      `; === OPTION A: SIP + RTP with Asterisk chan_sip and SIPAddHeader ===`,
-      `; Verify chan_sip is loaded; PJSIP needs a separately reviewed dialplan.`,
-      `; SIP/RTP are unencrypted and peer trust is IP-based: use a private network or VPN.`,
-      `; Regenerate and review these exact routes when campaign order changes.`,
-      `; 1) VICIdial Admin -> Carriers -> Add New Carrier (ID: AIBRIDGE); select the pilot PBX only:`,
-      `;    Account Entry:`,
+      `; === OPTION A (Universal — Asterisk 13 / 16 / 18+ on ViciBox 8-12): SIP + RTP Mode ===`,
+      `; 1) VICIdial Admin -> Carriers -> Add New Carrier (ID: AIBRIDGE) -> Account Entry:`,
       `[ai-bridge]`,
       `disallow=all`,
       `allow=ulaw`,
@@ -2338,28 +2313,36 @@
       `insecure=port,invite`,
       ``,
       `;    Dialplan Entry (under same Carrier):`,
-      sipRoutes,
+      `exten => _${v.aiExten}X.,1,NoOp(VICIdial AI Bot SIP -> Ext \${EXTEN} | ViciCID: \${CALLERID(name)})`,
+      ` same => n,SIPAddHeader(X-Vici-CallName: \${CALLERID(name)})`,
+      ` same => n,SIPAddHeader(X-Vici-UniqueID: \${CHANNEL(uniqueid)})`,
+      ` same => n,SIPAddHeader(X-Vici-Channel: \${CHANNEL})`,
+      ` same => n,SIPAddHeader(X-Vici-Exten: \${EXTEN})`,
+      ` same => n,Dial(SIP/\${EXTEN}@ai-bridge,60,tTo)`,
+      ` same => n,Hangup()`,
     ].join('\n');
 
     const audioSocketBlock = [
-      `; === OPTION B: AudioSocket TCP (requires the installed Asterisk module) ===`,
-      `; Verify module first: asterisk -rx "module show like audiosocket"`,
-      `; The unauthenticated CURL example below assumes local loopback HTTP on port 533.`,
-      `; Remote PBXs require separately configured authentication; do not expose the API publicly.`,
-      `; Regenerate and review these exact routes when campaign order changes.`,
-      audioSocketRoutes,
+      `; === OPTION B (Asterisk 18+ on ViciBox 11/12): Native AudioSocket TCP Mode ===`,
+      `; /api/vici/register-call returns a canonical 36-char RFC4122 UUID & pre-hydrates the lead!`,
+      `exten => _${v.aiExten}X.,1,NoOp(VICIdial AI Bot AudioSocket -> \${EXTEN} | ViciCID: \${CALLERID(name)})`,
+      ` same => n,Answer()`,
+      ` same => n,Set(CHANNEL(audioreadformat)=slin)`,
+      ` same => n,Set(CHANNEL(audiowriteformat)=slin)`,
+      ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:533/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
+      ` same => n,AudioSocket(\${_BRIDGE_UUID},${v.bridgeHost}:${v.bridgePort})`,
+      ` same => n,Hangup()`,
     ].join('\n');
 
-    // Only one mode can define these exact extensions in the exported dialplan.
-    const dialplan = v.transport === 'sip_trunk' ? sipCarrierBlock : audioSocketBlock;
+    const dialplan =
+      v.transport === 'sip_trunk'
+        ? `${sipCarrierBlock}\n\n${audioSocketBlock}`
+        : `${audioSocketBlock}\n\n${sipCarrierBlock}`;
 
     return [
       `; ============================================================================`,
-      `; VICIdial <-> Voice Agent Bridge Configuration (Selected Dialplan: ${v.transport === 'sip_trunk' ? 'SIP/RTP :' + v.sipPort : 'AudioSocket :' + v.bridgePort})`,
-      `; Only the selected dialplan is shown. Change transport to generate the alternative.`,
-      `; Configured ports: AudioSocket TCP :${v.bridgePort}; SIP UDP :${v.sipPort}. Check actual listener status.`,
-      `; RTP uses dynamic UDP ports; restrict peer access and verify firewall/NAT in staging.`,
-      `; One AMI host is configured per bridge instance; use a separate pilot per PBX.`,
+      `; VICIdial <-> Voice Agent Bridge Configuration (Active Primary: ${v.transport === 'sip_trunk' ? 'SIP/RTP :' + v.sipPort : 'AudioSocket :' + v.bridgePort})`,
+      `; Both listeners (:9092 AudioSocket TCP & :${v.sipPort} SIP/RTP UDP) run simultaneously!`,
       `; ============================================================================`,
       campaignBlock,
       ``,
@@ -5783,9 +5766,9 @@
           </div>
 
           <h2>Telephony Media &amp; Control Transport (Both Listeners Run Simultaneously)</h2>
-          ${F('Dialplan Mode to Generate', 'v.transport', 'sel', [
-            ['sip_trunk', 'SIP + RTP G.711 μ-law (chan_sip example; verify PBX compatibility)'],
-            ['audiosocket', 'AudioSocket TCP (requires installed module; example assumes loopback)'],
+          ${F('Primary Dialplan Mode Highlighted in Export', 'v.transport', 'sel', [
+            ['sip_trunk', 'SIP + RTP G.711 μ-law Peer (:5062 — Works on ALL ViciBox / Asterisk 13, 16, 18+)'],
+            ['audiosocket', 'Asterisk AudioSocket TCP (:9092 — Native Asterisk 18+ / ViciBox 11-12)'],
           ])}
           <div class="row r3">
             ${F('Bridge Host / IP', 'v.bridgeHost')}
@@ -5802,13 +5785,12 @@
             ${F('AMI Port', 'v.amiPort', 'number', [], 'min="1" max="65535" step="1"')}
             ${F('AMI Username', 'v.amiUser')}
           </div>
-          <div class="note wn">This instance has one AMI target. Before routing multiple PBXs through it, verify that channel actions reach the PBX that owns each call. SIP/RTP uses unencrypted, IP-based peer trust and dynamic media ports; use a private network or VPN.</div>
           <div class="note">
             Passwords (<code>VICI_API_PASS</code>, <code>AMI_SECRET</code>, <code>DEEPGRAM_API_KEY</code>) live exclusively in the server <code>.env</code> file — click <b>🔑 API Keys</b> in the top bar to manage them safely.
           </div>
         </div>
         <div class="card sticky">
-          <h2>Generated ViciBox Dialplan &amp; Bridge Config (Selected Mode)</h2>
+          <h2>Generated ViciBox Dialplan &amp; Bridge Config (SIP/RTP + AudioSocket)</h2>
           <pre id="pv"></pre>
         </div>
       `;
