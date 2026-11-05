@@ -269,6 +269,7 @@ export function createDefaultState(): ConsoleState {
           '- If the lead says stop, take me off your list, not interested, or do not call, apologise politely, call set_disposition with "DNC" (or "NI"), and call end_call immediately.',
         acceptViciCalls: true,
         injectCampaignDisclosure: true,
+        randomGreetingEnabled: true,
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
@@ -351,6 +352,7 @@ export function createDefaultState(): ConsoleState {
           '   "All right, everything looks good on my end. Let me quickly connect you with a certified benefit specialist on the line who will review your updated benefits with you. Just hold for one moment, here you go!"',
         acceptViciCalls: true,
         injectCampaignDisclosure: true,
+        randomGreetingEnabled: true,
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
@@ -402,6 +404,7 @@ export function createDefaultState(): ConsoleState {
           '7) Do-Not-Call (DNC) & Call Control: If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with code "DNC", and call end_call immediately. If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.',
         acceptViciCalls: true,
         injectCampaignDisclosure: true,
+        randomGreetingEnabled: true,
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
@@ -861,6 +864,7 @@ export function normalizeState(raw: any): ConsoleState {
           mode: ['outbound', 'inbound', 'both'].includes(a.mode) ? a.mode : 'outbound',
           language: String(a.language || 'en'),
           greeting: String(a.greeting ?? ''),
+          randomGreetingEnabled: a.randomGreetingEnabled !== false,
           prompt: cleanPrompt,
           acceptViciCalls: isNovaAgent ? true : a.acceptViciCalls !== undefined ? Boolean(a.acceptViciCalls) : hadLegacyAccept,
           injectCampaignDisclosure:

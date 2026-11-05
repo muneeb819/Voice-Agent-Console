@@ -41,17 +41,34 @@ async function main() {
       );
       INSERT INTO simulator_calls VALUES ('legacy', 'a1', 'Legacy', NULL, 'deepgram', 16000, 24000,
         '2020-01-01', '2020-01-01', 1, 1, NULL, NULL, NULL,
-        '[{"ts":"2020-01-01","role":"user","content":"original transcript"}]', '[]');\`);
+        '[{"ts":"2020-01-01","role":"user","content":"original transcript"}]', '[]');
+      CREATE TABLE bridge_calls (
+        id TEXT PRIMARY KEY, transport TEXT NOT NULL, exten TEXT NOT NULL, caller_code TEXT NOT NULL,
+        lead_id TEXT, phone TEXT NOT NULL, campaign_id TEXT, vici_campaign TEXT, agent_id TEXT NOT NULL,
+        agent_name TEXT NOT NULL, remote_agent_user TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL, turns INTEGER NOT NULL, avg_ttfb_ms INTEGER, disposition TEXT,
+        transferred_to TEXT, dnc_added INTEGER NOT NULL DEFAULT 0,
+        transcript_json TEXT NOT NULL, functions_json TEXT NOT NULL, vici_api_audit_json TEXT NOT NULL
+      );
+      INSERT INTO bridge_calls VALUES ('legacy-bridge', 'audiosocket', '88001', 'fixture', NULL, '', NULL, NULL,
+        'a1', 'Legacy', '9001', '2020-01-01', '2020-01-01', 1, 1, NULL, NULL, NULL, 0,
+        '[{"ts":"2020-01-01","role":"assistant","content":"original bridge transcript"}]', '[]', '[]');\`);
       db.close();
-      const migrated = require(process.argv[1]).getSimulatorCallLog('legacy');
+      const store = require(process.argv[1]);
+      const migrated = store.getSimulatorCallLog('legacy');
       assert.equal(migrated.recordingRequested, false);
       assert.equal(migrated.recordingStatus, 'not_requested');
+      assert.equal(migrated.greetingId, null);
       assert.equal(migrated.transcript[0].content, 'original transcript');
+      const bridge = store.listBridgeCallLogs(1)[0];
+      assert.equal(bridge.greetingId, null);
+      assert.equal(bridge.recordingFile, null);
+      assert.equal(bridge.transcript[0].content, 'original bridge transcript');
     `;
     childProcess.execFileSync(process.execPath, ['-e', script, path.resolve(__dirname, '../dist/db.js')], {
       cwd: path.resolve(__dirname, '..'), env: { ...process.env, VAC_DATA_DIR: migrationDir }, stdio: 'pipe',
     });
-    console.log('✓ Legacy SQLite history migrates without inventing audio or losing transcripts');
+    console.log('✓ Legacy simulator and bridge SQLite history migrate without inventing audio or greeting IDs, or losing transcripts');
   } finally { fs.rmSync(migrationDir, { recursive: true, force: true }); }
   const old = {
     key: process.env.DEEPGRAM_API_KEY, url: process.env.DEEPGRAM_AGENT_URL,

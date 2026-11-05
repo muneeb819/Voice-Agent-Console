@@ -866,6 +866,7 @@ class VicidialBridgeService {
         this.stats.totalCalls += 1;
         let closed = false;
         let settingsApplied = false;
+        let selectedGreeting = null;
         let dgWs = null;
         let keepAliveTimer = null;
         let comfortSilenceTimer = null;
@@ -1026,6 +1027,7 @@ class VicidialBridgeService {
                 viciCampaign: campaign?.viciCampaign || null,
                 agentId: agent.id,
                 agentName: agent.name,
+                greetingId: selectedGreeting?.greeting_id || null,
                 remoteAgentUser,
                 startedAt: startedAtIso,
                 endedAt: endedAtIso,
@@ -1099,16 +1101,6 @@ class VicidialBridgeService {
             if (hydratedLead.phone_number)
                 summary.phone = hydratedLead.phone_number;
             addTranscript('system', `Connected ${opts.transport.toUpperCase()} call (CID: ${parsedCaller.callerCode || 'direct'}, Lead #${summary.leadId || 'n/a'} ${hydratedLead.first_name || ''} ${hydratedLead.state || ''} via ${hydratedLead.sourceApi})`);
-            const rawSettings = (0, settings_builder_1.buildDeepgramSettings)(state, agent, campaign, {
-                forceClientSideWebhooks: true,
-            });
-            // Telephony is strictly 8000 Hz linear16 mono in & out
-            rawSettings.audio = {
-                input: { encoding: 'linear16', sample_rate: 8000 },
-                output: { encoding: 'linear16', sample_rate: 8000, container: 'none' },
-            };
-            hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
-            const wireSettings = interpolateEnvPlaceholders(rawSettings);
             const dgKey = (0, env_store_1.getSecret)('DEEPGRAM_API_KEY');
             const customAgentUrl = (process.env.DEEPGRAM_AGENT_URL || '').trim();
             const targetUrl = customAgentUrl || 'wss://agent.deepgram.com/v1/agent/converse';
@@ -1118,6 +1110,24 @@ class VicidialBridgeService {
                 await finalizeSession('missing_deepgram_key');
                 return;
             }
+            selectedGreeting = (0, db_1.trySelectGreeting)(agent.id, agent.randomGreetingEnabled !== false);
+            if (selectedGreeting) {
+                addTranscript('system', `Selected greeting #${selectedGreeting.greeting_id} (${selectedGreeting.persona}; ${selectedGreeting.context}; ${selectedGreeting.tone}).`);
+            }
+            else if (agent.randomGreetingEnabled !== false) {
+                addTranscript('system', 'Greeting library unavailable; using the configured opening.');
+            }
+            const rawSettings = (0, settings_builder_1.buildDeepgramSettings)(state, agent, campaign, {
+                forceClientSideWebhooks: true,
+                greetingText: selectedGreeting?.greeting_text,
+            });
+            // Telephony is strictly 8000 Hz linear16 mono in & out
+            rawSettings.audio = {
+                input: { encoding: 'linear16', sample_rate: 8000 },
+                output: { encoding: 'linear16', sample_rate: 8000, container: 'none' },
+            };
+            hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
+            const wireSettings = interpolateEnvPlaceholders(rawSettings);
             updateState('connecting_deepgram');
             dgWs = new ws_1.default(targetUrl, {
                 headers: dgKey ? { Authorization: `Token ${dgKey}` } : {},

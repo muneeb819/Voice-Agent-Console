@@ -6,7 +6,8 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { AsteriskAmiClient } from './ami-client';
 import { isBridgePeerIpAllowed, isLoopbackIp } from './auth-guard';
 import { StereoCallRecorder8k } from './call-recorder';
-import { getConsoleState, saveBridgeCallLog } from './db';
+import { getConsoleState, saveBridgeCallLog, trySelectGreeting } from './db';
+import { GreetingRecord } from './greetings';
 import { getSecret, MANAGED_SECRET_KEYS } from './env-store';
 import { executeCustomFunctionWebhook } from './webhook-executor';
 import {
@@ -1013,6 +1014,7 @@ export class VicidialBridgeService {
 
     let closed = false;
     let settingsApplied = false;
+    let selectedGreeting: GreetingRecord | null = null;
     let dgWs: WebSocket | null = null;
     let keepAliveTimer: NodeJS.Timeout | null = null;
     let comfortSilenceTimer: NodeJS.Timeout | null = null;
@@ -1205,6 +1207,7 @@ export class VicidialBridgeService {
         viciCampaign: campaign?.viciCampaign || null,
         agentId: agent.id,
         agentName: agent.name,
+        greetingId: selectedGreeting?.greeting_id || null,
         remoteAgentUser,
         startedAt: startedAtIso,
         endedAt: endedAtIso,
@@ -1283,17 +1286,6 @@ export class VicidialBridgeService {
         `Connected ${opts.transport.toUpperCase()} call (CID: ${parsedCaller.callerCode || 'direct'}, Lead #${summary.leadId || 'n/a'} ${hydratedLead.first_name || ''} ${hydratedLead.state || ''} via ${hydratedLead.sourceApi})`
       );
 
-      const rawSettings = buildDeepgramSettings(state, agent, campaign, {
-        forceClientSideWebhooks: true,
-      });
-      // Telephony is strictly 8000 Hz linear16 mono in & out
-      rawSettings.audio = {
-        input: { encoding: 'linear16', sample_rate: 8000 },
-        output: { encoding: 'linear16', sample_rate: 8000, container: 'none' },
-      };
-      hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
-      const wireSettings = interpolateEnvPlaceholders(rawSettings);
-
       const dgKey = getSecret('DEEPGRAM_API_KEY');
       const customAgentUrl = (process.env.DEEPGRAM_AGENT_URL || '').trim();
       const targetUrl = customAgentUrl || 'wss://agent.deepgram.com/v1/agent/converse';
@@ -1304,6 +1296,25 @@ export class VicidialBridgeService {
         await finalizeSession('missing_deepgram_key');
         return;
       }
+
+      selectedGreeting = trySelectGreeting(agent.id, agent.randomGreetingEnabled !== false);
+      if (selectedGreeting) {
+        addTranscript('system', `Selected greeting #${selectedGreeting.greeting_id} (${selectedGreeting.persona}; ${selectedGreeting.context}; ${selectedGreeting.tone}).`);
+      } else if (agent.randomGreetingEnabled !== false) {
+        addTranscript('system', 'Greeting library unavailable; using the configured opening.');
+      }
+
+      const rawSettings = buildDeepgramSettings(state, agent, campaign, {
+        forceClientSideWebhooks: true,
+        greetingText: selectedGreeting?.greeting_text,
+      });
+      // Telephony is strictly 8000 Hz linear16 mono in & out
+      rawSettings.audio = {
+        input: { encoding: 'linear16', sample_rate: 8000 },
+        output: { encoding: 'linear16', sample_rate: 8000, container: 'none' },
+      };
+      hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
+      const wireSettings = interpolateEnvPlaceholders(rawSettings);
 
       updateState('connecting_deepgram');
       dgWs = new WebSocket(targetUrl, {

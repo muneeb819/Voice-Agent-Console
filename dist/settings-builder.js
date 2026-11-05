@@ -309,6 +309,11 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
         !finalGreeting.toLowerCase().includes(linkedCampaign.disclosure.trim().toLowerCase())) {
         finalGreeting = `${linkedCampaign.disclosure.trim()} ${finalGreeting}`.trim();
     }
+    // Call/session code chooses once. Previews remain deterministic and never
+    // consume the rotation. Preserve the saved introduction and disclosure.
+    const variation = agent.randomGreetingEnabled !== false ? (options?.greetingText || '').trim() : '';
+    if (variation)
+        finalGreeting = `${finalGreeting} ${variation}`.trim();
     return {
         type: 'Settings',
         tags: ['voice-console', agent.mode, ...(linkedCampaign?.viciCampaign ? [linkedCampaign.viciCampaign] : [])],

@@ -4,6 +4,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDb = getDb;
+exports.listGreetingLibrary = listGreetingLibrary;
+exports.selectGreetingForAgent = selectGreetingForAgent;
+exports.trySelectGreeting = trySelectGreeting;
 exports.getConsoleState = getConsoleState;
 exports.saveConsoleState = saveConsoleState;
 exports.listRevisions = listRevisions;
@@ -25,6 +28,7 @@ const simulator_recordings_1 = require("./simulator-recordings");
 const defaults_1 = require("./defaults");
 const settings_builder_1 = require("./settings-builder");
 const data_paths_1 = require("./data-paths");
+const greetings_1 = require("./greetings");
 function openSqliteEngine(dbPath) {
     const normArgs = (args) => args.map((v) => (v === undefined ? null : v));
     // 1) Primary engine: better-sqlite3 (fast C++ native binding with prebuilds for Node 20..25)
@@ -33,6 +37,7 @@ function openSqliteEngine(dbPath) {
         const BetterSqlite3 = require('better-sqlite3');
         const raw = new BetterSqlite3(dbPath);
         raw.pragma('journal_mode = WAL');
+        raw.pragma('busy_timeout = 5000');
         return {
             exec: (sql) => raw.exec(sql),
             prepare: (sql) => {
@@ -44,6 +49,7 @@ function openSqliteEngine(dbPath) {
                 };
             },
             transaction: (fn) => raw.transaction(fn),
+            transactionImmediate: (fn) => raw.transaction(fn).immediate,
         };
     }
     catch {
@@ -51,7 +57,24 @@ function openSqliteEngine(dbPath) {
         // eslint-disable-next-line @typescript-eslint/no-var-requires
         const { DatabaseSync } = require('node:sqlite');
         const raw = new DatabaseSync(dbPath);
-        raw.exec('PRAGMA journal_mode = WAL');
+        raw.exec('PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000');
+        const transaction = (fn) => () => {
+            raw.exec('BEGIN IMMEDIATE');
+            try {
+                const out = fn();
+                raw.exec('COMMIT');
+                return out;
+            }
+            catch (err) {
+                try {
+                    raw.exec('ROLLBACK');
+                }
+                catch {
+                    // ignore rollback error
+                }
+                throw err;
+            }
+        };
         return {
             exec: (sql) => raw.exec(sql),
             prepare: (sql) => {
@@ -62,23 +85,8 @@ function openSqliteEngine(dbPath) {
                     run: (...p) => stmt.run(...normArgs(p)),
                 };
             },
-            transaction: (fn) => () => {
-                raw.exec('BEGIN IMMEDIATE');
-                try {
-                    const out = fn();
-                    raw.exec('COMMIT');
-                    return out;
-                }
-                catch (err) {
-                    try {
-                        raw.exec('ROLLBACK');
-                    }
-                    catch {
-                        // ignore rollback error
-                    }
-                    throw err;
-                }
-            },
+            transaction,
+            transactionImmediate: transaction,
         };
     }
 }
@@ -102,11 +110,28 @@ function getDb() {
       summary TEXT NOT NULL,
       snapshot TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS greeting_library (
+      greeting_id TEXT PRIMARY KEY,
+      persona TEXT NOT NULL,
+      context TEXT NOT NULL,
+      greeting_text TEXT NOT NULL,
+      tone TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS greeting_rotation_used (
+      agent_id TEXT NOT NULL,
+      greeting_id TEXT NOT NULL,
+      PRIMARY KEY (agent_id, greeting_id)
+    );
+    CREATE TABLE IF NOT EXISTS greeting_rotation_state (
+      agent_id TEXT PRIMARY KEY,
+      last_greeting_id TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS simulator_calls (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
       agent_name TEXT NOT NULL,
       campaign_id TEXT,
+      greeting_id TEXT,
       upstream_mode TEXT NOT NULL,
       sample_rate_in INTEGER NOT NULL,
       sample_rate_out INTEGER NOT NULL,
@@ -137,6 +162,7 @@ function getDb() {
       vici_campaign TEXT,
       agent_id TEXT NOT NULL,
       agent_name TEXT NOT NULL,
+      greeting_id TEXT,
       remote_agent_user TEXT NOT NULL,
       started_at TEXT NOT NULL,
       ended_at TEXT NOT NULL,
@@ -162,6 +188,7 @@ function getDb() {
         ['recording_mime', 'TEXT'],
         ['recording_bytes', 'INTEGER NOT NULL DEFAULT 0'],
         ['recording_truncated', 'INTEGER NOT NULL DEFAULT 0'],
+        ['greeting_id', 'TEXT'],
     ]) {
         if (!simCols.has(name))
             db.exec(`ALTER TABLE simulator_calls ADD COLUMN ${name} ${definition}`);
@@ -175,7 +202,75 @@ function getDb() {
     if (!colNames.has('recording_bytes')) {
         db.exec('ALTER TABLE bridge_calls ADD COLUMN recording_bytes INTEGER NOT NULL DEFAULT 0');
     }
+    if (!colNames.has('greeting_id')) {
+        db.exec('ALTER TABLE bridge_calls ADD COLUMN greeting_id TEXT');
+    }
+    // The CSV-derived catalog is an idempotent seed, not console state or a
+    // secret. Keep any already-imported database rows/edits on subsequent starts.
+    try {
+        const rows = (0, greetings_1.loadBundledGreetings)();
+        const insert = db.prepare(`INSERT OR IGNORE INTO greeting_library
+      (greeting_id, persona, context, greeting_text, tone) VALUES (?, ?, ?, ?, ?)`);
+        db.transactionImmediate(() => {
+            for (const row of rows)
+                insert.run(row.greeting_id, row.persona, row.context, row.greeting_text, row.tone);
+        })();
+    }
+    catch (err) {
+        // A missing/corrupt seed must not prevent calls from using the saved greeting.
+        console.error('[greetings] Could not seed the bundled greeting library:', err instanceof Error ? err.message : err);
+    }
     return db;
+}
+function listGreetingLibrary() {
+    return getDb().prepare(`SELECT greeting_id, persona, context, greeting_text, tone
+    FROM greeting_library ORDER BY CAST(greeting_id AS INTEGER), greeting_id`).all();
+}
+/**
+ * Choose uniformly among this agent's unused greetings, atomically across server
+ * processes. After a full cycle, reset the pool but avoid an immediate repeat.
+ * Browser tests and real bridge calls share the same per-agent server cursor.
+ */
+function selectGreetingForAgent(agentId) {
+    if (!agentId)
+        return null;
+    const conn = getDb();
+    return conn.transactionImmediate(() => {
+        const findUnused = conn.prepare(`SELECT g.greeting_id, g.persona, g.context, g.greeting_text, g.tone
+      FROM greeting_library g WHERE NOT EXISTS (
+        SELECT 1 FROM greeting_rotation_used u WHERE u.agent_id = ? AND u.greeting_id = g.greeting_id
+      ) ORDER BY RANDOM() LIMIT 1`);
+        let row = findUnused.get(agentId);
+        if (!row) {
+            const total = conn.prepare('SELECT COUNT(*) AS count FROM greeting_library').get();
+            if (!Number(total.count))
+                return null;
+            const last = conn.prepare('SELECT last_greeting_id FROM greeting_rotation_state WHERE agent_id = ?').get(agentId);
+            conn.prepare('DELETE FROM greeting_rotation_used WHERE agent_id = ?').run(agentId);
+            row = (Number(total.count) > 1 && last
+                ? conn.prepare(`SELECT greeting_id, persona, context, greeting_text, tone FROM greeting_library
+            WHERE greeting_id <> ? ORDER BY RANDOM() LIMIT 1`).get(last.last_greeting_id)
+                : findUnused.get(agentId));
+        }
+        if (!row)
+            return null;
+        conn.prepare('INSERT INTO greeting_rotation_used (agent_id, greeting_id) VALUES (?, ?)').run(agentId, row.greeting_id);
+        conn.prepare(`INSERT INTO greeting_rotation_state (agent_id, last_greeting_id) VALUES (?, ?)
+      ON CONFLICT(agent_id) DO UPDATE SET last_greeting_id = excluded.last_greeting_id`).run(agentId, row.greeting_id);
+        return row;
+    })();
+}
+/** Continue with the configured opening if the library or rotation is unavailable. */
+function trySelectGreeting(agentId, enabled) {
+    if (!enabled)
+        return null;
+    try {
+        return selectGreetingForAgent(agentId);
+    }
+    catch (err) {
+        console.error('[greetings] Could not select a greeting; using the configured opening:', err instanceof Error ? err.message : err);
+        return null;
+    }
 }
 function writeJsonMirror(state) {
     fs_1.default.mkdirSync(data_paths_1.DATA_DIR, { recursive: true });
@@ -268,12 +363,12 @@ function saveSimulatorCallLog(record) {
             (0, simulator_recordings_1.removeSimulatorRecording)(previous.recording_file);
         }
         conn.prepare(`INSERT OR REPLACE INTO simulator_calls (
-        id, agent_id, agent_name, campaign_id, upstream_mode,
+        id, agent_id, agent_name, campaign_id, greeting_id, upstream_mode,
         sample_rate_in, sample_rate_out, started_at, ended_at,
         duration_ms, turns, avg_ttfb_ms, disposition, transferred_to,
         recording_requested, recording_status, recording_file, recording_mime,
         recording_bytes, recording_truncated, transcript_json, functions_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(record.id, record.agentId, record.agentName, record.campaignId, record.upstreamMode, record.sampleRateIn, record.sampleRateOut, record.startedAt, record.endedAt, record.durationMs, record.turns, record.avgTtfbMs, record.disposition, record.transferredTo, record.recordingRequested ? 1 : 0, record.recordingStatus || (record.recordingRequested ? 'pending' : 'not_requested'), record.recordingFile || null, record.recordingMime || null, record.recordingBytes || 0, record.recordingTruncated ? 1 : 0, JSON.stringify(record.transcript), JSON.stringify(record.functionCalls));
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(record.id, record.agentId, record.agentName, record.campaignId, record.greetingId || null, record.upstreamMode, record.sampleRateIn, record.sampleRateOut, record.startedAt, record.endedAt, record.durationMs, record.turns, record.avgTtfbMs, record.disposition, record.transferredTo, record.recordingRequested ? 1 : 0, record.recordingStatus || (record.recordingRequested ? 'pending' : 'not_requested'), record.recordingFile || null, record.recordingMime || null, record.recordingBytes || 0, record.recordingTruncated ? 1 : 0, JSON.stringify(record.transcript), JSON.stringify(record.functionCalls));
         const stale = conn.prepare('SELECT recording_file FROM simulator_calls ORDER BY started_at DESC, rowid DESC LIMIT -1 OFFSET 100').all();
         for (const row of stale)
             (0, simulator_recordings_1.removeSimulatorRecording)(row.recording_file);
@@ -289,6 +384,7 @@ function simulatorLogFromRow(r) {
         agentId: r.agent_id,
         agentName: r.agent_name,
         campaignId: r.campaign_id,
+        greetingId: r.greeting_id || null,
         upstreamMode: r.upstream_mode,
         sampleRateIn: r.sample_rate_in,
         sampleRateOut: r.sample_rate_out,
@@ -358,13 +454,13 @@ function saveBridgeCallLog(record) {
     conn
         .prepare(`INSERT OR REPLACE INTO bridge_calls (
         id, transport, exten, caller_code, lead_id, phone,
-        campaign_id, vici_campaign, agent_id, agent_name, remote_agent_user,
+        campaign_id, vici_campaign, agent_id, agent_name, greeting_id, remote_agent_user,
         started_at, ended_at, duration_ms, turns, avg_ttfb_ms,
         disposition, transferred_to, dnc_added,
         recording_file, recording_bytes,
         transcript_json, functions_json, vici_api_audit_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(record.id, record.transport, record.exten, record.callerCode, record.leadId, record.phone, record.campaignId, record.viciCampaign, record.agentId, record.agentName, record.remoteAgentUser, record.startedAt, record.endedAt, record.durationMs, record.turns, record.avgTtfbMs, record.disposition, record.transferredTo, record.dncAdded ? 1 : 0, record.recordingFile || null, record.recordingBytes || 0, JSON.stringify(record.transcript), JSON.stringify(record.functionCalls), JSON.stringify(record.viciApiAudit));
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(record.id, record.transport, record.exten, record.callerCode, record.leadId, record.phone, record.campaignId, record.viciCampaign, record.agentId, record.agentName, record.greetingId || null, record.remoteAgentUser, record.startedAt, record.endedAt, record.durationMs, record.turns, record.avgTtfbMs, record.disposition, record.transferredTo, record.dncAdded ? 1 : 0, record.recordingFile || null, record.recordingBytes || 0, JSON.stringify(record.transcript), JSON.stringify(record.functionCalls), JSON.stringify(record.viciApiAudit));
     conn.prepare(`
     DELETE FROM bridge_calls
     WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT 200)
@@ -386,6 +482,7 @@ function listBridgeCallLogs(limit = 25) {
         viciCampaign: r.vici_campaign,
         agentId: r.agent_id,
         agentName: r.agent_name,
+        greetingId: r.greeting_id || null,
         remoteAgentUser: r.remote_agent_user,
         startedAt: r.started_at,
         endedAt: r.ended_at,
@@ -487,6 +584,7 @@ function exportBridgeLogsCsv(limit = 200) {
         'lead_id',
         'phone',
         'agent_name',
+        'greeting_id',
         'remote_agent_user',
         'turns',
         'avg_ttfb_ms',
@@ -516,6 +614,7 @@ function exportBridgeLogsCsv(limit = 200) {
             l.leadId || '',
             l.phone,
             l.agentName,
+            l.greetingId || '',
             l.remoteAgentUser,
             l.turns,
             l.avgTtfbMs ?? '',

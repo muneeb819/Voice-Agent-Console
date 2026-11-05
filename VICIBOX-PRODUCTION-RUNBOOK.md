@@ -2,6 +2,8 @@
 **Unified Voice Agent Console + Deepgram Voice Agent API + Universal VICIdial Bridge (Step 4 Release)**
 
 > **Legacy topology examples, not a verified deployment recipe.** The public IP addresses and dialplan values below describe an old environment and are not defaults or automatically trusted peers. Do not copy them or example credentials into production. Current installation requires Node.js 22.5+, defaults to loopback-only listeners and PBX peers, preserves an existing `.env`, and requires explicit proxy trust. Review the current [README](README.md), firewall/TLS configuration, and your own VICIdial/Asterisk setup; validate in staging before handling real calls.
+>
+> **Greeting behavior change:** imported greeting rotation is enabled by default for every bot. All 1,100 supplied rows, including meeting and time-specific language, can be appended after the saved opening and enabled disclosure. Review the library and each agent's complete script and factual claims before real calls. To disable this for a bot, uncheck its random-greeting setting under **Agents** and save. See the README's [greeting rotation section](README.md#imported-greetings-and-call-rotation) for logging and fallback limits.
 
 ---
 

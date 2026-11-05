@@ -1122,6 +1122,10 @@
     }
 
     for (const ag of state.agents) {
+      if (typeof ag.randomGreetingEnabled !== 'boolean') {
+        ag.randomGreetingEnabled = true;
+        mutated = true;
+      }
       const isNova = ag.id === 'a_nova' || /nova.*concierge/i.test(ag.name || '');
       if (!Array.isArray(ag.fnIds)) {
         ag.fnIds = [xferFn, dispoFn, endFn].filter(Boolean);
@@ -1339,6 +1343,151 @@
     return combined.length <= 24950 ? combined : basePrompt;
   }
 
+  // The server exposes its SQLite catalog; static hosting ships the same
+  // CSV-derived rows and keeps its independent per-agent cursor in IndexedDB.
+  const greetingCatalog = { rows: [], loaded: false, pending: null, error: '', query: '', page: 0 };
+  const fallbackGreetingRotations = new Map();
+
+  async function ensureGreetingCatalogLoaded() {
+    if (greetingCatalog.loaded) return greetingCatalog.rows;
+    if (greetingCatalog.pending) return greetingCatalog.pending;
+    greetingCatalog.error = '';
+    greetingCatalog.pending = (async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await fetch(serverlessCloudMode ? './greetings.json' : '/api/greetings', { cache: 'no-store', signal: controller.signal });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+        const rows = data?.greetings;
+        const fields = ['greeting_id', 'persona', 'context', 'greeting_text', 'tone'];
+        const ids = new Set();
+        if (!Array.isArray(rows) || !rows.length || rows.some((row) => {
+          if (!row || fields.some((key) => typeof row[key] !== 'string' || !row[key].trim()) || ids.has(row.greeting_id)) return true;
+          ids.add(row.greeting_id);
+          return false;
+        })) throw new Error('The greeting catalog is empty or invalid');
+        greetingCatalog.rows = rows;
+        greetingCatalog.loaded = true;
+        return rows;
+      } catch (err) {
+        greetingCatalog.error = err.message || 'Could not load the greeting catalog';
+        return [];
+      } finally {
+        clearTimeout(timer);
+        greetingCatalog.pending = null;
+        const panel = document.getElementById('greeting-catalog-panel');
+        if (panel) panel.innerHTML = renderGreetingCatalog();
+      }
+    })();
+    return greetingCatalog.pending;
+  }
+
+  function renderGreetingResults() {
+    const query = greetingCatalog.query.trim().toLowerCase();
+    const filtered = greetingCatalog.rows.filter((row) =>
+      ['greeting_id', 'persona', 'context', 'greeting_text', 'tone'].some((key) => row[key].toLowerCase().includes(query))
+    );
+    const size = 20;
+    const pages = Math.max(1, Math.ceil(filtered.length / size));
+    greetingCatalog.page = Math.max(0, Math.min(greetingCatalog.page, pages - 1));
+    const visible = filtered.slice(greetingCatalog.page * size, (greetingCatalog.page + 1) * size);
+    return `<div class="note" aria-live="polite">${filtered.length} matching greeting(s) · page ${greetingCatalog.page + 1} of ${pages}</div>
+      ${visible.map((row) => `<div class="t" style="margin:6px 0">
+        <b>#${esc(row.greeting_id)}</b> · ${esc(row.persona)} · ${esc(row.context)} · Tone: ${esc(row.tone)}
+        <div>${esc(row.greeting_text)}</div>
+      </div>`).join('')}
+      <div class="bar" style="margin:8px 0">
+        <button type="button" class="g" data-greeting-page="prev" ${greetingCatalog.page === 0 ? 'disabled' : ''}>Previous</button>
+        <button type="button" class="g" data-greeting-page="next" ${greetingCatalog.page >= pages - 1 ? 'disabled' : ''}>Next</button>
+      </div>`;
+  }
+
+  function renderGreetingCatalog() {
+    if (greetingCatalog.error) return `<div class="note er">Could not load the greeting library in this view: ${esc(greetingCatalog.error)}. ${serverlessCloudMode ? 'Static-site tests will use the saved opening.' : 'Server call rotation cannot be confirmed from this view.'} <button type="button" class="g" id="retry-greeting-catalog">Retry</button></div>`;
+    if (!greetingCatalog.loaded) return '<div class="note">Loading greeting library…</div>';
+    return `<div class="note"><b>${greetingCatalog.rows.length.toLocaleString()} imported greetings</b> available to every bot. ${serverlessCloudMode ? 'Rotation is local to this browser profile.' : 'Server calls and browser tests share a per-bot rotation.'}</div>
+      <details><summary>Browse imported greetings</summary>
+        <label for="greeting-search">Search ID, persona, context, greeting, or tone</label>
+        <input type="search" id="greeting-search" value="${esc(greetingCatalog.query)}" placeholder="Search the greeting library">
+        <div id="greeting-results">${renderGreetingResults()}</div>
+      </details>`;
+  }
+
+  function drawStaticGreeting(previous, rows) {
+    const ids = rows.map((row) => row.greeting_id);
+    const fingerprint = ids.join('\u001f');
+    const validIds = new Set(ids);
+    const sameCatalog = previous?.fingerprint === fingerprint && Array.isArray(previous.remaining);
+    let remaining = sameCatalog ? [...new Set(previous.remaining.filter((id) => validIds.has(id)))] : [];
+    const newCycle = remaining.length === 0;
+    if (newCycle) remaining = ids.slice();
+    const candidates = newCycle && remaining.length > 1 && previous?.last
+      ? remaining.filter((id) => id !== previous.last) : remaining;
+    const selectedId = candidates[Math.floor(Math.random() * candidates.length)];
+    remaining.splice(remaining.indexOf(selectedId), 1);
+    return {
+      row: rows.find((row) => row.greeting_id === selectedId),
+      state: { fingerprint, remaining, last: selectedId },
+    };
+  }
+
+  function openGreetingRotationDb() {
+    return new Promise((resolve, reject) => {
+      let request;
+      try {
+        if (!window.indexedDB) throw new Error('IndexedDB is unavailable');
+        request = window.indexedDB.open('vac-greeting-rotation-v1', 1);
+      } catch (err) { reject(err); return; }
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) { settled = true; reject(new Error('Greeting storage timed out')); }
+      }, 3000);
+      const fail = () => {
+        if (!settled) { settled = true; clearTimeout(timer); reject(request.error || new Error('Greeting storage unavailable')); }
+      };
+      request.onupgradeneeded = () => request.result.createObjectStore('rotations');
+      request.onerror = fail;
+      request.onblocked = fail;
+      request.onsuccess = () => {
+        if (settled) { request.result.close(); return; }
+        settled = true;
+        clearTimeout(timer);
+        resolve(request.result);
+      };
+    });
+  }
+
+  async function selectStaticGreeting(agentId, rows) {
+    if (!rows.length) return { row: null, storageWarning: false };
+    let db;
+    try {
+      db = await openGreetingRotationDb();
+      const row = await new Promise((resolve, reject) => {
+        const tx = db.transaction('rotations', 'readwrite');
+        const store = tx.objectStore('rotations');
+        const request = store.get(agentId);
+        let chosen = null;
+        request.onsuccess = () => {
+          const draw = drawStaticGreeting(request.result, rows);
+          chosen = draw.row;
+          store.put(draw.state, agentId);
+        };
+        tx.oncomplete = () => resolve(chosen);
+        tx.onerror = () => reject(tx.error || new Error('Could not save greeting rotation'));
+        tx.onabort = () => reject(tx.error || new Error('Greeting rotation was aborted'));
+      });
+      return { row, storageWarning: false };
+    } catch {
+      // In private/blocked storage, preserve a no-repeat cycle in this tab only.
+      const draw = drawStaticGreeting(fallbackGreetingRotations.get(agentId), rows);
+      fallbackGreetingRotations.set(agentId, draw.state);
+      return { row: draw.row, storageWarning: true };
+    } finally {
+      if (db) db.close();
+    }
+  }
+
   // Live Call Simulator state (Step 2)
   let sim = {
     active: false,
@@ -1355,6 +1504,7 @@
     recordingLoadVersions: new Map(),
     callId: '',
     logSaved: null,
+    selectedGreeting: null,
     bandwidth: 'wideband', // 'wideband' (16k/24k) or 'telephony' (8k/8k)
     lead: {
       lead_id: '104892',
@@ -1651,7 +1801,8 @@
     if (serverlessCloudMode) {
       const log = {
         id: snapshot.id, agentId: ctx.agentId, agentName: ctx.agentName,
-        campaignId: null, upstreamMode: 'deepgram', startedAt: ctx.startedAt,
+        campaignId: null, greetingId: snapshot.greetingId || null,
+        upstreamMode: 'deepgram', startedAt: ctx.startedAt,
         endedAt: new Date().toISOString(), durationMs: snapshot.durationMs, turns: snapshot.turns,
         avgTtfbMs: snapshot.avgTtfbMs, disposition: null, transferredTo: null,
         recordingRequested: true, recordingStatus: 'available', recordingMime: blob.type,
@@ -1845,7 +1996,7 @@
     }
   }
 
-  function buildSettings(agent) {
+  function buildSettings(agent, greetingText = '') {
     const sp = globalServiceProvider('stt') || {};
     const lp = globalServiceProvider('llm') || {};
     const tp = globalServiceProvider('tts') || {};
@@ -1977,6 +2128,9 @@
       !finalGreeting.toLowerCase().includes(linkedCampaign.disclosure.trim().toLowerCase())
     ) {
       finalGreeting = `${linkedCampaign.disclosure.trim()} ${finalGreeting}`.trim();
+    }
+    if (agent.randomGreetingEnabled !== false && String(greetingText || '').trim()) {
+      finalGreeting = `${finalGreeting} ${String(greetingText).trim()}`.trim();
     }
 
     return {
@@ -3117,7 +3271,7 @@
       };
       if (ctx?.started) {
         const snapshot = {
-          id: sim.callId, logSaved: sim.logSaved,
+          id: sim.callId, logSaved: sim.logSaved, greetingId: sim.selectedGreeting?.greeting_id || null,
           durationMs: Math.max(1, Date.now() - sim.startedAtMs), turns: sim.turns,
           avgTtfbMs: sim.avgTtfbMs, events: [...sim.events],
         };
@@ -3202,6 +3356,8 @@
     const attemptId = ++sim.sessionAttemptId;
     sim.callId = '';
     sim.logSaved = null;
+    sim.selectedGreeting = null;
+    sim.sessionSettings = null;
     if (!sim.recordingFallback) sim.recordingError = '';
     sim.muted = false;
     sim.micEnabled = withMic;
@@ -3352,6 +3508,7 @@
 
       if (msg.type === 'session_connecting') {
         sim.statusText = 'Handshaking with Deepgram Voice Agent API…';
+        sim.selectedGreeting = msg.greeting || null;
         sim.sessionSettings = msg.settings;
         renderSimulatorDomOnly();
       } else if (msg.type === 'session_started') {
@@ -3360,6 +3517,7 @@
         sim.lastError = null;
         sim.startedAtMs = Date.now();
         sim.callId = msg.callId || '';
+        sim.selectedGreeting = msg.greeting || null;
         sim.sessionSettings = msg.settings;
         sim.statusText = 'Connected to Deepgram — browser test';
         try { startPreparedRecording(); }
@@ -3480,7 +3638,7 @@
     };
   }
 
-  function startDirectBrowserSimulatorSession(mode, agent, camp, attemptId) {
+  async function startDirectBrowserSimulatorSession(mode, agent, camp, attemptId) {
     const dgKey = readCloudSecrets().DEEPGRAM_API_KEY || '';
     if (mode === 'deepgram' && !dgKey) {
       sim.connecting = false;
@@ -3490,7 +3648,33 @@
       return;
     }
 
-    const settings = buildSettings(agent);
+    if (agent.randomGreetingEnabled !== false) {
+      const rows = await ensureGreetingCatalogLoaded();
+      if (attemptId !== sim.sessionAttemptId || !sim.connecting) return;
+      const selected = await selectStaticGreeting(agent.id, rows);
+      if (attemptId !== sim.sessionAttemptId || !sim.connecting) return;
+      sim.selectedGreeting = selected.row || null;
+      if (!sim.selectedGreeting) {
+        sim.events.push({ kind: 'msg', role: 'system', content: 'Greeting library unavailable; using the configured opening.' });
+      } else if (selected.storageWarning) {
+        sim.events.push({ kind: 'msg', role: 'system', content: 'Greeting rotation storage is unavailable; the no-repeat cycle lasts only in this tab.' });
+      }
+      renderSimulatorDomOnly();
+    }
+    const settings = buildSettings(agent, sim.selectedGreeting?.greeting_text || '');
+    if (agent.acceptViciCalls) {
+      const vars = {
+        lead_id: String(sim.lead?.lead_id || '').trim(), first_name: String(sim.lead?.first_name || '').trim(),
+        phone_number: String(sim.lead?.phone_number || '').trim(), state: String(sim.lead?.state || '').trim(),
+        age: String(sim.lead?.age || '').trim(), campaign_id: String(camp?.viciCampaign || '').trim(),
+      };
+      const hydrate = (text) => String(text || '').replace(
+        /\{\{\s*(lead_id|first_name|phone_number|state|age|campaign_id)\s*\}\}/gi,
+        (_match, key) => vars[String(key).toLowerCase()] ?? ''
+      );
+      settings.agent.greeting = hydrate(settings.agent.greeting);
+      settings.agent.think.prompt = hydrate(settings.agent.think.prompt);
+    }
     settings.audio = {
       input: { encoding: 'linear16', sample_rate: sim.sampleRateIn },
       output: { encoding: 'linear16', sample_rate: sim.sampleRateOut, container: 'none' },
@@ -3519,6 +3703,7 @@
       return;
     }
     settings.agent.think.prompt += testConstraints;
+    sim.sessionSettings = settings;
 
     const dgWs = new WebSocket('wss://agent.deepgram.com/v1/agent/converse', ['token', dgKey]);
     dgWs.binaryType = 'arraybuffer';
@@ -3869,8 +4054,18 @@
     feed.scrollTop = feed.scrollHeight;
   }
 
+  function updateSelectedGreetingDom() {
+    const element = document.getElementById('sim-selected-greeting');
+    if (!element) return;
+    const selected = sim.selectedGreeting;
+    element.textContent = selected
+      ? `Selected greeting #${selected.greeting_id} · ${selected.persona} · ${selected.context} · ${selected.tone} (selection does not confirm playback).`
+      : 'The saved opening is used if random greetings are off or unavailable.';
+  }
+
   function renderSimulatorDomOnly() {
     renderSideNav();
+    updateSelectedGreetingDom();
     updateSimStatusDom();
     updateSimKpisDom();
     updatePersonaStageDom();
@@ -3966,6 +4161,7 @@
             <span>
               <b>${esc(new Date(c.startedAt).toLocaleTimeString())}</b> ·
               <span class="pill">${esc(c.transport === 'sip_rtp' ? 'SIP+RTP (PCMU)' : 'AudioSocket TCP')}</span> ·
+              ${c.greetingId ? `Selected greeting #${esc(c.greetingId)} · ` : ''}
               CID: <code>${esc(c.callerCode)}</code> ·
               Lead: <b>#${esc(c.leadId || 'n/a')}</b> (${esc(c.phone || 'n/a')})
             </span>
@@ -4137,7 +4333,7 @@
             : lg.recordingStatus === 'deleted' ? 'Recording deleted.' : 'No audio recording for this test.'}</div>`;
         return `<div class="t" style="margin-bottom:8px">
           <div class="bar" style="margin-bottom:4px;justify-content:space-between">
-            <span>${index === 0 ? '<b>Latest · </b>' : ''}<b>${esc(new Date(lg.startedAt).toLocaleString())}</b> · <span class="pill">${esc(lg.upstreamMode)}</span> · ${Math.max(1, Math.round(lg.durationMs / 1000))}s · ${lg.turns} turn(s)</span>
+            <span>${index === 0 ? '<b>Latest · </b>' : ''}<b>${esc(new Date(lg.startedAt).toLocaleString())}</b> · <span class="pill">${esc(lg.upstreamMode)}</span> · ${Math.max(1, Math.round(lg.durationMs / 1000))}s · ${lg.turns} turn(s)${lg.greetingId ? ` · Selected greeting #${esc(lg.greetingId)}` : ''}</span>
             <span>
               ${lg.avgTtfbMs && !legacy ? `<span class="pill">Avg TTFB: ${lg.avgTtfbMs}ms</span>` : ''}
               ${lg.disposition ? `<span class="pill wn">Historical test marker: ${esc(lg.disposition)} (not a confirmed VICIdial update)</span>` : ''}
@@ -4901,7 +5097,10 @@
           ])}
           ${F('Bridge VICIdial call-connect & automatic lead hydration (recommended — replaces hallucinated LLM accept tool)', 'a.acceptViciCalls', 'chk')}
           ${F('Auto-prepend linked Campaign Recording Disclosure to spoken greeting', 'a.injectCampaignDisclosure', 'chk')}
-          ${F('Greeting (spoken immediately when session opens)', 'a.greeting', 'ta')}
+          ${F('Saved opening (spoken when the session opens)', 'a.greeting', 'ta')}
+          ${F('Randomly add an imported greeting for this bot', 'a.randomGreetingEnabled', 'chk')}
+          <div class="note wn" style="margin:5px 0">The selected text is added after the saved opening and configured disclosure. Entries may contain extra questions, meeting language or time-specific phrases; review them before live calls. Persona and tone are labels, not guaranteed vocal delivery. The settings preview below shows only the saved opening.</div>
+          <div id="greeting-catalog-panel">${renderGreetingCatalog()}</div>
           ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
 
           <h2>⚡ Barge-In, Expressions, Gestures, Speed &amp; General Q&amp;A</h2>
@@ -5185,6 +5384,9 @@
             <span class="pill ${sim.active ? 'ok' : sim.connecting ? 'wn' : sim.lastError ? 'er' : ''}" id="sim-state-pill">${esc(sim.statusText)}</span>
           </div>
           <a href="#sim-history" class="note">↓ Jump to recent test history &amp; transcripts</a>
+          <div id="sim-selected-greeting" class="note">${sim.selectedGreeting
+            ? `Selected greeting #${esc(sim.selectedGreeting.greeting_id)} · ${esc(sim.selectedGreeting.persona)} · ${esc(sim.selectedGreeting.context)} · ${esc(sim.selectedGreeting.tone)} (selection does not confirm playback).`
+            : 'The saved opening is used if random greetings are off or unavailable.'}</div>
 
           ${
             sim.lastError
@@ -5753,6 +5955,9 @@
 
     updateLivePreview();
     updateHeaderStatus();
+    if (tab === 'agents' && !greetingCatalog.loaded && !greetingCatalog.pending && !greetingCatalog.error) {
+      void ensureGreetingCatalogLoaded();
+    }
   }
 
   function buildExportBundle() {
@@ -6514,6 +6719,18 @@
     const b = e.target.closest('button');
     if (!b) return;
     const d = b.dataset;
+
+    if (b.id === 'retry-greeting-catalog') {
+      greetingCatalog.error = '';
+      await ensureGreetingCatalogLoaded();
+      return;
+    }
+    if (d.greetingPage) {
+      greetingCatalog.page += d.greetingPage === 'next' ? 1 : -1;
+      const results = document.getElementById('greeting-results');
+      if (results) results.innerHTML = renderGreetingResults();
+      return;
+    }
 
     if (b.id === 'btn-sidebar-toggle') {
       toggleSidebar();
@@ -7387,6 +7604,7 @@
       } else {
         const clone = JSON.parse(JSON.stringify(act === 'dup' ? currentObj : arr[0]));
         clone.id = uid(kind === 'a' ? 'ag' : 'cp');
+        if (kind === 'a' && act === 'new') clone.randomGreetingEnabled = true;
         const nextNum = arr.length + 1;
         clone.name = act === 'dup' ? `${currentObj.name} (Copy)` : `Untitled ${kind === 'a' ? 'Agent' : 'Campaign'} ${nextNum}`;
         arr.push(clone);
@@ -7584,6 +7802,14 @@
 
     if (t.dataset.simlead) {
       sim.lead[t.dataset.simlead] = t.value;
+      return;
+    }
+
+    if (t.id === 'greeting-search') {
+      greetingCatalog.query = t.value;
+      greetingCatalog.page = 0;
+      const results = document.getElementById('greeting-results');
+      if (results) results.innerHTML = renderGreetingResults();
       return;
     }
 
