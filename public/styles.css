@@ -3152,17 +3152,12 @@ audio {
 .cmd-deck-wrap {
   position: relative;
   z-index: 2;
+  min-width: 0;
   width: 100%;
-  max-width: 1420px;
-  margin: 18px auto 0;
-  padding: 0 20px;
 }
 
-@media (max-width: 960px) {
-  .cmd-deck-wrap {
-    padding: 0 14px;
-    margin-top: 12px;
-  }
+.cmd-eyebrow {
+  margin: 0;
 }
 
 .cmd-deck-shell {

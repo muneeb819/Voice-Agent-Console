@@ -330,17 +330,21 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     const bridgeStatus = viciBridge ? viciBridge.getStatus() : null;
     const bridgeAnalytics = getBridgeAnalyticsSummary();
     const simLogs = listSimulatorCallLogs(undefined, 100);
+    // Older sandbox/local-speech logs contained synthetic latency; never mix them
+    // into the measured Deepgram/bridge figures. Keep the logs themselves intact.
     const simTtfbValues = simLogs
+      .filter((s) => s.upstreamMode === 'deepgram')
       .map((s) => s.avgTtfbMs)
       .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0);
-    const simAvgTtfbMs = simTtfbValues.length
-      ? Math.round(simTtfbValues.reduce((a, b) => a + b, 0) / simTtfbValues.length)
+    // Average the retained per-session means, rather than assigning equal
+    // weight to channels with different numbers of sessions.
+    const bridgeTtfbValues = listBridgeCallLogs(200)
+      .map((call) => call.avgTtfbMs)
+      .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0);
+    const retainedTtfbValues = [...bridgeTtfbValues, ...simTtfbValues];
+    const combinedTtfb = retainedTtfbValues.length
+      ? Math.round(retainedTtfbValues.reduce((a, b) => a + b, 0) / retainedTtfbValues.length)
       : null;
-
-    const combinedTtfb =
-      bridgeAnalytics.avgTtfbMs && simAvgTtfbMs
-        ? Math.round((bridgeAnalytics.avgTtfbMs + simAvgTtfbMs) / 2)
-        : bridgeAnalytics.avgTtfbMs ?? simAvgTtfbMs;
 
     const secrets = getSecretsStatus();
     const configuredKeysCount = Object.values(secrets).filter((s) => s.configured).length;
@@ -386,7 +390,8 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     const restrictedPeers = !allowedIps || !allowedIps.split(',').some((rule) => /^(?:\*|\d+\.\d+\.\d+\.\d+\/0)$/.test(rule.trim()));
     const securityScore = (authEnforced ? 50 : 0) + (restrictedPeers ? 50 : 0);
     const storageScore = revs.length > 0 ? 100 : 90;
-    const disclosuresReady = state.campaigns.every((c) => String(c.disclosure || '').trim().length >= 10);
+    const disclosureCount = state.campaigns.filter((c) => String(c.disclosure || '').trim().length >= 10).length;
+    const disclosuresReady = disclosureCount === state.campaigns.length;
     const complianceScore = disclosuresReady && erChecks === 0 ? 100 : 78;
 
     const overallQualityScore = Math.round(
@@ -434,7 +439,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
           { id: 'bridge', label: 'VICIdial Dual Bridge', score: bridgeScore, detail: bridgeStatus?.audioSocketListening ? `TCP :${bridgeStatus.audioSocketPort} · UDP :${bridgeStatus.sipPort}` : 'Standby' },
           { id: 'security', label: 'Auth & Peer Configuration', score: securityScore, detail: `${authEnforced ? 'Auth enforced' : 'Local bootstrap only'} · ${restrictedPeers ? 'Peer allowlist configured/default' : 'Peer allowlist open'}; not a security assessment` },
           { id: 'storage', label: 'SQLite WAL + JSON Mirror', score: storageScore, detail: `${revs.length} revisions` },
-          { id: 'compliance', label: 'Disclosures & DNC Guard', score: complianceScore, detail: `${state.campaigns.length}/${state.campaigns.length} compliant` },
+          { id: 'compliance', label: 'Disclosure Configuration', score: complianceScore, detail: `${disclosureCount}/${state.campaigns.length} disclosures configured; not a compliance review` },
         ],
       },
       inventory: {
@@ -485,6 +490,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         allowedPeerIp: allowedIps || 'loopback only',
         audioSocketPort: bridgeStatus?.audioSocketPort || state.vici.bridgePort,
         sipPort: bridgeStatus?.sipPort || state.vici.sipPort,
+        audioSocketListening: bridgeStatus?.audioSocketListening ?? false,
+        sipRtpListening: bridgeStatus?.sipRtpListening ?? false,
+        bridgeStatusAvailable: Boolean(bridgeStatus),
         publicDemoUrl,
       },
       agentMatrix: state.agents.map((a) => ({

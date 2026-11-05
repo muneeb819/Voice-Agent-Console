@@ -13,10 +13,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=elite-2.19" />
+  <link rel="stylesheet" href="./styles.css?v=elite-2.20" />
   <script>
     (function () {
-      var CURRENT_BUILD = 'elite-2.19';
+      var CURRENT_BUILD = 'elite-2.20';
       // Capture cross-site iframe auth handoff token (?vac_token=...) into storage & clean URL bar
       try {
         var sp = new URLSearchParams(window.location.search || '');
@@ -77,7 +77,7 @@
       <span class="hdr-sep" aria-hidden="true"></span>
 
       <div class="hdr-context-group" aria-label="Active Workspace and Storage Status">
-        <span class="pill nav-crumb" id="active-nav-crumb" title="Active Workspace View">Agents</span>
+        <span class="pill nav-crumb" id="active-nav-crumb" title="Active Workspace View">Dashboard</span>
         <span class="pill ok hdr-db-pill" id="db-pill" title="Backed by server SQLite WAL + JSON mirror">
           <span class="hdr-live-led" aria-hidden="true"></span>
           <span>SQLite Ready</span>
@@ -130,7 +130,6 @@
     </aside>
 
     <div class="workspace-stage">
-      <section id="cmd-deck" class="cmd-deck-wrap" aria-label="Executive Command &amp; Console Quality Dashboard"></section>
       <div id="vr"></div>
       <main id="m"></main>
     </div>
@@ -224,6 +223,6 @@
   </div>
 
   <input type="file" id="import-file" accept="application/json,.json" hidden />
-  <script src="./app.js?v=elite-2.19"></script>
+  <script src="./app.js?v=elite-2.20"></script>
 </body>
 </html>

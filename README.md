@@ -3,7 +3,7 @@
 Unified production **Node.js + TypeScript** platform combining:
 1. **Multi-Agent & Multi-Campaign Configuration Console** (`SQLite WAL` + JSON mirror + revision history + 18-rule pre-flight schema validator)
 2. **Live Deepgram Voice Lab** (139 real `Flux v2` & `Aura-2 / v1` voices, studio `.wav` preview proxy, live TTS greeting synthesizer, and 1-click **"Set as Agent Voice"**)
-3. **Browser Live Call Simulator** (`/ws/simulator` WebAudio `16 kHz`/`24 kHz` wideband & `8 kHz` telephony testing against `wss://agent.deepgram.com/v1/agent/converse` + zero-cost Sandbox mode)
+3. **Live Bot browser voice test** (`/ws/simulator`, WebAudio `16 kHz`/`24 kHz` wideband or `8 kHz` test audio, using the Deepgram Voice Agent API; not a live telephone call)
 4. **Co-Located Universal VICIdial Bridge** (`SIP + RTP G.711 μ-law` on UDP `:5062` for **all** Asterisk 13/16/18+ ViciBox servers **+** native Asterisk 18+ `AudioSocket` on TCP `:9092`)
 5. **Production Hardening, Stereo `.wav` Call Recordings & Supervisor Wallboard** (`ADMIN_PASSWORD` auth with localhost Asterisk whitelist, `BRIDGE_ALLOWED_IPS` & `maxCalls` guards, 2-channel `8 kHz` `.wav` recording playback, CSV CDR reports, live supervisor `Force Transfer` / `Force Hangup`, and custom HTTP Webhook tool execution)
 
@@ -78,6 +78,19 @@ npm start
 ```
 
 Open **`http://127.0.0.1:533`**. With no admin password or users, create the first account directly on loopback; proxied bootstrap is intentionally blocked. Once authentication is enabled, only a signed-in operator can create another account. All accounts currently have full operator privileges; there is no role separation.
+
+### Live Bot and test history
+
+1. In **Plug-ins**, select and save supported STT, LLM and TTS providers/models; set `DEEPGRAM_API_KEY` under **API Keys**. In **Live Bot**, choose an agent and start a microphone or speaker-and-text browser test. The status changes to connected only after Deepgram accepts the settings. A working provider account, browser audio permission and network access are required; provider usage can incur charges.
+2. This is a **browser test, not a VICIdial telephone call**. Its transfer, disposition and DNC function requests are reported as not executed. The `end_call` function ends the browser test. Custom webhooks are off by default: explicitly enable them for a test only if their real external side effects are acceptable. Static-host mode cannot run those server-side webhooks.
+3. To find a previous server-backed test, go to **Live Bot**, select the same agent and open **Recent Browser Test History → View transcript**. The page shows up to six recent tests for that agent; SQLite retains the latest 100 tests across agents. **Browser-test audio is not recorded**, so past test audio cannot be played back. Older sandbox/local-speech transcripts were scripted and are labeled as such. Static-site browser tests are not saved to the server.
+4. VICIdial bridge calls and bridge loopback tests are a separate path. When a bridge entry has a recording, find it under **Wallboard → Stereo 8 kHz Call Recordings & SQLite CDR Archive** (or **Vici Bridge → Recent SQLite Bridge Call CDRs**) and use the audio player or `.wav` download. A mock-AI bridge recording may contain synthetic test audio rather than an intelligible conversation. Recordings are retained separately from browser test logs. Verify consent and recording requirements for your jurisdiction before making calls.
+
+Bridge loopback tests use a mock VICIdial API, so their transfer, disposition and DNC responses do not prove real updates. Historical bridge records do not reliably distinguish tests from live calls. **Run bridge loopback tests only on an isolated instance with no live calls**: they temporarily change shared bridge/provider routing, and configured custom webhooks may still execute for real. Static-site mode cannot run a bridge test and no longer displays its old synthetic browser-local bridge records as live CDRs.
+
+Scripted sandbox responses and the fake local-speech conversation have been removed. The local speech service still supports standalone health checks and voice previews, but it does not currently provide an LLM-backed Live Bot conversation. The avatar gestures are decorative text-driven animations; microphone byte counts show data queued to the socket, not proof of transcription. Review existing custom agent prompts and deployments before placing real calls; older saved prompts are preserved, not silently rewritten.
+
+The **Dashboard** is the first navigation item and the default page; existing `?tab=` links to individual sections still work. Its scores are configuration estimates, not certifications or proof of live connectivity.
 
 The tests use temporary data and environment files, loopback ports, synthetic credentials and mocked services. External `fetch` calls are blocked by default and the live Deepgram test is reported as skipped. A live run may incur provider charges and requires explicit opt-in with `VAC_TEST_LIVE=1` and a test key:
 

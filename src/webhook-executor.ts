@@ -56,19 +56,17 @@ export async function executeCustomFunctionWebhook(
   fnDef: AgentFunction | undefined,
   args: Record<string, any>,
   ctx: WebhookCallContext = {},
-  timeoutMs = 6000
+  timeoutMs = 6000,
+  signal?: AbortSignal
 ): Promise<WebhookExecutionResult> {
   const started = Date.now();
   if (!fnDef || !fnDef.url || !fnDef.url.trim()) {
     return {
-      ok: true,
+      ok: false,
       executedWebhook: false,
       latencyMs: 0,
-      data: {
-        ok: true,
-        note: 'Function executed locally (no webhook URL configured)',
-        received_args: args,
-      },
+      error: 'No webhook URL is configured for this function.',
+      data: { ok: false, error: 'No webhook URL is configured for this function.' },
     };
   }
 
@@ -153,7 +151,7 @@ export async function executeCustomFunctionWebhook(
       method,
       headers,
       body,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
     });
 
     const rawText = (await res.text()).slice(0, 65536);

@@ -169,6 +169,30 @@ async function run() {
     await page.waitForTimeout(500);
     assert.equal(new URL(page.url()).searchParams.has('vac_token'), false, 'handoff token should be removed from the address bar');
   });
+  await check('Dashboard is the first, dedicated default page and its cards navigate', async () => {
+    assert.equal(await page.locator('#nav [data-t]').first().getAttribute('data-t'), 'dashboard');
+    assert.equal(await page.locator('#nav [data-t="dashboard"]').getAttribute('aria-current'), 'page');
+    assert(await page.locator('main #cmd-deck').isVisible());
+    const dashboard = await page.locator('#cmd-deck').innerText();
+    assert.match(dashboard, /configuration estimate/i);
+    assert.match(dashboard, /configured agents?/i);
+    assert.doesNotMatch(dashboard, /active bots|deepgram live|<15ms/i);
+    await page.locator('[data-cmd-tab="agents"]').first().click();
+    assert.equal(await page.locator('#cmd-deck').count(), 0);
+    assert.equal(await page.locator('#nav [data-t="agents"]').getAttribute('aria-current'), 'page');
+    await page.locator('#nav [data-t="dashboard"]').click();
+    await page.click('#btn-cmd-compact');
+    assert(await page.locator('.cmd-compact-ribbon').isVisible());
+    await page.click('#btn-cmd-compact');
+  });
+  await check('Existing tab deep links still open the requested page', async () => {
+    await page.goto(`${base}/?tab=test`);
+    await page.waitForSelector('#sim-state-pill');
+    assert.equal(await page.locator('#cmd-deck').count(), 0);
+    assert.equal(await page.locator('#nav [data-t="test"]').getAttribute('aria-current'), 'page');
+    await page.goto(`${base}/?tab=agents`);
+    await page.waitForSelector('[data-p="a.name"]');
+  });
   await check('Agent field is labelled, edited and discarded', async () => {
     const field = page.locator('[data-p="a.name"]').first();
     const original = await field.inputValue();
@@ -202,11 +226,12 @@ async function run() {
     await page.click('#keys-close');
   });
 
-  const views = ['agents', 'plugins', 'campaigns', 'voice', 'test', 'vici', 'wallboard', 'export'];
+  const views = ['dashboard', 'agents', 'plugins', 'campaigns', 'voice', 'test', 'vici', 'wallboard', 'export'];
   for (const view of views) {
     await check(`Navigate ${view} view`, async () => {
       await page.locator(`#nav [data-t="${view}"]`).click();
       await page.waitForFunction((v) => document.querySelector(`#nav [data-t="${v}"]`)?.getAttribute('aria-current') === 'page', view);
+      assert.equal(await page.locator('#cmd-deck').count(), view === 'dashboard' ? 1 : 0);
       if (view === 'plugins') await page.locator('main details').evaluateAll((nodes) => nodes.forEach((node) => { node.open = true; }));
       if (view === 'voice') await page.waitForSelector('[data-vsample]', { timeout: 15000 });
       await inventory(page, view);
@@ -223,8 +248,13 @@ async function run() {
   });
   await check('Unconfigured simulator reports an actionable failure', async () => {
     await page.locator('#nav [data-t="test"]').click();
+    assert.match(await page.locator('main').innerText(), /not a telephone call/i);
+    assert.match(await page.locator('main').innerText(), /not executed/i);
+    assert.equal(await page.locator('#sim-allow-webhooks').isChecked(), false);
+    assert.equal(await page.locator('#sim-mode').count(), 0, 'No scripted sandbox mode should be offered');
     await page.locator('#btn-call-nomic').click();
     await page.waitForFunction(() => /error|failed|need setup|unavailable/i.test(document.querySelector('#sim-state-pill')?.textContent || ''), null, { timeout: 12000 });
+    assert.doesNotMatch(await page.locator('#sim-feed').innerText(), /connecting you to our licensed specialist/i);
   });
   await check('Wallboard identifies the retained analytics window', async () => {
     await page.locator('#nav [data-t="wallboard"]').click();

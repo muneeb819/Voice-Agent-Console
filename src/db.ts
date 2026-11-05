@@ -98,7 +98,7 @@ export interface SimulatorCallLogRecord {
     id: string;
     name: string;
     args: Record<string, any>;
-    status: 'completed' | 'cancelled' | 'server_side';
+    status: 'completed' | 'cancelled' | 'server_side' | 'simulated' | 'failed';
     response?: Record<string, any>;
   }>;
 }

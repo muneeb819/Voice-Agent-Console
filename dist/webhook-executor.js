@@ -32,18 +32,15 @@ function isBlockedMetadataHost(hostname) {
         lower === 'metadata.google.internal' ||
         lower === '100.100.100.200');
 }
-async function executeCustomFunctionWebhook(fnDef, args, ctx = {}, timeoutMs = 6000) {
+async function executeCustomFunctionWebhook(fnDef, args, ctx = {}, timeoutMs = 6000, signal) {
     const started = Date.now();
     if (!fnDef || !fnDef.url || !fnDef.url.trim()) {
         return {
-            ok: true,
+            ok: false,
             executedWebhook: false,
             latencyMs: 0,
-            data: {
-                ok: true,
-                note: 'Function executed locally (no webhook URL configured)',
-                received_args: args,
-            },
+            error: 'No webhook URL is configured for this function.',
+            data: { ok: false, error: 'No webhook URL is configured for this function.' },
         };
     }
     const resolvedUrlStr = interpolateTemplate(fnDef.url.trim(), ctx);
@@ -123,7 +120,7 @@ async function executeCustomFunctionWebhook(fnDef, args, ctx = {}, timeoutMs = 6
             method,
             headers,
             body,
-            signal: AbortSignal.timeout(timeoutMs),
+            signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
         });
         const rawText = (await res.text()).slice(0, 65536);
         let parsedData = rawText;
