@@ -266,6 +266,20 @@ async function run() {
       assert.equal(await page.locator('#cmd-deck').count(), view === 'dashboard' ? 1 : 0);
       if (view === 'plugins') await page.locator('main details').evaluateAll((nodes) => nodes.forEach((node) => { node.open = true; }));
       if (view === 'voice') await page.waitForSelector('[data-vsample]', { timeout: 15000 });
+      if (view === 'vici') {
+        const state = await page.evaluate(async () => (await (await fetch('/api/state')).json()).state);
+        for (const [mode, label, other] of [['sip_trunk', 'SIP', 'AudioSocket'], ['audiosocket', 'AudioSocket', 'SIP']]) {
+          await page.selectOption('[data-p="v.transport"]', mode);
+          const config = await page.locator('#pv').innerText();
+          for (let idx = 0; idx < state.campaigns.length; idx++) {
+            const extension = `${state.vici.aiExten}${idx + 1}`;
+            assert(config.includes(`exten => ${extension},1,NoOp(VICIdial AI Bot ${label}`), `Missing browser ${label} route ${extension}`);
+            assert(!config.includes(`exten => ${extension},1,NoOp(VICIdial AI Bot ${other}`), `Conflicting browser ${other} route ${extension}`);
+          }
+          assert(!config.includes(`exten => _${state.vici.aiExten}X.`));
+        }
+        await page.selectOption('[data-p="v.transport"]', state.vici.transport);
+      }
       await inventory(page, view);
     });
   }

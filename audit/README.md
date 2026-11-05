@@ -37,6 +37,12 @@ The iframe handoff token is removed from the address bar after the console loads
 - The mock Live Bot browser suite passed **16 checks**. It compared selected IDs to the actual mock wire settings and saved history, preserved openings and disclosures, and checked static IndexedDB rotation across reload, simultaneous tabs and a seeded cycle boundary, plus catalog/storage fallbacks and recorded-test IDs. Browser fake media and local mock WebSockets were used; no real Deepgram provider, physical microphone, or live VICIdial/PBX call was verified. A selected ID is not proof that speech was heard.
 - All provided contexts and time-specific phrases are eligible; tone is metadata, not a provider voice control. Static-browser and server rotations are separate, failed attempts can advance a rotation, and unrecorded static tests do not persist history. Existing agent scripts, including the Food & OTC Advisor's unverified benefit claims, were preserved rather than endorsed and must be reviewed before calls.
 
+### VICIdial setup follow-up (2026-11-06)
+
+- The previous generated `_<prefix>X.` dialplan did not match the advertised one-digit campaign slots: Asterisk's trailing dot requires at least one additional character. Both server and browser generators now emit exact extension routes for each configured campaign and only the selected transport, avoiding duplicate SIP/AudioSocket definitions. The example runbook was corrected. Automated checks cover slots 1–11 and both selected modes; Chromium also checked the browser preview. No actual Asterisk dialplan was loaded or live call made.
+- The template's SIP example uses `chan_sip`/`SIPAddHeader` and needs PBX-specific review; it is not a PJSIP configuration. AudioSocket's unauthenticated pre-call URL is a loopback example. The bridge uses dynamically allocated RTP ports and one configured AMI host; multi-PBX fallback channel actions are not automatically mapped to the PBX that owns the call. Use an isolated private network, a one-PBX pilot, and an explicit multi-server design and real-call tests before wider rollout.
+- `npm run build && npm test`, the 27-check Chromium smoke and the 21-test Python suite passed after this follow-up. The real Deepgram check remained skipped without a key; browser/bridge tests use mocks.
+
 ### Reproducing the browser smoke
 
 From the repository root, build the project and install `playwright-core` plus a compatible Chromium separately (they are intentionally not project dependencies):

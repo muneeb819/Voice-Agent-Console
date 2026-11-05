@@ -20,7 +20,7 @@
 
 ---
 
-## 2. Step-by-Step Installation on ViciBox (5 Minutes)
+## 2. Installation Example (Review and Validate in Staging First)
 
 ### 2.1 Upload & Run the One-Command Installer
 Copy `voice-agent-vicibox-release.tar.gz` to `/tmp` on your ViciBox server and run:
@@ -117,7 +117,7 @@ insecure=port,invite
 - **Globals String:** *(leave blank)*
 - **Dialplan Entry (Universal SIP/RTP Mode):**
 ```asterisk
-exten => _839X.,1,NoOp(VICIdial AI Bot SIP -> Ext ${EXTEN} | ViciCID: ${CALLERID(name)})
+exten => 8391,1,NoOp(VICIdial AI Bot SIP -> Ext ${EXTEN} | ViciCID: ${CALLERID(name)})
  same => n,SIPAddHeader(X-Vici-CallName: ${CALLERID(name)})
  same => n,SIPAddHeader(X-Vici-UniqueID: ${CHANNEL(uniqueid)})
  same => n,SIPAddHeader(X-Vici-Channel: ${CHANNEL})
@@ -125,12 +125,12 @@ exten => _839X.,1,NoOp(VICIdial AI Bot SIP -> Ext ${EXTEN} | ViciCID: ${CALLERID
  same => n,Dial(SIP/${EXTEN}@ai-bridge,60,tTo)
  same => n,Hangup()
 ```
-*(Alternative Option B for Asterisk 18+ AudioSocket TCP is also generated dynamically in the Console's **Dialer / Vici (Bridge)** tab.)*
+The example route above is for one campaign slot only. Generate and review the exact routes for your configured campaigns and selected transport in **Dialer / Vici (Bridge)**; re-generate them whenever campaign order changes. The console emits only the selected mode to avoid duplicate extension definitions. Verify `chan_sip` and `SIPAddHeader` are available before using this example; a PJSIP-only installation needs a different, reviewed dialplan. The generated AudioSocket example requires that module and assumes a loopback HTTP pre-call hook; it is not an unauthenticated remote-PBX recipe.
 - Set **Active = `Y`**, click **Submit**, wait 60 seconds for `ADMIN_keepalive_ALL.pl` to reload Asterisk, and verify with:
   ```bash
   asterisk -rx "sip show peer ai-bridge"
   ```
-  You will see `Status : OK (1 ms)` because the Node SIP listener responds to `OPTIONS` keep-alives!
+  Check the reported peer status; an `OPTIONS` response establishes signaling reachability only, not bidirectional audio or a successful VICIdial call.
 
 ### Step D — Activate Remote Agent (`9001`)
 1. Go to **Remote Agents $\rightarrow$ Add New Remote Agents**:
@@ -149,7 +149,7 @@ exten => _839X.,1,NoOp(VICIdial AI Bot SIP -> Ext ${EXTEN} | ViciCID: ${CALLERID
 1. Open `http://<VICIBOX_IP>:533` and sign in with `ADMIN_PASSWORD`.
 2. Open **`Dialer / Vici (Bridge)`** and click **🔌 Test ViciBox HTTP & AMI**:
    - Confirm **`✓ VERSION: 2.14-...`** on `/vicidial/non_agent_api.php` and **`✓ Pong`** on Asterisk AMI `:5038`.
-3. Click **📞 Simulate Full ViciBox Call** (`SIP + RTP G.711 μ-law` + `Live Deepgram Cloud`) to verify end-to-end 8 kHz audio + TTS + function execution.
-4. Place **1 manual test lead** (your cell phone) into list `1001` on campaign `FETEST`, set Remote Agent `9001` to **`ACTIVE`**, answer your phone, confirm you hear the greeting + disclosure, say *"Yes, I'm 64 in Florida and want a quote"*, and verify:
+3. On a separate test instance with no live traffic, the bridge loopback tool can exercise its selected transport. It uses mock VICIdial responses and may run configured webhooks for real; it does **not** verify your actual PBX, transfer, disposition or DNC integration. Live Deepgram mode requires working credentials.
+4. After reviewing the configuration, permissions and disclosures with the PBX operator, place **one authorized manual test call** using a dedicated test campaign, an approved test number and no live lead list. Listen for the greeting and disclosure, and verify:
    - Your closer browser logged into `FE_CLOSERS` receives the live call + lead screen-pop with AI notes in `comments`!
    - Open **`Wallboard & QA`** in the Console to listen to the stereo `.wav` recording (`Left = Caller, Right = AI Bot`) and export CSV CDRs.

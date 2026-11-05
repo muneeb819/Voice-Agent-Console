@@ -4,7 +4,7 @@ Unified production **Node.js + TypeScript** platform combining:
 1. **Multi-Agent & Multi-Campaign Configuration Console** (`SQLite WAL` + JSON mirror + revision history + 18-rule pre-flight schema validator)
 2. **Live Deepgram Voice Lab** (139 real `Flux v2` & `Aura-2 / v1` voices, studio `.wav` preview proxy, live TTS greeting synthesizer, and 1-click **"Set as Agent Voice"**)
 3. **Live Bot browser voice test** (`/ws/simulator`, WebAudio `16 kHz`/`24 kHz` wideband or `8 kHz` test audio, using the Deepgram Voice Agent API; not a live telephone call)
-4. **Co-Located Universal VICIdial Bridge** (`SIP + RTP G.711 μ-law` on UDP `:5062` for **all** Asterisk 13/16/18+ ViciBox servers **+** native Asterisk 18+ `AudioSocket` on TCP `:9092`)
+4. **VICIdial Bridge** (SIP + RTP G.711 μ-law and, where the Asterisk module is installed, AudioSocket; PBX compatibility and routing must be verified in staging)
 5. **Production Hardening, Stereo `.wav` Call Recordings & Supervisor Wallboard** (`ADMIN_PASSWORD` auth with localhost Asterisk whitelist, `BRIDGE_ALLOWED_IPS` & `maxCalls` guards, 2-channel `8 kHz` `.wav` recording playback, CSV CDR reports, live supervisor `Force Transfer` / `Force Hangup`, and custom HTTP Webhook tool execution)
 
 ---
@@ -137,9 +137,17 @@ The release bundle contains only files listed in `tools/release-manifest.json`; 
 
 ---
 
-## ☎️ Co-Located ViciBox Production Deployment (5 Minutes)
+## ☎️ VICIdial deployment planning
 
-See **[`VICIBOX-PRODUCTION-RUNBOOK.md`](./VICIBOX-PRODUCTION-RUNBOOK.md)** for full VICIdial Admin screenshots/settings (`User 6666`, `FE_CLOSERS` In-Group, `AIBRIDGE` Carrier on `115.186.137.240:5062`, and `Remote Agent 9001`).
+See **[`VICIBOX-PRODUCTION-RUNBOOK.md`](./VICIBOX-PRODUCTION-RUNBOOK.md)** for historical examples, not values to copy into production. Inventory the live installation first: its VICIdial API base URL and version, selected Asterisk server and channel driver, pilot campaign/list and permitted transfer target, remote-agent availability, network path, and authorized operators. Securely configure a dedicated VICIdial API account with only the permissions required by the local installation; do not share passwords or keys in chat. The console also needs an active Deepgram Voice Agent account and selected STT/LLM/TTS models.
+
+For an Asterisk 16 pilot, SIP/RTP with G.711 μ-law is a possible approach **if** the deployed SIP driver and dialplan support it; the generated example uses `chan_sip` and `SIPAddHeader`, not PJSIP. Verify the loaded modules and test audio, lead context and every action. AudioSocket requires its installed Asterisk module and its example assumes a loopback HTTP pre-call hook; a remote PBX needs separately configured authentication. The console generates routes for only the selected mode; regenerate the exact dialplan routes if campaign order changes and check the actual listener port (which can differ if the configured port was occupied).
+
+**Multi-server limitation:** each bridge instance has one configured VICIdial API base URL and one AMI host. If several Asterisk servers send calls to one instance, AMI fallback channel actions are not automatically routed to the server owning each call; a failed or wrong-server action is possible. Start with an isolated pilot and one PBX/AMI pair, then design and test per-server routing or separate instances before involving other PBXs. Separate databases have separate greeting rotations.
+
+Keep SIP signaling and dynamically allocated RTP ports on an isolated private network/VPN, with restrictive firewall rules and `BRIDGE_ALLOWED_IPS`; this bridge uses IP-based peer trust, not SIP authentication or TLS/SRTP. Do not expose SIP, RTP, AMI, AudioSocket, or the unauthenticated local PBX hook to the public internet. Protect API traffic and logs, including VICIdial requests that may carry credentials in query strings. Confirm calling consent, permitted hours, identity, DNC handling, recording disclosures and scripts before testing with authorized numbers. The screenshots and local mock tests do not establish live PBX compatibility or readiness.
+
+For a **co-located pilot**, adapt the following installation example only after reviewing and backing up that server:
 
 ```bash
 git clone https://github.com/muneeb819/Voice-Agent-Console.git /tmp/voice-agent-console
