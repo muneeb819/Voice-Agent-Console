@@ -37,6 +37,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.VicidialBridgeService = void 0;
+exports.resolveSdpAdvertisedHost = resolveSdpAdvertisedHost;
 exports.uuidBytesToCanonical = uuidBytesToCanonical;
 exports.canonicalUuidToBytes = canonicalUuidToBytes;
 exports.resolveCampaignAndAgent = resolveCampaignAndAgent;
@@ -53,6 +54,14 @@ const webhook_executor_1 = require("./webhook-executor");
 const g711_1 = require("./g711");
 const settings_builder_1 = require("./settings-builder");
 const vici_client_1 = require("./vici-client");
+function resolveSdpAdvertisedHost(peerAddress, configuredHost, bindHost) {
+    if ((0, auth_guard_1.isLoopbackIp)(peerAddress))
+        return peerAddress;
+    const configured = configuredHost.trim();
+    const bind = bindHost.trim();
+    const usable = (host) => Boolean(host && !(0, auth_guard_1.isLoopbackIp)(host) && !['0.0.0.0', '::', '[::]'].includes(host));
+    return usable(configured) ? configured : usable(bind) ? bind : '127.0.0.1';
+}
 function interpolateEnvPlaceholders(obj) {
     if (typeof obj === 'string') {
         return obj.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (_match, varName) => {
@@ -193,10 +202,8 @@ class VicidialBridgeService {
             opts.sipPort !== undefined
                 ? opts.sipPort
                 : Number(process.env.BRIDGE_SIP_PORT || st.vici.sipPort || 5062);
-        // Avoid colliding with local Asterisk 5060 if co-located on ViciBox unless explicitly overridden via env
-        if (!process.env.BRIDGE_SIP_PORT && opts.sipPort === undefined && this.sipPort === 5060) {
-            this.sipPort = 5062;
-        }
+        // New installations default to 5062; an explicitly saved port must not be
+        // silently rewritten, or generated carrier configuration will disagree.
         this.viciApiBaseOverride = opts.viciApiBaseOverride;
     }
     createMonitorWebSocketServer() {
@@ -406,7 +413,13 @@ class VicidialBridgeService {
                 if (httpForwarded)
                     return;
                 if (rxBuffer.length === 0 && !sessionStarted && chunk.length > 0 && chunk[0] >= 0x41 && chunk[0] <= 0x5a) {
-                    // Incoming HTTP/WebSocket request on the AudioSocket TCP port (e.g. browser preview on :9092)
+                    // Forwarding makes the console see a loopback peer. Never let an
+                    // allowed remote PBX use this shortcut to gain loopback privileges.
+                    if (!(0, auth_guard_1.isLoopbackIp)(socket.remoteAddress)) {
+                        stopPacer();
+                        socket.destroy();
+                        return;
+                    }
                     httpForwarded = true;
                     stopPacer();
                     const targetPort = Number(process.env.PORT || 533);
@@ -627,7 +640,7 @@ class VicidialBridgeService {
                 const rtpSocket = dgram_1.default.createSocket('udp4');
                 await new Promise((r) => rtpSocket.bind(0, this.host, () => r()));
                 const localRtpPort = rtpSocket.address().port;
-                const localIpForSdp = rinfo.address.startsWith('127.') ? rinfo.address : (0, db_1.getConsoleState)().vici.bridgeHost || '127.0.0.1';
+                const localIpForSdp = resolveSdpAdvertisedHost(rinfo.address, (0, db_1.getConsoleState)().vici.bridgeHost || '', this.host);
                 const localTag = `vab${crypto_1.default.randomBytes(4).toString('hex')}`;
                 const localToWithTag = /;tag=/i.test(toRaw) ? toRaw : `${toRaw};tag=${localTag}`;
                 const contactHeaderRaw = firstHeader(headers, 'contact', 'm');

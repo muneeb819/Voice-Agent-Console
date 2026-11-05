@@ -37,6 +37,11 @@ async function main() {
     req.on('data', (chunk) => { body += chunk.toString(); });
     req.on('end', () => {
       webhookRequests.push({ path: req.url || '', body: JSON.parse(body || '{}') });
+      if (req.url === '/redirect') {
+        res.writeHead(302, { Location: '/redirect-target' });
+        res.end();
+        return;
+      }
       res.writeHead(req.url?.startsWith('/failure') ? 503 : 200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(req.url?.startsWith('/failure') ? { ok: false, error: 'test failure' } : { ok: true, receipt: 'local-only' }));
     });
@@ -157,6 +162,12 @@ async function main() {
     assert.strictEqual(webhookRequests[0].body._call_context.phone, '+15550000123');
     await exercise(true, 'failed', true);
     assert.strictEqual(webhookRequests.length, 2);
+    const redirectFn = { ...draft.functions.find((f) => f.id === 'fn_custom_test')!, url: `http://127.0.0.1:${port}/redirect`, headers: '{"X-Test-Secret":"synthetic"}' };
+    const redirected = await executeCustomFunctionWebhook(redirectFn, {}, {});
+    assert.strictEqual(redirected.ok, false);
+    assert.strictEqual(redirected.httpStatus, 302);
+    assert.match(redirected.error || '', /redirects are not followed/i);
+    assert.strictEqual(webhookRequests.filter((request) => request.path === '/redirect-target').length, 0, 'A redirect must not forward credentials or bypass destination checks');
     for (const settings of upstreamSettings) {
       assert.ok(settings.agent.think.functions.every((f: any) => !f.endpoint && f.defer_until_eot === true));
       assert.match(settings.agent.think.prompt, /not a live VICIdial call/i);

@@ -6,7 +6,7 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-const allSteps = ['step1', 'step2', 'live-bot', 'step3', 'step4', 'security'];
+const allSteps = ['step1', 'step2', 'live-bot', 'simulator-recording', 'step3', 'step4', 'security'];
 const requestedSteps = process.argv.slice(2);
 const steps = requestedSteps.length ? requestedSteps : allSteps;
 
@@ -88,7 +88,7 @@ async function main() {
     };
     if (process.env.VAC_TEST_LIVE !== '1') {
       const preload = path.join(root, 'tests', 'offline-fetch.cjs');
-      env.NODE_OPTIONS = `${process.env.NODE_OPTIONS || ''} --require="${preload.replace(/"/g, '\\"')}"`.trim();
+      env.NODE_OPTIONS = `${process.env.NODE_OPTIONS || ''} --require=${JSON.stringify(preload)}`.trim();
     }
 
     server = childProcess.spawn(process.execPath, [tsxCli, 'src/server.ts'], {

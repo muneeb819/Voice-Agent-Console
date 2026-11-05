@@ -9,6 +9,9 @@ exports.saveConsoleState = saveConsoleState;
 exports.listRevisions = listRevisions;
 exports.saveSimulatorCallLog = saveSimulatorCallLog;
 exports.listSimulatorCallLogs = listSimulatorCallLogs;
+exports.getSimulatorCallLog = getSimulatorCallLog;
+exports.attachSimulatorRecording = attachSimulatorRecording;
+exports.deleteSimulatorRecording = deleteSimulatorRecording;
 exports.clearSimulatorCallLogs = clearSimulatorCallLogs;
 exports.saveBridgeCallLog = saveBridgeCallLog;
 exports.listBridgeCallLogs = listBridgeCallLogs;
@@ -18,6 +21,7 @@ exports.exportBridgeLogsCsv = exportBridgeLogsCsv;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const call_recorder_1 = require("./call-recorder");
+const simulator_recordings_1 = require("./simulator-recordings");
 const defaults_1 = require("./defaults");
 const settings_builder_1 = require("./settings-builder");
 const data_paths_1 = require("./data-paths");
@@ -113,6 +117,12 @@ function getDb() {
       avg_ttfb_ms INTEGER,
       disposition TEXT,
       transferred_to TEXT,
+      recording_requested INTEGER NOT NULL DEFAULT 0,
+      recording_status TEXT NOT NULL DEFAULT 'not_requested',
+      recording_file TEXT,
+      recording_mime TEXT,
+      recording_bytes INTEGER NOT NULL DEFAULT 0,
+      recording_truncated INTEGER NOT NULL DEFAULT 0,
       transcript_json TEXT NOT NULL,
       functions_json TEXT NOT NULL
     );
@@ -143,6 +153,19 @@ function getDb() {
       vici_api_audit_json TEXT NOT NULL
     );
   `);
+    // Add optional browser recording metadata without changing old test logs.
+    const simCols = new Set(db.prepare('PRAGMA table_info(simulator_calls)').all().map((c) => c.name));
+    for (const [name, definition] of [
+        ['recording_requested', 'INTEGER NOT NULL DEFAULT 0'],
+        ['recording_status', "TEXT NOT NULL DEFAULT 'not_requested'"],
+        ['recording_file', 'TEXT'],
+        ['recording_mime', 'TEXT'],
+        ['recording_bytes', 'INTEGER NOT NULL DEFAULT 0'],
+        ['recording_truncated', 'INTEGER NOT NULL DEFAULT 0'],
+    ]) {
+        if (!simCols.has(name))
+            db.exec(`ALTER TABLE simulator_calls ADD COLUMN ${name} ${definition}`);
+    }
     // Safe Step 4 schema migration for existing SQLite databases
     const bridgeCols = db.prepare('PRAGMA table_info(bridge_calls)').all();
     const colNames = new Set(bridgeCols.map((c) => c.name));
@@ -237,27 +260,31 @@ function listRevisions(limit = 15) {
 }
 function saveSimulatorCallLog(record) {
     const conn = getDb();
-    conn
-        .prepare(`INSERT OR REPLACE INTO simulator_calls (
+    // The recording belongs to its history row. Prune files before deleting rows
+    // so a failed unlink cannot silently leave untracked private audio behind.
+    conn.transaction(() => {
+        const previous = conn.prepare('SELECT recording_file FROM simulator_calls WHERE id = ?').get(record.id);
+        if (previous?.recording_file && previous.recording_file !== record.recordingFile) {
+            (0, simulator_recordings_1.removeSimulatorRecording)(previous.recording_file);
+        }
+        conn.prepare(`INSERT OR REPLACE INTO simulator_calls (
         id, agent_id, agent_name, campaign_id, upstream_mode,
         sample_rate_in, sample_rate_out, started_at, ended_at,
         duration_ms, turns, avg_ttfb_ms, disposition, transferred_to,
-        transcript_json, functions_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(record.id, record.agentId, record.agentName, record.campaignId, record.upstreamMode, record.sampleRateIn, record.sampleRateOut, record.startedAt, record.endedAt, record.durationMs, record.turns, record.avgTtfbMs, record.disposition, record.transferredTo, JSON.stringify(record.transcript), JSON.stringify(record.functionCalls));
-    conn.prepare(`
-    DELETE FROM simulator_calls
-    WHERE id NOT IN (SELECT id FROM simulator_calls ORDER BY started_at DESC LIMIT 100)
-  `).run();
+        recording_requested, recording_status, recording_file, recording_mime,
+        recording_bytes, recording_truncated, transcript_json, functions_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(record.id, record.agentId, record.agentName, record.campaignId, record.upstreamMode, record.sampleRateIn, record.sampleRateOut, record.startedAt, record.endedAt, record.durationMs, record.turns, record.avgTtfbMs, record.disposition, record.transferredTo, record.recordingRequested ? 1 : 0, record.recordingStatus || (record.recordingRequested ? 'pending' : 'not_requested'), record.recordingFile || null, record.recordingMime || null, record.recordingBytes || 0, record.recordingTruncated ? 1 : 0, JSON.stringify(record.transcript), JSON.stringify(record.functionCalls));
+        const stale = conn.prepare('SELECT recording_file FROM simulator_calls ORDER BY started_at DESC, rowid DESC LIMIT -1 OFFSET 100').all();
+        for (const row of stale)
+            (0, simulator_recordings_1.removeSimulatorRecording)(row.recording_file);
+        conn.prepare(`
+      DELETE FROM simulator_calls
+      WHERE id NOT IN (SELECT id FROM simulator_calls ORDER BY started_at DESC, rowid DESC LIMIT 100)
+    `).run();
+    })();
 }
-function listSimulatorCallLogs(agentId, limit = 20) {
-    const conn = getDb();
-    const rows = (agentId
-        ? conn
-            .prepare('SELECT * FROM simulator_calls WHERE agent_id = ? ORDER BY started_at DESC LIMIT ?')
-            .all(agentId, limit)
-        : conn.prepare('SELECT * FROM simulator_calls ORDER BY started_at DESC LIMIT ?').all(limit));
-    return rows.map((r) => ({
+function simulatorLogFromRow(r) {
+    return {
         id: r.id,
         agentId: r.agent_id,
         agentName: r.agent_name,
@@ -272,18 +299,59 @@ function listSimulatorCallLogs(agentId, limit = 20) {
         avgTtfbMs: r.avg_ttfb_ms,
         disposition: r.disposition,
         transferredTo: r.transferred_to,
+        recordingRequested: Boolean(r.recording_requested),
+        recordingStatus: r.recording_status || 'not_requested',
+        recordingFile: r.recording_file || null,
+        recordingMime: r.recording_mime || null,
+        recordingBytes: Number(r.recording_bytes || 0),
+        recordingTruncated: Boolean(r.recording_truncated),
         transcript: JSON.parse(r.transcript_json || '[]'),
         functionCalls: JSON.parse(r.functions_json || '[]'),
-    }));
+    };
+}
+function listSimulatorCallLogs(agentId, limit = 20) {
+    const conn = getDb();
+    const rows = (agentId
+        ? conn.prepare('SELECT * FROM simulator_calls WHERE agent_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?').all(agentId, limit)
+        : conn.prepare('SELECT * FROM simulator_calls ORDER BY started_at DESC, rowid DESC LIMIT ?').all(limit));
+    return rows.map(simulatorLogFromRow);
+}
+function getSimulatorCallLog(id) {
+    const row = getDb().prepare('SELECT * FROM simulator_calls WHERE id = ?').get(id);
+    return row ? simulatorLogFromRow(row) : null;
+}
+function attachSimulatorRecording(id, file, mime, bytes, truncated) {
+    const result = getDb().prepare(`UPDATE simulator_calls
+    SET recording_status = 'available', recording_file = ?, recording_mime = ?, recording_bytes = ?, recording_truncated = ?
+    WHERE id = ? AND recording_requested = 1 AND recording_status = 'pending' AND recording_file IS NULL`)
+        .run(file, mime, bytes, truncated ? 1 : 0, id);
+    return Number(result.changes || 0) === 1;
+}
+function deleteSimulatorRecording(id) {
+    const conn = getDb();
+    return conn.transaction(() => {
+        const row = conn.prepare('SELECT recording_file, recording_status FROM simulator_calls WHERE id = ?').get(id);
+        if (!row)
+            return false;
+        (0, simulator_recordings_1.removeSimulatorRecording)(row.recording_file);
+        conn.prepare(`UPDATE simulator_calls SET recording_status = 'deleted', recording_file = NULL,
+      recording_mime = NULL, recording_bytes = 0, recording_truncated = 0 WHERE id = ?`).run(id);
+        return true;
+    })();
 }
 function clearSimulatorCallLogs(agentId) {
     const conn = getDb();
-    if (agentId) {
-        conn.prepare('DELETE FROM simulator_calls WHERE agent_id = ?').run(agentId);
-    }
-    else {
-        conn.prepare('DELETE FROM simulator_calls').run();
-    }
+    conn.transaction(() => {
+        const rows = (agentId
+            ? conn.prepare('SELECT recording_file FROM simulator_calls WHERE agent_id = ?').all(agentId)
+            : conn.prepare('SELECT recording_file FROM simulator_calls').all());
+        for (const row of rows)
+            (0, simulator_recordings_1.removeSimulatorRecording)(row.recording_file);
+        if (agentId)
+            conn.prepare('DELETE FROM simulator_calls WHERE agent_id = ?').run(agentId);
+        else
+            conn.prepare('DELETE FROM simulator_calls').run();
+    })();
 }
 function saveBridgeCallLog(record) {
     const conn = getDb();

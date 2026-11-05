@@ -9,6 +9,7 @@
 
   var rawPath = String(location.pathname || '/');
   var isStaticHtmlPath = /\.html$/i.test(rawPath);
+  var staticDemoReady = false;
   var basePrefix = rawPath.replace(/\/(login(?:\.html)?|signup(?:\.html)?)$/i, '');
   if (basePrefix === '/') basePrefix = '';
 
@@ -36,6 +37,7 @@
   }
 
   function markStaticDemo() {
+    staticDemoReady = true;
     var note = document.getElementById('auth-security-note');
     if (note) note.textContent = 'Static demo only: accounts are stored in this browser and do not secure a server. Do not use a real password.';
   }
@@ -292,7 +294,7 @@
     return {
       res: res,
       data: data,
-      isStaticHost: isStaticHtmlPath && (res.status === 404 || res.status === 405 || (res.ok && !isJson))
+      isStaticHost: staticDemoReady && (res.status === 404 || res.status === 405 || (res.ok && !isJson))
     };
   }
 
@@ -525,6 +527,11 @@
   });
 
   // ------------------------------------------------------------ entry point
+  function showAuthServiceError() {
+    var mode = !panes.signup.hidden ? 'signup' : !panes.admin.hidden ? 'admin' : 'signin';
+    setMsg(document.getElementById(mode + '-msg'), 'Authentication service is unavailable. Retry when the server is reachable.');
+  }
+
   (async function init() {
     var modeParam = new URLSearchParams(location.search).get('mode');
     if (/\/signup(?:\.html)?$/i.test(rawPath) || modeParam === 'signup') {
@@ -564,7 +571,7 @@
         return;
       }
       if (!isStaticHtmlPath) {
-        setMsg(document.getElementById('signin-msg'), 'Authentication service is unavailable. Retry when the server is reachable.');
+        showAuthServiceError();
         return;
       }
       // Static Cloud Mode (GitHub Pages): this is a local simulation, not auth.
@@ -584,7 +591,7 @@
         if (adminToggle) adminToggle.style.display = 'none';
         if (readCloudUsers().length === 0) setMode('signup');
       } else {
-        setMsg(document.getElementById('signin-msg'), 'Authentication service is unavailable. Retry when the server is reachable.');
+        showAuthServiceError();
       }
     }
   })();

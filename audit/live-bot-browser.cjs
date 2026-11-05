@@ -113,6 +113,12 @@ async function run() {
   await context.grantPermissions(['microphone'], { origin: base });
   await context.addInitScript(() => {
     window.__vacAudioStarts = 0;
+    window.__vacResumedContexts = [];
+    const originalResume = AudioContext.prototype.resume;
+    AudioContext.prototype.resume = function (...args) {
+      if (!window.__vacResumedContexts.includes(this)) window.__vacResumedContexts.push(this);
+      return originalResume.apply(this, args);
+    };
     const original = AudioBufferSourceNode.prototype.start;
     AudioBufferSourceNode.prototype.start = function (...args) {
       window.__vacAudioStarts++;
@@ -120,6 +126,10 @@ async function run() {
     };
   });
   const page = await context.newPage();
+  const recordingGets = [];
+  page.on('request', (request) => {
+    if (request.method() === 'GET' && request.url().includes('/api/simulator/recordings/')) recordingGets.push(request);
+  });
   page.on('pageerror', (err) => pageErrors.push(String(err)));
   await page.goto(`${base}/login`);
   await page.click('#admin-toggle');
@@ -137,7 +147,8 @@ async function run() {
     if (!result.ok) throw new Error('Could not save isolated test services');
   });
   await page.goto(`${base}/?tab=test`);
-  await page.waitForSelector('#btn-call-mic');
+  await page.waitForSelector('#btn-call-mic:enabled');
+  assert.equal(await page.locator('#sim-record-audio').isChecked(), false, 'Audio recording must default off');
   await page.click('#btn-call-mic');
   await page.waitForSelector('#btn-sim-mute:not([disabled])', { timeout: 10000 });
   await until(() => settingsReceived.length === 1 && nonSilentAudioBytes > 2048, 'non-silent fake microphone frames');
@@ -170,7 +181,7 @@ async function run() {
   assert.equal(await page.locator('#sim-kpi-xfer').innerText(), 'Not connected');
   assert.equal(webhooks, 0);
   await page.click('#btn-call-hangup');
-  await page.waitForSelector('#btn-call-nomic');
+  await page.waitForSelector('#btn-call-nomic:enabled');
   await page.waitForSelector('#sim-logs-box .sim-history-transcript summary');
   await page.locator('#sim-logs-box .sim-history-transcript summary').first().click();
   const history = await page.locator('#sim-logs-box').innerText();
@@ -178,9 +189,12 @@ async function run() {
   assert.match(history, /browser mock question/);
   assert.match(history, /Response from the local mock provider/);
   assert.equal(await page.locator('#sim-logs-box audio').count(), 0);
-  assert.match(await page.locator('#sim-history').locator('..').innerText(), /not audio recordings/i);
-  console.log('PASS Provider transcript is saved and discoverable; PBX actions fail without side effects or fake recording');
+  assert.match(await page.locator('#sim-logs-box').innerText(), /No audio recording for this test/i);
+  assert.equal(fs.existsSync(path.join(temp, 'simulator-recordings')), false, 'No audio should be saved by default');
+  assert.match(await page.locator('#sim-history').locator('..').innerText(), /Tests made before recording was available have no audio/i);
+  console.log('PASS Provider transcript is saved without default audio; PBX actions fail without side effects');
 
+  await page.check('#sim-record-audio');
   await page.click('#btn-call-nomic');
   await page.waitForSelector('#sim-inject-input:enabled');
   await page.fill('#sim-inject-input', 'finish the browser test');
@@ -188,8 +202,126 @@ async function run() {
   await page.waitForFunction(() => /Finishing browser audio playback/i.test(document.querySelector('#sim-state-pill')?.textContent || ''), null, { timeout: 7000 });
   await page.waitForTimeout(350);
   assert.equal(await page.locator('#btn-call-nomic').count(), 0, 'Final queued audio should not be cut off');
-  await page.waitForSelector('#btn-call-nomic', { timeout: 5000 });
-  console.log('PASS Bot end_call waits for buffered browser playback');
+  await page.waitForSelector('#btn-call-nomic:enabled', { timeout: 12000 });
+  await page.waitForSelector('[data-sim-audio-load]');
+  await page.locator('[data-sim-audio-load]').first().click();
+  await page.waitForSelector('#sim-logs-box audio');
+  const finalAudio = await page.evaluate(async () => {
+    const bytes = await (await fetch(document.querySelector('#sim-logs-box audio').src)).arrayBuffer();
+    const ctx = new AudioContext(), audio = await ctx.decodeAudioData(bytes), samples = audio.getChannelData(0);
+    let energy = 0; const from = Math.max(0, samples.length - audio.sampleRate);
+    for (let i = from; i < samples.length; i++) energy += samples[i] * samples[i];
+    await ctx.close(); return { duration: audio.duration, lastSecondRms: Math.sqrt(energy / (samples.length - from)) };
+  });
+  assert(finalAudio.duration > 1.8 && finalAudio.lastSecondRms > 0.01, `Final buffered speech must be in the recording: ${JSON.stringify(finalAudio)}`);
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.locator('[data-sim-audio-delete]').first().click();
+  await page.waitForFunction(() => (document.querySelector('#sim-logs-box')?.textContent || '').includes('Recording deleted.'));
+  console.log('PASS Bot end_call drains buffered playback into the recording');
+
+  // Record fake microphone first, then mute it and play the mock agent's 220 Hz tone.
+  // Decode the actual stored WebM: this checks the mix, not just a mock MediaRecorder call.
+  await page.check('#sim-record-audio');
+  await page.click('#btn-call-mic');
+  await page.waitForSelector('#btn-sim-mute:not([disabled])');
+  await page.waitForTimeout(1800);
+  await page.click('#btn-sim-mute');
+  await page.fill('#sim-inject-input', 'recording test tone');
+  await page.click('#btn-sim-inject');
+  await page.waitForFunction(() => (document.querySelector('#sim-feed')?.textContent || '').includes('Response from the local mock provider.'));
+  await page.waitForTimeout(800);
+  await page.click('#btn-call-hangup');
+  await page.waitForSelector('#btn-call-mic:enabled', { timeout: 12000 });
+  assert.equal(await page.locator('#sim-record-audio').isChecked(), false, 'Opt-in resets after each test');
+  await page.waitForSelector('[data-sim-audio-load]');
+  const priorGets = recordingGets.length;
+  await page.locator('[data-sim-audio-load]').first().click();
+  await page.waitForSelector('#sim-logs-box audio');
+  assert.equal(recordingGets.length, priorGets + 1);
+  assert.match(recordingGets.at(-1).headers().authorization || '', /^Bearer /);
+  assert.doesNotMatch(recordingGets.at(-1).url(), /token|authorization|synthetic-browser-admin/i);
+  assert.match(await page.locator('#sim-logs-box audio').first().getAttribute('src'), /^blob:/);
+  const decoded = await page.evaluate(async () => {
+    const blob = await (await fetch(document.querySelector('#sim-logs-box audio').src)).arrayBuffer();
+    const context = new AudioContext();
+    const audio = await context.decodeAudioData(blob);
+    const samples = audio.getChannelData(0), rate = audio.sampleRate;
+    const rms = (start, end) => {
+      let sum = 0; const from = Math.floor(start * rate), to = Math.min(samples.length, Math.floor(end * rate));
+      for (let i = from; i < to; i++) sum += samples[i] * samples[i];
+      return Math.sqrt(sum / Math.max(1, to - from));
+    };
+    let peak220 = 0;
+    const width = Math.floor(rate / 10);
+    for (let offset = Math.floor(rate * 1.5); offset + width < samples.length; offset += Math.floor(width / 2)) {
+      let sin = 0, cos = 0;
+      for (let i = 0; i < width; i++) {
+        const phase = 2 * Math.PI * 220 * i / rate;
+        sin += samples[offset + i] * Math.sin(phase); cos += samples[offset + i] * Math.cos(phase);
+      }
+      peak220 = Math.max(peak220, 2 * Math.sqrt(sin * sin + cos * cos) / width);
+    }
+    await context.close();
+    return { duration: audio.duration, micRms: rms(0.4, 1.5), peak220, tailRms: rms(Math.max(0, audio.duration - 0.3), audio.duration) };
+  });
+  assert(decoded.duration > 2, `Recording should include the live test: ${JSON.stringify(decoded)}`);
+  assert(decoded.micRms > 0.002, `Expected fake microphone audio in recording: ${JSON.stringify(decoded)}`);
+  assert(decoded.peak220 > 0.01, `Expected the mock agent's 220 Hz tone after mic mute: ${JSON.stringify(decoded)}`);
+  assert(decoded.tailRms < 0.005, `Muted microphone must not remain audible after agent playback: ${JSON.stringify(decoded)}`);
+  assert.equal(await page.locator('#sim-logs-box a[download]').count(), 1);
+  await page.reload();
+  await page.waitForSelector('[data-sim-audio-load]');
+  await page.locator('[data-sim-audio-load]').first().click();
+  await page.waitForSelector('#sim-logs-box audio');
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.locator('[data-sim-audio-delete]').first().click();
+  await page.waitForSelector('#sim-logs-box audio', { state: 'detached' });
+  assert.match(await page.locator('#sim-logs-box').innerText(), /Recording deleted/);
+  console.log('PASS Opt-in records real mixed browser audio, plays with auth after reload, and deletes audio only');
+
+  await page.check('#sim-record-audio');
+  await page.click('#btn-call-nomic');
+  await page.waitForSelector('#sim-inject-input:enabled');
+  await page.fill('#sim-inject-input', 'recording before audio suspension');
+  await page.click('#btn-sim-inject');
+  await page.waitForTimeout(450);
+  await page.evaluate(async () => window.__vacResumedContexts.at(-1).suspend());
+  await page.waitForFunction(() => /Browser audio was suspended during recording/i.test(document.querySelector('#sim-feed')?.textContent || ''));
+  await page.evaluate(async () => window.__vacResumedContexts.at(-1).resume());
+  await page.waitForTimeout(300);
+  await page.click('#btn-call-hangup');
+  await page.waitForSelector('#btn-call-nomic:enabled', { timeout: 12000 });
+  await page.getByText('Audio was not saved or could not be confirmed in history.', { exact: true }).waitFor();
+  assert.match(await page.locator('main').innerText(), /audio may be incomplete/i);
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.click('#btn-discard-recording-fallback');
+  console.log('PASS Suspended browser audio is reported as potentially incomplete, not silently saved as complete');
+
+  // A failed upload must leave the Blob downloadable and never report success.
+  const failUpload = (route) => route.request().method() === 'PUT'
+    ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"synthetic upload failure"}' })
+    : route.continue();
+  await page.route('**/api/simulator/recordings/**', failUpload);
+  await page.check('#sim-record-audio');
+  await page.click('#btn-call-nomic');
+  await page.waitForSelector('#sim-inject-input:enabled');
+  await page.fill('#sim-inject-input', 'recording upload fallback');
+  await page.click('#btn-sim-inject');
+  await page.waitForTimeout(700);
+  await page.click('#btn-call-hangup');
+  await page.waitForSelector('#btn-call-nomic:enabled', { timeout: 12000 });
+  const fallback = page.locator('a[download^="live-bot-"]').filter({ hasText: 'Download audio now' });
+  await fallback.waitFor();
+  assert.match(await fallback.getAttribute('href'), /^blob:/);
+  assert.match(await page.locator('main').innerText(), /Audio was not saved or could not be confirmed/i);
+  assert((await page.evaluate(async (href) => (await (await fetch(href)).blob()).size, await fallback.getAttribute('href'))) > 100);
+  page.once('dialog', (dialog) => dialog.dismiss());
+  await page.check('#sim-record-audio');
+  await page.click('#btn-call-nomic');
+  assert.equal(await page.locator('#btn-call-nomic').count(), 1, 'Declining fallback discard must not start a new call');
+  await page.unroute('**/api/simulator/recordings/**', failUpload);
+  console.log('PASS Failed upload retains a recoverable download and warns before discarding it');
+
   await page.locator('#nav [data-t="vici"]').click();
   const confirmed = new Promise((resolve) => page.once('dialog', async (dialog) => { const message = dialog.message(); await dialog.dismiss(); resolve(message); }));
   await page.click('#btn-vici-sim');
@@ -238,6 +370,12 @@ async function run() {
         } else if (message.type === 'InjectUserMessage') {
           const emit = (event) => this.onmessage?.({ data: JSON.stringify(event) });
           emit({ type: 'ConversationText', role: 'user', content: message.content });
+          emit({ type: 'ConversationText', role: 'assistant', content: 'Static mock audio response.' });
+          emit({ type: 'AgentStartedSpeaking' });
+          const pcm = new Int16Array(12000);
+          for (let i = 0; i < pcm.length; i++) pcm[i] = Math.round(Math.sin(i * 2 * Math.PI * 220 / 24000) * 2000);
+          this.onmessage?.({ data: pcm.buffer });
+          emit({ type: 'AgentAudioDone' });
           emit({ type: 'FunctionCallCancelled', id: 'cancelled', name: 'custom_demo' });
           emit({ type: 'FunctionCallRequest', functions: [
             { id: 'cancelled', name: 'custom_demo', arguments: '{}', client_side: true },
@@ -254,13 +392,13 @@ async function run() {
   staticPage.on('pageerror', (err) => pageErrors.push(String(err)));
   const staticBase = `http://127.0.0.1:${staticPort}`;
   await staticPage.goto(`${staticBase}/index.html?tab=test`);
-  await staticPage.waitForSelector('#btn-call-nomic');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled');
   await staticPage.click('#btn-call-nomic');
   assert.match(await staticPage.locator('#sim-state-pill').innerText(), /key needed/i);
   assert.equal(await staticPage.evaluate(() => window.__mockWs.created), 0, 'Missing key must not start a fake session');
   await staticPage.evaluate(() => localStorage.setItem('vac_cloud_secrets_v1', JSON.stringify({ DEEPGRAM_API_KEY: 'synthetic-static-key' })));
   await staticPage.reload();
-  await staticPage.waitForSelector('#btn-call-nomic');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled');
   await staticPage.click('#btn-call-nomic');
   await staticPage.waitForSelector('#sim-inject-input:enabled');
   assert(await staticPage.locator('#sim-allow-webhooks').isDisabled());
@@ -278,6 +416,130 @@ async function run() {
   console.log('PASS Static mode rejects missing key and never fabricates webhook/transfer success');
 
   await staticPage.click('#btn-call-hangup');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled');
+  const staticInitialAgent = await staticPage.locator('#sel-a').inputValue();
+  assert.notEqual(staticInitialAgent, 'a_medicare');
+  await staticPage.evaluate((initialAgent) => localStorage.setItem('vac_cloud_sim_logs_v1', JSON.stringify([
+    { id: 'legacy-a', agentId: initialAgent, startedAt: '2020-01-01', durationMs: 1, turns: 0, transcript: [], functionCalls: [] },
+    { id: 'legacy-b', agentId: 'a_medicare', startedAt: '2020-01-01', durationMs: 1, turns: 0, transcript: [], functionCalls: [] },
+  ])), staticInitialAgent);
+  const staticRecord = async (message) => {
+    assert.equal(await staticPage.locator('#sim-record-audio').isChecked(), false);
+    await staticPage.check('#sim-record-audio');
+    await staticPage.click('#btn-call-nomic');
+    await staticPage.waitForSelector('#sim-inject-input:enabled');
+    await staticPage.fill('#sim-inject-input', message);
+    await staticPage.click('#btn-sim-inject');
+    await staticPage.waitForTimeout(850);
+    await staticPage.click('#btn-call-hangup');
+    await staticPage.waitForSelector('#btn-call-nomic:enabled', { timeout: 12000 });
+    await staticPage.waitForSelector('[data-sim-audio-load]');
+    assert.equal(await staticPage.locator('#sim-record-audio').isChecked(), false);
+  };
+  await staticRecord('static recorded audio');
+  await staticPage.locator('[data-sim-audio-load]').first().click();
+  await staticPage.waitForSelector('#sim-logs-box audio');
+  const localDecoded = await staticPage.evaluate(async () => {
+    const buf = await (await fetch(document.querySelector('#sim-logs-box audio').src)).arrayBuffer();
+    const ctx = new AudioContext(); const audio = await ctx.decodeAudioData(buf);
+    let energy = 0; const data = audio.getChannelData(0);
+    for (const sample of data) energy += sample * sample;
+    await ctx.close(); return { duration: audio.duration, rms: Math.sqrt(energy / data.length) };
+  });
+  assert(localDecoded.duration > 0.4 && localDecoded.rms > 0.003, JSON.stringify(localDecoded));
+  await staticPage.reload();
+  await staticPage.waitForSelector('[data-sim-audio-load]');
+  await staticPage.locator('[data-sim-audio-load]').first().click();
+  await staticPage.waitForSelector('#sim-logs-box audio');
+  await staticPage.locator('#sim-logs-box .sim-history-transcript summary').first().click();
+  assert.match(await staticPage.locator('#sim-logs-box').innerText(), /static recorded audio/);
+  console.log('PASS Static recordings and transcripts survive reload in IndexedDB and play locally');
+
+  await staticPage.selectOption('#sel-a', 'a_medicare');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled');
+  await staticRecord('other agent recorded audio');
+  await staticPage.selectOption('#sel-a', staticInitialAgent);
+  await staticPage.waitForSelector('#sim-logs-box audio, [data-sim-audio-load]');
+  staticPage.once('dialog', (dialog) => dialog.accept());
+  await staticPage.click('#btn-clear-logs');
+  await staticPage.waitForFunction(() => (document.querySelector('#sim-logs-box')?.textContent || '').includes('No locally recorded tests'));
+  const legacy = await staticPage.evaluate(() => JSON.parse(localStorage.getItem('vac_cloud_sim_logs_v1')));
+  assert.deepEqual(legacy.map((item) => item.id), ['legacy-b'], 'Clearing one agent must preserve another agent’s legacy logs');
+  await staticPage.selectOption('#sel-a', 'a_medicare');
+  await staticPage.waitForSelector('[data-sim-audio-load]');
+  await staticPage.locator('#sim-logs-box .sim-history-transcript summary').first().click();
+  assert.match(await staticPage.locator('#sim-logs-box').innerText(), /other agent recorded audio/);
+  staticPage.once('dialog', (dialog) => dialog.accept());
+  await staticPage.locator('[data-sim-audio-delete]').first().click();
+  await staticPage.waitForFunction(() => (document.querySelector('#sim-logs-box')?.textContent || '').includes('Recording deleted.'));
+  await staticPage.locator('#sim-logs-box .sim-history-transcript summary').first().click();
+  assert.match(await staticPage.locator('#sim-logs-box').innerText(), /other agent recorded audio/, 'Audio deletion preserves local transcript');
+  console.log('PASS Static clear and individual delete respect agent boundaries and preserve transcripts');
+
+  // Seed older synthetic entries, then accelerate the 10-minute timer so the
+  // retention cap and truncation behavior can be tested without a long call.
+  await staticPage.evaluate(() => new Promise((resolve, reject) => {
+    const open = indexedDB.open('vac-live-bot-recordings-v1');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result; const tx = db.transaction(['logs', 'audio'], 'readwrite');
+      for (let i = 0; i < 20; i++) {
+        const id = `synthetic-local-old-${i}`;
+        tx.objectStore('logs').put({ id, agentId: 'a_medicare', startedAt: new Date(Date.UTC(2000, 0, 1, 0, 0, i)).toISOString(),
+          durationMs: 1, turns: 0, transcript: [], functionCalls: [], recordingStatus: 'available', recordingBytes: 4, recordingMime: 'audio/webm' });
+        tx.objectStore('audio').put({ id, blob: new Blob(['fake'], { type: 'audio/webm' }) });
+      }
+      tx.oncomplete = () => { db.close(); resolve(); }; tx.onerror = tx.onabort = () => reject(tx.error);
+    };
+  }));
+  await staticPage.evaluate(() => {
+    window.__realRecordingTimer = window.setTimeout;
+    window.setTimeout = function (fn, delay, ...args) {
+      return window.__realRecordingTimer(fn, delay === 600000 ? 700 : delay, ...args);
+    };
+  });
+  await staticPage.check('#sim-record-audio');
+  await staticPage.click('#btn-call-nomic');
+  await staticPage.waitForSelector('#sim-inject-input:enabled');
+  await staticPage.fill('#sim-inject-input', 'limited static recording');
+  await staticPage.click('#btn-sim-inject');
+  await staticPage.waitForFunction(() => /recording reached its 10-minute or size limit/i.test(document.querySelector('#sim-feed')?.textContent || ''), null, { timeout: 5000 });
+  assert(await staticPage.locator('#sim-inject-input').isEnabled(), 'The test must continue after recording stops at the limit');
+  await staticPage.click('#btn-call-hangup');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled', { timeout: 12000 });
+  await staticPage.evaluate(() => { window.setTimeout = window.__realRecordingTimer; });
+  await staticPage.waitForFunction(() => /truncated at recording limit/i.test(document.querySelector('#sim-logs-box')?.textContent || ''), null, { timeout: 8000 });
+  const retained = await staticPage.evaluate(() => new Promise((resolve, reject) => {
+    const open = indexedDB.open('vac-live-bot-recordings-v1'); open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result, tx = db.transaction(['logs', 'audio']);
+      const logs = tx.objectStore('logs').getAll(), keys = tx.objectStore('audio').getAllKeys();
+      tx.oncomplete = () => { resolve({ logs: logs.result, keys: keys.result }); db.close(); };
+      tx.onerror = tx.onabort = () => reject(tx.error);
+    };
+  }));
+  assert.equal(retained.logs.length, 20);
+  assert(!retained.keys.includes('synthetic-local-old-0'));
+  assert(!retained.logs.some((item) => item.id === 'synthetic-local-old-0'));
+  assert(retained.logs.some((item) => item.recordingTruncated === true));
+  assert.equal(await staticPage.locator('#sim-logs-box .sim-history-transcript').count(), 6);
+  await staticPage.locator('[data-sim-history-toggle]').click();
+  assert.equal(await staticPage.locator('#sim-logs-box .sim-history-transcript').count(), 21, 'All retained tests including legacy entries must be discoverable');
+  console.log('PASS Recording limit stops capture, marks truncation, and local retention deletes old audio; all history is discoverable');
+
+  await staticPage.evaluate(() => Object.defineProperty(window, 'indexedDB', { configurable: true, value: undefined }));
+  await staticPage.check('#sim-record-audio');
+  await staticPage.click('#btn-call-nomic');
+  await staticPage.waitForSelector('#sim-inject-input:enabled');
+  await staticPage.fill('#sim-inject-input', 'static fallback');
+  await staticPage.click('#btn-sim-inject');
+  await staticPage.waitForTimeout(700);
+  await staticPage.click('#btn-call-hangup');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled', { timeout: 12000 });
+  await staticPage.getByText('Audio was not saved or could not be confirmed in history.', { exact: true }).waitFor();
+  assert.match(await staticPage.locator('a[download^="live-bot-"]').filter({ hasText: 'Download audio now' }).getAttribute('href'), /^blob:/);
+  console.log('PASS Static storage failure exposes a temporary audio download');
+
   await staticPage.locator('#nav [data-t="vici"]').click();
   await staticPage.waitForSelector('#btn-vici-sim');
   assert(await staticPage.locator('#btn-vici-sim').isDisabled());

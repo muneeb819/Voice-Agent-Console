@@ -12,6 +12,9 @@ import { isBridgePeerIpAllowed, isLoopbackIp } from '../src/auth-guard';
 import { updateSecrets } from '../src/env-store';
 import { createReleaseBundle } from '../src/release-bundle';
 import { createDefaultState, normalizeState } from '../src/defaults';
+import { getConsoleState, saveConsoleState } from '../src/db';
+import { generateViciConfig } from '../src/settings-builder';
+import { resolveSdpAdvertisedHost, VicidialBridgeService } from '../src/vici-bridge';
 import { getSpeechServiceBaseUrl } from '../src/speech-service-client';
 import { isTunnelProxyReady } from '../src/demo-tunnel';
 
@@ -46,6 +49,21 @@ async function requestStatus(url: string, method: string, headers: Record<string
     req.end(body);
   });
 }
+async function rawHttpOnBridge(host: string, port: number, request: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    const socket = net.createConnection({ host, port });
+    socket.setTimeout(3000, () => socket.destroy(new Error('Timed out contacting AudioSocket fixture')));
+    socket.on('connect', () => socket.write(request));
+    socket.on('data', (chunk) => { data += chunk.toString(); });
+    socket.on('end', () => resolve(data));
+    socket.on('close', () => resolve(data));
+    socket.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'ECONNRESET' || err.code === 'EPIPE') resolve(data); else reject(err);
+    });
+  });
+}
+
 async function websocketStatus(url: string, headers: Record<string, string>): Promise<number> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(url, { headers });
@@ -82,8 +100,57 @@ async function run() {
     assert.strictEqual(normalized.vici.bridgeHost, '127.0.0.1');
     assert.strictEqual(normalized.vici.amiHost, '127.0.0.1');
     assert.strictEqual(normalized.vici.sipPort, 5060);
+    assert.match(generateViciConfig(normalized), /(?:^|\n)port=5060(?:\n|$)/);
+    const priorState = getConsoleState();
+    const priorSipPort = process.env.BRIDGE_SIP_PORT;
+    try {
+      saveConsoleState(normalized, 'Synthetic SIP port fixture');
+      delete process.env.BRIDGE_SIP_PORT;
+      assert.strictEqual(new VicidialBridgeService().getStatus().sipPort, 5060, 'Saved SIP port must match the listener when no env override exists');
+      process.env.BRIDGE_SIP_PORT = '5070';
+      assert.strictEqual(new VicidialBridgeService().getStatus().sipPort, 5070, 'Explicit env override must retain precedence');
+    } finally {
+      saveConsoleState(priorState, 'Restore synthetic SIP port fixture');
+      if (priorSipPort === undefined) delete process.env.BRIDGE_SIP_PORT; else process.env.BRIDGE_SIP_PORT = priorSipPort;
+    }
+    assert.strictEqual(resolveSdpAdvertisedHost('127.0.0.1', '192.0.2.40', '192.0.2.41'), '127.0.0.1');
+    assert.strictEqual(resolveSdpAdvertisedHost('192.0.2.10', '192.0.2.40', '192.0.2.41'), '192.0.2.40');
+    assert.strictEqual(resolveSdpAdvertisedHost('192.0.2.10', '127.0.0.1', '192.0.2.41'), '192.0.2.41');
+    assert.strictEqual(resolveSdpAdvertisedHost('192.0.2.10', '127.0.0.1', '0.0.0.0'), '127.0.0.1');
     assert.strictEqual(getSpeechServiceBaseUrl(), 'http://127.0.0.1:8000');
+    const preloadDir = path.join(testDir, process.platform === 'win32' ? 'preload with space' : 'preload\\with\\backslashes');
+    fs.mkdirSync(preloadDir);
+    const preloadPath = path.join(preloadDir, 'fixture.cjs');
+    fs.writeFileSync(preloadPath, "process.env.VAC_PRELOAD_FIXTURE = 'loaded';");
+    const preload = childProcess.spawnSync(process.execPath, ['-p', 'process.env.VAC_PRELOAD_FIXTURE'], {
+      env: { ...process.env, NODE_OPTIONS: `--require=${JSON.stringify(preloadPath)}` }, encoding: 'utf8',
+    });
+    assert.strictEqual(preload.status, 0, preload.stderr);
+    assert.strictEqual(preload.stdout.trim(), 'loaded', 'Quoted NODE_OPTIONS paths must preserve backslashes');
     console.log('✓ 1. Loopback classification, safe defaults and preservation of explicit host/port settings');
+
+    const oldConsolePort = process.env.PORT;
+    process.env.PORT = String(port);
+    process.env.BRIDGE_ALLOWED_IPS = '*';
+    const bridge = new VicidialBridgeService({ host: '0.0.0.0', audioSocketPort: 0, sipPort: 0 });
+    try {
+      await bridge.start();
+      const bridgePort = bridge.getStatus().audioSocketPort;
+      const local = await rawHttpOnBridge('127.0.0.1', bridgePort, 'GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n');
+      assert.match(local, /^HTTP\/1\.1 200/, 'Loopback HTTP forwarding remains available');
+      const remote = Object.values(os.networkInterfaces()).flat().find((item) => item && item.family === 'IPv4' && !item.internal)?.address;
+      if (remote) {
+        const body = account('remote-forward@example.test');
+        const response = await rawHttpOnBridge(remote, bridgePort, `POST /api/auth/signup HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+        assert(!/^HTTP\//.test(response), 'Remote AudioSocket HTTP must not inherit loopback bootstrap access');
+      } else {
+        console.log('  SKIP non-loopback AudioSocket probe: no local network interface available');
+      }
+    } finally {
+      await bridge.stop();
+      if (oldConsolePort === undefined) delete process.env.PORT; else process.env.PORT = oldConsolePort;
+      process.env.BRIDGE_ALLOWED_IPS = '';
+    }
 
     const spoofed = { ...json, 'X-Forwarded-For': '198.51.100.12' };
     const remoteSignup = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: spoofed, body: account('remote@example.test') });
@@ -206,6 +273,8 @@ async function run() {
     fs.writeFileSync(path.join(fixture, '.env.production'), 'SYNTHETIC_SECRET=never-package\n');
     fs.writeFileSync(path.join(fixture, 'speech-service/.env.local'), 'SYNTHETIC_SECRET=never-package\n');
     fs.writeFileSync(path.join(fixture, 'public/private-key.pem'), 'SYNTHETIC_PRIVATE_KEY');
+    fs.mkdirSync(path.join(fixture, 'data/simulator-recordings'), { recursive: true });
+    fs.writeFileSync(path.join(fixture, 'data/simulator-recordings/sim_test_abcdef.webm'), 'SYNTHETIC_PRIVATE_AUDIO');
     fs.symlinkSync(path.join(fixture, '.env.production'), path.join(fixture, 'public/private-link'));
     const outDir = path.join(testDir, 'external-data');
     fs.mkdirSync(outDir);
@@ -213,7 +282,7 @@ async function run() {
     createReleaseBundle(fixture, directArchive);
     let entries = childProcess.execFileSync('tar', ['-tzf', directArchive], { encoding: 'utf8' });
     assert(entries.includes('arbitrary-checkout-name/public/app.js'));
-    assert(!/\.env\.production|\.env\.local|private-key|private-link/.test(entries));
+    assert(!/\.env\.production|\.env\.local|private-key|private-link|simulator-recordings\/|\.webm/.test(entries));
     const requiredSource = path.join(fixture, 'src/request-origin.ts');
     fs.renameSync(requiredSource, `${requiredSource}.bak`);
     assert.throws(() => createReleaseBundle(fixture, directArchive), /missing required files:.*src\/request-origin\.ts/);
@@ -234,7 +303,7 @@ async function run() {
       assert((await download.arrayBuffer()).byteLength > 1000);
       entries = childProcess.execFileSync('tar', ['-tzf', path.join(outDir, 'voice-agent-vicibox-release.tar.gz')], { encoding: 'utf8' });
       assert(entries.includes('arbitrary-checkout-name/dist/server.js'));
-      assert(!/\.env\.production|\.env\.local|private-key|private-link/.test(entries));
+      assert(!/\.env\.production|\.env\.local|private-key|private-link|simulator-recordings\/|\.webm/.test(entries));
     } finally { child.kill(); await waitExit(child); }
     console.log('✓ 6. Real archive download excludes synthetic secrets and unlisted files');
 

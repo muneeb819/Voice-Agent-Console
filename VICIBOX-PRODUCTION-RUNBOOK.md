@@ -5,12 +5,12 @@
 
 ---
 
-## 1. Architecture Summary (Co-Located on ViciBox `115.186.137.240`)
+## 1. Architecture Summary (Example Co-Located ViciBox)
 
 | Component | Bind / Port | Purpose & Security |
 |---|---|---|
-| **Web Console, Wallboard & REST/WS API** | `0.0.0.0:533` | Protected by `ADMIN_PASSWORD` (`HttpOnly` HMAC cookie / `Bearer` token). Local Asterisk `115.186.137.240` pre-call hooks (`/api/vici/register-call`) are automatically whitelisted. |
-| **Universal SIP + RTP (G.711 μ-law 8 kHz)** | `115.186.137.240:5062` UDP | Works on **all ViciBox 8–12 (Asterisk 13, 16, 18+)** without compiling `app_audiosocket`. Uses `:5062` so it never collides with Asterisk on `:5060`. Restricted via `BRIDGE_ALLOWED_IPS=115.186.137.240,::1`. |
+| **Web Console, Wallboard & REST/WS API** | `127.0.0.1:533` by default | Protected by operator authentication. Direct loopback PBX hooks have a local exemption; remote peers require explicit configuration and authentication as applicable. |
+| **Universal SIP + RTP (G.711 μ-law 8 kHz)** | `127.0.0.1:5062` UDP by default | Supports SIP/RTP without `app_audiosocket`. Configure `BRIDGE_BIND_HOST` and a restrictive `BRIDGE_ALLOWED_IPS` for a remote PBX; choose a port that does not collide with Asterisk. |
 | **Native Asterisk 18+ AudioSocket TCP** | `115.186.137.240:9092` TCP | Native `slin` 8 kHz TCP audio framing for Asterisk 18+ (`ViciBox 11/12`). Uses `CURL(/api/vici/register-call)` returning a canonical 36-char RFC 4122 UUID. |
 | **VICIdial Non-Agent & Agent HTTP APIs** | `http://115.186.137.240` | `/vicidial/non_agent_api.php` (`lead_all_info`, `update_lead`, `add_dnc_phone`) + `/agc/api.php` (`ra_call_control` `INGROUPTRANSFER`, `EXTENSIONTRANSFER`, `HANGUP`). |
 | **Asterisk Manager Interface (AMI)** | `115.186.137.240:5038` | `Ping` diagnostics + `Redirect` / `Hangup` fallback for direct non-Remote-Agent channels. |
@@ -50,8 +50,8 @@ DEEPGRAM_API_KEY=<SET_LOCALLY_DO_NOT_COMMIT>
 VICI_API_PASS=your_vicidial_6666_user_password
 AMI_SECRET=<YOUR_ASTERISK_AMI_SECRET>
 ADMIN_PASSWORD=<YOUR_STRONG_CONSOLE_PASSWORD>
-BRIDGE_ALLOWED_IPS=115.186.137.240,::1
-BRIDGE_BIND_HOST=115.186.137.240
+BRIDGE_ALLOWED_IPS=<YOUR_TRUSTED_PBX_IPS>
+BRIDGE_BIND_HOST=<YOUR_BRIDGE_BIND_ADDRESS>
 ```
 *(Tip: On standard ViciBox installs, check `/etc/astguiclient.conf` or `/etc/asterisk/manager.conf` under `[cron]` to confirm `AMI_SECRET`.)*
 

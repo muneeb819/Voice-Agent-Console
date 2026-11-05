@@ -31,11 +31,14 @@ import { resolveRecordingPath } from './call-recorder';
 import { createReleaseBundle } from './release-bundle';
 import { isSameOriginRequest } from './request-origin';
 import {
+  attachSimulatorRecording,
   clearBridgeCallLogs,
   clearSimulatorCallLogs,
+  deleteSimulatorRecording,
   exportBridgeLogsCsv,
   getBridgeAnalyticsSummary,
   getConsoleState,
+  getSimulatorCallLog,
   listBridgeCallLogs,
   listRevisions,
   listSimulatorCallLogs,
@@ -59,6 +62,13 @@ import {
   verifyDeepgramConnection,
 } from './env-store';
 import { attachLiveSimulator } from './live-simulator';
+import {
+  isSupportedRecording,
+  MAX_SIMULATOR_RECORDING_BYTES,
+  removeSimulatorRecording,
+  resolveSimulatorRecording,
+  writeSimulatorRecording,
+} from './simulator-recordings';
 import {
   buildDeepgramSettings,
   generateViciConfig,
@@ -637,14 +647,89 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   // Step 2: Simulator call log history endpoints
   app.get('/api/simulator/logs', (req: Request, res: Response) => {
     const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
-    const logs = listSimulatorCallLogs(agentId, 20);
+    const requested = typeof req.query.limit === 'string' ? Number(req.query.limit) : 20;
+    const limit = Number.isFinite(requested) && requested > 0 ? Math.max(1, Math.min(100, Math.floor(requested))) : 20;
+    const logs = listSimulatorCallLogs(agentId, limit);
+    res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, count: logs.length, logs });
   });
 
   app.delete('/api/simulator/logs', (req: Request, res: Response) => {
     const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
-    clearSimulatorCallLogs(agentId);
-    res.json({ ok: true });
+    try {
+      clearSimulatorCallLogs(agentId);
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Could not delete all test recordings; some audio may already have been removed, but history was not cleared. Check server storage permissions and retry.' });
+    }
+  });
+
+  // Upload is allowed only for a completed test that explicitly opted in. The
+  // normal API auth/Origin guard applies to upload, playback and deletion.
+  const simulatorAudioBody = express.raw({ type: 'application/octet-stream', limit: MAX_SIMULATOR_RECORDING_BYTES });
+  app.put('/api/simulator/recordings/:id', (req, res, next) => {
+    simulatorAudioBody(req, res, (err: any) => {
+      if (!err) { next(); return; }
+      const tooLarge = err.type === 'entity.too.large';
+      res.status(tooLarge ? 413 : 400).json({ ok: false, error: tooLarge
+        ? 'The browser recording exceeds the 20 MB limit.' : 'Could not read the browser recording upload.' });
+    });
+  }, (req: Request, res: Response) => {
+    const id = String(req.params.id || '');
+    const log = getSimulatorCallLog(id);
+    if (!log) { res.status(404).json({ ok: false, error: 'Browser test not found.' }); return; }
+    if (!log.recordingRequested || log.recordingStatus !== 'pending') {
+      res.status(409).json({ ok: false, error: 'This test did not opt in to a new recording, or it was already saved or deleted.' });
+      return;
+    }
+    const mime = String(req.get('X-Recording-Type') || '').split(';')[0].trim().toLowerCase();
+    const data = req.body;
+    if (!Buffer.isBuffer(data) || !isSupportedRecording(data, mime)) {
+      res.status(400).json({ ok: false, error: 'Invalid or unsupported audio recording.' });
+      return;
+    }
+    let fileName: string | null = null;
+    try {
+      fileName = writeSimulatorRecording(id, data, mime);
+      const attached = attachSimulatorRecording(id, fileName, mime, data.length, req.get('X-Recording-Truncated') === '1');
+      if (!attached) {
+        removeSimulatorRecording(fileName);
+        res.status(409).json({ ok: false, error: 'Test history changed before audio could be saved.' });
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(201).json({ ok: true, bytes: data.length, mime });
+    } catch {
+      if (fileName) { try { removeSimulatorRecording(fileName); } catch {} }
+      res.status(500).json({ ok: false, error: 'Could not save the browser test recording.' });
+    }
+  });
+
+  app.get('/api/simulator/recordings/:id', (req: Request, res: Response) => {
+    const log = getSimulatorCallLog(String(req.params.id || ''));
+    try {
+      const fullPath = log?.recordingStatus === 'available' && log.recordingFile
+        ? resolveSimulatorRecording(log.recordingFile) : null;
+      if (!fullPath || !log?.recordingMime) { res.status(404).json({ ok: false, error: 'Browser test recording not found.' }); return; }
+      res.setHeader('Content-Type', log.recordingMime);
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.sendFile(fullPath);
+    } catch {
+      res.status(500).json({ ok: false, error: 'Could not read the browser test recording.' });
+    }
+  });
+
+  app.delete('/api/simulator/recordings/:id', (req: Request, res: Response) => {
+    try {
+      if (!deleteSimulatorRecording(String(req.params.id || ''))) {
+        res.status(404).json({ ok: false, error: 'Browser test not found.' });
+        return;
+      }
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Could not delete the recording. Check server storage permissions and retry.' });
+    }
   });
 
   // ==================== STEP 3: VICIDIAL BRIDGE ENDPOINTS ====================

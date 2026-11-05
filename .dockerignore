@@ -13,3 +13,7 @@ coverage
 *.sqlite
 *.sqlite-*
 *.wav
+*.webm
+*.ogg
+*.m4a
+*.opus

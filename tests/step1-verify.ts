@@ -71,6 +71,8 @@ async function run() {
       }) as typeof fetch;
       const sample = await fetchAllowedSampleAudio('https://static.deepgram.com/sample.wav');
       assert.strictEqual(sample.buffer.toString(), 'RIFF-mocked-sample');
+      globalThis.fetch = (async () => new Response('<html>not audio</html>', { headers: { 'Content-Type': 'text/html' } })) as typeof fetch;
+      await assert.rejects(fetchAllowedSampleAudio('https://static.deepgram.com/sample.wav'), /not a supported audio type/);
       globalThis.fetch = (async () => { throw new Error('offline'); }) as typeof fetch;
       await assert.rejects(fetchAllowedSampleAudio('https://static.deepgram.com/sample.wav'), /Voice sample unavailable/);
     } finally {
@@ -78,6 +80,7 @@ async function run() {
     }
     const res = await fetch(`${BASE}/api/deepgram/sample?url=${encodeURIComponent(sampleVoiceUrl)}`);
     if (res.status === 200) {
+      assert.match(res.headers.get('content-type') || '', /^audio\/(?:wav|x-wav|wave|mpeg|mp3|ogg|webm|mp4|x-m4a|aac|flac)(?:\s*;|$)/i);
       assert.ok((await res.arrayBuffer()).byteLength > 0, 'A real upstream response must contain audio');
     } else {
       assert.strictEqual(res.status, 502, 'Unavailable samples must not be replaced with fake audio');

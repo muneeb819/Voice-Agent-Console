@@ -198,6 +198,10 @@ async function run() {
     const original = await field.inputValue();
     assert(await field.evaluate((el) => Boolean(el.labels?.length)));
     await field.fill('Browser discarded agent');
+    const confirm = new Promise((resolve) => page.once('dialog', async (dialog) => { const message = dialog.message(); await dialog.dismiss(); resolve(message); }));
+    await page.click('#btn-create-account');
+    assert.match(await confirm, /unsaved changes/i);
+    assert.equal(await field.inputValue(), 'Browser discarded agent', 'Canceling account navigation preserves unsaved edits');
     await page.click('#dc');
     await page.waitForFunction((value) => document.querySelector('[data-p="a.name"]')?.value === value, original);
   });
@@ -276,6 +280,29 @@ async function run() {
     }
   });
   await check('No uncaught browser page errors', async () => assert.deepEqual(results.pageErrors, []));
+
+  await check('Server auth failures cannot create a silent browser-local account', async () => {
+    const authContext = await browser.newContext();
+    await blockExternal(authContext);
+    await authContext.route('**/api/auth/status', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ authenticated: false, signupOpen: true, hasUsers: false }) }));
+    await authContext.route('**/api/auth/signup', (route) => route.fulfill({ status: 404, body: 'Unavailable' }));
+    const authPage = await authContext.newPage();
+    await authPage.goto(`${base}/login.html?mode=signup`);
+    await authPage.waitForSelector('#signup-form:not([hidden])');
+    await authPage.fill('#signup-name', 'Synthetic');
+    await authPage.fill('#signup-email', 'synthetic@example.test');
+    await authPage.fill('#signup-password', 'synthetic-password-123');
+    await authPage.click('#signup-submit');
+    await authPage.waitForFunction(() => /Could not create the account/i.test(document.querySelector('#signup-msg')?.textContent || ''));
+    assert.equal(await authPage.evaluate(() => localStorage.getItem('vac_cloud_users_v1')), null);
+    assert.doesNotMatch(await authPage.locator('#auth-security-note').innerText(), /Static demo only/i);
+    await authContext.unroute('**/api/auth/status');
+    await authContext.route('**/api/auth/status', (route) => route.fulfill({ status: 503, body: 'Unavailable' }));
+    await authPage.goto(`${base}/signup`);
+    await authPage.waitForFunction(() => /Authentication service is unavailable/i.test(document.querySelector('#signup-msg')?.textContent || ''));
+    assert(await authPage.locator('#signup-msg').isVisible(), 'Service errors must appear on the active signup pane');
+    await authContext.close();
+  });
 
   // Serve docs as a static site without an API and verify the honest disclaimer.
   const docs = path.join(root, 'docs');

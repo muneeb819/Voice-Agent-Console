@@ -339,8 +339,12 @@ export async function fetchAllowedSampleAudio(sampleUrl: string): Promise<{ buff
     // Do not follow redirects away from an allowlisted sample host.
     const res = await fetch(parsed.toString(), { signal: AbortSignal.timeout(12000), redirect: 'error' });
     if (!res.ok) throw new Error(`Upstream sample returned HTTP ${res.status}`);
-    const contentType = res.headers.get('content-type') || 'audio/wav';
+    const contentType = res.headers.get('content-type') || '';
+    if (!/^audio\/(?:wav|x-wav|wave|mpeg|mp3|ogg|webm|mp4|x-m4a|aac|flac)(?:\s*;|$)/i.test(contentType)) {
+      throw new Error('Upstream sample is not a supported audio type');
+    }
     const arr = await res.arrayBuffer();
+    if (!arr.byteLength) throw new Error('Upstream audio sample is empty');
     return { buffer: Buffer.from(arr), contentType };
   } catch (err: any) {
     const failure = new Error(`Voice sample unavailable: ${err?.message || 'upstream request failed'}`) as Error & { statusCode: number; code: string };

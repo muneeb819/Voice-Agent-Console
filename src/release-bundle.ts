@@ -7,7 +7,7 @@ import path from 'path';
 // The manifest is an explicit list of project files, not recursive directory
 // inclusion. Update tools/release-manifest.json when adding a release file.
 const MANIFEST_PATH = path.join('tools', 'release-manifest.json');
-const EXCLUDED_DIRS = new Set(['.git', 'node_modules', '.venv', 'venv', '.cache', '__pycache__', '.pytest_cache', 'data', '.dev-data', 'logs', 'recordings']);
+const EXCLUDED_DIRS = new Set(['.git', 'node_modules', '.venv', 'venv', '.cache', '__pycache__', '.pytest_cache', 'data', '.dev-data', 'logs', 'recordings', 'simulator-recordings']);
 // A partial installation may omit optional docs or speech-service files, but
 // never claim a successful install bundle if these bootstrap files are absent.
 const REQUIRED_FILES = [
@@ -25,7 +25,7 @@ function isSafeManifestFile(projectRoot: string, relative: string): boolean {
   if (parts.slice(0, -1).some((part) => EXCLUDED_DIRS.has(part))) return false;
   const name = parts[parts.length - 1];
   if (name !== '.env.example' && /^\.env(?:\.|$)/i.test(name)) return false;
-  if (/(?:\.sqlite(?:3)?(?:-shm|-wal)?|\.db|\.wav|\.log|\.tar\.gz|\.pyc)$/i.test(name)) return false;
+  if (/(?:\.sqlite(?:3)?(?:-shm|-wal)?|\.db|\.(?:wav|webm|ogg|m4a|mp3|opus)|\.log|\.tar\.gz|\.pyc)$/i.test(name)) return false;
   if (name === 'cloudflared' || name === 'cloudflared.exe') return false;
 
   // Every component is checked: a symlinked parent could otherwise traverse

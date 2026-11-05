@@ -121,6 +121,7 @@ function attachLiveSimulator(server, noServer = false) {
         let activeCampaign;
         let testLead = {};
         let allowWebhooks = false;
+        let recordingRequested = false;
         let sampleRateIn = 16000;
         let sampleRateOut = 24000;
         let turns = 0;
@@ -355,6 +356,8 @@ function attachLiveSimulator(server, noServer = false) {
                         avgTtfbMs,
                         disposition: detectedDisposition,
                         transferredTo,
+                        recordingRequested,
+                        recordingStatus: recordingRequested ? 'pending' : 'not_requested',
                         transcript,
                         functionCalls,
                     });
@@ -454,6 +457,7 @@ function attachLiveSimulator(server, noServer = false) {
                 started = true;
                 const startMsg = msg;
                 allowWebhooks = startMsg.allowWebhooks === true;
+                recordingRequested = startMsg.recordAudio === true;
                 const persistedState = (0, db_1.getConsoleState)();
                 activeState = startMsg.draftState ? (0, defaults_1.normalizeState)(startMsg.draftState) : persistedState;
                 // Live calls always use saved global provider/model pairs and provider connection settings,
@@ -626,6 +630,7 @@ function attachLiveSimulator(server, noServer = false) {
                                 upstreamMode: 'deepgram',
                                 sampleRateIn,
                                 sampleRateOut,
+                                recordingRequested,
                                 hydratedLead: hydration.hydrated ? hydration.leadSummary : null,
                                 settings: displaySettings,
                             });

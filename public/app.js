@@ -1346,6 +1346,15 @@
     muted: false,
     micEnabled: true,
     allowWebhooks: false, // Explicit consent required for each browser test session
+    recordAudio: false, // Explicit opt-in; reset after every test
+    recording: null,
+    recordingSaving: false,
+    recordingFallback: null,
+    recordingError: '',
+    recordingUrls: new Map(),
+    recordingLoadVersions: new Map(),
+    callId: '',
+    logSaved: null,
     bandwidth: 'wideband', // 'wideband' (16k/24k) or 'telephony' (8k/8k)
     lead: {
       lead_id: '104892',
@@ -1407,7 +1416,314 @@
     callLogs: [],
     logsLoadedForAgent: null,
     logsError: null,
+    logsRequestId: 0,
+    historyExpanded: false,
   };
+
+  // Browser-only recordings on static hosts are kept in IndexedDB, separate
+  // from cloud accounts and from the server-backed test history.
+  const LOCAL_RECORDING_DB = 'vac-live-bot-recordings-v1';
+  const LOCAL_RECORDING_LIMIT = 20;
+  const RECORDING_MAX_MS = 10 * 60 * 1000;
+  const RECORDING_MAX_BYTES = 20 * 1024 * 1024;
+  const RECORDING_SOFT_BYTES = 19 * 1024 * 1024;
+
+  function openLocalRecordingDb() {
+    return new Promise((resolve, reject) => {
+      let req;
+      try {
+        if (!window.indexedDB) throw new Error('Browser storage is unavailable');
+        req = window.indexedDB.open(LOCAL_RECORDING_DB, 1);
+      } catch (err) { reject(err); return; }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('logs')) db.createObjectStore('logs', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('audio')) db.createObjectStore('audio', { keyPath: 'id' });
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('Could not open browser recording storage'));
+      req.onblocked = () => reject(new Error('Browser recording storage is blocked'));
+    });
+  }
+
+  async function localRecordingTransaction(stores, mode, schedule) {
+    const db = await openLocalRecordingDb();
+    return new Promise((resolve, reject) => {
+      let result;
+      let tx;
+      try {
+        tx = db.transaction(stores, mode);
+        schedule(tx, (value) => { result = value; });
+      } catch (err) { db.close(); reject(err); return; }
+      tx.oncomplete = () => { db.close(); resolve(result); };
+      tx.onabort = tx.onerror = () => { const err = tx.error || new Error('Browser storage transaction failed'); db.close(); reject(err); };
+    });
+  }
+
+  function listLocalRecordedTests() {
+    return localRecordingTransaction(['logs'], 'readonly', (tx, done) => {
+      const req = tx.objectStore('logs').getAll();
+      req.onsuccess = () => done(req.result || []);
+    });
+  }
+
+  function saveLocalRecordedTest(log, blob) {
+    return localRecordingTransaction(['logs', 'audio'], 'readwrite', (tx) => {
+      const logs = tx.objectStore('logs');
+      const audio = tx.objectStore('audio');
+      const req = logs.getAll();
+      req.onsuccess = () => {
+        logs.put(log);
+        audio.put({ id: log.id, blob });
+        const ordered = [log, ...req.result.filter((item) => item.id !== log.id)]
+          .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+        for (const old of ordered.slice(LOCAL_RECORDING_LIMIT)) {
+          logs.delete(old.id);
+          audio.delete(old.id);
+        }
+      };
+    });
+  }
+
+  function getLocalRecording(id) {
+    return localRecordingTransaction(['audio'], 'readonly', (tx, done) => {
+      const req = tx.objectStore('audio').get(id);
+      req.onsuccess = () => done(req.result?.blob || null);
+    });
+  }
+
+  function deleteLocalRecording(id) {
+    return localRecordingTransaction(['logs', 'audio'], 'readwrite', (tx) => {
+      const logs = tx.objectStore('logs');
+      const req = logs.get(id);
+      req.onsuccess = () => {
+        if (req.result) logs.put({ ...req.result, recordingStatus: 'deleted', recordingBytes: 0 });
+        tx.objectStore('audio').delete(id);
+      };
+    });
+  }
+
+  function clearLocalRecordedTests(agentId) {
+    return localRecordingTransaction(['logs', 'audio'], 'readwrite', (tx) => {
+      const logs = tx.objectStore('logs');
+      const audio = tx.objectStore('audio');
+      const req = logs.getAll();
+      req.onsuccess = () => {
+        for (const item of req.result) {
+          if (!agentId || item.agentId === agentId) { logs.delete(item.id); audio.delete(item.id); }
+        }
+      };
+    });
+  }
+
+  function revokeRecordingUrl(id) {
+    // Also invalidate an in-flight fetch so a deleted recording cannot be
+    // reintroduced into this view after its response arrives.
+    sim.recordingLoadVersions.set(id, (sim.recordingLoadVersions.get(id) || 0) + 1);
+    const url = sim.recordingUrls.get(id);
+    if (url) URL.revokeObjectURL(url);
+    sim.recordingUrls.delete(id);
+  }
+
+  function recordingExtension(mime) {
+    return String(mime || '').startsWith('audio/ogg') ? 'ogg' : String(mime || '').startsWith('audio/mp4') ? 'm4a' : 'webm';
+  }
+
+  function recordingMime() {
+    if (!window.MediaRecorder || typeof window.MediaRecorder.isTypeSupported !== 'function') return '';
+    return ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4']
+      .find((type) => window.MediaRecorder.isTypeSupported(type)) || '';
+  }
+
+  function disconnectRecordingMic(ctx = sim.recording) {
+    if (!ctx?.micSource) return;
+    try { ctx.micSource.disconnect(); } catch {}
+    ctx.micSource = null;
+  }
+
+  function connectRecordingMic(ctx = sim.recording) {
+    if (!ctx) return;
+    disconnectRecordingMic(ctx);
+    if (sim.micStream && sim.playCtx && ctx.recorder.state !== 'inactive') {
+      ctx.micSource = sim.playCtx.createMediaStreamSource(sim.micStream);
+      ctx.micSource.connect(ctx.destination);
+    }
+  }
+
+  function warnRecording(ctx, message) {
+    if (ctx.warned) return;
+    ctx.warned = true;
+    sim.events.push({ kind: 'msg', role: 'system', content: message });
+    renderSimFeedDom();
+  }
+
+  function stopRecordingAtLimit(ctx) {
+    if (!ctx || ctx.recorder.state === 'inactive') return;
+    ctx.truncated = true;
+    warnRecording(ctx, 'The recording reached its 10-minute or size limit. The test continues, but later audio is not recorded.');
+    try { ctx.recorder.stop(); } catch {}
+  }
+
+  function prepareBrowserRecording(agent) {
+    const mime = recordingMime();
+    if (!mime || !sim.playCtx?.createMediaStreamDestination) {
+      throw new Error('This browser does not support audio recording. Uncheck recording or use a supported browser.');
+    }
+    const destination = sim.playCtx.createMediaStreamDestination();
+    let recorder;
+    try { recorder = new window.MediaRecorder(destination.stream, { mimeType: mime, audioBitsPerSecond: 64000 }); }
+    catch (err) { destination.stream.getTracks().forEach((t) => t.stop()); throw err; }
+    const ctx = { recorder, destination, micSource: null, chunks: [], bytes: 0, mime,
+      audioContext: sim.playCtx, stateListener: null,
+      agentId: agent.id, agentName: agent.name, startedAt: '', started: false,
+      truncated: false, error: '', warned: false, timer: null, resolveStop: null, stopped: null };
+    ctx.stopped = new Promise((resolve) => { ctx.resolveStop = resolve; });
+    recorder.ondataavailable = (ev) => {
+      if (ev.data?.size) {
+        ctx.chunks.push(ev.data);
+        ctx.bytes += ev.data.size;
+        if (ctx.bytes >= RECORDING_SOFT_BYTES) stopRecordingAtLimit(ctx);
+      }
+    };
+    recorder.onerror = (ev) => {
+      ctx.error = ev.error?.message || 'The browser audio recorder failed.';
+      warnRecording(ctx, `Audio recording failed: ${ctx.error}`);
+      if (recorder.state !== 'inactive') { try { recorder.stop(); } catch {} }
+    };
+    recorder.onstop = () => {
+      closeRecordingGraph(ctx);
+      const type = String(recorder.mimeType || mime).split(';')[0].toLowerCase();
+      ctx.resolveStop(new Blob(ctx.chunks, { type }));
+    };
+    return ctx;
+  }
+
+  function startPreparedRecording() {
+    const ctx = sim.recording;
+    if (!ctx) return;
+    if (!sim.playCtx || sim.playCtx.state !== 'running') {
+      throw new Error('Browser audio is suspended. Allow audio playback or uncheck recording and try again.');
+    }
+    ctx.startedAt = new Date().toISOString();
+    ctx.recorder.start(1000);
+    ctx.started = true;
+    ctx.stateListener = () => {
+      if (ctx.recorder.state === 'recording' && ctx.audioContext.state !== 'running') {
+        ctx.error = 'Browser audio was suspended during recording, so the audio may be incomplete.';
+        warnRecording(ctx, ctx.error);
+      }
+    };
+    ctx.audioContext.addEventListener('statechange', ctx.stateListener);
+    connectRecordingMic(ctx);
+    ctx.timer = setTimeout(() => stopRecordingAtLimit(ctx), RECORDING_MAX_MS);
+  }
+
+  function closeRecordingGraph(ctx) {
+    if (!ctx) return;
+    if (ctx.timer) clearTimeout(ctx.timer);
+    if (ctx.stateListener) {
+      ctx.audioContext.removeEventListener('statechange', ctx.stateListener);
+      ctx.stateListener = null;
+    }
+    disconnectRecordingMic(ctx);
+    ctx.destination.stream.getTracks().forEach((track) => track.stop());
+  }
+
+  async function stopPreparedRecording(ctx) {
+    if (!ctx?.started) { closeRecordingGraph(ctx); return null; }
+    if (ctx.recorder.state !== 'inactive') ctx.recorder.stop();
+    let timeout;
+    let blob;
+    try {
+      blob = await Promise.race([
+        ctx.stopped,
+        new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('The browser did not finish encoding audio.')), 8000); }),
+      ]);
+    } finally { clearTimeout(timeout); }
+    closeRecordingGraph(ctx);
+    if (!blob?.size) throw new Error('The browser returned an empty audio recording.');
+    return blob;
+  }
+
+  async function saveFinishedRecording(ctx, blob, snapshot) {
+    if (ctx.error) throw new Error(ctx.error);
+    if (blob.size > RECORDING_MAX_BYTES) throw new Error('The recording exceeds the 20 MB storage limit.');
+    if (serverlessCloudMode) {
+      const log = {
+        id: snapshot.id, agentId: ctx.agentId, agentName: ctx.agentName,
+        campaignId: null, upstreamMode: 'deepgram', startedAt: ctx.startedAt,
+        endedAt: new Date().toISOString(), durationMs: snapshot.durationMs, turns: snapshot.turns,
+        avgTtfbMs: snapshot.avgTtfbMs, disposition: null, transferredTo: null,
+        recordingRequested: true, recordingStatus: 'available', recordingMime: blob.type,
+        recordingBytes: blob.size, recordingTruncated: ctx.truncated,
+        transcript: snapshot.events.filter((e) => e.kind === 'msg').map((e) => ({
+          ts: ctx.startedAt, role: e.role || 'system', content: e.content || '',
+        })),
+        functionCalls: snapshot.events.filter((e) => e.kind === 'fn').map((e) => ({
+          id: e.id, name: e.name, status: e.status, args: e.args || {}, response: e.response,
+        })),
+      };
+      await saveLocalRecordedTest(log, blob);
+      return;
+    }
+    if (!snapshot.id || snapshot.logSaved === false) throw new Error('Test history could not be saved on the server.');
+    const url = `/api/simulator/recordings/${encodeURIComponent(snapshot.id)}`;
+    const send = () => fetch(url, {
+      method: 'PUT', headers: { 'Content-Type': 'application/octet-stream',
+        'X-Recording-Type': blob.type, 'X-Recording-Truncated': ctx.truncated ? '1' : '0' }, body: blob,
+    });
+    let res = await send();
+    // On an unexpected socket close, the server may still be finalizing the log.
+    if (res.status === 404 && snapshot.logSaved == null) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      res = await send();
+    }
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).error || ''; } catch {}
+      throw new Error(detail || `Server returned HTTP ${res.status}`);
+    }
+  }
+
+  async function finalizeBrowserRecording(ctx, snapshot) {
+    let blob = null;
+    try {
+      blob = await stopPreparedRecording(ctx);
+      if (!blob) return;
+      await saveFinishedRecording(ctx, blob, snapshot);
+      sim.events.push({ kind: 'msg', role: 'system', content: serverlessCloudMode
+        ? 'Audio recording and transcript saved in this browser’s local storage.'
+        : 'Audio recording saved with this test in server history.' });
+    } catch (err) {
+      const partial = !blob && ctx.chunks.length > 0;
+      if (partial) blob = new Blob(ctx.chunks, { type: ctx.mime.split(';')[0] });
+      const message = `Audio recording could not be saved or confirmed: ${err.message || err}${partial ? ' The temporary copy may be incomplete.' : ''}`;
+      sim.recordingError = message;
+      sim.events.push({ kind: 'msg', role: 'system', content: message });
+      if (blob?.size) {
+        try {
+          if (sim.recordingFallback) URL.revokeObjectURL(sim.recordingFallback.url);
+          sim.recordingFallback = null;
+          sim.recordingFallback = {
+            url: URL.createObjectURL(blob),
+            fileName: `live-bot-${snapshot.id || 'test'}.${recordingExtension(blob.type)}`,
+            message,
+          };
+        } catch { sim.recordingError += ' The browser could not create a temporary download.'; }
+      } else {
+        sim.recordingError += ' No recoverable audio was returned by the browser.';
+      }
+    } finally {
+      closeRecordingGraph(ctx);
+    }
+  }
+
+  window.addEventListener('beforeunload', (event) => {
+    if (sim.recording?.started || sim.recordingSaving || sim.recordingFallback) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
 
   // Step 3 + Step 4: Live VICIdial Bridge & Wallboard Monitor state
   let viciMon = {
@@ -2079,13 +2395,14 @@
 
   const renderSelectorBar = (kind) => {
     const arr = kind === 'a' ? S.agents : S.campaigns;
+    const locked = sim.active || sim.connecting || sim.recordingSaving;
     return `<div class="bar">
-      <select aria-label="${kind === 'a' ? 'Select agent' : 'Select campaign'}" id="sel-${kind}" ${sim.active ? 'disabled title="Hang up active call before switching agent"' : ''}>
+      <select aria-label="${kind === 'a' ? 'Select agent' : 'Select campaign'}" id="sel-${kind}" ${locked ? 'disabled title="Finish the browser test before switching agent"' : ''}>
         ${arr.map((x) => `<option value="${esc(x.id)}" ${x.id === cur[kind] ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
       </select>
-      <button class="g" id="new-${kind}" ${sim.active ? 'disabled' : ''}>+ New</button>
-      <button class="g" id="dup-${kind}" ${sim.active ? 'disabled' : ''}>Duplicate</button>
-      <button class="g danger" id="del-${kind}" ${arr.length <= 1 || sim.active ? 'disabled title="At least one required"' : ''}>Delete</button>
+      <button class="g" id="new-${kind}" ${locked ? 'disabled' : ''}>+ New</button>
+      <button class="g" id="dup-${kind}" ${locked ? 'disabled' : ''}>Duplicate</button>
+      <button class="g danger" id="del-${kind}" ${arr.length <= 1 || locked ? 'disabled title="At least one required"' : ''}>Delete</button>
     </div>`;
   };
 
@@ -2471,6 +2788,9 @@
     const src = sim.playCtx.createBufferSource();
     src.buffer = audioBuffer;
     src.connect(sim.playAnalyser || sim.playCtx.destination);
+    if (sim.recording?.started && sim.recording.recorder.state === 'recording') {
+      src.connect(sim.recording.destination);
+    }
 
     const now = sim.playCtx.currentTime;
     const startAt = Math.max(now + 0.006, sim.nextPlayTime || now + 0.006);
@@ -2511,6 +2831,7 @@
   }
 
   function stopMicCaptureOnly() {
+    disconnectRecordingMic();
     if (sim.micWatchdog) {
       clearInterval(sim.micWatchdog);
       sim.micWatchdog = null;
@@ -2618,6 +2939,12 @@
       return;
     }
     sim.micStream = stream;
+    try { connectRecordingMic(); } catch (err) {
+      if (sim.recording) {
+        sim.recording.error = `Could not capture the microphone: ${err.message || err}`;
+        warnRecording(sim.recording, `Audio recording failed: ${sim.recording.error}`);
+      }
+    }
     const track = stream.getAudioTracks()[0];
     if (track) track.enabled = !sim.muted;
     sim.micActiveLabel = track?.label || 'Default microphone';
@@ -2769,6 +3096,7 @@
   }
 
   function finishSimulatorSession(reason, drainPlayback = false) {
+    if (sim.recordingSaving) return;
     if (sim.drainTimer) { clearTimeout(sim.drainTimer); sim.drainTimer = null; }
     stopMicCaptureOnly();
     sim.connecting = false;
@@ -2777,17 +3105,37 @@
     const finish = () => {
       sim.drainTimer = null;
       sim.active = false;
-      sim.statusText = sim.lastError ? `Call Failed (${reason})` : `Call Ended (${reason})`;
-      cleanupSimulatorMedia();
-      loadCallLogsForCurrentAgent();
-      if (tab === 'test') render();
+      const ctx = sim.recording;
+      const after = () => {
+        sim.recording = null;
+        sim.recordingSaving = false;
+        sim.recordAudio = false;
+        sim.statusText = sim.lastError ? `Call Failed (${reason})` : `Call Ended (${reason})`;
+        cleanupSimulatorMedia();
+        loadCallLogsForCurrentAgent();
+        if (tab === 'test') render();
+      };
+      if (ctx?.started) {
+        const snapshot = {
+          id: sim.callId, logSaved: sim.logSaved,
+          durationMs: Math.max(1, Date.now() - sim.startedAtMs), turns: sim.turns,
+          avgTtfbMs: sim.avgTtfbMs, events: [...sim.events],
+        };
+        sim.recordingSaving = true;
+        sim.statusText = 'Saving browser recording…';
+        if (tab === 'test') render();
+        finalizeBrowserRecording(ctx, snapshot).finally(after);
+      } else {
+        closeRecordingGraph(ctx);
+        after();
+      }
     };
     const remainingMs = sim.playCtx && sim.scheduledSources.length
       ? Math.max(0, (sim.nextPlayTime - sim.playCtx.currentTime) * 1000)
       : 0;
     if (drainPlayback && !sim.lastError && remainingMs > 10) {
       // AgentAudioDone means the provider finished sending, not that the
-      // browser has finished playing its already-buffered final utterance.
+      // browser has finished playing (or recording) its buffered final utterance.
       sim.active = true;
       sim.statusText = 'Finishing browser audio playback…';
       sim.drainTimer = setTimeout(finish, Math.min(remainingMs + 120, 30000));
@@ -2803,7 +3151,13 @@
   }
 
   async function startLiveCall(withMic = true) {
-    if (sim.active || sim.connecting) return;
+    if (sim.active || sim.connecting || sim.recordingSaving) return;
+    if (sim.recordAudio && !recordingMime()) {
+      sim.lastError = 'This browser does not support the required audio recorder. Uncheck recording or use a supported browser.';
+      sim.statusText = 'Recording unavailable';
+      render();
+      return;
+    }
     let savedServices = {};
     try {
       savedServices = JSON.parse(snap || '{}').services || {};
@@ -2839,8 +3193,16 @@
       render();
       return;
     }
+    if (sim.recordAudio && sim.recordingFallback) {
+      if (!window.confirm('There is an unsaved recording in this tab. Download it first, or continue and discard it. Continue?')) return;
+      URL.revokeObjectURL(sim.recordingFallback.url);
+      sim.recordingFallback = null;
+    }
     sim.connecting = true;
     const attemptId = ++sim.sessionAttemptId;
+    sim.callId = '';
+    sim.logSaved = null;
+    if (!sim.recordingFallback) sim.recordingError = '';
     sim.muted = false;
     sim.micEnabled = withMic;
     sim.lastError = null;
@@ -2918,6 +3280,17 @@
     }
 
     if (attemptId !== sim.sessionAttemptId || !sim.connecting) return;
+    if (sim.recordAudio) {
+      try { sim.recording = prepareBrowserRecording(A()); }
+      catch (err) {
+        sim.connecting = false;
+        sim.lastError = `Could not prepare audio recording: ${err.message || err}`;
+        sim.statusText = 'Recording unavailable';
+        cleanupSimulatorMedia();
+        if (tab === 'test') render();
+        return;
+      }
+    }
     if (sim.playCtx && sim.playCtx.state === 'suspended') {
       sim.playCtx.resume().catch(() => {});
     }
@@ -2950,6 +3323,7 @@
           bandwidth: sim.bandwidth,
           lead: sim.lead,
           allowWebhooks: sim.allowWebhooks,
+          recordAudio: sim.recordAudio,
           draftState: S, // Tests current Console settings live even before Save!
         })
       );
@@ -2985,8 +3359,17 @@
         sim.active = true;
         sim.lastError = null;
         sim.startedAtMs = Date.now();
+        sim.callId = msg.callId || '';
         sim.sessionSettings = msg.settings;
         sim.statusText = 'Connected to Deepgram — browser test';
+        try { startPreparedRecording(); }
+        catch (err) {
+          sim.lastError = `Audio recording could not start: ${err.message || err}. The browser test was ended.`;
+          if (sim.recording) sim.recording.error = sim.lastError;
+          sim.events.push({ kind: 'msg', role: 'system', content: sim.lastError });
+          hangupLiveCall();
+          return;
+        }
         if (sim.durationTimer) clearInterval(sim.durationTimer);
         sim.durationTimer = setInterval(() => {
           sim.elapsedSec = Math.floor((Date.now() - sim.startedAtMs) / 1000);
@@ -3081,6 +3464,7 @@
         updateSimStatusDom();
       } else if (msg.type === 'call_ended') {
         if (msg.fatalError && !sim.lastError) sim.lastError = msg.fatalError;
+        sim.logSaved = msg.logSaved;
         finishSimulatorSession(msg.reason, msg.reason === 'bot_end_call');
       }
     };
@@ -3091,14 +3475,7 @@
         if (sim.hangupTimer) {
           sim.events.push({ kind: 'msg', role: 'system', content: 'The connection closed before transcript saving was confirmed. Refresh test history to check whether it was saved.' });
         }
-        sim.active = false;
-        sim.connecting = false;
-        sim.agentState = 'ended';
-        sim.statusText = sim.lastError ? 'Call Failed — Disconnected' : 'Call Disconnected';
-        sim.allowWebhooks = false;
-        cleanupSimulatorMedia();
-        loadCallLogsForCurrentAgent();
-        if (tab === 'test') render();
+        finishSimulatorSession('connection_closed');
       }
     };
   }
@@ -3227,7 +3604,16 @@
         sim.connecting = false;
         sim.active = true;
         sim.startedAtMs = Date.now();
+        sim.callId = `static_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
         sim.statusText = 'Live on Deepgram Voice Agent API (Direct Browser WSS)';
+        try { startPreparedRecording(); }
+        catch (err) {
+          sim.lastError = `Audio recording could not start: ${err.message || err}. The browser test was ended.`;
+          if (sim.recording) sim.recording.error = sim.lastError;
+          sim.events.push({ kind: 'msg', role: 'system', content: sim.lastError });
+          endDirect('recording_error');
+          return;
+        }
         if (sim.durationTimer) clearInterval(sim.durationTimer);
         sim.durationTimer = setInterval(() => {
           sim.elapsedSec = Math.floor((Date.now() - sim.startedAtMs) / 1000);
@@ -3693,28 +4079,33 @@
   async function loadCallLogsForCurrentAgent() {
     if (!S) return;
     const aid = A().id;
+    const requestId = ++sim.logsRequestId;
+    const stillCurrent = () => A().id === aid && sim.logsRequestId === requestId;
     sim.logsError = null;
-    if (serverlessCloudMode) {
-      try {
-        const all = JSON.parse(window.localStorage?.getItem('vac_cloud_sim_logs_v1') || '[]');
-        sim.callLogs = (Array.isArray(all) ? all : []).filter((x) => x.agentId === aid);
-        sim.logsLoadedForAgent = aid;
-        const box = document.getElementById('sim-logs-box');
-        if (box) box.innerHTML = renderCallLogsList();
-      } catch {}
-      return;
-    }
     try {
-      const res = await fetch(`/api/simulator/logs?agentId=${encodeURIComponent(aid)}`);
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      if (A().id !== aid) return;
-      sim.callLogs = Array.isArray(data.logs) ? data.logs : [];
+      if (serverlessCloudMode) {
+        let old = [];
+        try {
+          const parsed = JSON.parse(window.localStorage?.getItem('vac_cloud_sim_logs_v1') || '[]');
+          if (Array.isArray(parsed)) old = parsed;
+        } catch { /* A corrupt or inaccessible legacy log must not hide IndexedDB recordings. */ }
+        const local = await listLocalRecordedTests();
+        if (!stillCurrent()) return;
+        sim.callLogs = [...old, ...local]
+          .filter((item) => item.agentId === aid)
+          .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+      } else {
+        const res = await fetch(`/api/simulator/logs?agentId=${encodeURIComponent(aid)}&limit=100`);
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (!stillCurrent()) return;
+        sim.callLogs = Array.isArray(data.logs) ? data.logs : [];
+      }
       sim.logsLoadedForAgent = aid;
     } catch (err) {
-      if (A().id !== aid) return;
+      if (!stillCurrent()) return;
       sim.logsLoadedForAgent = aid;
-      sim.logsError = `Could not load test history: ${err.message || 'network error'}`;
+      sim.logsError = `Could not load test history: ${err.message || 'storage or network error'}`;
     }
     const box = document.getElementById('sim-logs-box');
     if (box) box.innerHTML = renderCallLogsList();
@@ -3724,14 +4115,26 @@
     if (sim.logsError) return `<div class="note er">${esc(sim.logsError)}</div>`;
     if (!sim.callLogs.length) {
       return `<div class="note">${serverlessCloudMode
-        ? 'Static-site browser tests are not saved to the server. No audio recording is created.'
-        : 'No saved browser test logs for this agent yet. Audio is not recorded by the browser test.'}</div>`;
+        ? 'No locally recorded tests for this agent. Unrecorded static-site tests are not saved.'
+        : 'No saved browser test logs for this agent yet. Audio is saved only when recording was enabled for that test.'}</div>`;
     }
-    return sim.callLogs
-      .slice(0, 6)
-      .map((lg, index) => {
+    const displayed = sim.historyExpanded ? sim.callLogs : sim.callLogs.slice(0, 6);
+    const items = displayed.map((lg, index) => {
         const transcript = Array.isArray(lg.transcript) ? lg.transcript : [];
         const legacy = lg.upstreamMode === 'sandbox' || lg.upstreamMode === 'speech_service';
+        const audioUrl = sim.recordingUrls.get(lg.id);
+        const recording = lg.recordingStatus === 'available'
+          ? `<div class="bar" style="margin:6px 0;flex-wrap:wrap">
+              ${audioUrl
+                ? `<audio controls preload="metadata" aria-label="Browser test recording" src="${esc(audioUrl)}" style="height:32px;min-width:180px;max-width:100%"></audio>
+                   <a class="g" href="${esc(audioUrl)}" download="live-bot-${esc(lg.id)}.${recordingExtension(lg.recordingMime)}" style="text-decoration:none;padding:4px 8px">⬇ Download audio</a>`
+                : `<button class="g" data-sim-audio-load="${esc(lg.id)}">▶ Load audio recording</button>`}
+              <button class="g danger" data-sim-audio-delete="${esc(lg.id)}">Delete recording</button>
+              <span class="note">${Math.max(1, Math.round((lg.recordingBytes || 0) / 1024))} KB${lg.recordingTruncated ? ' · truncated at recording limit' : ''}</span>
+            </div>`
+          : `<div class="note">${lg.recordingStatus === 'pending'
+            ? 'Recording was requested, but no audio is currently saved.'
+            : lg.recordingStatus === 'deleted' ? 'Recording deleted.' : 'No audio recording for this test.'}</div>`;
         return `<div class="t" style="margin-bottom:8px">
           <div class="bar" style="margin-bottom:4px;justify-content:space-between">
             <span>${index === 0 ? '<b>Latest · </b>' : ''}<b>${esc(new Date(lg.startedAt).toLocaleString())}</b> · <span class="pill">${esc(lg.upstreamMode)}</span> · ${Math.max(1, Math.round(lg.durationMs / 1000))}s · ${lg.turns} turn(s)</span>
@@ -3742,6 +4145,7 @@
             </span>
           </div>
           ${legacy ? '<div class="note wn">Older scripted/local-speech demo: this transcript may not represent a real AI conversation.</div>' : ''}
+          ${recording}
           <details class="sim-history-transcript">
             <summary>View transcript (${transcript.length} messages)</summary>
             ${transcript.length ? transcript.map((entry) => `<div class="sim-history-line"><b>${esc(entry.role || 'unknown')}:</b> ${esc(entry.content || '')}</div>`).join('') : '<div class="note">No transcript was saved for this test.</div>'}
@@ -3752,8 +4156,11 @@
               : 'none'
           }</div>
         </div>`;
-      })
-      .join('');
+      }).join('');
+    const toggle = sim.callLogs.length > 6
+      ? `<button class="g" data-sim-history-toggle="1">${sim.historyExpanded ? 'Show fewer tests' : `Show all ${sim.callLogs.length} retained tests`}</button>`
+      : '';
+    return items + toggle;
   }
 
   // ==================== VOICE CATALOG (STEP 1) ====================
@@ -4905,12 +5312,21 @@
             <span>Allow configured custom webhooks for this test <b>(real external effects possible)</b></span>
           </label>
           <div class="note" style="margin-top:3px">${serverlessCloudMode ? 'Custom webhooks require the authenticated server; they are unavailable on the static site.' : 'Off by default. A request already sent to a webhook cannot necessarily be undone.'}</div>
+          <label class="chk-label" style="margin-top:10px">
+            <input type="checkbox" id="sim-record-audio" style="width:auto" ${sim.recordAudio ? 'checked' : ''} ${sim.active || sim.connecting || sim.recordingSaving ? 'disabled' : ''}>
+            <span>Record audio for this test <b>(opt-in, resets after the test)</b></span>
+          </label>
+          <div class="note" style="margin-top:3px">Obtain consent from everyone whose voice is recorded. The mixed recording contains microphone and agent playback; typed text is not spoken. Maximum 10 minutes / 20 MB. Keep this tab open while saving. ${serverlessCloudMode
+            ? 'Recorded tests and transcripts stay in this browser only (up to 20); clearing site data removes them. Other users of this browser may access them.'
+            : 'Audio is uploaded to the server after the test and is available to signed-in operators. The latest 100 test logs and their recordings are retained.'}</div>
+          ${sim.recording?.started && sim.recording.recorder.state === 'recording' ? '<div class="note wn">● Recording this browser test</div>' : ''}
+          ${sim.recordingSaving ? '<div class="note wn">Saving recording… keep this tab open.</div>' : ''}
           <div class="bar" style="margin-top:10px">
             ${
               !sim.active && !sim.connecting
                 ? `
-                  <button class="b" id="btn-call-mic">📞 Start Live Mic Call</button>
-                  <button class="g" id="btn-call-nomic" title="Connect live Deepgram speaker audio + text utterance injection without requesting microphone">💬 Start Call (Speaker + Text)</button>
+                  <button class="b" id="btn-call-mic" ${sim.recordingSaving ? 'disabled' : ''}>📞 Start Live Mic Call</button>
+                  <button class="g" id="btn-call-nomic" ${sim.recordingSaving ? 'disabled' : ''} title="Connect live Deepgram speaker audio + text utterance injection without requesting microphone">💬 Start Call (Speaker + Text)</button>
                   ${hasDgKey ? `<button class="g" id="btn-sim-diag" ${sim.diagRunning ? 'disabled' : ''}>${sim.diagRunning ? '⏳ Testing Deepgram…' : '🔌 Test Deepgram Connection'}</button>` : ''}
                 `
                 : `
@@ -5010,8 +5426,14 @@
           <button class="b" id="addt">+ Add Scenario</button>
           <div class="note" id="sum"></div>
 
-          <h2 id="sim-history">Recent Browser Test History <button class="g" id="btn-refresh-logs" style="font-size:11px;padding:3px 8px;text-transform:none">Refresh</button> <button class="g" id="btn-clear-logs" style="font-size:11px;padding:3px 8px;text-transform:none">Clear History</button></h2>
-          <div class="note">Newest first, for the selected agent. Browser tests save transcripts and function logs, not audio recordings. Bridge-call recordings are available separately in Wallboard.</div>
+          <h2 id="sim-history">Recent Browser Test History <button class="g" id="btn-refresh-logs" style="font-size:11px;padding:3px 8px;text-transform:none">Refresh</button> <button class="g" id="btn-clear-logs" ${sim.active || sim.connecting || sim.recordingSaving ? 'disabled' : ''} style="font-size:11px;padding:3px 8px;text-transform:none">Clear History</button></h2>
+          <div class="note">Newest first, for the selected agent. Audio is available only for tests recorded after opting in. Tests made before recording was available have no audio. Bridge-call recordings are separate in Wallboard.</div>
+          ${sim.recordingFallback ? `<div class="t" style="border-left:3px solid var(--er)">
+            <b>Audio was not saved or could not be confirmed in history.</b> ${esc(sim.recordingFallback.message)}
+            <a class="g" href="${esc(sim.recordingFallback.url)}" download="${esc(sim.recordingFallback.fileName)}" style="margin-left:8px">Download audio now</a>
+            <button class="g danger" id="btn-discard-recording-fallback" style="margin-left:8px">Discard temporary copy</button>
+            <div class="note">This temporary copy is lost if you leave or reload this tab.</div>
+          </div>` : sim.recordingError ? `<div class="t er" role="alert">${esc(sim.recordingError)}</div>` : ''}
           <div id="sim-logs-box">${renderCallLogsList()}</div>
         </div>
 
@@ -6083,6 +6505,10 @@
     if (tab === 'test' && !sim.active) render();
   }
 
+  document.getElementById('btn-create-account')?.addEventListener('click', (event) => {
+    if (isDirty() && !window.confirm('You have unsaved changes. Leave without saving them?')) event.preventDefault();
+  });
+
   // Click delegation
   document.addEventListener('click', async (e) => {
     const b = e.target.closest('button');
@@ -6509,15 +6935,97 @@
       await loadCallLogsForCurrentAgent();
       return;
     }
-    if (b.id === 'btn-clear-logs') {
-      if (serverlessCloudMode) {
-        try { window.localStorage?.removeItem('vac_cloud_sim_logs_v1'); } catch {}
-      } else {
-        await fetch(`/api/simulator/logs?agentId=${encodeURIComponent(A().id)}`, { method: 'DELETE' });
+    if (b.id === 'btn-discard-recording-fallback') {
+      if (sim.recordingFallback && window.confirm('Discard this temporary audio? Download it first if you want to keep it.')) {
+        URL.revokeObjectURL(sim.recordingFallback.url);
+        sim.recordingFallback = null;
+        sim.recordingError = '';
+        if (tab === 'test') render();
       }
-      sim.callLogs = [];
+      return;
+    }
+    if (d.simHistoryToggle) {
+      sim.historyExpanded = !sim.historyExpanded;
       const box = document.getElementById('sim-logs-box');
       if (box) box.innerHTML = renderCallLogsList();
+      return;
+    }
+    if (d.simAudioLoad) {
+      const id = d.simAudioLoad;
+      const agentId = A().id;
+      const version = sim.recordingLoadVersions.get(id) || 0;
+      b.disabled = true;
+      try {
+        let blob;
+        if (serverlessCloudMode) blob = await getLocalRecording(id);
+        else {
+          const res = await fetch(`/api/simulator/recordings/${encodeURIComponent(id)}`);
+          if (!res.ok) throw new Error(`Recording unavailable (HTTP ${res.status})`);
+          blob = await res.blob();
+        }
+        if (!blob?.size) throw new Error('Recording is missing or empty.');
+        if (A().id !== agentId || (sim.recordingLoadVersions.get(id) || 0) !== version ||
+            !sim.callLogs.some((log) => log.id === id && log.recordingStatus === 'available')) {
+          if (b.isConnected) b.disabled = false;
+          return;
+        }
+        revokeRecordingUrl(id);
+        sim.recordingUrls.set(id, URL.createObjectURL(blob));
+        const box = document.getElementById('sim-logs-box');
+        if (box) box.innerHTML = renderCallLogsList();
+      } catch (err) {
+        alert(`Could not load audio: ${err.message || err}`);
+        b.disabled = false;
+      }
+      return;
+    }
+    if (d.simAudioDelete) {
+      const id = d.simAudioDelete;
+      if (!window.confirm('Delete this audio recording? The transcript will remain.')) return;
+      try {
+        if (serverlessCloudMode) await deleteLocalRecording(id);
+        else {
+          const res = await fetch(`/api/simulator/recordings/${encodeURIComponent(id)}`, { method: 'DELETE' });
+          if (!res.ok) {
+            let detail = '';
+            try { detail = (await res.json()).error || ''; } catch {}
+            throw new Error(detail || `HTTP ${res.status}`);
+          }
+        }
+        revokeRecordingUrl(id);
+        await loadCallLogsForCurrentAgent();
+      } catch (err) { alert(`Could not delete audio: ${err.message || err}`); }
+      return;
+    }
+    if (b.id === 'btn-clear-logs') {
+      const agentId = A().id;
+      const visibleIds = sim.callLogs.map((log) => log.id);
+      if (!window.confirm('Delete this agent’s test history and all its associated recordings?')) return;
+      try {
+        if (serverlessCloudMode) {
+          await clearLocalRecordedTests(agentId);
+          try {
+            const old = JSON.parse(window.localStorage?.getItem('vac_cloud_sim_logs_v1') || '[]');
+            if (Array.isArray(old)) window.localStorage?.setItem('vac_cloud_sim_logs_v1', JSON.stringify(old.filter((entry) => entry.agentId !== agentId)));
+          } catch (err) { throw new Error(`Local recordings may already be deleted, but legacy history could not be cleared: ${err.message || err}`); }
+        } else {
+          const res = await fetch(`/api/simulator/logs?agentId=${encodeURIComponent(agentId)}`, { method: 'DELETE' });
+          if (!res.ok) {
+            let detail = '';
+            try { detail = (await res.json()).error || ''; } catch {}
+            throw new Error(detail || `HTTP ${res.status}`);
+          }
+        }
+        for (const id of visibleIds) revokeRecordingUrl(id);
+        if (A().id === agentId) {
+          sim.callLogs = [];
+          await loadCallLogsForCurrentAgent();
+        }
+      } catch (err) {
+        for (const id of visibleIds) revokeRecordingUrl(id);
+        if (A().id === agentId) await loadCallLogsForCurrentAgent();
+        alert(`Could not fully clear test history: ${err.message || err}`);
+      }
       return;
     }
 
@@ -6966,10 +7474,12 @@
       const kind = t.id.slice(4);
       cur[kind] = t.value;
       if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
-      if (tab === 'test') {
+      if (kind === 'a') {
+        for (const log of sim.callLogs) revokeRecordingUrl(log.id);
         sim.logsLoadedForAgent = null;
         sim.callLogs = [];
         sim.logsError = null;
+        sim.historyExpanded = false;
       }
       render();
       return;
@@ -6977,6 +7487,10 @@
 
     if (t.id === 'sim-allow-webhooks') {
       sim.allowWebhooks = t.checked;
+      return;
+    }
+    if (t.id === 'sim-record-audio') {
+      sim.recordAudio = t.checked;
       return;
     }
     if (t.id === 'sim-bw') {

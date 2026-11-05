@@ -24,8 +24,9 @@ export interface SimulatorStartMessage {
   bandwidth?: 'wideband' | 'telephony';
   lead?: SimulatedLeadContext;
   draftState?: unknown;
-  // Off by default: configured webhooks can perform real external actions.
+  // Both are off by default and apply only to this browser test.
   allowWebhooks?: boolean;
+  recordAudio?: boolean;
 }
 
 function interpolateEnvPlaceholders(obj: any): any {
@@ -117,6 +118,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
     let activeCampaign: Campaign | undefined;
     let testLead: Record<string, string> = {};
     let allowWebhooks = false;
+    let recordingRequested = false;
     let sampleRateIn = 16000;
     let sampleRateOut = 24000;
 
@@ -362,6 +364,8 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             avgTtfbMs,
             disposition: detectedDisposition,
             transferredTo,
+            recordingRequested,
+            recordingStatus: recordingRequested ? 'pending' : 'not_requested',
             transcript,
             functionCalls,
           });
@@ -466,6 +470,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         started = true;
         const startMsg = msg as SimulatorStartMessage;
         allowWebhooks = startMsg.allowWebhooks === true;
+        recordingRequested = startMsg.recordAudio === true;
         const persistedState = getConsoleState();
         activeState = startMsg.draftState ? normalizeState(startMsg.draftState) : persistedState;
         // Live calls always use saved global provider/model pairs and provider connection settings,
@@ -670,6 +675,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
                 upstreamMode: 'deepgram',
                 sampleRateIn,
                 sampleRateOut,
+                recordingRequested,
                 hydratedLead: hydration.hydrated ? hydration.leadSummary : null,
                 settings: displaySettings,
               });
