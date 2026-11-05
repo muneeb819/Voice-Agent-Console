@@ -524,6 +524,13 @@ function createApp(viciBridge) {
             ...buildPayload(state),
         });
     });
+    // Shared greeting catalog. The server database is authoritative for calls;
+    // the static site uses its own bundled copy and browser-local rotation.
+    app.get('/api/greetings', (_req, res) => {
+        const greetings = (0, db_1.listGreetingLibrary)();
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.json({ ok: true, count: greetings.length, greetings });
+    });
     // Step 2: Simulator call log history endpoints
     app.get('/api/simulator/logs', (req, res) => {
         const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;

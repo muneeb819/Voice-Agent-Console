@@ -16,6 +16,7 @@ let child, browser, mock, mockWss, staticServer;
 let childLog = '';
 const requests = [];
 const settingsReceived = [];
+const importedGreetings = JSON.parse(fs.readFileSync(path.join(root, 'public/greetings.json'), 'utf8')).greetings;
 const fnResponses = [];
 let nonSilentAudioBytes = 0;
 let webhooks = 0;
@@ -155,7 +156,19 @@ async function run() {
   await page.waitForFunction(() => /Queued to WebSocket/.test(document.querySelector('#sim-mic-telemetry')?.textContent || ''));
   assert.doesNotMatch(await page.locator('#sim-mic-telemetry').innerText(), /streamed to stt/i);
   assert.deepEqual(settingsReceived[0].audio.input, { encoding: 'linear16', sample_rate: 16000 });
-  console.log('PASS Browser microphone -> actual local mock Voice Agent PCM stream');
+  const serverGreetingLabel = await page.locator('#sim-selected-greeting').innerText();
+  const serverGreetingId = /Selected greeting #(\d+)/.exec(serverGreetingLabel)?.[1];
+  const serverGreeting = importedGreetings.find((row) => row.greeting_id === serverGreetingId);
+  assert(serverGreeting, `Selected server greeting should be in the imported catalog: ${serverGreetingLabel}`);
+  assert(settingsReceived[0].agent.greeting.endsWith(serverGreeting.greeting_text));
+  const savedAgentData = await page.evaluate(async () => {
+    const { state } = await (await fetch('/api/state')).json();
+    const agent = state.agents.find((item) => item.id === document.querySelector('#sel-a').value);
+    return { agent, campaign: state.campaigns.find((item) => item.agentId === agent.id) };
+  });
+  assert(settingsReceived[0].agent.greeting.includes(savedAgentData.agent.greeting));
+  assert(settingsReceived[0].agent.greeting.startsWith(savedAgentData.campaign.disclosure));
+  console.log('PASS Browser microphone -> actual local mock Voice Agent PCM stream, with selected greeting and saved opening');
 
   await page.click('#btn-sim-mute');
   await page.waitForTimeout(500);
@@ -188,6 +201,7 @@ async function run() {
   assert.match(history, /Latest/);
   assert.match(history, /browser mock question/);
   assert.match(history, /Response from the local mock provider/);
+  assert.match(history, new RegExp(`Selected greeting #${serverGreetingId}\\b`));
   assert.equal(await page.locator('#sim-logs-box audio').count(), 0);
   assert.match(await page.locator('#sim-logs-box').innerText(), /No audio recording for this test/i);
   assert.equal(fs.existsSync(path.join(temp, 'simulator-recordings')), false, 'No audio should be saved by default');
@@ -406,6 +420,13 @@ async function run() {
   await staticPage.click('#btn-sim-inject');
   await staticPage.waitForFunction(() => window.__mockWs.responses.length === 2);
   const staticWire = await staticPage.evaluate(() => window.__mockWs);
+  const staticLabel = await staticPage.locator('#sim-selected-greeting').innerText();
+  const staticId = /Selected greeting #(\d+)/.exec(staticLabel)?.[1];
+  const staticGreeting = importedGreetings.find((row) => row.greeting_id === staticId);
+  assert(staticGreeting, `Selected static greeting should be in the catalog: ${staticLabel}`);
+  const staticAgent = state.agents.find((agent) => agent.id === 'a_nova');
+  const staticCampaign = state.campaigns.find((campaign) => campaign.agentId === staticAgent.id);
+  assert.equal(staticWire.settings.agent.greeting, `${staticCampaign.disclosure} ${staticAgent.greeting} ${staticGreeting.greeting_text}`);
   assert.ok(staticWire.settings.agent.think.functions.every((f) => !f.endpoint && f.defer_until_eot === true));
   assert.ok(!staticWire.responses.some((r) => r.id === 'cancelled'));
   assert.equal(JSON.parse(staticWire.responses.find((r) => r.id === 'custom').content).ok, false);
@@ -417,6 +438,69 @@ async function run() {
 
   await staticPage.click('#btn-call-hangup');
   await staticPage.waitForSelector('#btn-call-nomic:enabled');
+  await staticPage.reload();
+  await staticPage.waitForSelector('#btn-call-nomic:enabled');
+  await staticPage.click('#btn-call-nomic');
+  await staticPage.waitForSelector('#sim-inject-input:enabled');
+  const afterReloadLabel = await staticPage.locator('#sim-selected-greeting').innerText();
+  const afterReloadId = /Selected greeting #(\d+)/.exec(afterReloadLabel)?.[1];
+  assert(afterReloadId && afterReloadId !== staticId, 'Static IndexedDB rotation survives reload without repeating');
+  await staticPage.click('#btn-call-hangup');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled');
+
+  // Two tabs in the same profile must serialize their per-bot IndexedDB draws.
+  const secondStaticPage = await staticContext.newPage();
+  secondStaticPage.on('pageerror', (err) => pageErrors.push(String(err)));
+  await secondStaticPage.goto(`${staticBase}/index.html?tab=test`);
+  await secondStaticPage.waitForSelector('#btn-call-nomic:enabled');
+  await Promise.all([staticPage.click('#btn-call-nomic'), secondStaticPage.click('#btn-call-nomic')]);
+  await Promise.all([staticPage.waitForSelector('#sim-inject-input:enabled'), secondStaticPage.waitForSelector('#sim-inject-input:enabled')]);
+  const tabIds = await Promise.all([staticPage, secondStaticPage].map(async (p) =>
+    /Selected greeting #(\d+)/.exec(await p.locator('#sim-selected-greeting').innerText())?.[1]));
+  assert(tabIds.every(Boolean));
+  assert.equal(new Set([staticId, afterReloadId, ...tabIds]).size, 4, 'Static draws across reload and concurrent tabs should be distinct');
+  await Promise.all([staticPage.click('#btn-call-hangup'), secondStaticPage.click('#btn-call-hangup')]);
+  await Promise.all([staticPage.waitForSelector('#btn-call-nomic:enabled'), secondStaticPage.waitForSelector('#btn-call-nomic:enabled')]);
+  await secondStaticPage.close();
+  // Seed the last remaining ID of a cycle to exercise the boundary without
+  // starting 1,100 browser sessions.
+  await staticPage.evaluate((ids) => new Promise((resolve, reject) => {
+    const open = indexedDB.open('vac-greeting-rotation-v1', 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result, tx = db.transaction('rotations', 'readwrite');
+      tx.objectStore('rotations').put({ fingerprint: ids.join('\u001f'), remaining: ['1100'], last: '1099' }, 'a_nova');
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = tx.onabort = () => reject(tx.error);
+    };
+  }), importedGreetings.map((row) => row.greeting_id));
+  await staticPage.click('#btn-call-nomic');
+  await staticPage.waitForSelector('#sim-inject-input:enabled');
+  assert.match(await staticPage.locator('#sim-selected-greeting').innerText(), /Selected greeting #1100\b/);
+  await staticPage.click('#btn-call-hangup');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled');
+  await staticPage.click('#btn-call-nomic');
+  await staticPage.waitForSelector('#sim-inject-input:enabled');
+  assert.doesNotMatch(await staticPage.locator('#sim-selected-greeting').innerText(), /Selected greeting #1100\b/);
+  await staticPage.click('#btn-call-hangup');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled');
+  console.log('PASS Static greeting rotation persists across reload, serializes simultaneous tabs and avoids a boundary repeat');
+
+  const rejectCatalog = (route) => route.fulfill({ status: 503, body: 'fixture unavailable' });
+  await staticContext.route('**/greetings.json', rejectCatalog);
+  const fallbackPage = await staticContext.newPage();
+  fallbackPage.on('pageerror', (err) => pageErrors.push(String(err)));
+  await fallbackPage.goto(`${staticBase}/index.html?tab=test`);
+  await fallbackPage.waitForSelector('#btn-call-nomic:enabled');
+  await fallbackPage.click('#btn-call-nomic');
+  await fallbackPage.waitForSelector('#sim-inject-input:enabled');
+  assert.match(await fallbackPage.locator('#sim-feed').innerText(), /Greeting library unavailable; using the configured opening/i);
+  assert.equal(await fallbackPage.evaluate(() => window.__mockWs.settings.agent.greeting), `${staticCampaign.disclosure} ${staticAgent.greeting}`);
+  await fallbackPage.click('#btn-call-hangup');
+  await fallbackPage.close();
+  await staticContext.unroute('**/greetings.json', rejectCatalog);
+  console.log('PASS Static site falls back to the configured opening if the catalog cannot load');
+
   const staticInitialAgent = await staticPage.locator('#sel-a').inputValue();
   assert.notEqual(staticInitialAgent, 'a_medicare');
   await staticPage.evaluate((initialAgent) => localStorage.setItem('vac_cloud_sim_logs_v1', JSON.stringify([
@@ -437,6 +521,9 @@ async function run() {
     assert.equal(await staticPage.locator('#sim-record-audio').isChecked(), false);
   };
   await staticRecord('static recorded audio');
+  const recordedGreetingId = /Selected greeting #(\d+)/.exec(await staticPage.locator('#sim-selected-greeting').innerText())?.[1];
+  assert(recordedGreetingId);
+  assert.match(await staticPage.locator('#sim-logs-box').innerText(), new RegExp(`Selected greeting #${recordedGreetingId}\\b`));
   await staticPage.locator('[data-sim-audio-load]').first().click();
   await staticPage.waitForSelector('#sim-logs-box audio');
   const localDecoded = await staticPage.evaluate(async () => {
@@ -495,7 +582,8 @@ async function run() {
   await staticPage.evaluate(() => {
     window.__realRecordingTimer = window.setTimeout;
     window.setTimeout = function (fn, delay, ...args) {
-      return window.__realRecordingTimer(fn, delay === 600000 ? 700 : delay, ...args);
+      // Allow at least one MediaRecorder timeslice before the synthetic limit.
+      return window.__realRecordingTimer(fn, delay === 600000 ? 1800 : delay, ...args);
     };
   });
   await staticPage.check('#sim-record-audio');
@@ -508,7 +596,12 @@ async function run() {
   await staticPage.click('#btn-call-hangup');
   await staticPage.waitForSelector('#btn-call-nomic:enabled', { timeout: 12000 });
   await staticPage.evaluate(() => { window.setTimeout = window.__realRecordingTimer; });
-  await staticPage.waitForFunction(() => /truncated at recording limit/i.test(document.querySelector('#sim-logs-box')?.textContent || ''), null, { timeout: 8000 });
+  try {
+    await staticPage.waitForFunction(() => /truncated at recording limit/i.test(document.querySelector('#sim-logs-box')?.textContent || ''), null, { timeout: 8000 });
+  } catch (err) {
+    console.error('Recording-limit fixture diagnostics:', await staticPage.locator('#sim-logs-box').innerText(), await staticPage.locator('#sim-feed').innerText());
+    throw err;
+  }
   const retained = await staticPage.evaluate(() => new Promise((resolve, reject) => {
     const open = indexedDB.open('vac-live-bot-recordings-v1'); open.onerror = () => reject(open.error);
     open.onsuccess = () => {
@@ -531,6 +624,8 @@ async function run() {
   await staticPage.check('#sim-record-audio');
   await staticPage.click('#btn-call-nomic');
   await staticPage.waitForSelector('#sim-inject-input:enabled');
+  assert.match(await staticPage.locator('#sim-feed').innerText(), /Greeting rotation storage is unavailable/i);
+  assert.match(await staticPage.locator('#sim-selected-greeting').innerText(), /Selected greeting #\d+/);
   await staticPage.fill('#sim-inject-input', 'static fallback');
   await staticPage.click('#btn-sim-inject');
   await staticPage.waitForTimeout(700);

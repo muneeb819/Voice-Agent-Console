@@ -212,6 +212,34 @@ async function run() {
     await page.reload();
     await page.waitForFunction(() => document.querySelector('[data-p="a.name"]')?.value === 'Browser saved agent');
   });
+  await check('Greeting library is searchable and enabled per bot, with a saved opt-out', async () => {
+    await page.waitForFunction(() => /1,100 imported greetings/.test(document.querySelector('#greeting-catalog-panel')?.textContent || ''));
+    const agentIds = await page.locator('#sel-a option').evaluateAll((items) => items.map((item) => item.value));
+    for (const id of agentIds) {
+      await page.selectOption('#sel-a', id);
+      assert.equal(await page.locator('[data-p="a.randomGreetingEnabled"]').isChecked(), true, `Rotation should default on for ${id}`);
+    }
+    await page.locator('#greeting-catalog-panel summary').click();
+    assert.match(await page.locator('#greeting-results').innerText(), /#1\b/);
+    await page.locator('[data-greeting-page="next"]').click();
+    assert.match(await page.locator('#greeting-results').innerText(), /#21\b/);
+    await page.fill('#greeting-search', '1100');
+    assert.match(await page.locator('#greeting-results').innerText(), /#1100\b/);
+    assert.match(await page.locator('#greeting-results').innerText(), /Executive Welcome/);
+    await page.selectOption('#sel-a', agentIds[0]);
+    await page.uncheck('[data-p="a.randomGreetingEnabled"]');
+    await Promise.all([page.waitForResponse((r) => r.url().endsWith('/api/state') && r.request().method() === 'PUT' && r.ok()), page.click('#sv')]);
+    await page.reload();
+    await page.waitForSelector('[data-p="a.randomGreetingEnabled"]');
+    await page.selectOption('#sel-a', agentIds[0]);
+    assert.equal(await page.locator('[data-p="a.randomGreetingEnabled"]').isChecked(), false);
+    await page.click('#new-a');
+    assert.equal(await page.locator('[data-p="a.randomGreetingEnabled"]').isChecked(), true, 'A new bot defaults to enabled even when the template is opted out');
+    await page.click('#del-a');
+    await page.selectOption('#sel-a', agentIds[0]);
+    await page.check('[data-p="a.randomGreetingEnabled"]');
+    await Promise.all([page.waitForResponse((r) => r.url().endsWith('/api/state') && r.request().method() === 'PUT' && r.ok()), page.click('#sv')]);
+  });
   await check('Theme, exposure and API-key modals', async () => {
     await page.click('#btn-theme');
     await page.waitForSelector('#theme-modal:not([hidden])');

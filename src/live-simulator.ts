@@ -1,7 +1,8 @@
 import http from 'http';
 import crypto from 'crypto';
 import WebSocket, { WebSocketServer } from 'ws';
-import { getConsoleState, saveSimulatorCallLog, SimulatorCallLogRecord } from './db';
+import { getConsoleState, saveSimulatorCallLog, SimulatorCallLogRecord, trySelectGreeting } from './db';
+import { GreetingRecord } from './greetings';
 import { normalizeState } from './defaults';
 import { getSecret, MANAGED_SECRET_KEYS } from './env-store';
 import { buildDeepgramSettings } from './settings-builder';
@@ -116,6 +117,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
     let activeState: ConsoleState | null = null;
     let activeAgent: Agent | null = null;
     let activeCampaign: Campaign | undefined;
+    let selectedGreeting: GreetingRecord | null = null;
     let testLead: Record<string, string> = {};
     let allowWebhooks = false;
     let recordingRequested = false;
@@ -354,6 +356,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             agentId: activeAgent.id,
             agentName: activeAgent.name,
             campaignId: activeCampaign?.id || null,
+            greetingId: selectedGreeting?.greeting_id || null,
             upstreamMode,
             sampleRateIn,
             sampleRateOut,
@@ -378,6 +381,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
 
       sendClientJson({
         type: 'call_ended',
+        greetingId: selectedGreeting?.greeting_id || null,
         callId,
         logSaved,
         reason,
@@ -508,43 +512,6 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         sampleRateIn = bandwidth === 'telephony' ? 8000 : 16000;
         sampleRateOut = bandwidth === 'telephony' ? 8000 : 24000;
 
-        const displaySettings = buildDeepgramSettings(activeState, activeAgent, activeCampaign);
-        const rawSettings = buildDeepgramSettings(activeState, activeAgent, activeCampaign, {
-          forceClientSideWebhooks: true,
-        });
-        rawSettings.audio = {
-          input: { encoding: 'linear16', sample_rate: sampleRateIn },
-          output: { encoding: 'linear16', sample_rate: sampleRateOut, container: 'none' },
-        };
-        displaySettings.audio = JSON.parse(JSON.stringify(rawSettings.audio));
-
-        const hydration = hydrateLeadIntoPromptAndGreeting(
-          rawSettings,
-          activeAgent,
-          activeCampaign,
-          startMsg.lead || {}
-        );
-        hydrateLeadIntoPromptAndGreeting(
-          displaySettings,
-          activeAgent,
-          activeCampaign,
-          startMsg.lead || {}
-        );
-
-        testLead = hydration.leadSummary;
-        const testConstraints = '\n\n[Browser test constraints] This is not a live VICIdial call. A transfer, disposition or do-not-call update cannot be completed here. Never claim one succeeded when the tool reports it was not executed. Be truthful about being an AI assistant if asked.';
-        if (rawSettings.agent.think.prompt.length + testConstraints.length > 25000) {
-          sendFatalError('PROMPT_TOO_LONG', 'The agent prompt is too long to add browser-test safety context. Shorten it before starting a test.');
-          finalizeCall('prompt_too_long');
-          return;
-        }
-        rawSettings.agent.think.prompt += testConstraints;
-        displaySettings.agent.think.prompt += testConstraints;
-        // Browser tests never hand a webhook endpoint to Deepgram. If the operator
-        // opts in, the authenticated backend executes it only after turn confirmation.
-        for (const fn of rawSettings.agent.think.functions || []) fn.defer_until_eot = true;
-        const wireSettings = interpolateEnvPlaceholders(rawSettings);
-
         const activeSttProv = activeState.providers.find(
           (p) => p.kind === 'stt' && p.id === activeState!.services?.stt?.providerId
         );
@@ -584,6 +551,50 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           return;
         }
 
+        selectedGreeting = trySelectGreeting(activeAgent.id, activeAgent.randomGreetingEnabled !== false);
+        if (activeAgent.randomGreetingEnabled !== false && !selectedGreeting) {
+          sendClientJson({ type: 'warning', code: 'GREETING_LIBRARY_UNAVAILABLE',
+            message: 'The greeting library is unavailable; this test will use the configured opening.' });
+        }
+
+        const displaySettings = buildDeepgramSettings(activeState, activeAgent, activeCampaign, { greetingText: selectedGreeting?.greeting_text });
+        const rawSettings = buildDeepgramSettings(activeState, activeAgent, activeCampaign, {
+          forceClientSideWebhooks: true,
+          greetingText: selectedGreeting?.greeting_text,
+        });
+        rawSettings.audio = {
+          input: { encoding: 'linear16', sample_rate: sampleRateIn },
+          output: { encoding: 'linear16', sample_rate: sampleRateOut, container: 'none' },
+        };
+        displaySettings.audio = JSON.parse(JSON.stringify(rawSettings.audio));
+
+        const hydration = hydrateLeadIntoPromptAndGreeting(
+          rawSettings,
+          activeAgent,
+          activeCampaign,
+          startMsg.lead || {}
+        );
+        hydrateLeadIntoPromptAndGreeting(
+          displaySettings,
+          activeAgent,
+          activeCampaign,
+          startMsg.lead || {}
+        );
+
+        testLead = hydration.leadSummary;
+        const testConstraints = '\n\n[Browser test constraints] This is not a live VICIdial call. A transfer, disposition or do-not-call update cannot be completed here. Never claim one succeeded when the tool reports it was not executed. Be truthful about being an AI assistant if asked.';
+        if (rawSettings.agent.think.prompt.length + testConstraints.length > 25000) {
+          sendFatalError('PROMPT_TOO_LONG', 'The agent prompt is too long to add browser-test safety context. Shorten it before starting a test.');
+          finalizeCall('prompt_too_long');
+          return;
+        }
+        rawSettings.agent.think.prompt += testConstraints;
+        displaySettings.agent.think.prompt += testConstraints;
+        // Browser tests never hand a webhook endpoint to Deepgram. If the operator
+        // opts in, the authenticated backend executes it only after turn confirmation.
+        for (const fn of rawSettings.agent.think.functions || []) fn.defer_until_eot = true;
+        const wireSettings = interpolateEnvPlaceholders(rawSettings);
+
         const targetUrl = customAgentUrl || 'wss://agent.deepgram.com/v1/agent/converse';
         const wsHeaders: Record<string, string> = {};
         if (dgApiKey) {
@@ -592,6 +603,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
 
         sendClientJson({
           type: 'session_connecting',
+          greeting: selectedGreeting,
           callId,
           targetUrl,
           sampleRateIn,
@@ -671,6 +683,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
               lastBrowserAudioAt = Date.now();
               sendClientJson({
                 type: 'session_started',
+                greeting: selectedGreeting,
                 callId,
                 upstreamMode: 'deepgram',
                 sampleRateIn,

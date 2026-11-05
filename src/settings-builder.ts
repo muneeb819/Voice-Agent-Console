@@ -125,7 +125,7 @@ export function buildDeepgramSettings(
   state: ConsoleState,
   agent: Agent,
   explicitCampaign?: Campaign,
-  options?: { forceClientSideWebhooks?: boolean }
+  options?: { forceClientSideWebhooks?: boolean; greetingText?: string }
 ) {
   const sp: Partial<Provider> = state.providers.find((p) => p.kind === 'stt' && p.id === state.services?.stt?.providerId) || {};
   const lp: Partial<Provider> = state.providers.find((p) => p.kind === 'llm' && p.id === state.services?.llm?.providerId) || {};
@@ -336,6 +336,10 @@ export function buildDeepgramSettings(
   ) {
     finalGreeting = `${linkedCampaign.disclosure.trim()} ${finalGreeting}`.trim();
   }
+  // Call/session code chooses once. Previews remain deterministic and never
+  // consume the rotation. Preserve the saved introduction and disclosure.
+  const variation = agent.randomGreetingEnabled !== false ? (options?.greetingText || '').trim() : '';
+  if (variation) finalGreeting = `${finalGreeting} ${variation}`.trim();
 
   return {
     type: 'Settings',
