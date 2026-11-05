@@ -8,7 +8,7 @@
   <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
   <link rel="alternate icon" href="./assets/favicon.svg" />
   <link rel="apple-touch-icon" href="./assets/monogram.svg" />
-  <link rel="stylesheet" href="./login.css?v=elite-2.19" />
+  <link rel="stylesheet" href="./login.css?v=elite-2.21" />
 </head>
 <body>
   <div class="aurora" aria-hidden="true"></div>
@@ -185,9 +185,9 @@
         <button type="submit" class="btn-primary" id="signup-submit">Create Account</button>
       </form>
 
-      <p class="fineprint">
+      <p class="fineprint" id="auth-security-note">
         <svg class="ic" aria-hidden="true"><use href="./assets/icons.svg#i-secure"/></svg>
-        Secured with scrypt password hashing and HttpOnly session cookies.
+        Server accounts use scrypt password hashing and HttpOnly session cookies.
       </p>
     </section>
 
@@ -209,6 +209,6 @@
     </div>
   </div>
 
-  <script src="./login.js?v=elite-2.19"></script>
+  <script src="./login.js?v=elite-2.21"></script>
 </body>
 </html>

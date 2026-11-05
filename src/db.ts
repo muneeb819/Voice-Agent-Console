@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { clearAllRecordings } from './call-recorder';
+import { removeSimulatorRecording } from './simulator-recordings';
 import { ConsoleState } from './types';
 import { createDefaultState, normalizeState } from './defaults';
 import { diffStates } from './settings-builder';
@@ -92,13 +93,19 @@ export interface SimulatorCallLogRecord {
   avgTtfbMs: number | null;
   disposition: string | null;
   transferredTo: string | null;
+  recordingRequested?: boolean;
+  recordingStatus?: 'not_requested' | 'pending' | 'available' | 'deleted';
+  recordingFile?: string | null;
+  recordingMime?: string | null;
+  recordingBytes?: number;
+  recordingTruncated?: boolean;
   transcript: Array<{ ts: string; role: 'user' | 'assistant' | 'system'; content: string }>;
   functionCalls: Array<{
     ts: string;
     id: string;
     name: string;
     args: Record<string, any>;
-    status: 'completed' | 'cancelled' | 'server_side';
+    status: 'completed' | 'cancelled' | 'server_side' | 'simulated' | 'failed';
     response?: Record<string, any>;
   }>;
 }
@@ -177,6 +184,12 @@ export function getDb(): SqliteDbLike {
       avg_ttfb_ms INTEGER,
       disposition TEXT,
       transferred_to TEXT,
+      recording_requested INTEGER NOT NULL DEFAULT 0,
+      recording_status TEXT NOT NULL DEFAULT 'not_requested',
+      recording_file TEXT,
+      recording_mime TEXT,
+      recording_bytes INTEGER NOT NULL DEFAULT 0,
+      recording_truncated INTEGER NOT NULL DEFAULT 0,
       transcript_json TEXT NOT NULL,
       functions_json TEXT NOT NULL
     );
@@ -207,6 +220,19 @@ export function getDb(): SqliteDbLike {
       vici_api_audit_json TEXT NOT NULL
     );
   `);
+
+  // Add optional browser recording metadata without changing old test logs.
+  const simCols = new Set((db.prepare('PRAGMA table_info(simulator_calls)').all() as Array<{ name: string }>).map((c) => c.name));
+  for (const [name, definition] of [
+    ['recording_requested', 'INTEGER NOT NULL DEFAULT 0'],
+    ['recording_status', "TEXT NOT NULL DEFAULT 'not_requested'"],
+    ['recording_file', 'TEXT'],
+    ['recording_mime', 'TEXT'],
+    ['recording_bytes', 'INTEGER NOT NULL DEFAULT 0'],
+    ['recording_truncated', 'INTEGER NOT NULL DEFAULT 0'],
+  ]) {
+    if (!simCols.has(name)) db.exec(`ALTER TABLE simulator_calls ADD COLUMN ${name} ${definition}`);
+  }
 
   // Safe Step 4 schema migration for existing SQLite databases
   const bridgeCols = db.prepare('PRAGMA table_info(bridge_calls)').all() as Array<{ name: string }>;
@@ -325,51 +351,42 @@ export function listRevisions(limit = 15): Array<{ id: number; saved_at: string;
 
 export function saveSimulatorCallLog(record: SimulatorCallLogRecord): void {
   const conn = getDb();
-  conn
-    .prepare(
+  // The recording belongs to its history row. Prune files before deleting rows
+  // so a failed unlink cannot silently leave untracked private audio behind.
+  conn.transaction(() => {
+    const previous = conn.prepare('SELECT recording_file FROM simulator_calls WHERE id = ?').get(record.id) as any;
+    if (previous?.recording_file && previous.recording_file !== record.recordingFile) {
+      removeSimulatorRecording(previous.recording_file);
+    }
+    conn.prepare(
       `INSERT OR REPLACE INTO simulator_calls (
         id, agent_id, agent_name, campaign_id, upstream_mode,
         sample_rate_in, sample_rate_out, started_at, ended_at,
         duration_ms, turns, avg_ttfb_ms, disposition, transferred_to,
-        transcript_json, functions_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      record.id,
-      record.agentId,
-      record.agentName,
-      record.campaignId,
-      record.upstreamMode,
-      record.sampleRateIn,
-      record.sampleRateOut,
-      record.startedAt,
-      record.endedAt,
-      record.durationMs,
-      record.turns,
-      record.avgTtfbMs,
-      record.disposition,
-      record.transferredTo,
-      JSON.stringify(record.transcript),
-      JSON.stringify(record.functionCalls)
+        recording_requested, recording_status, recording_file, recording_mime,
+        recording_bytes, recording_truncated, transcript_json, functions_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      record.id, record.agentId, record.agentName, record.campaignId, record.upstreamMode,
+      record.sampleRateIn, record.sampleRateOut, record.startedAt, record.endedAt,
+      record.durationMs, record.turns, record.avgTtfbMs, record.disposition, record.transferredTo,
+      record.recordingRequested ? 1 : 0,
+      record.recordingStatus || (record.recordingRequested ? 'pending' : 'not_requested'),
+      record.recordingFile || null, record.recordingMime || null, record.recordingBytes || 0,
+      record.recordingTruncated ? 1 : 0,
+      JSON.stringify(record.transcript), JSON.stringify(record.functionCalls)
     );
-
-  conn.prepare(`
-    DELETE FROM simulator_calls
-    WHERE id NOT IN (SELECT id FROM simulator_calls ORDER BY started_at DESC LIMIT 100)
-  `).run();
+    const stale = conn.prepare('SELECT recording_file FROM simulator_calls ORDER BY started_at DESC, rowid DESC LIMIT -1 OFFSET 100').all() as any[];
+    for (const row of stale) removeSimulatorRecording(row.recording_file);
+    conn.prepare(`
+      DELETE FROM simulator_calls
+      WHERE id NOT IN (SELECT id FROM simulator_calls ORDER BY started_at DESC, rowid DESC LIMIT 100)
+    `).run();
+  })();
 }
 
-export function listSimulatorCallLogs(agentId?: string, limit = 20): SimulatorCallLogRecord[] {
-  const conn = getDb();
-  const rows = (
-    agentId
-      ? conn
-          .prepare('SELECT * FROM simulator_calls WHERE agent_id = ? ORDER BY started_at DESC LIMIT ?')
-          .all(agentId, limit)
-      : conn.prepare('SELECT * FROM simulator_calls ORDER BY started_at DESC LIMIT ?').all(limit)
-  ) as any[];
-
-  return rows.map((r) => ({
+function simulatorLogFromRow(r: any): SimulatorCallLogRecord {
+  return {
     id: r.id,
     agentId: r.agent_id,
     agentName: r.agent_name,
@@ -384,18 +401,62 @@ export function listSimulatorCallLogs(agentId?: string, limit = 20): SimulatorCa
     avgTtfbMs: r.avg_ttfb_ms,
     disposition: r.disposition,
     transferredTo: r.transferred_to,
+    recordingRequested: Boolean(r.recording_requested),
+    recordingStatus: r.recording_status || 'not_requested',
+    recordingFile: r.recording_file || null,
+    recordingMime: r.recording_mime || null,
+    recordingBytes: Number(r.recording_bytes || 0),
+    recordingTruncated: Boolean(r.recording_truncated),
     transcript: JSON.parse(r.transcript_json || '[]'),
     functionCalls: JSON.parse(r.functions_json || '[]'),
-  }));
+  };
+}
+
+export function listSimulatorCallLogs(agentId?: string, limit = 20): SimulatorCallLogRecord[] {
+  const conn = getDb();
+  const rows = (
+    agentId
+      ? conn.prepare('SELECT * FROM simulator_calls WHERE agent_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?').all(agentId, limit)
+      : conn.prepare('SELECT * FROM simulator_calls ORDER BY started_at DESC, rowid DESC LIMIT ?').all(limit)
+  ) as any[];
+  return rows.map(simulatorLogFromRow);
+}
+
+export function getSimulatorCallLog(id: string): SimulatorCallLogRecord | null {
+  const row = getDb().prepare('SELECT * FROM simulator_calls WHERE id = ?').get(id);
+  return row ? simulatorLogFromRow(row) : null;
+}
+
+export function attachSimulatorRecording(id: string, file: string, mime: string, bytes: number, truncated: boolean): boolean {
+  const result = getDb().prepare(`UPDATE simulator_calls
+    SET recording_status = 'available', recording_file = ?, recording_mime = ?, recording_bytes = ?, recording_truncated = ?
+    WHERE id = ? AND recording_requested = 1 AND recording_status = 'pending' AND recording_file IS NULL`)
+    .run(file, mime, bytes, truncated ? 1 : 0, id);
+  return Number(result.changes || 0) === 1;
+}
+
+export function deleteSimulatorRecording(id: string): boolean {
+  const conn = getDb();
+  return conn.transaction(() => {
+    const row = conn.prepare('SELECT recording_file, recording_status FROM simulator_calls WHERE id = ?').get(id) as any;
+    if (!row) return false;
+    removeSimulatorRecording(row.recording_file);
+    conn.prepare(`UPDATE simulator_calls SET recording_status = 'deleted', recording_file = NULL,
+      recording_mime = NULL, recording_bytes = 0, recording_truncated = 0 WHERE id = ?`).run(id);
+    return true;
+  })();
 }
 
 export function clearSimulatorCallLogs(agentId?: string): void {
   const conn = getDb();
-  if (agentId) {
-    conn.prepare('DELETE FROM simulator_calls WHERE agent_id = ?').run(agentId);
-  } else {
-    conn.prepare('DELETE FROM simulator_calls').run();
-  }
+  conn.transaction(() => {
+    const rows = (agentId
+      ? conn.prepare('SELECT recording_file FROM simulator_calls WHERE agent_id = ?').all(agentId)
+      : conn.prepare('SELECT recording_file FROM simulator_calls').all()) as any[];
+    for (const row of rows) removeSimulatorRecording(row.recording_file);
+    if (agentId) conn.prepare('DELETE FROM simulator_calls WHERE agent_id = ?').run(agentId);
+    else conn.prepare('DELETE FROM simulator_calls').run();
+  })();
 }
 
 export function saveBridgeCallLog(record: BridgeCallLogRecord): void {
@@ -536,6 +597,8 @@ export function getBridgeAnalyticsSummary() {
   }
 
   return {
+    // Counts and rates cover retained logs only, not lifetime call volume.
+    retentionLimits: { bridgeCalls: 200, simulatorCalls: 100 },
     totalBridgeCalls: totalCalls,
     totalSimulatorCalls: simLogs.length,
     transfersCount: xferCount,

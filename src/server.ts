@@ -1,4 +1,3 @@
-import childProcess from 'child_process';
 import dns from 'dns';
 import fs from 'fs';
 import http from 'http';
@@ -21,6 +20,7 @@ import {
   getRequestSessionToken,
   hasActiveAuthSession,
   hasRegisteredUsers,
+  invalidateAdminSession,
   invalidateUserCountCache,
   isAuthEnabled,
   isLoopbackIp,
@@ -28,12 +28,17 @@ import {
   setAuthCookie,
 } from './auth-guard';
 import { resolveRecordingPath } from './call-recorder';
+import { createReleaseBundle } from './release-bundle';
+import { isSameOriginRequest } from './request-origin';
 import {
+  attachSimulatorRecording,
   clearBridgeCallLogs,
   clearSimulatorCallLogs,
+  deleteSimulatorRecording,
   exportBridgeLogsCsv,
   getBridgeAnalyticsSummary,
   getConsoleState,
+  getSimulatorCallLog,
   listBridgeCallLogs,
   listRevisions,
   listSimulatorCallLogs,
@@ -58,6 +63,13 @@ import {
 } from './env-store';
 import { attachLiveSimulator } from './live-simulator';
 import {
+  isSupportedRecording,
+  MAX_SIMULATOR_RECORDING_BYTES,
+  removeSimulatorRecording,
+  resolveSimulatorRecording,
+  writeSimulatorRecording,
+} from './simulator-recordings';
+import {
   buildDeepgramSettings,
   generateViciConfig,
   validateState,
@@ -78,6 +90,7 @@ import {
   discoverActiveTunnelUrl,
   getCachedTunnelUrlSync,
   getPreferredLanIpv4,
+  isTunnelProxyReady,
   startPublicDemoTunnel,
   stopPublicDemoTunnel,
 } from './demo-tunnel';
@@ -91,6 +104,10 @@ loadEnv();
 
 export function createApp(viciBridge?: VicidialBridgeService) {
   const app = express();
+  // Proxy headers are untrusted by default. Configure only known proxy IPs or
+  // CIDRs (for example TRUST_PROXY=loopback) when running behind a proxy.
+  const trustedProxies = String(process.env.TRUST_PROXY || '').trim();
+  if (trustedProxies) app.set('trust proxy', trustedProxies.split(',').map((x) => x.trim()).filter(Boolean));
   const loginAttempts = new Map<string, { count: number; resetAt: number }>();
   const signupAttempts = new Map<string, { count: number; resetAt: number }>();
   const loginWindowMs = 15 * 60 * 1000;
@@ -98,9 +115,25 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   const signupAttemptLimit = 10;
 
   app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    // Login handoff and WebSocket URLs can carry a session token; do not send
+    // the current URL as a Referer on subsequent browser requests.
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    // Cookies can be sent cross-site (including when HTTPS uses SameSite=None).
+    // Do not grant cross-origin API access, and reject browser requests with a
+    // mismatched Origin even when they would not need a CORS preflight.
+    if (req.path.startsWith('/api/') && !isSameOriginRequest(req, app.get('trust proxy fn'))) {
+      res.status(403).json({ ok: false, error: 'Cross-origin API requests are not allowed.' });
+      return;
+    }
+    // Pre-call GET hooks intentionally support Asterisk CURL without auth.
+    // An image/navigation request may have no Origin, so also reject browser
+    // fetches to these endpoints from another site or origin.
+    const fetchSite = req.get('sec-fetch-site');
+    if ((req.path === '/api/vici/register-call' || req.path === '/api/vici/precall') &&
+        fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
+      res.status(403).json({ ok: false, error: 'Cross-origin pre-call requests are not allowed.' });
+      return;
+    }
     if (req.method === 'OPTIONS') {
       res.status(204).end();
       return;
@@ -124,13 +157,14 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   // ==================== STEP 4: AUTHENTICATION ROUTES & GUARD ====================
 
   const rateKey = (req: Request, subKey = ''): string => {
-    const cfIp = String(req.headers['cf-connecting-ip'] || '').trim();
-    const xff = String(req.headers['x-forwarded-for'] || '')
-      .split(',')[0]
-      .trim();
-    const baseIp = cfIp || xff || String(req.socket?.remoteAddress || req.ip || 'unknown');
+    // Express resolves req.ip using only explicitly trusted proxies. Never
+    // accept client-supplied X-Forwarded-For / CF-Connecting-IP directly.
+    const baseIp = String(req.ip || req.socket?.remoteAddress || 'unknown');
     return subKey ? `${baseIp}:${subKey}` : baseIp;
   };
+
+  const canCreateAccount = (req: Request): boolean =>
+    hasActiveAuthSession(req) || (!isAuthEnabled() && isRequestAuthorized(req));
 
   const rateLimited = (
     key: string,
@@ -178,7 +212,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       adminPasswordConfigured: getSecret('ADMIN_PASSWORD').length > 0,
       authenticated: sessionAuth,
       user,
-      signupOpen: true,
+      signupOpen: canCreateAccount(req),
     });
   });
 
@@ -193,6 +227,14 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   // Create a new account (email + full name + password) and sign in immediately.
   app.post('/api/auth/signup', (req: Request, res: Response) => {
+    if (!canCreateAccount(req)) {
+      res.status(403).json({
+        ok: false,
+        code: 'SIGNUP_CLOSED',
+        error: 'Account creation requires an existing signed-in operator. Contact your administrator.',
+      });
+      return;
+    }
     const key = rateKey(req);
     const gate = rateLimited(key, signupAttempts, signupAttemptLimit);
     if (gate.limited) {
@@ -276,7 +318,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   });
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {
-    destroyUserSession(getRequestSessionToken(req));
+    const token = getRequestSessionToken(req);
+    invalidateAdminSession(token);
+    destroyUserSession(token);
     clearAuthCookie(res, req);
     res.json({ ok: true, authEnabled: true, authenticated: false });
   });
@@ -296,17 +340,21 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     const bridgeStatus = viciBridge ? viciBridge.getStatus() : null;
     const bridgeAnalytics = getBridgeAnalyticsSummary();
     const simLogs = listSimulatorCallLogs(undefined, 100);
+    // Older sandbox/local-speech logs contained synthetic latency; never mix them
+    // into the measured Deepgram/bridge figures. Keep the logs themselves intact.
     const simTtfbValues = simLogs
+      .filter((s) => s.upstreamMode === 'deepgram')
       .map((s) => s.avgTtfbMs)
       .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0);
-    const simAvgTtfbMs = simTtfbValues.length
-      ? Math.round(simTtfbValues.reduce((a, b) => a + b, 0) / simTtfbValues.length)
+    // Average the retained per-session means, rather than assigning equal
+    // weight to channels with different numbers of sessions.
+    const bridgeTtfbValues = listBridgeCallLogs(200)
+      .map((call) => call.avgTtfbMs)
+      .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0);
+    const retainedTtfbValues = [...bridgeTtfbValues, ...simTtfbValues];
+    const combinedTtfb = retainedTtfbValues.length
+      ? Math.round(retainedTtfbValues.reduce((a, b) => a + b, 0) / retainedTtfbValues.length)
       : null;
-
-    const combinedTtfb =
-      bridgeAnalytics.avgTtfbMs && simAvgTtfbMs
-        ? Math.round((bridgeAnalytics.avgTtfbMs + simAvgTtfbMs) / 2)
-        : bridgeAnalytics.avgTtfbMs ?? simAvgTtfbMs;
 
     const secrets = getSecretsStatus();
     const configuredKeysCount = Object.values(secrets).filter((s) => s.configured).length;
@@ -337,7 +385,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       registeredUsers = countUsers();
     } catch {}
 
-    // 6-pillar Console Quality & Certification calculation (0-100)
+    // These are configuration heuristics, not a security audit or certification.
     const preflightScore = Math.max(0, Math.min(100, Math.round(((okChecks - erChecks * 8 - wnChecks * 2) / totalChecks) * 100)));
     const hasPipelineModels = Boolean(
       state.services?.stt?.model && state.services?.llm?.model && state.services?.tts?.model
@@ -346,15 +394,14 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     const activeTtsProv = state.providers.find((p) => p.kind === 'tts' && p.id === state.services?.tts?.providerId);
     const localSpeechActive = activeSttProv?.type === 'speech_service' && activeTtsProv?.type === 'speech_service';
     const pipelineScore = hasPipelineModels ? (dgConfigured || localSpeechActive ? 100 : 92) : 55;
-    const bridgeScore =
-      bridgeStatus?.audioSocketListening && bridgeStatus?.sipRtpListening
-        ? 100
-        : bridgeStatus
-          ? 85
-          : 90;
-    const securityScore = 100; // First-page SignUp/SignIn gate + scrypt + HttpOnly + Peer IP allowlist active
+    const bridgeScore = bridgeStatus?.audioSocketListening && bridgeStatus?.sipRtpListening ? 100 : 0;
+    const authEnforced = isAuthEnabled();
+    const allowedIps = getSecret('BRIDGE_ALLOWED_IPS').trim();
+    const restrictedPeers = !allowedIps || !allowedIps.split(',').some((rule) => /^(?:\*|\d+\.\d+\.\d+\.\d+\/0)$/.test(rule.trim()));
+    const securityScore = (authEnforced ? 50 : 0) + (restrictedPeers ? 50 : 0);
     const storageScore = revs.length > 0 ? 100 : 90;
-    const disclosuresReady = state.campaigns.every((c) => String(c.disclosure || '').trim().length >= 10);
+    const disclosureCount = state.campaigns.filter((c) => String(c.disclosure || '').trim().length >= 10).length;
+    const disclosuresReady = disclosureCount === state.campaigns.length;
     const complianceScore = disclosuresReady && erChecks === 0 ? 100 : 78;
 
     const overallQualityScore = Math.round(
@@ -384,7 +431,8 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       quality: {
         score: overallQualityScore,
         grade: qualityGrade,
-        certified: erChecks === 0 && wnChecks === 0,
+        certified: false,
+        assessment: 'Configuration estimate only; not a security audit or certification.',
         checks: { passed: okChecks, warnings: wnChecks, errors: erChecks, total: validations.length },
         pillars: [
           { id: 'preflight', label: 'Pre-Flight Schema Audit', score: preflightScore, detail: `${okChecks}/${validations.length} checks` },
@@ -393,15 +441,15 @@ export function createApp(viciBridge?: VicidialBridgeService) {
             label: 'Neural Speech Pipeline',
             score: pipelineScore,
             detail: localSpeechActive
-              ? 'Local Whisper + Kokoro Active'
+              ? 'Local speech providers selected (health not assessed)'
               : dgConfigured
-                ? 'Live API Key Ready'
-                : 'Models Synced',
+                ? 'API key configured (health not assessed)'
+                : 'Model selection only',
           },
           { id: 'bridge', label: 'VICIdial Dual Bridge', score: bridgeScore, detail: bridgeStatus?.audioSocketListening ? `TCP :${bridgeStatus.audioSocketPort} · UDP :${bridgeStatus.sipPort}` : 'Standby' },
-          { id: 'security', label: 'Auth Gate & IP Shield', score: securityScore, detail: 'SignUp Gate + 115.186.137.240' },
+          { id: 'security', label: 'Auth & Peer Configuration', score: securityScore, detail: `${authEnforced ? 'Auth enforced' : 'Local bootstrap only'} · ${restrictedPeers ? 'Peer allowlist configured/default' : 'Peer allowlist open'}; not a security assessment` },
           { id: 'storage', label: 'SQLite WAL + JSON Mirror', score: storageScore, detail: `${revs.length} revisions` },
-          { id: 'compliance', label: 'Disclosures & DNC Guard', score: complianceScore, detail: `${state.campaigns.length}/${state.campaigns.length} compliant` },
+          { id: 'compliance', label: 'Disclosure Configuration', score: complianceScore, detail: `${disclosureCount}/${state.campaigns.length} disclosures configured; not a compliance review` },
         ],
       },
       inventory: {
@@ -417,6 +465,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         qaPending,
         qaFailed,
         registeredUsers,
+        authEnforced,
         revisionsCount: revs.length,
         configuredSecretsCount: configuredKeysCount,
         deepgramConfigured: dgConfigured,
@@ -426,6 +475,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         totalBridgeCalls: bridgeAnalytics.totalBridgeCalls,
         totalSimulatorCalls: bridgeAnalytics.totalSimulatorCalls,
         totalCallsAllChannels: bridgeAnalytics.totalBridgeCalls + bridgeAnalytics.totalSimulatorCalls,
+        retentionLimits: bridgeAnalytics.retentionLimits,
         closerTransfers: bridgeAnalytics.transfersCount,
         transferRatePct: bridgeAnalytics.transferRatePct,
         dncBlocked: bridgeAnalytics.dncCount,
@@ -445,10 +495,14 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         rssMb: Math.round(mem.rss / 1048576),
         heapMb: Math.round(mem.heapUsed / 1048576),
         httpPort: Number(process.env.PORT || 533),
+        httpHost: process.env.HOST || '127.0.0.1',
         lanIp: getPreferredLanIpv4(),
-        allowedPeerIp: '115.186.137.240',
+        allowedPeerIp: allowedIps || 'loopback only',
         audioSocketPort: bridgeStatus?.audioSocketPort || state.vici.bridgePort,
         sipPort: bridgeStatus?.sipPort || state.vici.sipPort,
+        audioSocketListening: bridgeStatus?.audioSocketListening ?? false,
+        sipRtpListening: bridgeStatus?.sipRtpListening ?? false,
+        bridgeStatusAvailable: Boolean(bridgeStatus),
         publicDemoUrl,
       },
       agentMatrix: state.agents.map((a) => ({
@@ -535,8 +589,16 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     });
   });
 
-  app.post('/api/demo-tunnel/start', async (_req: Request, res: Response) => {
+  app.post('/api/demo-tunnel/start', async (req: Request, res: Response) => {
+    if (!isAuthEnabled() || !hasActiveAuthSession(req)) {
+      res.status(403).json({ ok: false, error: 'Sign in before opening a public tunnel.' });
+      return;
+    }
     const port = Number(process.env.PORT || 533);
+    if (!(await isTunnelProxyReady(port))) {
+      res.status(409).json({ ok: false, error: 'The local tunnel proxy is not trusted. Configure TRUST_PROXY for the cloudflared connection and restart the console before starting a tunnel.' });
+      return;
+    }
     const out = await startPublicDemoTunnel(port);
     if (!out.ok || !out.publicUrl) {
       res.status(500).json({ ok: false, error: out.error || 'Could not start public tunnel.' });
@@ -585,14 +647,89 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   // Step 2: Simulator call log history endpoints
   app.get('/api/simulator/logs', (req: Request, res: Response) => {
     const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
-    const logs = listSimulatorCallLogs(agentId, 20);
+    const requested = typeof req.query.limit === 'string' ? Number(req.query.limit) : 20;
+    const limit = Number.isFinite(requested) && requested > 0 ? Math.max(1, Math.min(100, Math.floor(requested))) : 20;
+    const logs = listSimulatorCallLogs(agentId, limit);
+    res.setHeader('Cache-Control', 'private, no-store');
     res.json({ ok: true, count: logs.length, logs });
   });
 
   app.delete('/api/simulator/logs', (req: Request, res: Response) => {
     const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
-    clearSimulatorCallLogs(agentId);
-    res.json({ ok: true });
+    try {
+      clearSimulatorCallLogs(agentId);
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Could not delete all test recordings; some audio may already have been removed, but history was not cleared. Check server storage permissions and retry.' });
+    }
+  });
+
+  // Upload is allowed only for a completed test that explicitly opted in. The
+  // normal API auth/Origin guard applies to upload, playback and deletion.
+  const simulatorAudioBody = express.raw({ type: 'application/octet-stream', limit: MAX_SIMULATOR_RECORDING_BYTES });
+  app.put('/api/simulator/recordings/:id', (req, res, next) => {
+    simulatorAudioBody(req, res, (err: any) => {
+      if (!err) { next(); return; }
+      const tooLarge = err.type === 'entity.too.large';
+      res.status(tooLarge ? 413 : 400).json({ ok: false, error: tooLarge
+        ? 'The browser recording exceeds the 20 MB limit.' : 'Could not read the browser recording upload.' });
+    });
+  }, (req: Request, res: Response) => {
+    const id = String(req.params.id || '');
+    const log = getSimulatorCallLog(id);
+    if (!log) { res.status(404).json({ ok: false, error: 'Browser test not found.' }); return; }
+    if (!log.recordingRequested || log.recordingStatus !== 'pending') {
+      res.status(409).json({ ok: false, error: 'This test did not opt in to a new recording, or it was already saved or deleted.' });
+      return;
+    }
+    const mime = String(req.get('X-Recording-Type') || '').split(';')[0].trim().toLowerCase();
+    const data = req.body;
+    if (!Buffer.isBuffer(data) || !isSupportedRecording(data, mime)) {
+      res.status(400).json({ ok: false, error: 'Invalid or unsupported audio recording.' });
+      return;
+    }
+    let fileName: string | null = null;
+    try {
+      fileName = writeSimulatorRecording(id, data, mime);
+      const attached = attachSimulatorRecording(id, fileName, mime, data.length, req.get('X-Recording-Truncated') === '1');
+      if (!attached) {
+        removeSimulatorRecording(fileName);
+        res.status(409).json({ ok: false, error: 'Test history changed before audio could be saved.' });
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(201).json({ ok: true, bytes: data.length, mime });
+    } catch {
+      if (fileName) { try { removeSimulatorRecording(fileName); } catch {} }
+      res.status(500).json({ ok: false, error: 'Could not save the browser test recording.' });
+    }
+  });
+
+  app.get('/api/simulator/recordings/:id', (req: Request, res: Response) => {
+    const log = getSimulatorCallLog(String(req.params.id || ''));
+    try {
+      const fullPath = log?.recordingStatus === 'available' && log.recordingFile
+        ? resolveSimulatorRecording(log.recordingFile) : null;
+      if (!fullPath || !log?.recordingMime) { res.status(404).json({ ok: false, error: 'Browser test recording not found.' }); return; }
+      res.setHeader('Content-Type', log.recordingMime);
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.sendFile(fullPath);
+    } catch {
+      res.status(500).json({ ok: false, error: 'Could not read the browser test recording.' });
+    }
+  });
+
+  app.delete('/api/simulator/recordings/:id', (req: Request, res: Response) => {
+    try {
+      if (!deleteSimulatorRecording(String(req.params.id || ''))) {
+        res.status(404).json({ ok: false, error: 'Browser test not found.' });
+        return;
+      }
+      res.json({ ok: true });
+    } catch {
+      res.status(500).json({ ok: false, error: 'Could not delete the recording. Check server storage permissions and retry.' });
+    }
   });
 
   // ==================== STEP 3: VICIDIAL BRIDGE ENDPOINTS ====================
@@ -817,27 +954,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   app.get('/api/vici/release-bundle', (_req: Request, res: Response) => {
     const bundlePath = path.join(DATA_DIR, 'voice-agent-vicibox-release.tar.gz');
     try {
-      if (!fs.existsSync(bundlePath)) {
-        const projectRoot = path.resolve(__dirname, '..');
-        childProcess.execFileSync(
-          'tar',
-          [
-            '-czf',
-            bundlePath,
-            '--exclude=node_modules',
-            '--exclude=.git',
-            '--exclude=.env',
-            '--exclude=data',
-            '--exclude=logs',
-            '--exclude=logs/*',
-            '--exclude=tools/cloudflared.exe',
-            '-C',
-            path.dirname(projectRoot),
-            path.basename(projectRoot),
-          ],
-          { timeout: 20000 }
-        );
-      }
+      // Rebuild from a filtered allowlist; a cached archive could otherwise be
+      // stale or contain private files from an earlier installation.
+      createReleaseBundle(path.resolve(__dirname, '..'), bundlePath);
       res.setHeader('Content-Type', 'application/gzip');
       res.setHeader('Content-Disposition', 'attachment; filename="voice-agent-vicibox-release.tar.gz"');
       res.sendFile(bundlePath);
@@ -986,7 +1105,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       res.setHeader('Cache-Control', 'public, max-age=86400');
       res.send(buffer);
     } catch (err: any) {
-      res.status(400).json({ ok: false, error: err?.message || 'Unable to stream sample audio' });
+      res.status(err?.statusCode || 400).json({ ok: false, code: err?.code, error: err?.message || 'Unable to stream sample audio' });
     }
   });
 
@@ -1122,7 +1241,8 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   // Dedicated authentication pages (same shell, tabbed Sign In / Create Account)
   const serveAuthShell = (req: Request, res: Response) => {
-    if (hasActiveAuthSession(req)) {
+    // A signed-in operator can explicitly open /signup to provision an account.
+    if (hasActiveAuthSession(req) && req.path !== '/signup') {
       const rawNext = typeof req.query.next === 'string' ? req.query.next : '';
       const target = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/';
       res.redirect(target);
@@ -1139,7 +1259,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   // Gate the web console entry point so Sign Up / Sign In is always the very first page
   const serveConsoleEntry = (req: Request, res: Response) => {
     if (!hasActiveAuthSession(req)) {
-      const entryPath = hasRegisteredUsers() ? '/login' : '/signup';
+      const entryPath = isAuthEnabled() ? '/login' : '/signup';
       const qsIdx = req.originalUrl.indexOf('?');
       const nextSuffix =
         (req.path === '/' || req.path === '/index.html') && qsIdx === -1
@@ -1172,6 +1292,11 @@ export function createServerWithSimulator(bridgeOpts?: ViciBridgeOptions & { ena
   const monitorWss = viciBridge ? viciBridge.createMonitorWebSocketServer() : null;
 
   server.on('upgrade', (req, socket, head) => {
+    if (!isSameOriginRequest(req, app.get('trust proxy fn'))) {
+      socket.write('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nForbidden');
+      socket.destroy();
+      return;
+    }
     if (!isRequestAuthorized(req)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n\r\nUnauthorized');
       socket.destroy();
@@ -1200,10 +1325,10 @@ if (require.main === module) {
     process.env.E2B_SANDBOX === 'true' && requestedPort > 0 && requestedPort < 1024
       ? requestedPort + 5000
       : requestedPort;
-  const host = process.env.HOST || '115.186.137.240';
+  const host = process.env.HOST || '127.0.0.1';
   const debugMode = process.env.VAC_DEBUG === '1';
-  if (!isLoopbackIp(host) && !isAuthEnabled() && !debugMode) {
-    console.error('[VoiceAgentConsole] Refusing to bind to a non-loopback interface without ADMIN_PASSWORD.');
+  if (!isLoopbackIp(host) && !isAuthEnabled()) {
+    console.error('[VoiceAgentConsole] Refusing to bind to a non-loopback interface without an admin password or a registered user.');
     process.exit(1);
   }
   const { server, viciBridge } = createServerWithSimulator({ enableBridge: true });
@@ -1221,15 +1346,6 @@ if (require.main === module) {
         let onListening: () => void;
         const onError = (err: NodeJS.ErrnoException) => {
           server.removeListener('listening', onListening);
-          if (err.code === 'EADDRNOTAVAIL' && bindHost !== '0.0.0.0') {
-            console.warn(
-              `[VoiceAgentConsole] Host ${bindHost} is not a local interface (EADDRNOTAVAIL) — binding 0.0.0.0:${candidatePort} to accept traffic from ${bindHost}...`
-            );
-            server.removeListener('error', onError);
-            bindHost = '0.0.0.0';
-            listenWithFallback(candidatePort, retriesLeft);
-            return;
-          }
           if (err.code === 'EACCES' && candidatePort < 1024 && retriesLeft > 0) {
             const nextPort = candidatePort + 5000;
             console.warn(
@@ -1255,7 +1371,7 @@ if (require.main === module) {
           server.removeListener('error', onError);
           process.env.PORT = String(candidatePort);
           console.log(
-            `[VoiceAgentConsole] Step 4 Production Server + Bridge listening on http://115.186.137.240:${candidatePort} (bound ${bindHost}:${candidatePort}, allowed peer: 115.186.137.240)${debugMode ? ' [DEBUG MODE]' : ''}`
+            `[VoiceAgentConsole] Server listening on ${bindHost}:${candidatePort}${debugMode ? ' [DEBUG MODE]' : ''}`
           );
           if (debugMode) {
             const currentState = getConsoleState();

@@ -16,7 +16,7 @@ COPY --chown=appuser:appuser . .
 RUN npm run build && mkdir -p data/recordings
 
 ENV PORT=533
-ENV HOST=115.186.137.240
+ENV HOST=0.0.0.0
 EXPOSE 533
 
 CMD ["npm", "start"]

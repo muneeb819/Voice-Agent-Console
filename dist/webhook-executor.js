@@ -32,18 +32,15 @@ function isBlockedMetadataHost(hostname) {
         lower === 'metadata.google.internal' ||
         lower === '100.100.100.200');
 }
-async function executeCustomFunctionWebhook(fnDef, args, ctx = {}, timeoutMs = 6000) {
+async function executeCustomFunctionWebhook(fnDef, args, ctx = {}, timeoutMs = 6000, signal) {
     const started = Date.now();
     if (!fnDef || !fnDef.url || !fnDef.url.trim()) {
         return {
-            ok: true,
+            ok: false,
             executedWebhook: false,
             latencyMs: 0,
-            data: {
-                ok: true,
-                note: 'Function executed locally (no webhook URL configured)',
-                received_args: args,
-            },
+            error: 'No webhook URL is configured for this function.',
+            data: { ok: false, error: 'No webhook URL is configured for this function.' },
         };
     }
     const resolvedUrlStr = interpolateTemplate(fnDef.url.trim(), ctx);
@@ -123,8 +120,15 @@ async function executeCustomFunctionWebhook(fnDef, args, ctx = {}, timeoutMs = 6
             method,
             headers,
             body,
-            signal: AbortSignal.timeout(timeoutMs),
+            // Do not forward interpolated credentials or bypass the metadata-host
+            // restriction through a redirect to another destination.
+            redirect: 'manual',
+            signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
         });
+        if (res.status >= 300 && res.status < 400) {
+            return { ok: false, executedWebhook: true, httpStatus: res.status, latencyMs: Date.now() - started,
+                url: targetUrl.toString(), method, error: `Webhook redirects are not followed (HTTP ${res.status}).` };
+        }
         const rawText = (await res.text()).slice(0, 65536);
         let parsedData = rawText;
         try {

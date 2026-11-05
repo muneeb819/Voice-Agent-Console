@@ -13,11 +13,8 @@ if ($existing) {
     exit 0
 }
 
-$env:VAC_DEBUG = "1"
-$env:HOST = "115.186.137.240"
-$env:PORT = "533"
-$env:BRIDGE_BIND_HOST = "115.186.137.240"
-$env:BRIDGE_ALLOWED_IPS = "115.186.137.240"
+# Let the server load .env or use its loopback defaults; do not override an
+# operator's existing listener and peer settings or enable debug logging.
 
 Start-Process -FilePath $node -ArgumentList "dist\server.js" `
     -WorkingDirectory $root `
@@ -26,13 +23,17 @@ Start-Process -FilePath $node -ArgumentList "dist\server.js" `
     -WindowStyle Hidden
 
 Start-Sleep -Seconds 5
-try {
-    try {
-        $h = Invoke-RestMethod "http://115.186.137.240:533/api/health" -TimeoutSec 3
-    } catch {
-        $h = Invoke-RestMethod "http://localhost:533/api/health" -TimeoutSec 5
+$port = if ($env:PORT) { $env:PORT } else {
+    # Match the server's dotenv-based PORT when it is not exported in the shell.
+    $envFile = if ($env:VAC_ENV_FILE) { $env:VAC_ENV_FILE } else { Join-Path $root ".env" }
+    $portLine = if (Test-Path $envFile) {
+        Get-Content $envFile | Select-String -Pattern '^\s*(?:export\s+)?PORT\s*=\s*["'']?([0-9]+)["'']?\s*(?:#.*)?$' | Select-Object -Last 1
     }
-    "console started on port 533; health ok=$($h.ok) auth=$($h.authEnabled)"
+    if ($portLine) { $portLine.Matches[0].Groups[1].Value } else { "533" }
+}
+try {
+    $h = Invoke-RestMethod "http://127.0.0.1:${port}/api/health" -TimeoutSec 5
+    "console started on port $port; health ok=$($h.ok) auth=$($h.authEnabled)"
 }
 catch {
     "console start FAILED: $($_.Exception.Message)"

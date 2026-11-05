@@ -118,7 +118,7 @@ class VicidialApiClient {
         return this.apiPassOverride !== undefined ? this.apiPassOverride : (0, env_store_1.getSecret)('VICI_API_PASS');
     }
     get baseUrl() {
-        return String(this.cfg.viciBaseUrl || 'http://115.186.137.240').replace(/\/+$/, '');
+        return String(this.cfg.viciBaseUrl || 'http://127.0.0.1').replace(/\/+$/, '');
     }
     get nonAgentUrl() {
         const p = this.cfg.nonAgentApiPath || '/vicidial/non_agent_api.php';

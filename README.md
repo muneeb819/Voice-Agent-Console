@@ -3,7 +3,7 @@
 Unified production **Node.js + TypeScript** platform combining:
 1. **Multi-Agent & Multi-Campaign Configuration Console** (`SQLite WAL` + JSON mirror + revision history + 18-rule pre-flight schema validator)
 2. **Live Deepgram Voice Lab** (139 real `Flux v2` & `Aura-2 / v1` voices, studio `.wav` preview proxy, live TTS greeting synthesizer, and 1-click **"Set as Agent Voice"**)
-3. **Browser Live Call Simulator** (`/ws/simulator` WebAudio `16 kHz`/`24 kHz` wideband & `8 kHz` telephony testing against `wss://agent.deepgram.com/v1/agent/converse` + zero-cost Sandbox mode)
+3. **Live Bot browser voice test** (`/ws/simulator`, WebAudio `16 kHz`/`24 kHz` wideband or `8 kHz` test audio, using the Deepgram Voice Agent API; not a live telephone call)
 4. **Co-Located Universal VICIdial Bridge** (`SIP + RTP G.711 μ-law` on UDP `:5062` for **all** Asterisk 13/16/18+ ViciBox servers **+** native Asterisk 18+ `AudioSocket` on TCP `:9092`)
 5. **Production Hardening, Stereo `.wav` Call Recordings & Supervisor Wallboard** (`ADMIN_PASSWORD` auth with localhost Asterisk whitelist, `BRIDGE_ALLOWED_IPS` & `maxCalls` guards, 2-channel `8 kHz` `.wav` recording playback, CSV CDR reports, live supervisor `Force Transfer` / `Force Hangup`, and custom HTTP Webhook tool execution)
 
@@ -28,8 +28,9 @@ voice-agent-console/
 │   ├── vici-bridge.ts            # Dual-transport SIP+RTP (:5062) & AudioSocket (:9092) call orchestrator
 │   ├── vici-loopback-tester.ts   # Binary SIP/RTP & AudioSocket hardware-loopback call simulator
 │   ├── call-recorder.ts          # Timeline-accurate 8 kHz Stereo WAV recorder (L=Caller, R=Bot)
+│   ├── simulator-recordings.ts  # Private, opt-in browser-test audio storage (separate from bridge calls)
 │   ├── webhook-executor.ts       # Custom Function HTTP Webhook executor (.env + lead template interpolation)
-│   └── auth-guard.ts             # HMAC cookie/Bearer auth + 115.186.137.240 Asterisk whitelist + IP allowlist
+│   └── auth-guard.ts             # HMAC cookie/Bearer auth + explicit PBX peer allowlist
 ├── public/
 │   ├── index.html                # Single-Page Operator & Supervisor Console
 │   ├── styles.css                # Dark-mode responsive telemetry & studio styling
@@ -77,17 +78,47 @@ npm start
 # Or simply run ./start.sh (Linux/macOS) or start.bat (Windows)
 ```
 
-Open **`http://115.186.137.240:533`**.
+Open **`http://127.0.0.1:533`**. With no admin password or users, create the first account directly on loopback; proxied bootstrap is intentionally blocked. Once authentication is enabled, only a signed-in operator can create another account. All accounts currently have full operator privileges; there is no role separation.
 
-Run all **37 end-to-end verification checks** across Steps 1–4. The runner uses a temporary data directory and loopback-only ports; live Deepgram checks use your configured API key:
+### Live Bot and test history
+
+1. In **Plug-ins**, select and save supported STT, LLM and TTS providers/models; set `DEEPGRAM_API_KEY` under **API Keys**. In **Live Bot**, choose an agent and start a microphone or speaker-and-text browser test. The status changes to connected only after Deepgram accepts the settings. A working provider account, browser audio permission and network access are required; provider usage can incur charges.
+2. This is a **browser test, not a VICIdial telephone call**. Its transfer, disposition and DNC function requests are reported as not executed. The `end_call` function ends the browser test. Custom webhooks are off by default: explicitly enable them for a test only if their real external side effects are acceptable. Webhook redirects are rejected rather than followed; configure the final endpoint directly. Static-host mode cannot run those server-side webhooks.
+3. Audio recording for a **new** Live Bot test is **off by default**. If everyone whose voice may be captured has consented, check **Record audio for this test**, then start the test. The choice resets when the test ends. Go to **Recent Browser Test History** for the same agent, choose **Load audio recording**, and use the player or download link. Expand **Show all retained tests** if needed. A recording can be deleted without deleting the transcript; **Clear History** deletes that agent's history and attached recordings. Older tests made without recording have no audio and cannot be recovered. Older sandbox/local-speech transcripts were scripted and are labeled as such.
+4. VICIdial bridge calls and bridge loopback tests are a separate path. When a bridge entry has a recording, find it under **Wallboard → Stereo 8 kHz Call Recordings & SQLite CDR Archive** (or **Vici Bridge → Recent SQLite Bridge Call CDRs**) and use the audio player or `.wav` download. A mock-AI bridge recording may contain synthetic test audio rather than an intelligible conversation. Recordings are retained separately from browser test logs. Verify consent and recording requirements for your jurisdiction before making calls.
+
+#### Browser-test recording: storage and limits
+
+- The recording is a **mixed browser capture** of the microphone (unless muted or unavailable) and agent audio actually played by the browser; it is not a separate caller/bot stereo WAV. Speaker-and-text mode records only agent playback; typed text is not converted into speech. A compatible browser with `MediaRecorder` and Web Audio is required. Tab suspension, audio devices, browser restrictions, network interruptions or an interrupted save can yield incomplete or missing audio.
+- Recording stops at 10 minutes or near the 20 MiB size limit; the test may continue without further recording. History marks a limit-truncated recording. Keep the tab open through **Saving recording…**. If saving fails or cannot be confirmed and audio is available, download the temporary copy immediately; it is lost on reload or when the tab closes. A partial copy may not play correctly.
+- **Server mode:** completed audio is uploaded to the server and attached to its saved test log. By default it is stored in `data/simulator-recordings/` (or `VAC_DATA_DIR/simulator-recordings/`); owner-only filesystem permissions are requested where supported, but audio is not encrypted at rest. The latest 100 browser-test logs across all agents are retained, with associated files deleted when logs are evicted or cleared. Transcripts are saved even when audio is off. All signed-in operators can access these recordings; there is no per-user isolation. Use HTTPS, restrict server access, protect backups and downloads, and secure any custom data directory.
+- **Static-host mode:** opted-in audio and its transcript are stored in this browser profile's IndexedDB for this site, not in server test history. The most recent 20 recorded-test entries across agents are kept, with older associated audio removed; unrecorded static-site tests are not saved. Other users or extensions with access to the browser profile may be able to read the data; private browsing, storage eviction, quota limits or clearing site data can remove it. Live microphone audio and text are still sent to Deepgram to conduct the test.
+- Deletion removes the app's stored copy, not downloads, backups, browser/OS caches or other copies. Server recordings and SQLite history should be backed up together when needed. Protect backups and follow applicable consent, retention and deletion requirements.
+
+Bridge loopback tests use a mock VICIdial API, so their transfer, disposition and DNC responses do not prove real updates. Historical bridge records do not reliably distinguish tests from live calls. **Run bridge loopback tests only on an isolated instance with no live calls**: they temporarily change shared bridge/provider routing, and configured custom webhooks may still execute for real. Static-site mode cannot run a bridge test and no longer displays its old synthetic browser-local bridge records as live CDRs.
+
+Scripted sandbox responses and the fake local-speech conversation have been removed. The local speech service still supports standalone health checks and voice previews, but it does not currently provide an LLM-backed Live Bot conversation. The avatar gestures are decorative text-driven animations; microphone byte counts show data queued to the socket, not proof of transcription. Review existing custom agent prompts and deployments before placing real calls; older saved prompts are preserved, not silently rewritten.
+
+The **Dashboard** is the first navigation item and the default page; existing `?tab=` links to individual sections still work. Its scores are configuration estimates, not certifications or proof of live connectivity.
+
+The tests use temporary data and environment files, loopback ports, synthetic credentials and mocked services. External `fetch` calls are blocked by default and the live Deepgram test is reported as skipped. A live run may incur provider charges and requires explicit opt-in with `VAC_TEST_LIVE=1` and a test key:
 
 ```bash
+npm run build
 npm test
+# Only with permission and a dedicated test key:
+# VAC_TEST_LIVE=1 DEEPGRAM_API_KEY=... npm test
 ```
 
 ## Docker / Render Deployment
 
-The full console requires a long-running Node service with WebSocket support. Configure a strong `ADMIN_PASSWORD` and `DEEPGRAM_API_KEY` in the host's secret manager. The server refuses to bind to a non-loopback interface without `ADMIN_PASSWORD`. For Docker, pass your environment file and override `HOST=0.0.0.0`; keep the SIP and AudioSocket bridge ports private. The `vercel.json` configuration only serves static assets and does not provide the API, WebSocket simulator, or telephony bridge.
+The full console needs a long-running Node 22.5+ service with WebSocket support. Configure a strong `ADMIN_PASSWORD` or create a local account before binding to a non-loopback address or opening a public demo tunnel. For Docker, set `HOST=0.0.0.0`, supply credentials through your deployment's secret manager, and keep SIP and AudioSocket ports private. For a remote PBX, explicitly set `BRIDGE_BIND_HOST` and a restrictive `BRIDGE_ALLOWED_IPS`; the defaults allow loopback only. Set `TRUST_PROXY` only to the addresses/CIDRs of a trusted reverse proxy which overwrites forwarded headers; it is needed for correct client-IP throttling, secure cookies, and same-origin HTTP/WebSocket checks behind TLS termination. Incorrect proxy trust can prevent browser API and WebSocket access. Never expose an unauthenticated bootstrap instance through a reverse proxy.
+
+Browser API calls and WebSocket upgrades with an `Origin` must be same-origin; the console no longer advertises wildcard CORS. Non-browser clients may omit `Origin`. Local unauthenticated bootstrap and local PBX exemptions also require a loopback Host (`localhost`, `127.0.0.1`, or `[::1]`) to reduce DNS-rebinding risk. Deployments that need cross-origin access should use a same-origin reverse proxy rather than opening CORS. For a local cloudflared demo, configure an appropriate `TRUST_PROXY` (for example `loopback` when cloudflared connects directly from loopback) and restart the console; the launcher checks authentication and proxy readiness before opening the tunnel.
+
+The ViciBox installer preserves existing `.env` settings and creates a loopback-only configuration for a new installation. Review all listener, PBX, TLS and firewall settings before allowing remote traffic. `BRIDGE_SIP_PORT` overrides the saved console port, and an occupied port can cause a listener to select another port: check the actual bridge status and align the generated VICIdial configuration before placing calls. For wildcard binds with a remote PBX, set a reachable advertised `bridgeHost` explicitly. The `vercel.json`/GitHub Pages deployment is a static demo only: its browser-local accounts do **not** secure a server, and it provides no API, WebSocket backend or telephony bridge.
+
+The release bundle contains only files listed in `tools/release-manifest.json`; add new release files to that manifest. Runtime data, credentials and symlinks are excluded. Analytics describe the retained 200 bridge and 100 simulator calls, not lifetime totals.
 
 ---
 

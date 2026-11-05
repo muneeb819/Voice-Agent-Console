@@ -52,8 +52,13 @@ function waitForEvent<T = any>(
 async function run() {
   configureTestServices();
   const results: string[] = [];
-  const check = async (name: string, fn: () => Promise<void> | void) => {
-    await fn();
+  const skipped: string[] = [];
+  const check = async (name: string, fn: () => Promise<void | 'skip'> | void | 'skip') => {
+    if ((await fn()) === 'skip') {
+      skipped.push(name);
+      console.log(`⏭ SKIPPED ${name} (no live Deepgram key)`);
+      return;
+    }
     results.push(name);
     console.log(`✓ ${name}`);
   };
@@ -165,7 +170,7 @@ async function run() {
               JSON.stringify({
                 type: 'ConversationText',
                 role: 'assistant',
-                content: 'Awesome Amina, connecting you to our licensed specialist right now!',
+                content: 'This browser test cannot transfer a real call.',
               })
             );
             const pcmReply = Buffer.alloc(960, 0x12);
@@ -284,8 +289,8 @@ async function run() {
 
       const endedEvt = await waitForEvent(clientEvents, waiters, (m) => m.type === 'call_ended', 4000, 'call_ended');
       assert.strictEqual(endedEvt.reason, 'bot_end_call');
-      assert.strictEqual(endedEvt.disposition, 'XFER');
-      assert.strictEqual(endedEvt.transferredTo, 'ingroup:FE_CLOSERS');
+      assert.strictEqual(endedEvt.disposition, null);
+      assert.strictEqual(endedEvt.transferredTo, null);
       assert.strictEqual(clientAudioBytes, 960, 'Expected 960 bytes of binary TTS PCM16 audio');
       assert.strictEqual(receivedBinaryFrames.length, 2, 'Expected both pre- and post-SettingsApplied mic frames');
 
@@ -298,6 +303,16 @@ async function run() {
       const xferResp = receivedFnResponses.find((r) => r.id === 'fc_xfer_1');
       assert.ok(xferResp, 'Expected FunctionCallResponse for transfer_to_live_agent');
       assert.strictEqual(xferResp.thought_signature, 'gemini_sig_abc123');
+      const xferResult = JSON.parse(xferResp.content);
+      const dispoResult = JSON.parse(receivedFnResponses.find((r) => r.id === 'fc_dispo_1').content);
+      assert.strictEqual(xferResult.ok, false);
+      assert.strictEqual(xferResult.simulated, true);
+      assert.match(xferResult.error, /no VICIdial or PBX transfer/i);
+      assert.strictEqual(dispoResult.ok, false);
+      assert.strictEqual(dispoResult.simulated, true);
+      assert.match(dispoResult.error, /no disposition.*changed/i);
+      assert.ok(receivedSettings.agent.think.functions.every((fn: any) => fn.defer_until_eot === true));
+      assert.match(receivedSettings.agent.think.prompt, /not a live VICIdial call/i);
     } finally {
       process.env.DEEPGRAM_API_KEY = prevKey || '';
       if (prevUrl === undefined) delete process.env.DEEPGRAM_AGENT_URL;
@@ -307,86 +322,28 @@ async function run() {
     }
   });
 
-  await check('3. Live Running Server Sandbox Call Flow (Price Deferral -> Transfer -> DNC End Call + SQLite Call Log)', async () => {
-    const events: any[] = [];
-    const waiters: Array<() => boolean> = [];
-    let rxAudio = 0;
-
-    const ws = new WebSocket(LIVE_WS);
-    ws.on('message', (data, isBinary) => {
-      if (isBinary) {
-        const b = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
-        rxAudio += b.length;
-      } else {
-        events.push(JSON.parse(data.toString()));
-      }
-      for (let i = waiters.length - 1; i >= 0; i--) {
-        if (waiters[i]()) waiters.splice(i, 1);
-      }
-    });
-
-    await new Promise<void>((r, rej) => {
-      ws.once('open', () => r());
-      ws.once('error', rej);
-    });
-
-    ws.send(
-      JSON.stringify({
-        type: 'start',
-        upstreamMode: 'sandbox',
-        agentId: 'a1',
-        bandwidth: 'wideband',
-        lead: { lead_id: '50012', first_name: 'Carlos', state: 'FL', age: '62' },
-      })
-    );
-
-    await waitForEvent(events, waiters, (m) => m.type === 'session_started', 4000, 'sandbox session_started');
-    await waitForEvent(
-      events,
-      waiters,
-      (m) => m.type === 'transcript' && m.role === 'assistant',
-      4000,
-      'sandbox greeting transcript'
-    );
-
-    // Turn 1: Ask price ("How much does it cost?") -> bot must defer without dollar figure
-    ws.send(JSON.stringify({ type: 'inject_user_message', content: 'How much does it cost per month?' }));
-    const priceReply = await waitForEvent(
-      events,
-      waiters,
-      (m) => m.type === 'transcript' && m.role === 'assistant' && m.content.includes('licensed specialist'),
-      4000,
-      'price deferral reply'
-    );
-    assert.ok(!/\$\d+/.test(priceReply.content), 'Bot must never quote dollar figures');
-
-    // Turn 2: DNC ("Take me off your list") -> sets DNC disposition & triggers end_call auto-hangup
-    ws.send(JSON.stringify({ type: 'inject_user_message', content: 'Take me off your list please' }));
-    const dncFn = await waitForEvent(
-      events,
-      waiters,
-      (m) => m.type === 'function_call' && m.name === 'set_disposition',
-      4000,
-      'DNC set_disposition'
-    );
-    assert.strictEqual(dncFn.args.code, 'DNC');
-
-    const callEnded = await waitForEvent(events, waiters, (m) => m.type === 'call_ended', 5000, 'sandbox call_ended');
-    assert.strictEqual(callEnded.disposition, 'DNC');
-    assert.ok(rxAudio > 1000, 'Expected binary audio frames during sandbox call');
-
-    // Verify call log persisted in SQLite via GET /api/simulator/logs
-    const logsRes = await fetch(`${LIVE_HTTP}/api/simulator/logs?agentId=a1`);
-    assert.strictEqual(logsRes.status, 200);
-    const logsData: any = await logsRes.json();
-    assert.ok(logsData.count >= 1, 'Expected saved call log in SQLite');
-    assert.ok(logsData.logs.some((l: any) => l.id === callEnded.callId && l.disposition === 'DNC'));
-
-    // Clean up test logs so user starts with a clean slate
-    await fetch(`${LIVE_HTTP}/api/simulator/logs`, { method: 'DELETE' });
+  await check('3. Unsupported scripted and local-speech modes fail closed without fake audio or transcripts', async () => {
+    for (const [mode, expected] of [
+      ['sandbox', 'SANDBOX_UNAVAILABLE'],
+      ['speech_service', 'LOCAL_SPEECH_AGENT_UNAVAILABLE'],
+    ]) {
+      const events: any[] = [];
+      const ws = new WebSocket(LIVE_WS);
+      let rxAudio = 0;
+      ws.on('message', (data, isBinary) => {
+        if (isBinary) rxAudio += (data as Buffer).length;
+        else events.push(JSON.parse(data.toString()));
+      });
+      await new Promise<void>((resolve, reject) => { ws.once('open', () => resolve()); ws.once('error', reject); });
+      ws.send(JSON.stringify({ type: 'start', upstreamMode: mode, agentId: 'a1', bandwidth: 'wideband' }));
+      await new Promise<void>((resolve) => ws.once('close', () => resolve()));
+      assert.ok(events.some((e) => e.type === 'error' && e.code === expected), `Expected ${expected}`);
+      assert.ok(!events.some((e) => e.type === 'session_started' || e.type === 'transcript'));
+      assert.strictEqual(rxAudio, 0);
+    }
   });
 
-  await check('4. Secret Sanitization (Token/Bearer/Quotes) & Real Deepgram Auth Verification on /api/secrets', async () => {
+  await check('4. Secret sanitization and Deepgram auth rejection/failure response', async () => {
     assert.strictEqual(sanitizeSecretValue('  "Token dg_abc123"  '), 'dg_abc123');
     assert.strictEqual(sanitizeSecretValue("'Bearer dg_xyz987'"), 'dg_xyz987');
     assert.strictEqual(sanitizeSecretValue('dg_raw_key\r\n'), 'dg_raw_key');
@@ -527,7 +484,7 @@ async function run() {
       // No DEEPGRAM_API_KEY in .env (offline CI/sandbox environment)
       assert.strictEqual(verifyRes.status, 400);
       assert.strictEqual(verifyData.ok, false);
-      return;
+      return 'skip';
     }
     assert.strictEqual(verifyRes.status, 200);
     assert.strictEqual(verifyData.ok, true);
@@ -587,7 +544,7 @@ async function run() {
     await fetch(`${LIVE_HTTP}/api/simulator/logs`, { method: 'DELETE' });
   });
 
-  console.log(`\nALL ${results.length}/${results.length} STEP 2 VERIFICATION CHECKS PASSED!`);
+  console.log(`\nSTEP 2: ${results.length} passed, ${skipped.length} skipped.`);
 }
 
 run().catch((err) => {

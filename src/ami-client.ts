@@ -21,7 +21,7 @@ export class AsteriskAmiClient {
   private readonly secretOverride?: string;
 
   constructor(cfg: ViciConfig, secretOverride?: string) {
-    this.host = cfg.amiHost || '115.186.137.240';
+    this.host = cfg.amiHost || '127.0.0.1';
     this.port = Number(cfg.amiPort || 5038);
     this.username = cfg.amiUser || 'cron';
     this.secretOverride = secretOverride;

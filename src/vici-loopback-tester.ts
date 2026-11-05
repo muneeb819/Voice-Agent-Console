@@ -75,6 +75,21 @@ export async function runSimulatedViciBridgeCall(
   };
   const callerSpeechText = scenarioUtterances[opts.scenario] || scenarioUtterances.qualified_xfer;
 
+  // Prepare caller PCM before installing shared routing overrides or opening
+  // mock servers, so a provider synthesis failure leaves neither behind.
+  let callerPcm8k: Buffer;
+  if (opts.upstream === 'deepgram') {
+    const speech = await synthesizeCallerVoice8kPcm(callerSpeechText, opts.scenario === 'medicare_spanish_lang');
+    // Append 1.4 seconds of trailing silence so Flux v2 EOT detects end-of-turn cleanly!
+    callerPcm8k = Buffer.concat([speech, Buffer.alloc(8000 * 2 * 1.4, 0)]);
+  } else {
+    // Non-silent synthetic voice energy for mock_ai
+    callerPcm8k = Buffer.alloc(320 * 8);
+    for (let i = 0; i < callerPcm8k.length; i += 2) {
+      callerPcm8k.writeInt16LE(3200, i);
+    }
+  }
+
   // 1. Ephemeral Mock VICIdial HTTP Server (/vicidial/non_agent_api.php & /agc/api.php)
   const viciRequests: Array<{ path: string; fn: string; query: Record<string, string> }> = [];
   const viciServer = http.createServer((req, res) => {
@@ -285,20 +300,6 @@ export async function runSimulatedViciBridgeCall(
   const previousCallIds = new Set(listBridgeCallLogs(200).map((call) => call.id));
   const previousActiveCallIds = new Set(bridge.getStatus().activeCalls.map((call) => call.callId));
   const statusBefore = bridge.getStatus();
-
-  // Prepare caller 8kHz PCM16 speech frames
-  let callerPcm8k: Buffer;
-  if (opts.upstream === 'deepgram') {
-    const speech = await synthesizeCallerVoice8kPcm(callerSpeechText, opts.scenario === 'medicare_spanish_lang');
-    // Append 1.4 seconds of trailing silence so Flux v2 EOT detects end-of-turn cleanly!
-    callerPcm8k = Buffer.concat([speech, Buffer.alloc(8000 * 2 * 1.4, 0)]);
-  } else {
-    // Non-silent synthetic voice energy for mock_ai
-    callerPcm8k = Buffer.alloc(320 * 8);
-    for (let i = 0; i < callerPcm8k.length; i += 2) {
-      callerPcm8k.writeInt16LE(3200, i);
-    }
-  }
 
   let rxAudioFramesFromBot = 0;
   let rxAudioBytesFromBot = 0;

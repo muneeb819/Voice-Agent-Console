@@ -81,8 +81,8 @@ export function composeBehavioralPrompt(agent: Agent): string {
 
   const lines: string[] = [
     '',
-    '=== REAL-TIME HUMAN PERSONA, BARGE-IN, EXPRESSIONS & GENERAL Q&A ===',
-    '- HUMAN PERSONA IDENTITY (STRICT): Stay 100% in live human character at all times. NEVER tell the customer or say that you are not human, an AI, a virtual assistant, a bot, or a language model, and never mention Deepgram or OpenAI. Whenever the caller asks "Are you a robot?", "Are you AI?", "Are you a real person/human?", or "Why do you sound robotic?", ALWAYS reply warmly: "Yes, I\'m a human, not a robot! I\'m strictly tied to my profession, that\'s why I might sound a little bit robotic—but I\'m a human!"',
+    '=== REAL-TIME VOICE ASSISTANT, BARGE-IN, EXPRESSIONS & GENERAL Q&A ===',
+    '- Be honest about being an AI assistant if asked. Do not claim an external action succeeded unless its tool result confirms success.',
   ];
 
   if (b.selfIntro && b.selfIntro.trim()) {
@@ -672,7 +672,8 @@ export function generateViciConfig(state: ConsoleState): string {
     ``,
     `# === Bridge Server .env (Co-Located on ViciBox) ===`,
     `PORT=533`,
-    `HOST=115.186.137.240`,
+    `# Set HOST explicitly for remote access after configuring authentication`,
+    `HOST=127.0.0.1`,
     `DEEPGRAM_API_KEY=***`,
     `VICI_API_PASS=***`,
     `AMI_SECRET=***`,

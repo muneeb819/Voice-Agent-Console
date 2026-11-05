@@ -43,7 +43,6 @@ const db_1 = require("./db");
 const defaults_1 = require("./defaults");
 const env_store_1 = require("./env-store");
 const settings_builder_1 = require("./settings-builder");
-const speech_service_client_1 = require("./speech-service-client");
 const webhook_executor_1 = require("./webhook-executor");
 function interpolateEnvPlaceholders(obj) {
     if (typeof obj === 'string') {
@@ -73,12 +72,12 @@ function interpolateEnvPlaceholders(obj) {
 }
 function hydrateLeadIntoPromptAndGreeting(settings, agent, campaign, lead) {
     const cleanLead = {
-        lead_id: String(lead?.lead_id || '104892').trim(),
-        first_name: String(lead?.first_name || 'Robert').trim(),
-        phone_number: String(lead?.phone_number || '+13055550192').trim(),
-        state: String(lead?.state || 'FL').trim(),
-        age: String(lead?.age || '64').trim(),
-        campaign_id: String(campaign?.viciCampaign || 'FETEST').trim(),
+        lead_id: String(lead?.lead_id || '').trim(),
+        first_name: String(lead?.first_name || '').trim(),
+        phone_number: String(lead?.phone_number || '').trim(),
+        state: String(lead?.state || '').trim(),
+        age: String(lead?.age || '').trim(),
+        campaign_id: String(campaign?.viciCampaign || '').trim(),
     };
     if (!agent.acceptViciCalls) {
         return { hydrated: false, leadSummary: cleanLead };
@@ -89,7 +88,7 @@ function hydrateLeadIntoPromptAndGreeting(settings, agent, campaign, lead) {
     });
     settings.agent.greeting = replaceVars(settings.agent.greeting || '');
     const basePrompt = replaceVars(settings.agent.think.prompt || '');
-    const contextFooter = `\n\n[Active VICIdial Call Lead Record — Hydrated by Bridge on Connect]\n` +
+    const contextFooter = `\n\n[Browser Test Lead Context — supplied for this test, not a live VICIdial call]\n` +
         `- lead_id: ${cleanLead.lead_id}\n` +
         `- caller_first_name: ${cleanLead.first_name}\n` +
         `- phone_number: ${cleanLead.phone_number}\n` +
@@ -99,18 +98,6 @@ function hydrateLeadIntoPromptAndGreeting(settings, agent, campaign, lead) {
         (campaign?.xferTarget ? `\n- live_closer_target: ${campaign.xferType} "${campaign.xferTarget}"` : '');
     settings.agent.think.prompt = basePrompt + contextFooter;
     return { hydrated: true, leadSummary: cleanLead };
-}
-function synthesizeSandboxTonePcm16(sampleRate, durationMs = 420, freqHz = 440) {
-    const numSamples = Math.floor((sampleRate * durationMs) / 1000);
-    const buf = Buffer.alloc(numSamples * 2);
-    for (let i = 0; i < numSamples; i++) {
-        const t = i / sampleRate;
-        const env = Math.sin((Math.PI * i) / numSamples) * 0.18;
-        const sample = Math.sin(2 * Math.PI * freqHz * t) * env + Math.sin(2 * Math.PI * (freqHz * 1.5) * t) * (env * 0.4);
-        const s16 = Math.max(-32768, Math.min(32767, Math.round(sample * 32767)));
-        buf.writeInt16LE(s16, i * 2);
-    }
-    return buf;
 }
 function attachLiveSimulator(server, noServer = false) {
     const wss = noServer
@@ -125,14 +112,16 @@ function attachLiveSimulator(server, noServer = false) {
         let settingsApplied = false;
         let upstreamMode = 'deepgram';
         let dgWs = null;
-        let localSttWs = null;
-        let localTtsHandle = null;
         let keepAliveTimer = null;
         let comfortSilenceTimer = null;
         let pendingEndTimer = null;
+        let connectTimer = null;
         let activeState = null;
         let activeAgent = null;
         let activeCampaign;
+        let testLead = {};
+        let allowWebhooks = false;
+        let recordingRequested = false;
         let sampleRateIn = 16000;
         let sampleRateOut = 24000;
         let turns = 0;
@@ -146,15 +135,15 @@ function attachLiveSimulator(server, noServer = false) {
         let detectedDisposition = null;
         let transferredTo = null;
         let awaitingHangupAudioDone = false;
+        let pendingEndFunctionId = null;
         let fatalErrorMessage = null;
         let suppressStaleAgentAudio = false;
         const cancelledFnIds = new Set();
+        const activeFunctionAborts = new Map();
         const pendingPreSettingsAudio = [];
         const pendingInjectedMessages = [];
         const transcript = [];
         const functionCalls = [];
-        let sandboxSpeechFrames = 0;
-        let sandboxSpeaking = false;
         const sendClientJson = (payload) => {
             if (clientWs.readyState === ws_1.default.OPEN) {
                 clientWs.send(JSON.stringify(payload));
@@ -222,86 +211,73 @@ function attachLiveSimulator(server, noServer = false) {
                 sendClientJson({ type: 'function_call', ...entry });
                 return;
             }
-            let resultPayload = { ok: true, simulated: true };
-            if (fnReq.name === 'set_disposition') {
-                const code = String(parsedArgs.code || 'CALLBK').trim().toUpperCase();
-                const allowed = (activeCampaign?.dispos || '')
-                    .split(',')
-                    .map((d) => d.trim().toUpperCase())
-                    .filter(Boolean);
-                const validCode = allowed.length === 0 || allowed.includes(code);
-                detectedDisposition = code;
+            const fnConfig = activeState?.functions.find((f) => f.name === fnReq.name);
+            const enabled = Boolean(fnConfig && activeAgent?.fnIds.includes(fnConfig.id));
+            let resultPayload;
+            if (!enabled) {
+                resultPayload = { ok: false, error: 'Function is not enabled for this agent.' };
+            }
+            else if (fnReq.name === 'set_disposition') {
                 resultPayload = {
-                    ok: true,
-                    vici_api: '/vicidial/non_agent_api.php',
-                    disposition_code: code,
-                    valid_for_campaign: validCode,
-                    notes: parsedArgs.notes || '',
+                    ok: false,
+                    simulated: true,
+                    requested_code: String(parsedArgs.code || '').trim().toUpperCase(),
+                    error: 'Browser tests are not VICIdial calls. No disposition or do-not-call record was changed.',
                 };
             }
             else if (fnReq.name === 'transfer_to_live_agent') {
-                const target = activeCampaign
-                    ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}`
-                    : 'ingroup:FE_CLOSERS';
-                transferredTo = target;
-                if (!detectedDisposition)
-                    detectedDisposition = 'XFER';
                 resultPayload = {
-                    ok: true,
-                    vici_api: '/agc/api.php?function=ra_call_control&stage=INGROUPTRANSFER',
-                    transferred_to: target,
-                    screen_pop_lead_preserved: true,
-                    reason: parsedArgs.reason || 'Qualified & interested lead',
-                    metadata_passed: {
-                        prospect_name: parsedArgs.prospect_name || null,
-                        confirmed_age: parsedArgs.confirmed_age || null,
-                        medicare_status: parsedArgs.medicare_status || null,
-                        hook_type: parsedArgs.hook_type || null,
-                    },
+                    ok: false,
+                    simulated: true,
+                    requested_target: activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : null,
+                    error: 'Browser tests cannot transfer a real call. No VICIdial or PBX transfer was made.',
                 };
             }
             else if (fnReq.name === 'end_call') {
                 awaitingHangupAudioDone = true;
-                resultPayload = {
-                    ok: true,
-                    action: 'hangup_scheduled_after_speech',
-                };
+                pendingEndFunctionId = fnReq.id;
+                resultPayload = { ok: true, action: 'end_browser_test_after_speech' };
                 if (pendingEndTimer)
                     clearTimeout(pendingEndTimer);
-                pendingEndTimer = setTimeout(() => {
-                    finalizeCall('bot_end_call');
-                }, 1800);
+                pendingEndTimer = setTimeout(() => finalizeCall('bot_end_call'), 9000);
+            }
+            else if (!fnConfig?.url?.trim()) {
+                resultPayload = { ok: false, error: 'No webhook URL is configured for this function.' };
+            }
+            else if (!allowWebhooks) {
+                resultPayload = { ok: false, error: 'Real webhooks are disabled for this browser test.' };
             }
             else {
-                const fnConfig = activeState?.functions.find((f) => f.name === fnReq.name);
+                const controller = new AbortController();
+                activeFunctionAborts.set(fnReq.id, controller);
                 const whRes = await (0, webhook_executor_1.executeCustomFunctionWebhook)(fnConfig, parsedArgs, {
                     callId,
-                    leadId: '104892',
-                    phone: '3055550192',
+                    leadId: testLead.lead_id || null,
+                    phone: testLead.phone_number || '',
                     campaignId: activeCampaign?.id || null,
                     viciCampaign: activeCampaign?.viciCampaign || null,
-                });
-                resultPayload = whRes.executedWebhook
-                    ? {
-                        ok: whRes.ok,
-                        executed_by: 'node_webhook_executor',
-                        http_status: whRes.httpStatus,
-                        latency_ms: whRes.latencyMs,
-                        result: whRes.data ?? null,
-                        ...(whRes.error ? { error: whRes.error } : {}),
-                    }
-                    : {
-                        ok: true,
-                        executed_by: 'simulator_client_handler',
-                        received_args: parsedArgs,
-                    };
+                    lead: testLead,
+                }, 6000, controller.signal);
+                activeFunctionAborts.delete(fnReq.id);
+                // A cancelled/closed session must not send a late success to the model.
+                if (cancelledFnIds.has(fnReq.id) || closed)
+                    return;
+                const responseRejected = whRes.data && typeof whRes.data === 'object' && whRes.data.ok === false;
+                resultPayload = {
+                    ok: whRes.ok && !responseRejected,
+                    executed_by: 'node_webhook_executor',
+                    http_status: whRes.httpStatus,
+                    latency_ms: whRes.latencyMs,
+                    result: whRes.data ?? null,
+                    ...(whRes.error ? { error: whRes.error } : {}),
+                };
             }
             const entry = {
                 ts: new Date().toISOString(),
                 id: fnReq.id,
                 name: fnReq.name,
                 args: parsedArgs,
-                status: 'completed',
+                status: resultPayload.simulated ? 'simulated' : resultPayload.ok ? 'completed' : 'failed',
                 response: resultPayload,
             };
             functionCalls.push(entry);
@@ -324,292 +300,6 @@ function attachLiveSimulator(server, noServer = false) {
                 dgWs.send(JSON.stringify(fnResp));
             }
         };
-        let localTtsFailed = false;
-        const speakLocalOrSandbox = (text, fallbackMs = 380, fallbackHz = 523.25) => {
-            if (upstreamMode === 'speech_service' && localTtsHandle && !localTtsFailed) {
-                localTtsHandle.speak(text);
-                return;
-            }
-            sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, fallbackMs, fallbackHz));
-            setTimeout(() => {
-                if (!closed)
-                    sendClientJson({ type: 'agent_state', state: 'listening' });
-            }, Math.min(300, fallbackMs));
-        };
-        let sandboxMedicareConfirmed = false;
-        const handleSandboxUtterance = (userText) => {
-            const clean = userText.trim();
-            if (!clean || closed)
-                return;
-            turns += 1;
-            lastUserTurnTs = Date.now();
-            awaitingFirstAudioForTurn = true;
-            sendClientJson({ type: 'agent_state', state: 'user_speaking' });
-            recordTranscript('user', clean);
-            setTimeout(() => {
-                if (closed)
-                    return;
-                lastThinkingTs = Date.now();
-                sendClientJson({ type: 'agent_state', state: 'thinking' });
-                setTimeout(() => {
-                    if (closed)
-                        return;
-                    const lower = clean.toLowerCase();
-                    const isMedicareBot = activeAgent?.id === 'a_medicare' || /medicare/i.test(activeAgent?.name || '');
-                    const enabledFnNames = (activeAgent?.fnIds || [])
-                        .map((id) => activeState?.functions.find((f) => f.id === id)?.name)
-                        .filter(Boolean);
-                    // Medicare-specific Sandbox Dialogue Tree (mirrors exact 4-phase Training Blueprint)
-                    if (isMedicareBot) {
-                        // Scenario A: Language Barrier (Spanish / Non-English)
-                        if (/(hablo espa|español|espanol|no hablo ingl|no speak english|spanish only)/i.test(lower)) {
-                            if (enabledFnNames.includes('set_disposition')) {
-                                executeClientFunction({
-                                    id: `fc_sbx_${Date.now()}_lang`,
-                                    name: 'set_disposition',
-                                    arguments: JSON.stringify({
-                                        code: 'LANG',
-                                        notes: `Language Barrier - Non-English speaker ("${clean}")`,
-                                    }),
-                                    client_side: true,
-                                });
-                            }
-                            const langReply = 'Apologies, have a great day.';
-                            sendClientJson({ type: 'agent_state', state: 'speaking' });
-                            recordTranscript('assistant', langReply);
-                            speakLocalOrSandbox(langReply, 280, 392);
-                            if (enabledFnNames.includes('end_call')) {
-                                executeClientFunction({
-                                    id: `fc_sbx_${Date.now()}_end`,
-                                    name: 'end_call',
-                                    arguments: '{}',
-                                    client_side: true,
-                                });
-                            }
-                            return;
-                        }
-                        // Scenario B: Hostility / Do-Not-Call Resistance
-                        if (/(take me off|do not call|dnc|stop calling|don't call)/i.test(lower)) {
-                            if (enabledFnNames.includes('set_disposition')) {
-                                executeClientFunction({
-                                    id: `fc_sbx_${Date.now()}_dnc`,
-                                    name: 'set_disposition',
-                                    arguments: JSON.stringify({ code: 'DNC', notes: `Caller requested DNC: "${clean}"` }),
-                                    client_side: true,
-                                });
-                            }
-                            const dncReply = 'I completely understand, and I apologize for the intrusion. I will remove your number from our active outreach list immediately. Have a great day.';
-                            sendClientJson({ type: 'agent_state', state: 'speaking' });
-                            recordTranscript('assistant', dncReply);
-                            speakLocalOrSandbox(dncReply, 360, 392);
-                            if (enabledFnNames.includes('end_call')) {
-                                executeClientFunction({
-                                    id: `fc_sbx_${Date.now()}_end`,
-                                    name: 'end_call',
-                                    arguments: '{}',
-                                    client_side: true,
-                                });
-                            }
-                            return;
-                        }
-                        // Human Persona check ("Are you a robot / AI?")
-                        if (/(are you a robot|are you ai|are you an ai|are you human|real human|sound robotic)/i.test(lower)) {
-                            const humanReply = "Yes, I'm a human, not a robot! I'm strictly tied to my profession, that's why I might sound a little bit robotic—but I'm a human!";
-                            sendClientJson({ type: 'agent_state', state: 'speaking' });
-                            recordTranscript('assistant', humanReply);
-                            speakLocalOrSandbox(humanReply, 380, 523.25);
-                            return;
-                        }
-                        // Scenario C: Skepticism / "Is this a scam?"
-                        if (/(scam|sales pitch|bill|who are you|legit)/i.test(lower)) {
-                            const scamReply = "I understand your caution! This isn't a bill or a sales pitch—this is a review of the state-approved supplemental allowances and credits available under your current Medicare Part A and B coverage. It takes less than a minute to verify if your zip code is approved. Do you currently have Medicare Part A and B?";
-                            sendClientJson({ type: 'agent_state', state: 'speaking' });
-                            recordTranscript('assistant', scamReply);
-                            speakLocalOrSandbox(scamReply, 440, 493.88);
-                            return;
-                        }
-                        // Explicit No Medicare
-                        if (/\b(no medicare|don't have medicare|do not have medicare|medicaid only)\b/i.test(lower)) {
-                            if (enabledFnNames.includes('set_disposition')) {
-                                executeClientFunction({
-                                    id: `fc_sbx_${Date.now()}_dq`,
-                                    name: 'set_disposition',
-                                    arguments: JSON.stringify({ code: 'DQ', notes: 'Disqualified: No Medicare Part A or B' }),
-                                    client_side: true,
-                                });
-                            }
-                            const dqReply = 'Thank you for letting me know! Right now this state allowance release requires active Medicare Part A or B, so we cannot release the card today. Have a wonderful rest of your day!';
-                            sendClientJson({ type: 'agent_state', state: 'speaking' });
-                            recordTranscript('assistant', dqReply);
-                            speakLocalOrSandbox(dqReply, 360, 392);
-                            if (enabledFnNames.includes('end_call')) {
-                                executeClientFunction({
-                                    id: `fc_sbx_${Date.now()}_end`,
-                                    name: 'end_call',
-                                    arguments: '{}',
-                                    client_side: true,
-                                });
-                            }
-                            return;
-                        }
-                        if (/(yes|yeah|i think so|part a|part b|both|i have medicare)/i.test(lower)) {
-                            sandboxMedicareConfirmed = true;
-                        }
-                        const ageMatch = /\b(\d{2,3})\b/.exec(lower);
-                        if (ageMatch) {
-                            const ageNum = Number(ageMatch[1]);
-                            if (ageNum < 65 || ageNum > 85) {
-                                if (enabledFnNames.includes('set_disposition')) {
-                                    executeClientFunction({
-                                        id: `fc_sbx_${Date.now()}_dq_age`,
-                                        name: 'set_disposition',
-                                        arguments: JSON.stringify({
-                                            code: 'DQ',
-                                            notes: `Disqualified: Age ${ageNum} outside strict 65-85 gate`,
-                                        }),
-                                        client_side: true,
-                                    });
-                                }
-                                const ageDqReply = 'Thank you for confirming! Right now this state allowance update is strictly for beneficiaries between ages 65 and 85, so we cannot activate the card today. Have a wonderful day!';
-                                sendClientJson({ type: 'agent_state', state: 'speaking' });
-                                recordTranscript('assistant', ageDqReply);
-                                speakLocalOrSandbox(ageDqReply, 360, 392);
-                                if (enabledFnNames.includes('end_call')) {
-                                    executeClientFunction({
-                                        id: `fc_sbx_${Date.now()}_end`,
-                                        name: 'end_call',
-                                        arguments: '{}',
-                                        client_side: true,
-                                    });
-                                }
-                                return;
-                            }
-                            // Age is strictly 65-85!
-                            sandboxMedicareConfirmed = true;
-                            if (enabledFnNames.includes('set_disposition')) {
-                                executeClientFunction({
-                                    id: `fc_sbx_${Date.now()}_xfer_d`,
-                                    name: 'set_disposition',
-                                    arguments: JSON.stringify({
-                                        code: 'XFER',
-                                        notes: `Qualified Medicare Part A & B, Age ${ageNum}, Hook: Food & OTC Card`,
-                                    }),
-                                    client_side: true,
-                                });
-                            }
-                            if (enabledFnNames.includes('transfer_to_live_agent')) {
-                                executeClientFunction({
-                                    id: `fc_sbx_${Date.now()}_xfer`,
-                                    name: 'transfer_to_live_agent',
-                                    arguments: JSON.stringify({
-                                        reason: 'Qualified Medicare beneficiary ready for Food & OTC benefit review',
-                                        prospect_name: 'Robert',
-                                        confirmed_age: String(ageNum),
-                                        medicare_status: 'Medicare Part A & B',
-                                        hook_type: 'Food & OTC Card',
-                                    }),
-                                    client_side: true,
-                                });
-                            }
-                            const xferReply = 'All right, everything looks good on my end. Let me quickly connect you with a certified benefit specialist on the line who will review your updated benefits with you. Just hold for one moment, here you go!';
-                            sendClientJson({ type: 'agent_state', state: 'speaking' });
-                            recordTranscript('assistant', xferReply);
-                            speakLocalOrSandbox(xferReply, 440, 523.25);
-                            return;
-                        }
-                        const phase2Reply = sandboxMedicareConfirmed
-                            ? 'Wonderful. Just to confirm your state eligibility profile for the file update, what is your current age?'
-                            : 'To release your Food and OTC card immediately, could you confirm if you currently have Medicare Part A or Part B?';
-                        sendClientJson({ type: 'agent_state', state: 'speaking' });
-                        recordTranscript('assistant', phase2Reply);
-                        speakLocalOrSandbox(phase2Reply, 420, 466.16);
-                        return;
-                    }
-                    let reply = "That's great to hear! Just to confirm before I bring on our licensed specialist, are you between 50 and 85 and looking for coverage options today?";
-                    if (/(are you a robot|are you ai|are you an ai|are you human|real person|sound robotic|recording)/i.test(lower)) {
-                        reply =
-                            "Yes, I'm a human, not a robot! I'm strictly tied to my profession, that's why I might sound a little bit robotic—but I'm a human!";
-                        sendClientJson({ type: 'agent_state', state: 'speaking' });
-                        recordTranscript('assistant', reply);
-                        speakLocalOrSandbox(reply, 380, 523.25);
-                        return;
-                    }
-                    if (/(introduce yourself|who are you|what is your name|what's your name|what can you do)/i.test(lower)) {
-                        reply =
-                            activeAgent?.behavior?.selfIntro ||
-                                `Hi there! I'm ${activeAgent?.name || 'Nova'}, your expressive, ultra-fast AI voice assistant. I can chat naturally with instant barge-in and answer any general or specialist questions you have!`;
-                        sendClientJson({ type: 'agent_state', state: 'speaking' });
-                        recordTranscript('assistant', reply);
-                        speakLocalOrSandbox(reply, 360, 523.25);
-                        return;
-                    }
-                    if (/(capital of|speed of light|sky blue|times|plus|weather|joke|how far|moon)/i.test(lower)) {
-                        reply = /capital of japan/i.test(lower)
-                            ? 'Oh, great question! The capital of Japan is Tokyo — a vibrant metropolis of nearly 14 million people.'
-                            : /sky blue/i.test(lower)
-                                ? 'Oh, I love that question! Sunlight scatters off tiny nitrogen and oxygen molecules in our atmosphere, and blue wavelengths scatter the most — painting the sky bright blue!'
-                                : "Great question! In live Deepgram mode I answer any general knowledge, science, or math question in under half a second — add your DEEPGRAM_API_KEY in API Keys to hear full live neural answers!";
-                        sendClientJson({ type: 'agent_state', state: 'speaking' });
-                        recordTranscript('assistant', reply);
-                        speakLocalOrSandbox(reply, 340, 493.88);
-                        return;
-                    }
-                    if (/(take me off|do not call|dnc|stop calling|not interested)/i.test(lower)) {
-                        if (enabledFnNames.includes('set_disposition')) {
-                            const code = /not interested/i.test(lower) ? 'NI' : 'DNC';
-                            executeClientFunction({
-                                id: `fc_sbx_${Date.now()}_1`,
-                                name: 'set_disposition',
-                                arguments: JSON.stringify({ code, notes: `Caller stated: "${clean}"` }),
-                                client_side: true,
-                            });
-                        }
-                        reply = "I completely understand — I've updated our records so you won't be called again. Have a wonderful day, goodbye.";
-                        sendClientJson({ type: 'agent_state', state: 'speaking' });
-                        recordTranscript('assistant', reply);
-                        speakLocalOrSandbox(reply, 360, 392);
-                        if (enabledFnNames.includes('end_call')) {
-                            executeClientFunction({
-                                id: `fc_sbx_${Date.now()}_2`,
-                                name: 'end_call',
-                                arguments: '{}',
-                                client_side: true,
-                            });
-                        }
-                        return;
-                    }
-                    if (/(how much|price|cost|dollar|quote amount)/i.test(lower)) {
-                        reply =
-                            'Exact monthly rates depend on your age and health profile, so our licensed specialist handles all pricing directly. Are you between ages 50 and 85 so I can connect you right now?';
-                    }
-                    else if (/(yes|interested|64|55|60|70|connect me|sure|quote|no coverage)/i.test(lower)) {
-                        if (enabledFnNames.includes('set_disposition')) {
-                            executeClientFunction({
-                                id: `fc_sbx_${Date.now()}_1`,
-                                name: 'set_disposition',
-                                arguments: JSON.stringify({ code: 'XFER', notes: 'Lead confirmed age & interest' }),
-                                client_side: true,
-                            });
-                        }
-                        if (enabledFnNames.includes('transfer_to_live_agent')) {
-                            executeClientFunction({
-                                id: `fc_sbx_${Date.now()}_2`,
-                                name: 'transfer_to_live_agent',
-                                arguments: JSON.stringify({
-                                    reason: `Lead interested and qualified ("${clean}")`,
-                                }),
-                                client_side: true,
-                            });
-                        }
-                        reply =
-                            'Wonderful, you qualify! Please stay on the line for just a moment while I connect you with our licensed specialist now.';
-                    }
-                    sendClientJson({ type: 'agent_state', state: 'speaking' });
-                    recordTranscript('assistant', reply);
-                    speakLocalOrSandbox(reply, 440, 523.25);
-                }, 95);
-            }, 45);
-        };
         let finalized = false;
         const finalizeCall = (reason = 'client_hangup') => {
             if (finalized)
@@ -628,28 +318,28 @@ function attachLiveSimulator(server, noServer = false) {
                 clearTimeout(pendingEndTimer);
                 pendingEndTimer = null;
             }
+            if (connectTimer) {
+                clearTimeout(connectTimer);
+                connectTimer = null;
+            }
+            for (const controller of activeFunctionAborts.values())
+                controller.abort();
+            activeFunctionAborts.clear();
             if (dgWs && (dgWs.readyState === ws_1.default.OPEN || dgWs.readyState === ws_1.default.CONNECTING)) {
                 try {
                     dgWs.close(1000, 'Call ended');
                 }
                 catch { }
             }
-            if (localSttWs && (localSttWs.readyState === ws_1.default.OPEN || localSttWs.readyState === ws_1.default.CONNECTING)) {
-                try {
-                    localSttWs.close(1000, 'Call ended');
-                }
-                catch { }
-            }
-            if (localTtsHandle) {
-                localTtsHandle.close();
-                localTtsHandle = null;
-            }
             const endedAtIso = new Date().toISOString();
             const durationMs = Math.max(1, Date.now() - startedAtMs);
             const avgTtfbMs = ttfbSamples.length
                 ? Math.round(ttfbSamples.reduce((a, b) => a + b, 0) / ttfbSamples.length)
                 : null;
-            if (started && activeAgent) {
+            // Only provider-confirmed sessions count as test calls. A call-ended
+            // event must not imply persistence when the database write failed.
+            let logSaved = null;
+            if (settingsApplied && activeAgent) {
                 try {
                     (0, db_1.saveSimulatorCallLog)({
                         id: callId,
@@ -666,15 +356,22 @@ function attachLiveSimulator(server, noServer = false) {
                         avgTtfbMs,
                         disposition: detectedDisposition,
                         transferredTo,
+                        recordingRequested,
+                        recordingStatus: recordingRequested ? 'pending' : 'not_requested',
                         transcript,
                         functionCalls,
                     });
+                    logSaved = true;
                 }
-                catch { }
+                catch {
+                    logSaved = false;
+                    sendClientJson({ type: 'warning', message: 'The browser test ended, but its transcript could not be saved to test history.' });
+                }
             }
             sendClientJson({
                 type: 'call_ended',
                 callId,
+                logSaved,
                 reason,
                 fatalError: fatalErrorMessage,
                 durationMs,
@@ -699,37 +396,6 @@ function attachLiveSimulator(server, noServer = false) {
                 const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
                 txAudioBytes += buf.length;
                 lastBrowserAudioAt = Date.now();
-                if (upstreamMode === 'speech_service') {
-                    if (localSttWs && localSttWs.readyState === ws_1.default.OPEN) {
-                        localSttWs.send(buf, { binary: true });
-                    }
-                    return;
-                }
-                if (upstreamMode === 'sandbox') {
-                    if (buf.length >= 4) {
-                        let sumSq = 0;
-                        const samples = Math.floor(buf.length / 2);
-                        for (let i = 0; i < samples; i++) {
-                            const s = buf.readInt16LE(i * 2) / 32768;
-                            sumSq += s * s;
-                        }
-                        const rms = Math.sqrt(sumSq / samples);
-                        if (rms > 0.045) {
-                            sandboxSpeechFrames += 1;
-                            if (sandboxSpeechFrames === 3 && !sandboxSpeaking) {
-                                sandboxSpeaking = true;
-                                sendClientJson({ type: 'barge_in' });
-                                sendClientJson({ type: 'agent_state', state: 'user_speaking' });
-                            }
-                        }
-                        else if (sandboxSpeaking && rms < 0.015) {
-                            sandboxSpeechFrames = 0;
-                            sandboxSpeaking = false;
-                            handleSandboxUtterance('[Voice Mic Utterance — Yes, I am 64 and interested in a quote]');
-                        }
-                    }
-                    return;
-                }
                 if (!settingsApplied) {
                     if (pendingPreSettingsAudio.length < 25) {
                         pendingPreSettingsAudio.push(buf);
@@ -756,8 +422,6 @@ function attachLiveSimulator(server, noServer = false) {
             if (msg.type === 'client_barge_in') {
                 if (activeAgent?.behavior?.bargeIn !== 'off') {
                     suppressStaleAgentAudio = true;
-                    if (localTtsHandle)
-                        localTtsHandle.bargeInCancel();
                     sendClientJson({ type: 'barge_in', source: 'client_vad' });
                     sendClientJson({ type: 'agent_state', state: 'user_speaking' });
                 }
@@ -768,12 +432,6 @@ function attachLiveSimulator(server, noServer = false) {
                 if (!content)
                     return;
                 suppressStaleAgentAudio = false;
-                if (upstreamMode === 'sandbox' || upstreamMode === 'speech_service') {
-                    sendClientJson({ type: 'agent_state', state: 'speaking' });
-                    recordTranscript('assistant', content);
-                    speakLocalOrSandbox(content, 320, 523.25);
-                    return;
-                }
                 if (dgWs && dgWs.readyState === ws_1.default.OPEN && settingsApplied) {
                     dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', content }));
                 }
@@ -784,12 +442,6 @@ function attachLiveSimulator(server, noServer = false) {
                 if (!content)
                     return;
                 suppressStaleAgentAudio = false;
-                if (upstreamMode === 'sandbox' || upstreamMode === 'speech_service') {
-                    if (localTtsHandle)
-                        localTtsHandle.bargeInCancel();
-                    handleSandboxUtterance(content);
-                    return;
-                }
                 const injectPayload = JSON.stringify({ type: 'InjectUserMessage', content });
                 if (!settingsApplied) {
                     pendingInjectedMessages.push(injectPayload);
@@ -804,6 +456,8 @@ function attachLiveSimulator(server, noServer = false) {
             if (msg.type === 'start' && !started) {
                 started = true;
                 const startMsg = msg;
+                allowWebhooks = startMsg.allowWebhooks === true;
+                recordingRequested = startMsg.recordAudio === true;
                 const persistedState = (0, db_1.getConsoleState)();
                 activeState = startMsg.draftState ? (0, defaults_1.normalizeState)(startMsg.draftState) : persistedState;
                 // Live calls always use saved global provider/model pairs and provider connection settings,
@@ -849,6 +503,19 @@ function attachLiveSimulator(server, noServer = false) {
                 displaySettings.audio = JSON.parse(JSON.stringify(rawSettings.audio));
                 const hydration = hydrateLeadIntoPromptAndGreeting(rawSettings, activeAgent, activeCampaign, startMsg.lead || {});
                 hydrateLeadIntoPromptAndGreeting(displaySettings, activeAgent, activeCampaign, startMsg.lead || {});
+                testLead = hydration.leadSummary;
+                const testConstraints = '\n\n[Browser test constraints] This is not a live VICIdial call. A transfer, disposition or do-not-call update cannot be completed here. Never claim one succeeded when the tool reports it was not executed. Be truthful about being an AI assistant if asked.';
+                if (rawSettings.agent.think.prompt.length + testConstraints.length > 25000) {
+                    sendFatalError('PROMPT_TOO_LONG', 'The agent prompt is too long to add browser-test safety context. Shorten it before starting a test.');
+                    finalizeCall('prompt_too_long');
+                    return;
+                }
+                rawSettings.agent.think.prompt += testConstraints;
+                displaySettings.agent.think.prompt += testConstraints;
+                // Browser tests never hand a webhook endpoint to Deepgram. If the operator
+                // opts in, the authenticated backend executes it only after turn confirmation.
+                for (const fn of rawSettings.agent.think.functions || [])
+                    fn.defer_until_eot = true;
                 const wireSettings = interpolateEnvPlaceholders(rawSettings);
                 const activeSttProv = activeState.providers.find((p) => p.kind === 'stt' && p.id === activeState.services?.stt?.providerId);
                 const activeTtsProv = activeState.providers.find((p) => p.kind === 'tts' && p.id === activeState.services?.tts?.providerId);
@@ -856,101 +523,24 @@ function attachLiveSimulator(server, noServer = false) {
                 const requestedMode = startMsg.upstreamMode || (usesLocalSpeechService ? 'speech_service' : 'deepgram');
                 const customAgentUrl = (process.env.DEEPGRAM_AGENT_URL || '').trim();
                 const dgApiKey = (0, env_store_1.getSecret)('DEEPGRAM_API_KEY');
-                if (requestedMode === 'speech_service') {
-                    upstreamMode = 'speech_service';
-                    settingsApplied = true;
-                    const activeVoice = String(activeState.services?.tts?.model || 'af_heart');
-                    localTtsHandle = (0, speech_service_client_1.openSpeechServiceTtsStream)({
-                        voice: activeVoice,
-                        speed: Number(activeAgent.tts?.speed || 1.0),
-                        format: 'pcm',
-                        sampleRate: sampleRateOut,
-                        onAudioChunk: (chunk) => {
-                            if (!suppressStaleAgentAudio)
-                                sendClientAudio(chunk);
-                        },
-                        onDone: () => {
-                            if (!closed)
-                                sendClientJson({ type: 'agent_state', state: 'listening' });
-                        },
-                        onError: (err) => {
-                            localTtsFailed = true;
-                            sendClientJson({ type: 'warning', message: `Local Speech TTS: ${err}` });
-                            if (!closed)
-                                sendClientJson({ type: 'agent_state', state: 'listening' });
-                        },
-                    });
-                    localSttWs = (0, speech_service_client_1.openSpeechServiceSttStream)({
-                        sampleRate: (sampleRateIn === 8000 ? 8000 : 16000),
-                        encoding: 'pcm',
-                        language: (activeAgent.language || 'en').split(',')[0].trim() || 'en',
-                        endpointMs: 500,
-                        onPartial: (partialText) => {
-                            if (activeAgent?.behavior?.bargeIn !== 'off' && localTtsHandle) {
-                                localTtsHandle.bargeInCancel();
-                            }
-                            sendClientJson({ type: 'partial_transcript', role: 'user', content: partialText });
-                        },
-                        onFinal: (finalText) => {
-                            suppressStaleAgentAudio = false;
-                            handleSandboxUtterance(finalText);
-                        },
-                        onError: (err) => {
-                            sendClientJson({ type: 'warning', message: `Local Speech STT: ${err}` });
-                        },
-                    });
-                    sendClientJson({
-                        type: 'session_started',
-                        callId,
-                        upstreamMode: 'speech_service',
-                        targetUrl: (0, speech_service_client_1.getSpeechServiceBaseUrl)(),
-                        sampleRateIn,
-                        sampleRateOut,
-                        hydratedLead: hydration.hydrated ? hydration.leadSummary : null,
-                        settings: displaySettings,
-                    });
-                    if (hydration.hydrated) {
-                        recordTranscript('system', `Bridge hydrated VICIdial lead #${hydration.leadSummary.lead_id} (${hydration.leadSummary.first_name}, ${hydration.leadSummary.state}, age ${hydration.leadSummary.age})`);
-                    }
-                    if (displaySettings.agent.greeting) {
-                        sendClientJson({ type: 'agent_state', state: 'speaking' });
-                        recordTranscript('assistant', displaySettings.agent.greeting);
-                        localTtsHandle.speak(displaySettings.agent.greeting, 'greeting');
-                    }
-                    else {
-                        sendClientJson({ type: 'agent_state', state: 'listening' });
-                    }
+                if (requestedMode === 'sandbox') {
+                    sendFatalError('SANDBOX_UNAVAILABLE', 'Scripted sandbox replies and tone audio have been removed. Configure Deepgram for a real browser test.');
+                    finalizeCall('unsupported_mode');
                     return;
                 }
-                if (requestedMode === 'sandbox') {
-                    upstreamMode = 'sandbox';
-                    settingsApplied = true;
-                    sendClientJson({
-                        type: 'session_started',
-                        callId,
-                        upstreamMode: 'sandbox',
-                        sampleRateIn,
-                        sampleRateOut,
-                        hydratedLead: hydration.hydrated ? hydration.leadSummary : null,
-                        settings: displaySettings,
-                    });
-                    if (hydration.hydrated) {
-                        recordTranscript('system', `Bridge hydrated VICIdial lead #${hydration.leadSummary.lead_id} (${hydration.leadSummary.first_name}, ${hydration.leadSummary.state}, age ${hydration.leadSummary.age})`);
-                    }
-                    sendClientJson({ type: 'agent_state', state: 'speaking' });
-                    if (displaySettings.agent.greeting) {
-                        recordTranscript('assistant', displaySettings.agent.greeting);
-                        sendClientAudio(synthesizeSandboxTonePcm16(sampleRateOut, 420, 440));
-                    }
-                    setTimeout(() => {
-                        if (!closed)
-                            sendClientJson({ type: 'agent_state', state: 'listening' });
-                    }, 250);
+                if (requestedMode === 'speech_service' || usesLocalSpeechService) {
+                    sendFatalError('LOCAL_SPEECH_AGENT_UNAVAILABLE', 'Local STT/TTS is not connected to an LLM in Live Bot. Select supported Deepgram Voice Agent providers for a real conversation.');
+                    finalizeCall('unsupported_mode');
+                    return;
+                }
+                if (requestedMode !== 'deepgram') {
+                    sendFatalError('UNSUPPORTED_MODE', 'Only Deepgram Voice Agent is supported for Live Bot.');
+                    finalizeCall('unsupported_mode');
                     return;
                 }
                 upstreamMode = 'deepgram';
                 if (!dgApiKey && !customAgentUrl) {
-                    sendFatalError('MISSING_DEEPGRAM_KEY', 'DEEPGRAM_API_KEY is not configured on the server. Click "🔑 API Keys" in the top bar and save your Deepgram API key, or select "Sandbox Dry-Run Responder".');
+                    sendFatalError('MISSING_DEEPGRAM_KEY', 'DEEPGRAM_API_KEY is not configured on the server. Click "🔑 API Keys" in the top bar and save your Deepgram API key.');
                     finalizeCall('missing_api_key');
                     return;
                 }
@@ -968,7 +558,20 @@ function attachLiveSimulator(server, noServer = false) {
                     hydratedLead: hydration.hydrated ? hydration.leadSummary : null,
                     settings: displaySettings,
                 });
-                dgWs = new ws_1.default(targetUrl, { headers: wsHeaders, family: 4 });
+                try {
+                    dgWs = new ws_1.default(targetUrl, { headers: wsHeaders, family: 4 });
+                }
+                catch (err) {
+                    sendFatalError('UPSTREAM_WS_ERROR', `Could not open the Deepgram connection: ${err.message}`);
+                    finalizeCall('upstream_error');
+                    return;
+                }
+                connectTimer = setTimeout(() => {
+                    if (!settingsApplied && !closed) {
+                        sendFatalError('UPSTREAM_TIMEOUT', 'Deepgram did not confirm the session settings in time.');
+                        finalizeCall('upstream_timeout');
+                    }
+                }, 15000);
                 dgWs.on('unexpected-response', (_req, res) => {
                     let body = '';
                     res.on('data', (chunk) => {
@@ -1013,7 +616,13 @@ function attachLiveSimulator(server, noServer = false) {
                             break;
                         }
                         case 'SettingsApplied': {
+                            if (settingsApplied)
+                                break;
                             settingsApplied = true;
+                            if (connectTimer) {
+                                clearTimeout(connectTimer);
+                                connectTimer = null;
+                            }
                             lastBrowserAudioAt = Date.now();
                             sendClientJson({
                                 type: 'session_started',
@@ -1021,11 +630,12 @@ function attachLiveSimulator(server, noServer = false) {
                                 upstreamMode: 'deepgram',
                                 sampleRateIn,
                                 sampleRateOut,
+                                recordingRequested,
                                 hydratedLead: hydration.hydrated ? hydration.leadSummary : null,
                                 settings: displaySettings,
                             });
                             if (hydration.hydrated) {
-                                recordTranscript('system', `Bridge hydrated VICIdial lead #${hydration.leadSummary.lead_id} (${hydration.leadSummary.first_name}, ${hydration.leadSummary.state}, age ${hydration.leadSummary.age})`);
+                                recordTranscript('system', `Browser test lead context: #${hydration.leadSummary.lead_id} (${hydration.leadSummary.first_name}, ${hydration.leadSummary.state}, age ${hydration.leadSummary.age}). This is not a live VICIdial call.`);
                             }
                             sendClientJson({ type: 'agent_state', state: 'listening' });
                             while (pendingPreSettingsAudio.length > 0) {
@@ -1100,6 +710,14 @@ function attachLiveSimulator(server, noServer = false) {
                             const cancelledId = evt.id || evt.function_call_id;
                             if (cancelledId) {
                                 cancelledFnIds.add(String(cancelledId));
+                                activeFunctionAborts.get(String(cancelledId))?.abort();
+                                if (pendingEndFunctionId === String(cancelledId)) {
+                                    awaitingHangupAudioDone = false;
+                                    pendingEndFunctionId = null;
+                                    if (pendingEndTimer)
+                                        clearTimeout(pendingEndTimer);
+                                    pendingEndTimer = null;
+                                }
                             }
                             const entry = {
                                 ts: new Date().toISOString(),
@@ -1119,6 +737,10 @@ function attachLiveSimulator(server, noServer = false) {
                             }
                             break;
                         }
+                        case 'InjectionRefused': {
+                            sendClientJson({ type: 'warning', code: 'INJECTION_REFUSED', message: evt.description || evt.message || 'Deepgram rejected the injected message.' });
+                            break;
+                        }
                         case 'Warning': {
                             sendClientJson({
                                 type: 'dg_warning',
@@ -1129,6 +751,7 @@ function attachLiveSimulator(server, noServer = false) {
                         }
                         case 'Error': {
                             sendFatalError(evt.code || 'DEEPGRAM_AGENT_ERROR', evt.description || evt.message || JSON.stringify(evt));
+                            finalizeCall('deepgram_error');
                             break;
                         }
                         default:
@@ -1144,6 +767,8 @@ function attachLiveSimulator(server, noServer = false) {
                 dgWs.on('close', (code, reasonBuf) => {
                     if (!closed) {
                         const reasonStr = reasonBuf?.toString() || `Upstream closed (${code})`;
+                        if (!fatalErrorMessage)
+                            sendFatalError('UPSTREAM_CLOSED', `Deepgram connection closed: ${reasonStr}`);
                         finalizeCall(reasonStr);
                     }
                 });

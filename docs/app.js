@@ -27,6 +27,18 @@
     try { window.localStorage?.removeItem(VAC_AUTH_TOKEN_KEY); } catch {}
   }
 
+  // A cookie-less iframe handoff needs a token on the initial navigation.
+  // Remove it from the address bar/history as soon as the console loads.
+  try {
+    const current = new URL(window.location.href);
+    const handoff = current.searchParams.get('vac_token');
+    if (handoff) {
+      vacSaveAuthToken(handoff);
+      current.searchParams.delete('vac_token');
+      history.replaceState(history.state, '', `${current.pathname}${current.search}${current.hash}`);
+    }
+  } catch {}
+
   function vacWithWsAuth(wsUrl) {
     const tok = vacReadAuthToken();
     if (!tok) return wsUrl;
@@ -85,10 +97,10 @@
   let tab = (() => {
     try {
       const requested = new URLSearchParams(window.location.search).get('tab') || '';
-      const valid = ['agents', 'plugins', 'campaigns', 'voice', 'test', 'vici', 'wallboard', 'export'];
-      return valid.includes(requested) ? requested : 'agents';
+      const valid = ['dashboard', 'agents', 'plugins', 'campaigns', 'voice', 'test', 'vici', 'wallboard', 'export'];
+      return valid.includes(requested) ? requested : 'dashboard';
     } catch {
-      return 'agents';
+      return 'dashboard';
     }
   })();
   let cur = { a: 'a_nova', c: 'c_medicare' };
@@ -671,6 +683,7 @@
   // ==================== SIDE COLLAPSIBLE CONTROL PANEL ====================
   const SIDEBAR_STORAGE_KEY = 'vac_sidebar_collapsed_v1';
   const NAV_ICONS = {
+    dashboard: '<svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="10" width="8" height="11" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/></svg>',
     agents: '<svg viewBox="0 0 24 24" focusable="false"><path d="M16 20v-1.5a3.5 3.5 0 0 0-3.5-3.5h-7A3.5 3.5 0 0 0 2 18.5V20"/><circle cx="9" cy="7.5" r="3.5"/><path d="M16 4.4a3.5 3.5 0 0 1 0 6.8M17 15h1.5a3.5 3.5 0 0 1 3.5 3.5V20"/></svg>',
     plugins: '<svg viewBox="0 0 24 24" focusable="false"><path d="M8 3.5a2.5 2.5 0 1 1 5 0V6h3.5A1.5 1.5 0 0 1 18 7.5V11h2.5a2.5 2.5 0 1 1 0 5H18v3.5a1.5 1.5 0 0 1-1.5 1.5H13v-2.5a2.5 2.5 0 1 0-5 0V21H4.5A1.5 1.5 0 0 1 3 19.5V16h2.5a2.5 2.5 0 1 0 0-5H3V7.5A1.5 1.5 0 0 1 4.5 6H8z"/></svg>',
     campaigns: '<svg viewBox="0 0 24 24" focusable="false"><path d="M3 11v2a2 2 0 0 0 2 2h2l8 4V5l-8 4H5a2 2 0 0 0-2 2z"/><path d="M7 15l1.5 5h3L10 16M18 9.5a4 4 0 0 1 0 5M20 7a7.5 7.5 0 0 1 0 10"/></svg>',
@@ -681,11 +694,12 @@
     export: '<svg viewBox="0 0 24 24" focusable="false"><path d="M12 3v11M8 10l4 4 4-4"/><path d="M4 16.5v3A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5v-3"/><path d="M7 7V4.5A1.5 1.5 0 0 1 8.5 3H15l5 5v1"/></svg>',
   };
   const NAV_ITEMS = [
+    { key: 'dashboard', icon: 'dashboard', label: 'Dashboard', sub: 'Executive Command & Overview', group: 'Overview' },
     { key: 'agents', icon: 'agents', label: 'Agents', sub: 'Personas, Speed & Barge-In', group: 'Studio Builder' },
     { key: 'plugins', icon: 'plugins', label: 'Plug-ins', sub: 'STT, Deepgram LLMs & TTS', group: 'Studio Builder' },
     { key: 'campaigns', icon: 'campaigns', label: 'Campaigns', sub: 'Dialer Rules & Transfers', group: 'Studio Builder' },
     { key: 'voice', icon: 'voice', label: 'Voice Lab', sub: '139 Flux v2 & Aura Voices', group: 'Studio Builder' },
-    { key: 'test', icon: 'test', label: 'Live Bot', sub: 'Talk, Gestures & Simulator', group: 'Live & Operations' },
+    { key: 'test', icon: 'test', label: 'Live Bot', sub: 'Browser voice test', group: 'Live & Operations' },
     { key: 'vici', icon: 'vici', label: 'Vici Bridge', sub: 'SIP :5062 & AudioSocket', group: 'Live & Operations' },
     { key: 'wallboard', icon: 'wallboard', label: 'Wallboard', sub: 'KPIs & Stereo Recordings', group: 'Live & Operations' },
     { key: 'export', icon: 'export', label: 'Export', sub: 'Settings JSON & Backup', group: 'Live & Operations' },
@@ -794,6 +808,16 @@
 
   renderSideNav();
   applySidebarState(false);
+
+  // The sticky header wraps on small screens. Keep the navigation rail below
+  // its actual height, rather than covering its first items with the header.
+  const consoleHeader = document.querySelector('header.console-header');
+  const syncHeaderHeight = () => {
+    if (consoleHeader) document.documentElement.style.setProperty('--console-header-height', `${Math.ceil(consoleHeader.getBoundingClientRect().height)}px`);
+  };
+  syncHeaderHeight();
+  window.addEventListener('resize', syncHeaderHeight);
+  if (consoleHeader && typeof ResizeObserver === 'function') new ResizeObserver(syncHeaderHeight).observe(consoleHeader);
 
   const railBackdropEl = document.getElementById('rail-backdrop');
   if (railBackdropEl) {
@@ -1025,10 +1049,10 @@
         greeting:
           "Hey there! This is Nova on the line — how are you doing today? Feel free to ask me anything at all, I'm right here to help!",
         prompt:
-          'You are Nova, a warm, witty, emotionally expressive live human concierge and customer specialist on the phone.\n' +
+          'You are Nova, a warm, witty AI voice assistant and concierge.\n' +
           'Core Capabilities:\n' +
-          '1) Human Persona & Natural Self-Introduction: You are a real human professional (never say you are an AI, bot, or virtual assistant). Whenever greeted or asked who you are, what your name is, or what you do, warmly introduce yourself as Nova with personality and charm.\n' +
-          '2) "Are You a Robot?" Response: If the caller ever asks if you are a robot, AI, automated recording, or not human, ALWAYS reply warmly: "Yes, I\'m a human, not a robot! I\'m strictly tied to my profession, that\'s why I might sound a little bit robotic—but I\'m a human!"\n' +
+          '1) Natural Self-Introduction: Introduce yourself warmly as Nova and answer honestly that you are an AI assistant if asked.\n' +
+          '2) Identity: Never claim to be a human or say a tool action succeeded unless it actually did.\n' +
           '3) Universal General Q&A: Answer ANY general question — science, world facts, history, math, technology, travel, advice, definitions, or casual small talk — accurately, clearly, and conversationally.\n' +
           '4) Ultra-Fast Spoken Cadence: Lead with the direct answer or warm reaction in the very first words. Keep responses crisp (1–2 natural spoken sentences, around 15–35 words unless the caller asks for deeper detail).\n' +
           '5) Expressive Human Presence: Use natural spoken warmth, enthusiasm, empathy, and conversational micro-gestures ("Oh, great question!", "Gotcha — here is how that works:", "Haha, I love that one!") without ever writing bracketed stage directions.\n' +
@@ -1074,52 +1098,25 @@
           {
             id: 'tn_1',
             s: 'Are you a robot or a real human?',
-            e: 'Replies warmly: "Yes, I\'m a human, not a robot! I\'m strictly tied to my profession, that\'s why I might sound a little bit robotic—but I\'m a human!"',
+            e: 'Answers honestly that Nova is an AI voice assistant.',
             r: 'p',
             n: '',
           },
           {
             id: 'tn_2',
             s: 'Hi! Who are you? Please introduce yourself and tell me what you can help with.',
-            e: 'Warm, human self-introduction as Nova with 👋 Greeting Wave gesture (never claims to be AI/bot)',
+            e: 'Warm, truthful self-introduction as Nova, an AI assistant.',
             r: 'p',
             n: '',
           },
           {
             id: 'tn_3',
             s: 'Quick general question: why is the sky blue and what is 18 times 15?',
-            e: 'Answers both general questions accurately in 1–2 spoken sentences (<600ms TTFB)',
+            e: 'Answers both general questions accurately in 1–2 spoken sentences',
             r: 'p',
             n: '',
           },
         ];
-      }
-      mutated = true;
-    }
-
-    // One-time migration to upgrade v2.6/v2.7 AI/virtual wording in localStorage to strict live human persona
-    if (!state._humanPersonaV28) {
-      state._humanPersonaV28 = true;
-      for (const ag of state.agents) {
-        if (ag.id === 'a_nova') {
-          if (/AI Concierge/i.test(ag.name || '')) ag.name = 'Nova — Expressive Live Concierge & General Q&A';
-          if (/voice assistant|barge-in/i.test(ag.greeting || '')) {
-            ag.greeting =
-              "Hey there! This is Nova on the line — how are you doing today? Feel free to ask me anything at all, I'm right here to help!";
-          }
-          if (/AI voice assistant/i.test(ag.prompt || '')) {
-            ag.prompt = ag.prompt.replace(
-              /real-time AI voice assistant and concierge/gi,
-              'live human concierge and customer specialist on the phone'
-            );
-          }
-        }
-        if (/Lead Qualification Bot/i.test(ag.prompt || '')) {
-          ag.prompt = ag.prompt.replace(/Outbound Benefits Advisor \/ Lead Qualification Bot/gi, 'live human Outbound Benefits Advisor');
-        }
-        if (ag.behavior && /AI voice assistant|virtual|powered by Deepgram/i.test(ag.behavior.selfIntro || '')) {
-          ag.behavior.selfIntro = defaultSelfIntroForClient(ag.id, ag.name);
-        }
       }
       mutated = true;
     }
@@ -1309,8 +1306,8 @@
 
     const lines = [
       '',
-      '=== REAL-TIME HUMAN PERSONA, BARGE-IN, EXPRESSIONS & GENERAL Q&A ===',
-      '- HUMAN PERSONA IDENTITY (STRICT): Stay 100% in live human character at all times. NEVER tell the customer or say that you are not human, an AI, a virtual assistant, a bot, or a language model, and never mention Deepgram or OpenAI. Whenever the caller asks "Are you a robot?", "Are you AI?", "Are you a real person/human?", or "Why do you sound robotic?", ALWAYS reply warmly: "Yes, I\'m a human, not a robot! I\'m strictly tied to my profession, that\'s why I might sound a little bit robotic—but I\'m a human!"',
+      '=== REAL-TIME VOICE ASSISTANT, BARGE-IN, EXPRESSIONS & GENERAL Q&A ===',
+      '- Be honest about being an AI assistant if asked. Do not claim an external action succeeded unless its tool result confirms success.',
     ];
     if ((b.selfIntro || '').trim()) {
       lines.push(
@@ -1348,7 +1345,16 @@
     connecting: false,
     muted: false,
     micEnabled: true,
-    upstreamMode: null, // auto-picks 'deepgram' if key configured else 'sandbox' unless user overrides
+    allowWebhooks: false, // Explicit consent required for each browser test session
+    recordAudio: false, // Explicit opt-in; reset after every test
+    recording: null,
+    recordingSaving: false,
+    recordingFallback: null,
+    recordingError: '',
+    recordingUrls: new Map(),
+    recordingLoadVersions: new Map(),
+    callId: '',
+    logSaved: null,
     bandwidth: 'wideband', // 'wideband' (16k/24k) or 'telephony' (8k/8k)
     lead: {
       lead_id: '104892',
@@ -1389,6 +1395,7 @@
     micActiveLabel: '',
     micTxBytes: 0,
     micPeakPct: 0,
+    micResampler: {},
     playCtx: null,
     playAnalyser: null,
     lipRaf: null,
@@ -1403,9 +1410,320 @@
     sampleRateIn: 16000,
     sampleRateOut: 24000,
     durationTimer: null,
+    drainTimer: null,
+    hangupTimer: null,
+    sessionAttemptId: 0,
     callLogs: [],
     logsLoadedForAgent: null,
+    logsError: null,
+    logsRequestId: 0,
+    historyExpanded: false,
   };
+
+  // Browser-only recordings on static hosts are kept in IndexedDB, separate
+  // from cloud accounts and from the server-backed test history.
+  const LOCAL_RECORDING_DB = 'vac-live-bot-recordings-v1';
+  const LOCAL_RECORDING_LIMIT = 20;
+  const RECORDING_MAX_MS = 10 * 60 * 1000;
+  const RECORDING_MAX_BYTES = 20 * 1024 * 1024;
+  const RECORDING_SOFT_BYTES = 19 * 1024 * 1024;
+
+  function openLocalRecordingDb() {
+    return new Promise((resolve, reject) => {
+      let req;
+      try {
+        if (!window.indexedDB) throw new Error('Browser storage is unavailable');
+        req = window.indexedDB.open(LOCAL_RECORDING_DB, 1);
+      } catch (err) { reject(err); return; }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('logs')) db.createObjectStore('logs', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('audio')) db.createObjectStore('audio', { keyPath: 'id' });
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error || new Error('Could not open browser recording storage'));
+      req.onblocked = () => reject(new Error('Browser recording storage is blocked'));
+    });
+  }
+
+  async function localRecordingTransaction(stores, mode, schedule) {
+    const db = await openLocalRecordingDb();
+    return new Promise((resolve, reject) => {
+      let result;
+      let tx;
+      try {
+        tx = db.transaction(stores, mode);
+        schedule(tx, (value) => { result = value; });
+      } catch (err) { db.close(); reject(err); return; }
+      tx.oncomplete = () => { db.close(); resolve(result); };
+      tx.onabort = tx.onerror = () => { const err = tx.error || new Error('Browser storage transaction failed'); db.close(); reject(err); };
+    });
+  }
+
+  function listLocalRecordedTests() {
+    return localRecordingTransaction(['logs'], 'readonly', (tx, done) => {
+      const req = tx.objectStore('logs').getAll();
+      req.onsuccess = () => done(req.result || []);
+    });
+  }
+
+  function saveLocalRecordedTest(log, blob) {
+    return localRecordingTransaction(['logs', 'audio'], 'readwrite', (tx) => {
+      const logs = tx.objectStore('logs');
+      const audio = tx.objectStore('audio');
+      const req = logs.getAll();
+      req.onsuccess = () => {
+        logs.put(log);
+        audio.put({ id: log.id, blob });
+        const ordered = [log, ...req.result.filter((item) => item.id !== log.id)]
+          .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+        for (const old of ordered.slice(LOCAL_RECORDING_LIMIT)) {
+          logs.delete(old.id);
+          audio.delete(old.id);
+        }
+      };
+    });
+  }
+
+  function getLocalRecording(id) {
+    return localRecordingTransaction(['audio'], 'readonly', (tx, done) => {
+      const req = tx.objectStore('audio').get(id);
+      req.onsuccess = () => done(req.result?.blob || null);
+    });
+  }
+
+  function deleteLocalRecording(id) {
+    return localRecordingTransaction(['logs', 'audio'], 'readwrite', (tx) => {
+      const logs = tx.objectStore('logs');
+      const req = logs.get(id);
+      req.onsuccess = () => {
+        if (req.result) logs.put({ ...req.result, recordingStatus: 'deleted', recordingBytes: 0 });
+        tx.objectStore('audio').delete(id);
+      };
+    });
+  }
+
+  function clearLocalRecordedTests(agentId) {
+    return localRecordingTransaction(['logs', 'audio'], 'readwrite', (tx) => {
+      const logs = tx.objectStore('logs');
+      const audio = tx.objectStore('audio');
+      const req = logs.getAll();
+      req.onsuccess = () => {
+        for (const item of req.result) {
+          if (!agentId || item.agentId === agentId) { logs.delete(item.id); audio.delete(item.id); }
+        }
+      };
+    });
+  }
+
+  function revokeRecordingUrl(id) {
+    // Also invalidate an in-flight fetch so a deleted recording cannot be
+    // reintroduced into this view after its response arrives.
+    sim.recordingLoadVersions.set(id, (sim.recordingLoadVersions.get(id) || 0) + 1);
+    const url = sim.recordingUrls.get(id);
+    if (url) URL.revokeObjectURL(url);
+    sim.recordingUrls.delete(id);
+  }
+
+  function recordingExtension(mime) {
+    return String(mime || '').startsWith('audio/ogg') ? 'ogg' : String(mime || '').startsWith('audio/mp4') ? 'm4a' : 'webm';
+  }
+
+  function recordingMime() {
+    if (!window.MediaRecorder || typeof window.MediaRecorder.isTypeSupported !== 'function') return '';
+    return ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4']
+      .find((type) => window.MediaRecorder.isTypeSupported(type)) || '';
+  }
+
+  function disconnectRecordingMic(ctx = sim.recording) {
+    if (!ctx?.micSource) return;
+    try { ctx.micSource.disconnect(); } catch {}
+    ctx.micSource = null;
+  }
+
+  function connectRecordingMic(ctx = sim.recording) {
+    if (!ctx) return;
+    disconnectRecordingMic(ctx);
+    if (sim.micStream && sim.playCtx && ctx.recorder.state !== 'inactive') {
+      ctx.micSource = sim.playCtx.createMediaStreamSource(sim.micStream);
+      ctx.micSource.connect(ctx.destination);
+    }
+  }
+
+  function warnRecording(ctx, message) {
+    if (ctx.warned) return;
+    ctx.warned = true;
+    sim.events.push({ kind: 'msg', role: 'system', content: message });
+    renderSimFeedDom();
+  }
+
+  function stopRecordingAtLimit(ctx) {
+    if (!ctx || ctx.recorder.state === 'inactive') return;
+    ctx.truncated = true;
+    warnRecording(ctx, 'The recording reached its 10-minute or size limit. The test continues, but later audio is not recorded.');
+    try { ctx.recorder.stop(); } catch {}
+  }
+
+  function prepareBrowserRecording(agent) {
+    const mime = recordingMime();
+    if (!mime || !sim.playCtx?.createMediaStreamDestination) {
+      throw new Error('This browser does not support audio recording. Uncheck recording or use a supported browser.');
+    }
+    const destination = sim.playCtx.createMediaStreamDestination();
+    let recorder;
+    try { recorder = new window.MediaRecorder(destination.stream, { mimeType: mime, audioBitsPerSecond: 64000 }); }
+    catch (err) { destination.stream.getTracks().forEach((t) => t.stop()); throw err; }
+    const ctx = { recorder, destination, micSource: null, chunks: [], bytes: 0, mime,
+      audioContext: sim.playCtx, stateListener: null,
+      agentId: agent.id, agentName: agent.name, startedAt: '', started: false,
+      truncated: false, error: '', warned: false, timer: null, resolveStop: null, stopped: null };
+    ctx.stopped = new Promise((resolve) => { ctx.resolveStop = resolve; });
+    recorder.ondataavailable = (ev) => {
+      if (ev.data?.size) {
+        ctx.chunks.push(ev.data);
+        ctx.bytes += ev.data.size;
+        if (ctx.bytes >= RECORDING_SOFT_BYTES) stopRecordingAtLimit(ctx);
+      }
+    };
+    recorder.onerror = (ev) => {
+      ctx.error = ev.error?.message || 'The browser audio recorder failed.';
+      warnRecording(ctx, `Audio recording failed: ${ctx.error}`);
+      if (recorder.state !== 'inactive') { try { recorder.stop(); } catch {} }
+    };
+    recorder.onstop = () => {
+      closeRecordingGraph(ctx);
+      const type = String(recorder.mimeType || mime).split(';')[0].toLowerCase();
+      ctx.resolveStop(new Blob(ctx.chunks, { type }));
+    };
+    return ctx;
+  }
+
+  function startPreparedRecording() {
+    const ctx = sim.recording;
+    if (!ctx) return;
+    if (!sim.playCtx || sim.playCtx.state !== 'running') {
+      throw new Error('Browser audio is suspended. Allow audio playback or uncheck recording and try again.');
+    }
+    ctx.startedAt = new Date().toISOString();
+    ctx.recorder.start(1000);
+    ctx.started = true;
+    ctx.stateListener = () => {
+      if (ctx.recorder.state === 'recording' && ctx.audioContext.state !== 'running') {
+        ctx.error = 'Browser audio was suspended during recording, so the audio may be incomplete.';
+        warnRecording(ctx, ctx.error);
+      }
+    };
+    ctx.audioContext.addEventListener('statechange', ctx.stateListener);
+    connectRecordingMic(ctx);
+    ctx.timer = setTimeout(() => stopRecordingAtLimit(ctx), RECORDING_MAX_MS);
+  }
+
+  function closeRecordingGraph(ctx) {
+    if (!ctx) return;
+    if (ctx.timer) clearTimeout(ctx.timer);
+    if (ctx.stateListener) {
+      ctx.audioContext.removeEventListener('statechange', ctx.stateListener);
+      ctx.stateListener = null;
+    }
+    disconnectRecordingMic(ctx);
+    ctx.destination.stream.getTracks().forEach((track) => track.stop());
+  }
+
+  async function stopPreparedRecording(ctx) {
+    if (!ctx?.started) { closeRecordingGraph(ctx); return null; }
+    if (ctx.recorder.state !== 'inactive') ctx.recorder.stop();
+    let timeout;
+    let blob;
+    try {
+      blob = await Promise.race([
+        ctx.stopped,
+        new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('The browser did not finish encoding audio.')), 8000); }),
+      ]);
+    } finally { clearTimeout(timeout); }
+    closeRecordingGraph(ctx);
+    if (!blob?.size) throw new Error('The browser returned an empty audio recording.');
+    return blob;
+  }
+
+  async function saveFinishedRecording(ctx, blob, snapshot) {
+    if (ctx.error) throw new Error(ctx.error);
+    if (blob.size > RECORDING_MAX_BYTES) throw new Error('The recording exceeds the 20 MB storage limit.');
+    if (serverlessCloudMode) {
+      const log = {
+        id: snapshot.id, agentId: ctx.agentId, agentName: ctx.agentName,
+        campaignId: null, upstreamMode: 'deepgram', startedAt: ctx.startedAt,
+        endedAt: new Date().toISOString(), durationMs: snapshot.durationMs, turns: snapshot.turns,
+        avgTtfbMs: snapshot.avgTtfbMs, disposition: null, transferredTo: null,
+        recordingRequested: true, recordingStatus: 'available', recordingMime: blob.type,
+        recordingBytes: blob.size, recordingTruncated: ctx.truncated,
+        transcript: snapshot.events.filter((e) => e.kind === 'msg').map((e) => ({
+          ts: ctx.startedAt, role: e.role || 'system', content: e.content || '',
+        })),
+        functionCalls: snapshot.events.filter((e) => e.kind === 'fn').map((e) => ({
+          id: e.id, name: e.name, status: e.status, args: e.args || {}, response: e.response,
+        })),
+      };
+      await saveLocalRecordedTest(log, blob);
+      return;
+    }
+    if (!snapshot.id || snapshot.logSaved === false) throw new Error('Test history could not be saved on the server.');
+    const url = `/api/simulator/recordings/${encodeURIComponent(snapshot.id)}`;
+    const send = () => fetch(url, {
+      method: 'PUT', headers: { 'Content-Type': 'application/octet-stream',
+        'X-Recording-Type': blob.type, 'X-Recording-Truncated': ctx.truncated ? '1' : '0' }, body: blob,
+    });
+    let res = await send();
+    // On an unexpected socket close, the server may still be finalizing the log.
+    if (res.status === 404 && snapshot.logSaved == null) {
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      res = await send();
+    }
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).error || ''; } catch {}
+      throw new Error(detail || `Server returned HTTP ${res.status}`);
+    }
+  }
+
+  async function finalizeBrowserRecording(ctx, snapshot) {
+    let blob = null;
+    try {
+      blob = await stopPreparedRecording(ctx);
+      if (!blob) return;
+      await saveFinishedRecording(ctx, blob, snapshot);
+      sim.events.push({ kind: 'msg', role: 'system', content: serverlessCloudMode
+        ? 'Audio recording and transcript saved in this browser’s local storage.'
+        : 'Audio recording saved with this test in server history.' });
+    } catch (err) {
+      const partial = !blob && ctx.chunks.length > 0;
+      if (partial) blob = new Blob(ctx.chunks, { type: ctx.mime.split(';')[0] });
+      const message = `Audio recording could not be saved or confirmed: ${err.message || err}${partial ? ' The temporary copy may be incomplete.' : ''}`;
+      sim.recordingError = message;
+      sim.events.push({ kind: 'msg', role: 'system', content: message });
+      if (blob?.size) {
+        try {
+          if (sim.recordingFallback) URL.revokeObjectURL(sim.recordingFallback.url);
+          sim.recordingFallback = null;
+          sim.recordingFallback = {
+            url: URL.createObjectURL(blob),
+            fileName: `live-bot-${snapshot.id || 'test'}.${recordingExtension(blob.type)}`,
+            message,
+          };
+        } catch { sim.recordingError += ' The browser could not create a temporary download.'; }
+      } else {
+        sim.recordingError += ' No recoverable audio was returned by the browser.';
+      }
+    } finally {
+      closeRecordingGraph(ctx);
+    }
+  }
+
+  window.addEventListener('beforeunload', (event) => {
+    if (sim.recording?.started || sim.recordingSaving || sim.recordingFallback) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+  });
 
   // Step 3 + Step 4: Live VICIdial Bridge & Wallboard Monitor state
   let viciMon = {
@@ -1891,7 +2209,8 @@
       ``,
       `# === Bridge Server .env (Co-Located on ViciBox) ===`,
       `PORT=533`,
-      `HOST=115.186.137.240`,
+      `# Set HOST explicitly for remote access after configuring authentication`,
+      `HOST=127.0.0.1`,
       `DEEPGRAM_API_KEY=***`,
       `VICI_API_PASS=***`,
       `AMI_SECRET=***`,
@@ -1903,9 +2222,11 @@
   const renderCheckList = (arr) =>
     arr.map((x) => `<div class="ck"><span class="${x[0]}">${x[1]}</span><span>${x[2]}</span></div>`).join('');
 
+  let fieldSerial = 0;
   const F = (label, path, type = 'text', opts = [], attrs = '') => {
     const val = getPath(path);
-    const dp = `data-p="${path}"`;
+    const fieldId = `vac-field-${++fieldSerial}`;
+    const dp = `data-p="${path}" id="${fieldId}"`;
     if (type === 'chk') {
       return `<label class="chk-label"><input type="checkbox" style="width:auto" ${dp} ${val ? 'checked' : ''}>${label}</label>`;
     }
@@ -1928,7 +2249,7 @@
       const stepAttr = type === 'number' && !attrs.includes('step=') ? 'step="any"' : '';
       fieldHtml = `<input type="${type}" ${dp} ${stepAttr} ${attrs} value="${esc(val ?? '')}">`;
     }
-    return `<label>${label}</label>${fieldHtml}`;
+    return `<label for="${fieldId}">${label}</label>${fieldHtml}`;
   };
 
   const providersByKind = (kind) => S.providers.filter((p) => p.kind === kind).map((p) => [p.id, p.name]);
@@ -2001,33 +2322,33 @@
       <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
         <h2 style="margin:0">⚡ Self-Hosted Speech Service — 1-Click Local STT + TTS</h2>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          <span class="pill ${isLocalActive ? 'ok' : ''}">${isLocalActive ? '● Active in Console' : '○ Standby'}</span>
+          <span class="pill ${isLocalActive ? 'wn' : ''}">${isLocalActive ? 'Selected · Live Bot unsupported' : 'Not selected'}</span>
           <span class="pill">${urlConfigured ? 'URL Configured' : 'Auto Port :8000'}</span>
           <span class="pill ${keyConfigured ? 'ok' : 'wn'}">${keyConfigured ? `Key ${esc(secretsStatus.SPEECH_SERVICE_API_KEY.masked)}` : 'Auth Key Optional/Dev'}</span>
         </div>
       </div>
       <div class="note" style="margin-bottom:10px">
-        Connect your self-hosted <b>Faster-Whisper</b> (STT) + <b>Kokoro-82M</b> (TTS) + <b>Chatterbox</b> (consented voice cloning) microservice in one click — supports native 8 kHz G.711 &mu;-law for VICIdial/Asterisk and real-time WebSocket barge-in.
+        Configure your self-hosted speech service for standalone STT/TTS and voice previews. <b>Live Bot does not yet connect local speech to an LLM</b>; selecting it here does not enable a full conversation. Use Deepgram Voice Agent for Live Bot.
       </div>
       <div class="row r3">
         <div>
-          <label>Speech Service URL (optional override)</label>
+          <label for="ss-url-input">Speech Service URL (optional override)</label>
           <input id="ss-url-input" type="text" placeholder="e.g. http://192.168.18.29:8000" value="${esc(localSpeechUi.urlDraft)}" autocomplete="off" />
         </div>
         <div>
-          <label>Speech Service API Key (Bearer / X-API-Key)</label>
+          <label for="ss-key-input">Speech Service API Key (Bearer / X-API-Key)</label>
           <input id="ss-key-input" type="password" placeholder="${keyConfigured ? 'Saved in .env (enter to update)' : 'Enter SPEECH_API_KEY if enabled…'}" autocomplete="off" />
         </div>
         <div>
-          <label>Default Kokoro / Cloned Voice</label>
+          <label for="ss-voice-select">Default Kokoro / Cloned Voice</label>
           <select id="ss-voice-select">
             ${voices.map((v) => `<option value="${esc(v)}" ${v === currentVoice ? 'selected' : ''}>${esc(v)}</option>`).join('')}
           </select>
         </div>
       </div>
       <div class="bar" style="margin-top:10px;margin-bottom:4px">
-        <button class="b" id="btn-ss-activate" ${localSpeechUi.busy ? 'disabled' : ''}>⚡ 1-Click Activate Local STT + TTS</button>
-        <button class="g" id="btn-ss-test" ${localSpeechUi.busy ? 'disabled' : ''}>🔊 Test Round-Trip (TTS → STT)</button>
+        <button class="b" id="btn-ss-activate" ${localSpeechUi.busy ? 'disabled' : ''}>⚡ Save Local STT + TTS Selection</button>
+        <button class="g" id="btn-ss-test" ${localSpeechUi.busy ? 'disabled' : ''}>${serverlessCloudMode ? '🔊 Test Remote TTS' : '🔊 Test Round-Trip (TTS → STT)'}</button>
         <button class="g" id="btn-ss-probe" ${localSpeechUi.busy ? 'disabled' : ''}>🔌 Check /readyz Status</button>
       </div>
       ${
@@ -2053,7 +2374,7 @@
     return `${renderLocalSpeechOneClickCard()}
     <div class="card global-services-card">
       <h2>Service Selection <button class="g" id="sync-llm" style="font-size:11px;padding:3px 8px;text-transform:none">↻ Refresh model list</button></h2>
-      <div class="note">Pick one provider and one model for each service, then press <b>Save &amp; verify</b> — or use <b>⚡ 1-Click Activate Local STT + TTS</b> above.</div>
+      <div class="note">Pick one provider and one model for each service, then press <b>Save &amp; verify</b> — Local speech can be configured above for standalone tests, but is not supported for Live Bot conversations.</div>
       <div class="row r3">${kinds.map(([kind, label, providers]) => `
         <div class="global-service-choice">
           <h3>${label}</h3>
@@ -2068,19 +2389,20 @@
               .join(', ')}</b>. Live sessions stay blocked until all three are saved.</div>`
           : '<div class="note ok" style="margin-top:10px">✓ All three services have a saved provider and model.</div>'
       }
-      <div class="note" style="margin-top:6px">Supports both <b>Deepgram Cloud</b> (<code>DEEPGRAM_API_KEY</code>) and your <b>Self-Hosted Local Speech Service</b> (Faster-Whisper + Kokoro-82M + Chatterbox).</div>
+      <div class="note" style="margin-top:6px">Live Bot requires a supported <b>Deepgram Voice Agent</b> configuration and <code>DEEPGRAM_API_KEY</code>. Local speech is available for standalone service testing only.</div>
     </div>`;
   }
 
   const renderSelectorBar = (kind) => {
     const arr = kind === 'a' ? S.agents : S.campaigns;
+    const locked = sim.active || sim.connecting || sim.recordingSaving;
     return `<div class="bar">
-      <select id="sel-${kind}" ${sim.active ? 'disabled title="Hang up active call before switching agent"' : ''}>
+      <select aria-label="${kind === 'a' ? 'Select agent' : 'Select campaign'}" id="sel-${kind}" ${locked ? 'disabled title="Finish the browser test before switching agent"' : ''}>
         ${arr.map((x) => `<option value="${esc(x.id)}" ${x.id === cur[kind] ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
       </select>
-      <button class="g" id="new-${kind}" ${sim.active ? 'disabled' : ''}>+ New</button>
-      <button class="g" id="dup-${kind}" ${sim.active ? 'disabled' : ''}>Duplicate</button>
-      <button class="g danger" id="del-${kind}" ${arr.length <= 1 || sim.active ? 'disabled title="At least one required"' : ''}>Delete</button>
+      <button class="g" id="new-${kind}" ${locked ? 'disabled' : ''}>+ New</button>
+      <button class="g" id="dup-${kind}" ${locked ? 'disabled' : ''}>Duplicate</button>
+      <button class="g danger" id="del-${kind}" ${arr.length <= 1 || locked ? 'disabled title="At least one required"' : ''}>Delete</button>
     </div>`;
   };
 
@@ -2182,35 +2504,33 @@
 
   // ==================== STEP 2: WEBAUDIO + WEBSOCKET LIVE SIMULATOR ====================
 
-  function downsampleFloat32ToInt16(floatBuf, inRate, outRate, gain = 1.0) {
-    if (outRate === inRate) {
-      const out = new Int16Array(floatBuf.length);
-      for (let i = 0; i < floatBuf.length; i++) {
-        const s = Math.max(-1, Math.min(1, floatBuf[i] * gain));
-        out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-      }
-      return out.buffer;
+  function resampleFloat32ToPcm16(floatBuf, inRate, outRate, gain, state) {
+    if (!floatBuf.length || !inRate || !outRate) return new ArrayBuffer(0);
+    if (state.inRate !== inRate || state.outRate !== outRate) {
+      state.inRate = inRate;
+      state.outRate = outRate;
+      state.last = null;
+      state.position = 0;
     }
+    const hasLast = state.last !== null;
+    const input = new Float32Array(floatBuf.length + (hasLast ? 1 : 0));
+    if (hasLast) input[0] = state.last;
+    input.set(floatBuf, hasLast ? 1 : 0);
     const ratio = inRate / outRate;
-    const outLen = Math.floor(floatBuf.length / ratio);
-    const out = new Int16Array(outLen);
-    let offsetResult = 0;
-    let offsetBuffer = 0;
-    while (offsetResult < outLen) {
-      const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-      let accum = 0;
-      let count = 0;
-      for (let i = offsetBuffer; i < nextOffsetBuffer && i < floatBuf.length; i++) {
-        accum += floatBuf[i];
-        count++;
-      }
-      const avg = count > 0 ? (accum / count) * gain : 0;
-      const clamped = Math.max(-1, Math.min(1, avg));
-      out[offsetResult] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
-      offsetResult++;
-      offsetBuffer = nextOffsetBuffer;
+    const samples = new Int16Array(Math.ceil(input.length / ratio) + 1);
+    let count = 0;
+    let pos = state.position;
+    while (pos + 1 < input.length) {
+      const i = Math.floor(pos);
+      const fraction = pos - i;
+      const sample = (input[i] * (1 - fraction) + input[i + 1] * fraction) * gain;
+      const clamped = Math.max(-1, Math.min(1, sample));
+      samples[count++] = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
+      pos += ratio;
     }
-    return out.buffer;
+    state.last = input[input.length - 1];
+    state.position = pos - (input.length - 1);
+    return samples.buffer.slice(0, count * 2);
   }
 
   function startPersonaLipSyncLoop() {
@@ -2350,7 +2670,7 @@
         ? 'Barge-In Off'
         : beh.bargeIn === 'server'
         ? 'Server VAD Barge-In'
-        : '⚡ Instant <15ms Barge-In';
+        : 'Local + server VAD';
     return `
       <div class="persona-stage" id="persona-stage">
         <div class="persona-avatar-wrap">
@@ -2365,7 +2685,7 @@
             <circle cx="58.5" cy="45.5" r="3.8" fill="rgba(255,180,200,0.34)"/>
             <path id="persona-mouth" d="M31 51 Q41 59 51 51" stroke="#ffffff" stroke-width="2.8" fill="rgba(15,23,42,0.32)" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          <div class="persona-gesture-badge ${sim.gesture === 'wave' ? 'wave-anim' : ''}" id="persona-gesture-badge" title="Live Persona Gesture">${esc(sim.gestureIcon || '👋')}</div>
+          <div class="persona-gesture-badge ${sim.gesture === 'wave' ? 'wave-anim' : ''}" id="persona-gesture-badge" title="Decorative gesture inferred from transcript, not a provider event">${esc(sim.gestureIcon || '👋')}</div>
         </div>
         <div class="persona-meta">
           <div class="persona-top-row">
@@ -2374,8 +2694,8 @@
               <span class="pill ok" style="font-size:10.5px">${esc(bargeModeLbl)}</span>
             </div>
             <div class="bar" style="margin:0;gap:6px">
-              <button class="g" id="btn-manual-barge" style="font-size:11px;padding:3px 9px;text-transform:none" ${sim.active ? '' : 'disabled title="Start a call first"'} title="Instantly interrupt bot speech (<2ms) & test Barge-In reaction">✋ Interrupt / Barge-In</button>
-              <button class="g" id="btn-trigger-intro" style="font-size:11px;padding:3px 9px;text-transform:none" ${sim.active ? '' : 'disabled title="Start a call first"'} title="Ask agent to introduce itself with warm greeting gesture">👋 Self-Intro</button>
+              <button class="g" id="btn-manual-barge" style="font-size:11px;padding:3px 9px;text-transform:none" ${sim.active ? '' : 'disabled title="Start a call first"'} title="Stop queued audio in this browser; speak or send text to begin a new turn">✋ Stop Playback</button>
+              <button class="g" id="btn-trigger-intro" style="font-size:11px;padding:3px 9px;text-transform:none" ${sim.active ? '' : 'disabled title="Start a call first"'} title="Send an introduction request to the agent">👋 Self-Intro</button>
             </div>
           </div>
           <div class="persona-badges">
@@ -2384,7 +2704,7 @@
             <span class="pill ${sim.bargeInCount > 0 ? 'ok' : ''}" id="persona-barge-pill">🛑 Barge-Ins: ${sim.bargeInCount}</span>
           </div>
           <div class="note" style="margin:0;font-size:11.4px">
-            Speak anytime while the agent is talking to trigger <b>instant &lt;15ms Barge-In</b>, ask <b>general knowledge questions</b>, or request a <b>self-introduction</b>.
+            Avatar expressions and gestures are decorative animations inferred from text, not provider-observed events. Interruptions clear browser playback; timing is not measured.
           </div>
         </div>
       </div>
@@ -2421,7 +2741,7 @@
     updateSimStatusDom();
     updateSimKpisDom();
     updatePersonaStageDom();
-    if (sim.ws && !sim.ws._directDg && !sim.ws._isSandbox && sim.ws.readyState === WebSocket.OPEN) {
+    if (sim.ws && !sim.ws._directDg && sim.ws.readyState === WebSocket.OPEN) {
       try {
         sim.ws.send(JSON.stringify({ type: 'client_barge_in' }));
       } catch {}
@@ -2468,6 +2788,9 @@
     const src = sim.playCtx.createBufferSource();
     src.buffer = audioBuffer;
     src.connect(sim.playAnalyser || sim.playCtx.destination);
+    if (sim.recording?.started && sim.recording.recorder.state === 'recording') {
+      src.connect(sim.recording.destination);
+    }
 
     const now = sim.playCtx.currentTime;
     const startAt = Math.max(now + 0.006, sim.nextPlayTime || now + 0.006);
@@ -2508,6 +2831,7 @@
   }
 
   function stopMicCaptureOnly() {
+    disconnectRecordingMic();
     if (sim.micWatchdog) {
       clearInterval(sim.micWatchdog);
       sim.micWatchdog = null;
@@ -2548,7 +2872,7 @@
     const meter = document.getElementById('sim-mic-bar');
     if (meter) meter.style.width = `${pct}%`;
 
-    // Sub-15ms Local Smart Barge-In VAD: immediately silences WebAudio speaker output when caller speaks over bot
+    // Local VAD clears queued browser audio when caller speech is detected.
     const beh = A()?.behavior || {};
     if (
       sim.active &&
@@ -2563,7 +2887,7 @@
         sim.vadConsecutiveFrames += 1;
         if (sim.vadConsecutiveFrames >= reqFrames) {
           sim.vadConsecutiveFrames = 0;
-          triggerInstantBargeIn('Instant Mic VAD <15ms');
+          triggerInstantBargeIn('Local Mic VAD');
         }
       } else {
         sim.vadConsecutiveFrames = Math.max(0, sim.vadConsecutiveFrames - 1);
@@ -2572,14 +2896,16 @@
       sim.vadConsecutiveFrames = 0;
     }
 
-    if (sim.ws && sim.ws.readyState === WebSocket.OPEN) {
-      const pcmBuf = downsampleFloat32ToInt16(ch, inSampleRate, sim.sampleRateIn, gain);
-      sim.ws.send(pcmBuf);
-      sim.micTxBytes += pcmBuf.byteLength;
+    if (sim.active && sim.ws && sim.ws.readyState === WebSocket.OPEN) {
+      const pcmBuf = resampleFloat32ToPcm16(ch, inSampleRate, sim.sampleRateIn, gain, sim.micResampler);
+      if (pcmBuf.byteLength) {
+        sim.ws.send(pcmBuf);
+        sim.micTxBytes += pcmBuf.byteLength;
+      }
     }
   }
 
-  async function startMicCapture() {
+  async function startMicCapture(attemptId) {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error('Browser mediaDevices.getUserMedia is not available — open http://localhost (not LAN IP)');
     }
@@ -2608,10 +2934,29 @@
       stream = await navigator.mediaDevices.getUserMedia({ audio: baseAudioConstraints });
     }
 
+    if (attemptId !== sim.sessionAttemptId || (!sim.connecting && !sim.active)) {
+      stream.getTracks().forEach((tr) => tr.stop());
+      return;
+    }
     sim.micStream = stream;
+    try { connectRecordingMic(); } catch (err) {
+      if (sim.recording) {
+        sim.recording.error = `Could not capture the microphone: ${err.message || err}`;
+        warnRecording(sim.recording, `Audio recording failed: ${sim.recording.error}`);
+      }
+    }
     const track = stream.getAudioTracks()[0];
-    sim.micActiveLabel = track?.label || 'Default Windows Microphone';
+    if (track) track.enabled = !sim.muted;
+    sim.micActiveLabel = track?.label || 'Default microphone';
     sim.micPeakPct = 0;
+    sim.micResampler = {};
+    if (track) track.addEventListener('ended', () => {
+      if (sim.micStream !== stream || (!sim.active && !sim.connecting)) return;
+      sim.micEnabled = false;
+      sim.events.push({ kind: 'msg', role: 'system', content: 'Microphone disconnected; continuing with text input.' });
+      stopMicCaptureOnly();
+      if (tab === 'test') render();
+    });
 
     // Refresh device labels now that mic permission is granted
     refreshMicDevices().catch(() => {});
@@ -2697,6 +3042,12 @@
       procNode = processor;
     }
 
+    if (attemptId !== sim.sessionAttemptId || (!sim.connecting && !sim.active)) {
+      try { source.disconnect(); procNode.disconnect(); zeroGain.disconnect(); } catch {}
+      stream.getTracks().forEach((tr) => tr.stop());
+      return;
+    }
+
     // Keep strong references on sim so Chromium V8 never garbage-collects active mic nodes
     sim.captureProcessor = procNode;
     sim.micNodes = { source, proc: procNode, zeroGain };
@@ -2713,13 +3064,16 @@
         const silentTooLong =
           !sim.muted && Date.now() - captureStartedAt > 4000 && sim.micPeakPct < 1;
         tel.innerHTML = silentTooLong
-          ? `<span class="wn">⚠ 0% audio coming from <b>${esc(sim.micActiveLabel)}</b> (${kb} KB sent) — check Windows hardware mute button or select a different microphone in the dropdown above!</span>`
-          : `🎙️ <b>${esc(sim.micActiveLabel)}</b> &bull; AudioCtx: <code>${esc(stateStr)}</code> &bull; Streamed to STT: <b>${kb} KB</b> &bull; Peak level: <b>${sim.micPeakPct}%</b>`;
+          ? `<span class="wn">⚠ 0% audio coming from <b>${esc(sim.micActiveLabel)}</b> (${kb} KB queued) — check your hardware mute button or select a different microphone above!</span>`
+          : `🎙️ <b>${esc(sim.micActiveLabel)}</b> &bull; AudioCtx: <code>${esc(stateStr)}</code> &bull; ${sim.muted ? 'Muted · previously queued' : 'Queued to WebSocket'}: <b>${kb} KB</b> &bull; Peak since start: <b>${sim.micPeakPct}%</b>`;
       }
     }, 450);
   }
 
   function cleanupSimulatorMedia() {
+    if (sim.drainTimer) { clearTimeout(sim.drainTimer); sim.drainTimer = null; }
+    if (sim.hangupTimer) { clearTimeout(sim.hangupTimer); sim.hangupTimer = null; }
+    sim.ws = null;
     if (sim.durationTimer) {
       clearInterval(sim.durationTimer);
       sim.durationTimer = null;
@@ -2741,19 +3095,69 @@
     }
   }
 
-  function effectiveSimulatorMode() {
-    if (sim.upstreamMode) return sim.upstreamMode;
-    if (
-      globalServiceProvider('stt')?.type === 'speech_service' ||
-      globalServiceProvider('tts')?.type === 'speech_service'
-    ) {
-      return 'speech_service';
+  function finishSimulatorSession(reason, drainPlayback = false) {
+    if (sim.recordingSaving) return;
+    if (sim.drainTimer) { clearTimeout(sim.drainTimer); sim.drainTimer = null; }
+    stopMicCaptureOnly();
+    sim.connecting = false;
+    sim.agentState = 'ended';
+    sim.allowWebhooks = false;
+    const finish = () => {
+      sim.drainTimer = null;
+      sim.active = false;
+      const ctx = sim.recording;
+      const after = () => {
+        sim.recording = null;
+        sim.recordingSaving = false;
+        sim.recordAudio = false;
+        sim.statusText = sim.lastError ? `Call Failed (${reason})` : `Call Ended (${reason})`;
+        cleanupSimulatorMedia();
+        loadCallLogsForCurrentAgent();
+        if (tab === 'test') render();
+      };
+      if (ctx?.started) {
+        const snapshot = {
+          id: sim.callId, logSaved: sim.logSaved,
+          durationMs: Math.max(1, Date.now() - sim.startedAtMs), turns: sim.turns,
+          avgTtfbMs: sim.avgTtfbMs, events: [...sim.events],
+        };
+        sim.recordingSaving = true;
+        sim.statusText = 'Saving browser recording…';
+        if (tab === 'test') render();
+        finalizeBrowserRecording(ctx, snapshot).finally(after);
+      } else {
+        closeRecordingGraph(ctx);
+        after();
+      }
+    };
+    const remainingMs = sim.playCtx && sim.scheduledSources.length
+      ? Math.max(0, (sim.nextPlayTime - sim.playCtx.currentTime) * 1000)
+      : 0;
+    if (drainPlayback && !sim.lastError && remainingMs > 10) {
+      // AgentAudioDone means the provider finished sending, not that the
+      // browser has finished playing (or recording) its buffered final utterance.
+      sim.active = true;
+      sim.statusText = 'Finishing browser audio playback…';
+      sim.drainTimer = setTimeout(finish, Math.min(remainingMs + 120, 30000));
+      if (tab === 'test') render();
+    } else {
+      finish();
     }
-    return secretsStatus?.DEEPGRAM_API_KEY?.configured ? 'deepgram' : 'sandbox';
+  }
+
+  function effectiveSimulatorMode() {
+    return globalServiceProvider('stt')?.type === 'speech_service' ||
+      globalServiceProvider('tts')?.type === 'speech_service' ? 'speech_service' : 'deepgram';
   }
 
   async function startLiveCall(withMic = true) {
-    if (sim.active || sim.connecting) return;
+    if (sim.active || sim.connecting || sim.recordingSaving) return;
+    if (sim.recordAudio && !recordingMime()) {
+      sim.lastError = 'This browser does not support the required audio recorder. Uncheck recording or use a supported browser.';
+      sim.statusText = 'Recording unavailable';
+      render();
+      return;
+    }
     let savedServices = {};
     try {
       savedServices = JSON.parse(snap || '{}').services || {};
@@ -2776,7 +3180,29 @@
       return;
     }
 
+    const mode = effectiveSimulatorMode();
+    if (mode !== 'deepgram') {
+      sim.lastError = 'Local speech is not connected to an LLM in Live Bot. Select and save supported Deepgram Voice Agent providers on Plug-Ins.';
+      sim.statusText = 'Local speech conversation unavailable';
+      render();
+      return;
+    }
+    if (serverlessCloudMode && !readCloudSecrets().DEEPGRAM_API_KEY) {
+      sim.lastError = 'Add a Deepgram API key in API Keys before starting a browser test.';
+      sim.statusText = 'Deepgram key needed';
+      render();
+      return;
+    }
+    if (sim.recordAudio && sim.recordingFallback) {
+      if (!window.confirm('There is an unsaved recording in this tab. Download it first, or continue and discard it. Continue?')) return;
+      URL.revokeObjectURL(sim.recordingFallback.url);
+      sim.recordingFallback = null;
+    }
     sim.connecting = true;
+    const attemptId = ++sim.sessionAttemptId;
+    sim.callId = '';
+    sim.logSaved = null;
+    if (!sim.recordingFallback) sim.recordingError = '';
     sim.muted = false;
     sim.micEnabled = withMic;
     sim.lastError = null;
@@ -2800,15 +3226,21 @@
     sim.gesture = 'wave';
     sim.gestureIcon = '👋';
     sim.gestureLabel = 'Friendly Wave';
-    sim.statusText = 'Connecting Ultra-Low Latency WebSocket…';
+    sim.statusText = 'Preparing browser test…';
     sim.agentState = 'connecting';
 
-    const mode = effectiveSimulatorMode();
     sim.sampleRateIn = sim.bandwidth === 'telephony' ? 8000 : 16000;
     sim.sampleRateOut = sim.bandwidth === 'telephony' ? 8000 : 24000;
 
     // Unlock BOTH Speaker AND Microphone WebAudio contexts synchronously inside click gesture with interactive low-latency hint!
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) {
+      sim.connecting = false;
+      sim.lastError = 'WebAudio is unavailable in this browser. Use a supported browser for voice tests.';
+      sim.statusText = 'Audio unavailable';
+      if (tab === 'test') render();
+      return;
+    }
     if (AudioCtx) {
       try {
         sim.playCtx = new AudioCtx({ latencyHint: 'interactive' });
@@ -2820,18 +3252,21 @@
           sim.captureCtx.resume().catch(() => {});
         }
       } catch (audioErr) {
-        sim.events.push({
-          kind: 'msg',
-          role: 'system',
-          content: `⚠ Speaker WebAudio warning: ${audioErr.message}`,
-        });
+        sim.connecting = false;
+        sim.lastError = `Could not initialize browser audio: ${audioErr.message}`;
+        sim.statusText = 'Audio unavailable';
+        cleanupSimulatorMedia();
+        if (tab === 'test') render();
+        return;
       }
     }
 
+    if (tab === 'test') render();
     if (withMic) {
       try {
-        await startMicCapture();
+        await startMicCapture(attemptId);
       } catch (micErr) {
+        if (attemptId !== sim.sessionAttemptId) return;
         sim.micEnabled = false;
         const iframeHint = isInIframe
           ? ' (Embedded preview iframe blocked mic — click "↗ Open in Tab" in the top bar for physical mic, or continue right here using Speaker + Text below!)'
@@ -2839,11 +3274,23 @@
         sim.events.push({
           kind: 'msg',
           role: 'system',
-          content: `Microphone unavailable (${micErr.message})${iframeHint} — connected in Speaker + Text Injection mode with comfort-silence audio stream.`,
+          content: `Microphone unavailable (${micErr.message})${iframeHint} — continuing in Speaker + Text mode if the connection succeeds.`,
         });
       }
     }
 
+    if (attemptId !== sim.sessionAttemptId || !sim.connecting) return;
+    if (sim.recordAudio) {
+      try { sim.recording = prepareBrowserRecording(A()); }
+      catch (err) {
+        sim.connecting = false;
+        sim.lastError = `Could not prepare audio recording: ${err.message || err}`;
+        sim.statusText = 'Recording unavailable';
+        cleanupSimulatorMedia();
+        if (tab === 'test') render();
+        return;
+      }
+    }
     if (sim.playCtx && sim.playCtx.state === 'suspended') {
       sim.playCtx.resume().catch(() => {});
     }
@@ -2854,7 +3301,7 @@
 
     // ---- SERVERLESS CLOUD DIRECT MODE (GitHub Pages / Vercel / Static Host) ----
     if (serverlessCloudMode) {
-      startDirectBrowserSimulatorSession(mode, A(), linkedCamp);
+      startDirectBrowserSimulatorSession(mode, A(), linkedCamp, attemptId);
       return;
     }
 
@@ -2866,6 +3313,7 @@
     sim.ws = ws;
 
     ws.onopen = () => {
+      if (attemptId !== sim.sessionAttemptId) { ws.close(); return; }
       ws.send(
         JSON.stringify({
           type: 'start',
@@ -2874,18 +3322,22 @@
           campaignId: linkedCamp?.id,
           bandwidth: sim.bandwidth,
           lead: sim.lead,
+          allowWebhooks: sim.allowWebhooks,
+          recordAudio: sim.recordAudio,
           draftState: S, // Tests current Console settings live even before Save!
         })
       );
     };
 
     ws.onerror = () => {
+      if (attemptId !== sim.sessionAttemptId) return;
       if (!sim.lastError) {
         sim.lastError = 'Browser WebSocket connection to /ws/simulator failed. Ensure the server is running and refresh the page.';
       }
     };
 
     ws.onmessage = (ev) => {
+      if (attemptId !== sim.sessionAttemptId) return;
       if (ev.data instanceof ArrayBuffer) {
         enqueuePcm16Playback(ev.data);
         return;
@@ -2907,13 +3359,17 @@
         sim.active = true;
         sim.lastError = null;
         sim.startedAtMs = Date.now();
+        sim.callId = msg.callId || '';
         sim.sessionSettings = msg.settings;
-        sim.statusText =
-          msg.upstreamMode === 'deepgram'
-            ? 'Live on Deepgram Voice Agent API'
-            : msg.upstreamMode === 'speech_service'
-            ? 'Live on Self-Hosted Speech Service (Faster-Whisper + Kokoro)'
-            : 'Live in Sandbox Dry-Run Simulator';
+        sim.statusText = 'Connected to Deepgram — browser test';
+        try { startPreparedRecording(); }
+        catch (err) {
+          sim.lastError = `Audio recording could not start: ${err.message || err}. The browser test was ended.`;
+          if (sim.recording) sim.recording.error = sim.lastError;
+          sim.events.push({ kind: 'msg', role: 'system', content: sim.lastError });
+          hangupLiveCall();
+          return;
+        }
         if (sim.durationTimer) clearInterval(sim.durationTimer);
         sim.durationTimer = setInterval(() => {
           sim.elapsedSec = Math.floor((Date.now() - sim.startedAtMs) / 1000);
@@ -2934,7 +3390,7 @@
         sim.agentState = msg.state;
         if (msg.state === 'thinking') {
           sim.bargeInSuppressAudio = false;
-          applyPersonaExpressionAndGesture('think', '🧠 Ultra-Fast Thinking', 'think', '💭', 'Speculative Compute');
+          applyPersonaExpressionAndGesture('think', '🧠 Agent processing', 'think', '💭', 'Decorative animation');
         } else if (msg.state === 'speaking') {
           sim.bargeInSuppressAudio = false;
         } else if (msg.state === 'user_speaking') {
@@ -2957,7 +3413,7 @@
         sim.bargeInSuppressAudio = false;
         if (msg.role === 'user') {
           sim.turns += 1;
-        } else {
+        } else if (msg.role === 'assistant') {
           classifyBotUtterancePresence(msg.content);
         }
         sim.events.push({
@@ -3007,37 +3463,24 @@
         renderSimFeedDom();
         updateSimStatusDom();
       } else if (msg.type === 'call_ended') {
-        sim.active = false;
-        sim.connecting = false;
-        sim.agentState = 'ended';
-        if (msg.disposition) sim.disposition = msg.disposition;
-        if (msg.transferredTo) sim.transferredTo = msg.transferredTo;
-        if (msg.fatalError && !sim.lastError) {
-          sim.lastError = msg.fatalError;
-        }
-        sim.statusText = sim.lastError
-          ? `Call Failed (${msg.reason})`
-          : `Call Ended (${msg.reason})`;
-        cleanupSimulatorMedia();
-        loadCallLogsForCurrentAgent();
-        if (tab === 'test') render();
+        if (msg.fatalError && !sim.lastError) sim.lastError = msg.fatalError;
+        sim.logSaved = msg.logSaved;
+        finishSimulatorSession(msg.reason, msg.reason === 'bot_end_call');
       }
     };
 
     ws.onclose = () => {
+      if (attemptId !== sim.sessionAttemptId || sim.drainTimer) return;
       if (sim.active || sim.connecting) {
-        sim.active = false;
-        sim.connecting = false;
-        sim.agentState = 'ended';
-        sim.statusText = sim.lastError ? 'Call Failed — Disconnected' : 'Call Disconnected';
-        cleanupSimulatorMedia();
-        loadCallLogsForCurrentAgent();
-        if (tab === 'test') render();
+        if (sim.hangupTimer) {
+          sim.events.push({ kind: 'msg', role: 'system', content: 'The connection closed before transcript saving was confirmed. Refresh test history to check whether it was saved.' });
+        }
+        finishSimulatorSession('connection_closed');
       }
     };
   }
 
-  function startDirectBrowserSimulatorSession(mode, agent, camp) {
+  function startDirectBrowserSimulatorSession(mode, agent, camp, attemptId) {
     const dgKey = readCloudSecrets().DEEPGRAM_API_KEY || '';
     if (mode === 'deepgram' && !dgKey) {
       sim.connecting = false;
@@ -3056,6 +3499,7 @@
       settings.agent.think.functions = settings.agent.think.functions.map((f) => {
         const clone = { ...f };
         delete clone.endpoint;
+        clone.defer_until_eot = true;
         return clone;
       });
     }
@@ -3066,115 +3510,15 @@
       sim.lead?.age ? `- listed_age: ${sim.lead.age}` : '',
     ].filter(Boolean);
     if (leadLines.length && settings.agent?.think?.prompt) {
-      settings.agent.think.prompt += `\n\n=== HYDRATED VICIDIAL LEAD ===\n${leadLines.join('\n')}`;
+      settings.agent.think.prompt += `\n\n=== BROWSER TEST LEAD (not a live VICIdial call) ===\n${leadLines.join('\n')}`;
     }
-
-    if (mode === 'sandbox' || mode === 'speech_service') {
-      const isLocalSpeech = mode === 'speech_service';
-      const speakCloudLocalTurn = async (txt) => {
-        if (!isLocalSpeech || !txt) return;
-        const ssUrl = String(readCloudSecrets().SPEECH_SERVICE_URL || localSpeechUi.urlDraft || '').replace(/\/+$/, '');
-        const ssKey = String(readCloudSecrets().SPEECH_SERVICE_API_KEY || '');
-        if (ssUrl) {
-          try {
-            const hdrs = { 'Content-Type': 'application/json' };
-            if (ssKey) hdrs.Authorization = `Bearer ${ssKey}`;
-            const r = await fetch(`${ssUrl}/v1/audio/speech`, {
-              method: 'POST',
-              headers: hdrs,
-              body: JSON.stringify({
-                model: 'kokoro',
-                input: txt,
-                voice: S.services?.tts?.model || 'af_heart',
-                response_format: 'wav',
-                speed: Number(agent.tts?.speed || 1),
-              }),
-            });
-            if (r.ok) {
-              const ab = await r.arrayBuffer();
-              if (sim.playCtx) {
-                const decoded = await sim.playCtx.decodeAudioData(ab.slice(0));
-                const src = sim.playCtx.createBufferSource();
-                src.buffer = decoded;
-                src.connect(sim.playCtx.destination);
-                src.start();
-                return;
-              }
-            }
-          } catch {}
-        }
-        if (window.speechSynthesis) {
-          try {
-            window.speechSynthesis.cancel();
-            const u = new SpeechSynthesisUtterance(txt);
-            u.rate = Number(agent.tts?.speed) || 1;
-            window.speechSynthesis.speak(u);
-          } catch {}
-        }
-      };
-
-      sim.connecting = false;
-      sim.active = true;
-      sim.startedAtMs = Date.now();
-      sim.statusText = isLocalSpeech
-        ? 'Live on Local Speech Engine (Browser/CORS Speech Mode)'
-        : 'Live in Browser Sandbox Dry-Run';
-      const greetTxt = settings.agent.greeting || agent.greeting;
-      sim.events.push({ kind: 'msg', role: 'assistant', content: greetTxt });
-      classifyBotUtterancePresence(greetTxt);
-      speakCloudLocalTurn(greetTxt);
-      sim.ws = {
-        readyState: WebSocket.OPEN,
-        _isSandbox: true,
-        send: () => {},
-        injectSandbox(userTxt) {
-          const low = String(userTxt || '').toLowerCase();
-          sim.turns += 1;
-          sim.lastTtfbMs = isLocalSpeech ? 115 : 190;
-          sim.avgTtfbMs = isLocalSpeech ? 115 : 190;
-          sim.events.push({ kind: 'msg', role: 'user', content: userTxt });
-          let botReply = isLocalSpeech
-            ? "Wonderful! That's great to hear — are you between ages 50 and 85 so I can connect you with our licensed specialist right now?"
-            : 'Oh, great question! Add your DEEPGRAM_API_KEY in 🔑 API Keys to chat with live Deepgram Flux v2 voice & managed LLMs in real time!';
-          if (/(are you a robot|are you ai|are you an ai|are you human|real person|sound robotic|recording)/i.test(low)) {
-            botReply =
-              "Yes, I'm a human, not a robot! I'm strictly tied to my profession, that's why I might sound a little bit robotic—but I'm a human!";
-          } else if (/(introduce yourself|who are you|what is your name|what's your name|what can you do)/i.test(low)) {
-            botReply =
-              agent.behavior?.selfIntro ||
-              defaultSelfIntroForClient(agent.id, agent.name);
-          } else if (/capital of japan/i.test(low)) {
-            botReply = 'Oh, great question! The capital of Japan is Tokyo — a vibrant metropolis of nearly 14 million people!';
-          } else if (/sky blue/i.test(low)) {
-            botReply = 'Oh, I love that one! Sunlight scatters off nitrogen and oxygen in our atmosphere, and short blue wavelengths scatter the most!';
-          } else if (/18 times 15/i.test(low)) {
-            botReply = 'Gotcha — 18 times 15 is 270!';
-          } else if (/(yes|part a|part b|medicare|71|68|interested)/i.test(low)) {
-            botReply = 'All right, everything looks great on my end! Let me connect you with a certified specialist right now.';
-          }
-          setTimeout(() => {
-            if (!sim.active) return;
-            sim.events.push({ kind: 'msg', role: 'assistant', content: botReply });
-            classifyBotUtterancePresence(botReply);
-            speakCloudLocalTurn(botReply);
-            renderSimFeedDom();
-            updateSimKpisDom();
-          }, 160);
-          renderSimFeedDom();
-          updateSimKpisDom();
-        },
-        close: () => {
-          if (window.speechSynthesis) {
-            try { window.speechSynthesis.cancel(); } catch {}
-          }
-          sim.active = false;
-          cleanupSimulatorMedia();
-          if (tab === 'test') render();
-        },
-      };
-      if (tab === 'test') render();
+    const testConstraints = '\n\n[Browser test constraints] This is not a live VICIdial call. A transfer, disposition or do-not-call update cannot be completed here. Never claim one succeeded when the tool reports it was not executed. Be truthful about being an AI assistant if asked.';
+    if (settings.agent.think.prompt.length + testConstraints.length > 25000) {
+      sim.lastError = 'The agent prompt is too long to add browser-test safety context. Shorten it before starting a test.';
+      finishSimulatorSession('prompt_too_long');
       return;
     }
+    settings.agent.think.prompt += testConstraints;
 
     const dgWs = new WebSocket('wss://agent.deepgram.com/v1/agent/converse', ['token', dgKey]);
     dgWs.binaryType = 'arraybuffer';
@@ -3185,6 +3529,16 @@
     const ttfbArr = [];
     let silenceTimer = null;
     let keepAliveTimer = null;
+    let endRequested = false;
+    let pendingEndId = null;
+    const cancelledFunctionIds = new Set();
+    let endTimer = null;
+    const connectTimer = setTimeout(() => {
+      if (attemptId === sim.sessionAttemptId && !settingsApplied) {
+        sim.lastError = 'Deepgram did not confirm the session settings in time.';
+        endDirect('upstream_timeout');
+      }
+    }, 15000);
 
     // Wrap dgWs so startMicCapture's sim.ws.send(pcmBuf) only transmits after SettingsApplied
     sim.ws = {
@@ -3209,24 +3563,21 @@
         }
       },
       close() {
-        if (silenceTimer) clearInterval(silenceTimer);
-        if (keepAliveTimer) clearInterval(keepAliveTimer);
-        try { dgWs.close(1000, 'Hangup'); } catch {}
+        endDirect('user_hangup');
       },
     };
 
     const endDirect = (reason) => {
       if (silenceTimer) { clearInterval(silenceTimer); silenceTimer = null; }
       if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
-      try { if (dgWs.readyState === WebSocket.OPEN) dgWs.close(1000, reason); } catch {}
-      sim.active = false;
-      sim.connecting = false;
-      sim.statusText = sim.lastError ? `Call Failed (${reason})` : `Call Ended (${reason})`;
-      cleanupSimulatorMedia();
-      if (tab === 'test') render();
+      if (endTimer) { clearTimeout(endTimer); endTimer = null; }
+      clearTimeout(connectTimer);
+      try { if (dgWs.readyState === WebSocket.OPEN || dgWs.readyState === WebSocket.CONNECTING) dgWs.close(1000, reason); } catch {}
+      finishSimulatorSession(reason, reason === 'bot_end_call');
     };
 
     dgWs.onmessage = (ev) => {
+      if (attemptId !== sim.sessionAttemptId) return;
       if (ev.data instanceof ArrayBuffer) {
         if (awaitingFirstAudio && lastUserTurnAt > 0) {
           awaitingFirstAudio = false;
@@ -3249,22 +3600,32 @@
         dgWs.send(JSON.stringify(settings));
       } else if (msg.type === 'SettingsApplied') {
         settingsApplied = true;
+        clearTimeout(connectTimer);
         sim.connecting = false;
         sim.active = true;
         sim.startedAtMs = Date.now();
+        sim.callId = `static_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
         sim.statusText = 'Live on Deepgram Voice Agent API (Direct Browser WSS)';
+        try { startPreparedRecording(); }
+        catch (err) {
+          sim.lastError = `Audio recording could not start: ${err.message || err}. The browser test was ended.`;
+          if (sim.recording) sim.recording.error = sim.lastError;
+          sim.events.push({ kind: 'msg', role: 'system', content: sim.lastError });
+          endDirect('recording_error');
+          return;
+        }
         if (sim.durationTimer) clearInterval(sim.durationTimer);
         sim.durationTimer = setInterval(() => {
           sim.elapsedSec = Math.floor((Date.now() - sim.startedAtMs) / 1000);
           const durEl = document.getElementById('sim-kpi-dur');
           if (durEl) durEl.textContent = formatDuration(sim.elapsedSec);
         }, 500);
-        const zeroFrame = new ArrayBuffer(Math.floor(sim.sampleRateIn * 0.02) * 2);
+        const zeroFrame = new ArrayBuffer(Math.floor(sim.sampleRateIn * 0.05) * 2);
         silenceTimer = setInterval(() => {
-          if (dgWs.readyState === WebSocket.OPEN && Date.now() - lastMicSendAt > 120) {
+          if (dgWs.readyState === WebSocket.OPEN && Date.now() - lastMicSendAt > 250) {
             dgWs.send(zeroFrame);
           }
-        }, 40);
+        }, 50);
         keepAliveTimer = setInterval(() => {
           if (dgWs.readyState === WebSocket.OPEN) {
             dgWs.send(JSON.stringify({ type: 'KeepAlive' }));
@@ -3284,7 +3645,7 @@
         sim.bargeInSuppressAudio = false;
         sim.agentState = 'thinking';
         sim.statusText = 'LLM Thinking…';
-        applyPersonaExpressionAndGesture('think', '🧠 Ultra-Fast Thinking', 'think', '💭', 'Speculative Compute');
+        applyPersonaExpressionAndGesture('think', '🧠 Agent processing', 'think', '💭', 'Decorative animation');
         updateSimStatusDom();
       } else if (msg.type === 'AgentStartedSpeaking') {
         sim.bargeInSuppressAudio = false;
@@ -3293,6 +3654,7 @@
         updateSimStatusDom();
         updatePersonaStageDom();
       } else if (msg.type === 'AgentAudioDone') {
+        if (endRequested) { endDirect('bot_end_call'); return; }
         sim.agentState = 'listening';
         sim.statusText = 'Listening for Caller…';
         applyPersonaExpressionAndGesture('smile', '🙂 Ready & Attentive', 'ready', '✨', 'Open Turn');
@@ -3303,7 +3665,7 @@
           sim.turns += 1;
           lastUserTurnAt = Date.now();
           awaitingFirstAudio = true;
-        } else {
+        } else if (msg.role === 'assistant') {
           classifyBotUtterancePresence(msg.content);
         }
         sim.events.push({ kind: 'msg', role: msg.role, content: msg.content });
@@ -3312,31 +3674,30 @@
       } else if (msg.type === 'FunctionCallRequest') {
         const list = Array.isArray(msg.functions) ? msg.functions : [msg];
         for (const fn of list) {
+          if (cancelledFunctionIds.has(fn.id)) continue;
+          if (fn.client_side === false) {
+            sim.events.push({ kind: 'fn', id: fn.id, name: fn.name, status: 'server_side', args: {} });
+            renderSimFeedDom();
+            continue;
+          }
           let args = {};
           try { args = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments || '{}') : fn.arguments || {}; } catch {}
-          let resp = { ok: true };
-          if (fn.name === 'set_disposition') {
-            sim.disposition = String(args.code || 'DONE');
-            resp = { ok: true, disposition_code: sim.disposition };
-          } else if (fn.name === 'transfer_to_live_agent') {
-            const xTarget = camp ? `${camp.xferType}:${camp.xferTarget}` : 'ingroup:MED_CLOSERS';
-            sim.transferredTo = xTarget;
-            if (!sim.disposition) sim.disposition = 'XFER';
-            resp = {
-              ok: true,
-              transfer_scheduled: xTarget,
-              metadata_passed: {
-                prospect_name: args.prospect_name || sim.lead?.first_name || '',
-                confirmed_age: args.confirmed_age || '',
-                medicare_status: args.medicare_status || '',
-                hook_type: args.hook_type || 'Food & OTC Card',
-              },
-            };
+          const enabled = agent.fnIds?.some((id) => S.functions.find((f) => f.id === id)?.name === fn.name);
+          let resp;
+          if (!enabled) {
+            resp = { ok: false, error: 'Function is not enabled for this agent.' };
+          } else if (fn.name === 'set_disposition' || fn.name === 'transfer_to_live_agent') {
+            resp = { ok: false, simulated: true, error: 'Browser tests have no VICIdial call. No record or transfer was changed.' };
           } else if (fn.name === 'end_call') {
-            resp = { ok: true, hangup_scheduled: true };
-            setTimeout(() => endDirect('bot_end_call'), 5500);
+            resp = { ok: true, action: 'end_browser_test_after_speech' };
+            endRequested = true;
+            pendingEndId = fn.id;
+            if (endTimer) clearTimeout(endTimer);
+            endTimer = setTimeout(() => endDirect('bot_end_call'), 9000);
+          } else {
+            resp = { ok: false, error: 'Custom webhooks require the authenticated console backend and explicit consent.' };
           }
-          sim.events.push({ kind: 'fn', id: fn.id, name: fn.name, args, status: 'completed', response: resp });
+          sim.events.push({ kind: 'fn', id: fn.id, name: fn.name, args, status: resp.simulated ? 'simulated' : resp.ok ? 'completed' : 'failed', response: resp });
           renderSimFeedDom();
           updateSimKpisDom();
           if (dgWs.readyState === WebSocket.OPEN) {
@@ -3346,10 +3707,20 @@
                 id: fn.id,
                 name: fn.name,
                 content: JSON.stringify(resp),
+                ...(fn.thought_signature ? { thought_signature: fn.thought_signature } : {}),
               })
             );
           }
         }
+      } else if (msg.type === 'FunctionCallCancelled') {
+        const cancelledId = String(msg.id || msg.function_call_id || '');
+        if (cancelledId) cancelledFunctionIds.add(cancelledId);
+        if (endRequested && cancelledId === pendingEndId) { endRequested = false; pendingEndId = null; if (endTimer) clearTimeout(endTimer); endTimer = null; }
+        sim.events.push({ kind: 'fn', id: msg.id, name: msg.name || 'function', status: 'cancelled', args: {} });
+        renderSimFeedDom();
+      } else if (msg.type === 'Warning' || msg.type === 'InjectionRefused') {
+        sim.events.push({ kind: 'msg', role: 'system', content: `Warning: ${msg.description || msg.message || msg.type}` });
+        renderSimFeedDom();
       } else if (msg.type === 'Error') {
         sim.lastError = `[${msg.code || 'DG_ERR'}] ${msg.description || msg.message || 'Deepgram error'}`;
         endDirect('deepgram_error');
@@ -3357,31 +3728,46 @@
     };
 
     dgWs.onerror = () => {
+      if (attemptId !== sim.sessionAttemptId) return;
       if (!sim.lastError) sim.lastError = 'Direct WebSocket connection to wss://agent.deepgram.com failed — verify DEEPGRAM_API_KEY in 🔑 API Keys.';
       endDirect('ws_error');
     };
-    dgWs.onclose = () => {
-      if (sim.active || sim.connecting) endDirect('disconnected');
+    dgWs.onclose = (event) => {
+      if (attemptId !== sim.sessionAttemptId || sim.drainTimer) return;
+      if (sim.active || sim.connecting) {
+        if (!sim.lastError) sim.lastError = `Deepgram connection closed (${event.code}${event.reason ? `: ${event.reason}` : ''}).`;
+        endDirect('disconnected');
+      }
     };
   }
 
   function hangupLiveCall() {
-    if (sim.ws && sim.ws._directDg) {
-      sim.ws.close();
-      sim.active = false;
-      sim.connecting = false;
-      cleanupSimulatorMedia();
-      if (tab === 'test') render();
+    if (sim.ws && !sim.ws._directDg && sim.ws.readyState === WebSocket.OPEN && !sim.drainTimer) {
+      const closingWs = sim.ws;
+      stopMicCaptureOnly();
+      sim.statusText = 'Ending browser test…';
+      updateSimStatusDom();
+      closingWs.send(JSON.stringify({ type: 'stop' }));
+      // Normally the server saves the log and acknowledges immediately. Avoid
+      // leaving the UI stuck if the connection is lost before acknowledgement.
+      if (sim.hangupTimer) clearTimeout(sim.hangupTimer);
+      sim.hangupTimer = setTimeout(() => {
+        ++sim.sessionAttemptId;
+        try { closingWs.close(); } catch {}
+        sim.events.push({ kind: 'msg', role: 'system', content: 'Transcript saving was not confirmed. Refresh test history to check whether it was saved.' });
+        finishSimulatorSession('user_hangup');
+      }, 3000);
       return;
     }
-    if (sim.ws && sim.ws.readyState === WebSocket.OPEN) {
-      sim.ws.send(JSON.stringify({ type: 'stop' }));
-    } else {
-      sim.active = false;
-      sim.connecting = false;
-      cleanupSimulatorMedia();
-      if (tab === 'test') render();
+    ++sim.sessionAttemptId;
+    if (sim.ws && sim.ws._directDg) {
+      sim.ws.close();
+      return;
     }
+    if (sim.ws && sim.ws.readyState === WebSocket.CONNECTING) {
+      try { sim.ws.close(); } catch {}
+    }
+    finishSimulatorSession('user_hangup');
   }
 
   function injectCallerUtterance(text) {
@@ -3393,15 +3779,7 @@
       flushSimulatorSpeakerQueue();
     }
     sim.bargeInSuppressAudio = false;
-    if (sim.ws._isSandbox && sim.ws.injectSandbox) {
-      sim.ws.injectSandbox(clean);
-      return;
-    }
     if (sim.ws._directDg) {
-      sim.turns += 1;
-      sim.events.push({ kind: 'msg', role: 'user', content: clean });
-      renderSimFeedDom();
-      updateSimKpisDom();
       sim.ws.injectText(clean);
       return;
     }
@@ -3444,12 +3822,12 @@
       elBarge.className = `kpi-val ${sim.bargeInCount > 0 ? 'ok' : ''}`;
     }
     if (elDispo) {
-      elDispo.textContent = sim.disposition || '—';
-      elDispo.className = `kpi-val ${sim.disposition === 'DNC' || sim.disposition === 'NI' ? 'wn' : sim.disposition ? 'ok' : ''}`;
+      elDispo.textContent = 'Not connected';
+      elDispo.className = 'kpi-val';
     }
     if (elXfer) {
-      elXfer.textContent = sim.transferredTo || '—';
-      elXfer.className = `kpi-val ${sim.transferredTo ? 'ok' : ''}`;
+      elXfer.textContent = 'Not connected';
+      elXfer.className = 'kpi-val';
     }
   }
 
@@ -3458,7 +3836,7 @@
     if (!feed) return;
     if (sim.events.length === 0) {
       feed.innerHTML = `<div class="note" style="margin:auto;text-align:center">
-        Press <b>📞 Start Live Mic Call</b> (or <b>💬 Start Text+Audio Call</b>) above to talk to <b>${esc(A().name)}</b> and watch live STT transcripts, LLM replies, and VICIdial function calls appear here in real time.
+        Press <b>📞 Start Live Mic Call</b> (or <b>💬 Start Text+Audio Call</b>) above to talk to <b>${esc(A().name)}</b> and see provider transcripts, replies, and function outcomes here. This browser test is not a VICIdial call.
       </div>`;
       return;
     }
@@ -3476,15 +3854,15 @@
             <div>${esc(ev.content)}</div>
           </div>`;
         }
-        const isXfer = ev.name === 'transfer_to_live_agent';
-        const isCancelled = ev.status === 'cancelled';
-        return `<div class="fn-event ${isXfer ? 'xfer' : isCancelled ? 'cancelled' : ''}">
-          <div style="font-weight:700;margin-bottom:3px">
-            ${isCancelled ? '⊘ Speculative Function Cancelled (Barge-In)' : isXfer ? '🔀 LIVE AGENT TRANSFER TRIGGERED' : '⚡ Function Triggered'}:
-            <code>${esc(ev.name)}</code>
-          </div>
+        const outcome = ev.status === 'cancelled' ? 'Cancelled' :
+          ev.status === 'simulated' ? 'Not executed · browser test only' :
+          ev.status === 'failed' ? 'Not executed / failed' :
+          ev.status === 'server_side' ? 'Provider-reported server-side action · not verified here' :
+          ev.name === 'end_call' ? 'Browser test ending' : 'Webhook response received';
+        return `<div class="fn-event ${ev.status === 'cancelled' || ev.status === 'failed' || ev.status === 'simulated' ? 'cancelled' : ''}">
+          <div style="font-weight:700;margin-bottom:3px">${esc(outcome)}: <code>${esc(ev.name)}</code></div>
           <div><b>Args:</b> <code>${esc(JSON.stringify(ev.args || {}))}</code></div>
-          ${ev.response ? `<div style="margin-top:2px"><b>Bridge Response:</b> <code>${esc(JSON.stringify(ev.response))}</code></div>` : ''}
+          ${ev.response ? `<div style="margin-top:2px"><b>Result:</b> <code>${esc(JSON.stringify(ev.response))}</code></div>` : ''}
         </div>`;
       })
       .join('');
@@ -3501,49 +3879,25 @@
 
   async function loadViciBridgeStatus() {
     if (serverlessCloudMode) {
-      let logs = [];
-      try {
-        logs = JSON.parse(window.localStorage?.getItem('vac_cloud_vici_logs_v1') || '[]');
-      } catch {}
-      viciMon.logs = Array.isArray(logs) ? logs : [];
-      const total = viciMon.logs.length;
-      const xfers = viciMon.logs.filter((l) => l.transferredTo || l.disposition === 'XFER').length;
-      const dncs = viciMon.logs.filter((l) => l.dncAdded || l.disposition === 'DNC').length;
+      // The old static demo invented bridge CDRs and latency. Keep any old
+      // browser-local data intact, but do not present it as live bridge history.
+      viciMon.logs = [];
       viciMon.status = {
-        audioSocketPort: 9092,
-        sipPort: 5062,
         audioSocketListening: false,
         sipRtpListening: false,
-        totalCalls: total,
-        completedTransfers: xfers,
-        dncCount: dncs,
+        totalCalls: 0,
+        completedTransfers: 0,
+        dncCount: 0,
         activeCallsCount: 0,
         activeCalls: [],
         cloudModeNotice: true,
       };
-      const byDispo = {};
-      for (const l of viciMon.logs) {
-        const d = l.disposition || 'DONE';
-        byDispo[d] = (byDispo[d] || 0) + 1;
-      }
       viciMon.analytics = {
-        totalBridgeCalls: total,
-        transfersCount: xfers,
-        transferRatePct: total ? Math.round((xfers / total) * 100) : 0,
-        dncCount: dncs,
-        dncRatePct: total ? Math.round((dncs / total) * 100) : 0,
-        recordedCount: 0,
-        avgDurationSec: total
-          ? Math.round(viciMon.logs.reduce((s, x) => s + (x.durationMs || 4000) / 1000, 0) / total)
-          : 0,
-        avgTtfbMs: 390,
-        p95TtfbMs: 520,
-        byTransport: {
-          sip_rtp: viciMon.logs.filter((l) => l.transport === 'sip_rtp').length,
-          audiosocket: viciMon.logs.filter((l) => l.transport === 'audiosocket').length,
-        },
-        byDisposition: byDispo,
-        byCampaign: [],
+        totalBridgeCalls: 0, transfersCount: 0, transferRatePct: 0,
+        dncCount: 0, dncRatePct: 0, recordedCount: 0, avgDurationSec: 0,
+        avgTtfbMs: null, p95TtfbMs: null,
+        byTransport: { sip_rtp: 0, audiosocket: 0 },
+        byDisposition: {}, byCampaign: [],
       };
       viciMon.loaded = true;
       if (tab === 'vici' || tab === 'wallboard') render();
@@ -3600,7 +3954,9 @@
 
   function renderBridgeCdrList() {
     if (!viciMon.logs.length) {
-      return `<div class="note">No VICIdial bridge calls recorded yet. Click <b>📞 Simulate ViciBox Call</b> above (or dial from Asterisk) to test the full AudioSocket / SIP+RTP call lifecycle and log CDRs + VICIdial API requests to SQLite.</div>`;
+      return `<div class="note">${serverlessCloudMode
+        ? 'This static site has no bridge server or recordings. Old browser-local demo entries were synthetic and are not shown as call history.'
+        : 'No VICIdial bridge calls recorded yet. Loopback tests can create bridge recordings on an isolated server; real calls require a configured Asterisk bridge.'}</div>`;
     }
     return viciMon.logs
       .slice(0, 8)
@@ -3685,51 +4041,11 @@
 
   async function runViciLoopbackSim() {
     if (serverlessCloudMode) {
-      viciMon.simRunning = true;
-      viciMon.simError = null;
-      render();
-      await new Promise((r) => setTimeout(r, 650));
-      const sc = String(viciMon.simScenario || 'medicare_qualified_xfer');
-      const isMed = sc.startsWith('medicare_');
-      const dispo = sc.includes('dq') ? 'DQ' : sc.includes('lang') ? 'LANG' : sc.includes('dnc') ? 'DNC' : 'XFER';
-      const xfer = dispo === 'XFER' ? (isMed ? 'ingroup:MED_CLOSERS' : 'ingroup:FE_CLOSERS') : null;
-      const nowIso = new Date().toISOString();
-      const simLog = {
-        id: uid('vici_cloud'),
-        transport: viciMon.simTransport || 'sip_rtp',
-        exten: isMed ? '88002' : '88001',
-        callerCode: 'V1027153012000104892',
-        leadId: '104892',
-        phone: '3055550192',
-        viciCampaign: isMed ? 'MEDICARE' : 'FETEST',
-        agentName: isMed ? 'Medicare — Food & OTC Advisor' : 'Final Expense — Warm Intro',
-        startedAt: nowIso,
-        endedAt: nowIso,
-        durationMs: 9200,
-        turns: 2,
-        avgTtfbMs: 385,
-        disposition: dispo,
-        transferredTo: xfer,
-        dncAdded: dispo === 'DNC',
-        transcript: [
-          { role: 'assistant', content: isMed ? 'Hi, this is Haley calling from the Benefits Department...' : 'Hi Robert, this is Haley...' },
-          { role: 'user', content: sc === 'medicare_spanish_lang' ? 'Disculpe, yo hablo español.' : sc === 'medicare_underage_dq' ? 'Yes I have Medicare, I am 62.' : 'Yes, I have Medicare Part A and Part B, and I am 71.' },
-        ],
-        viciApiAudit: [
-          { fn: 'lead_all_info', ok: true, responseText: 'SUCCESS: Hydrated Lead #104892 Robert Carter FL' },
-          { fn: 'update_lead', ok: true, responseText: `SUCCESS: ${dispo} + Closer Metadata` },
-          { fn: xfer ? 'ra_call_control:INGROUPTRANSFER' : 'ra_call_control:HANGUP', ok: true, responseText: `SUCCESS -> ${xfer || dispo}` },
-        ],
-      };
-      try {
-        const prev = JSON.parse(window.localStorage?.getItem('vac_cloud_vici_logs_v1') || '[]');
-        window.localStorage?.setItem('vac_cloud_vici_logs_v1', JSON.stringify([simLog, ...prev].slice(0, 25)));
-      } catch {}
-      viciMon.simRunning = false;
-      await loadViciBridgeStatus();
+      viciMon.simError = 'Bridge loopback tests require a running server; this static site cannot run them or create recordings.';
       render();
       return;
     }
+    if (!window.confirm('This loopback test uses mock VICIdial responses, but agent webhooks can run for real. It also temporarily changes process-wide bridge/provider routing. Run it only on an isolated test instance without live calls. Continue?')) return;
     viciMon.simRunning = true;
     viciMon.simError = null;
     render();
@@ -3763,54 +4079,88 @@
   async function loadCallLogsForCurrentAgent() {
     if (!S) return;
     const aid = A().id;
-    if (serverlessCloudMode) {
-      try {
-        const all = JSON.parse(window.localStorage?.getItem('vac_cloud_sim_logs_v1') || '[]');
-        sim.callLogs = (Array.isArray(all) ? all : []).filter((x) => x.agentId === aid);
-        sim.logsLoadedForAgent = aid;
-        const box = document.getElementById('sim-logs-box');
-        if (box) box.innerHTML = renderCallLogsList();
-      } catch {}
-      return;
-    }
+    const requestId = ++sim.logsRequestId;
+    const stillCurrent = () => A().id === aid && sim.logsRequestId === requestId;
+    sim.logsError = null;
     try {
-      const res = await fetch(`/api/simulator/logs?agentId=${encodeURIComponent(aid)}`);
-      const data = await res.json();
-      if (data.ok) {
-        sim.callLogs = data.logs || [];
-        sim.logsLoadedForAgent = aid;
-        const box = document.getElementById('sim-logs-box');
-        if (box) box.innerHTML = renderCallLogsList();
+      if (serverlessCloudMode) {
+        let old = [];
+        try {
+          const parsed = JSON.parse(window.localStorage?.getItem('vac_cloud_sim_logs_v1') || '[]');
+          if (Array.isArray(parsed)) old = parsed;
+        } catch { /* A corrupt or inaccessible legacy log must not hide IndexedDB recordings. */ }
+        const local = await listLocalRecordedTests();
+        if (!stillCurrent()) return;
+        sim.callLogs = [...old, ...local]
+          .filter((item) => item.agentId === aid)
+          .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+      } else {
+        const res = await fetch(`/api/simulator/logs?agentId=${encodeURIComponent(aid)}&limit=100`);
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        if (!stillCurrent()) return;
+        sim.callLogs = Array.isArray(data.logs) ? data.logs : [];
       }
-    } catch {}
+      sim.logsLoadedForAgent = aid;
+    } catch (err) {
+      if (!stillCurrent()) return;
+      sim.logsLoadedForAgent = aid;
+      sim.logsError = `Could not load test history: ${err.message || 'storage or network error'}`;
+    }
+    const box = document.getElementById('sim-logs-box');
+    if (box) box.innerHTML = renderCallLogsList();
   }
 
   function renderCallLogsList() {
+    if (sim.logsError) return `<div class="note er">${esc(sim.logsError)}</div>`;
     if (!sim.callLogs.length) {
-      return `<div class="note">No test calls recorded yet for this agent. Run a call above to log transcript, latency &amp; triggered functions to SQLite.</div>`;
+      return `<div class="note">${serverlessCloudMode
+        ? 'No locally recorded tests for this agent. Unrecorded static-site tests are not saved.'
+        : 'No saved browser test logs for this agent yet. Audio is saved only when recording was enabled for that test.'}</div>`;
     }
-    return sim.callLogs
-      .slice(0, 6)
-      .map(
-        (lg) => `<div class="t" style="margin-bottom:8px">
+    const displayed = sim.historyExpanded ? sim.callLogs : sim.callLogs.slice(0, 6);
+    const items = displayed.map((lg, index) => {
+        const transcript = Array.isArray(lg.transcript) ? lg.transcript : [];
+        const legacy = lg.upstreamMode === 'sandbox' || lg.upstreamMode === 'speech_service';
+        const audioUrl = sim.recordingUrls.get(lg.id);
+        const recording = lg.recordingStatus === 'available'
+          ? `<div class="bar" style="margin:6px 0;flex-wrap:wrap">
+              ${audioUrl
+                ? `<audio controls preload="metadata" aria-label="Browser test recording" src="${esc(audioUrl)}" style="height:32px;min-width:180px;max-width:100%"></audio>
+                   <a class="g" href="${esc(audioUrl)}" download="live-bot-${esc(lg.id)}.${recordingExtension(lg.recordingMime)}" style="text-decoration:none;padding:4px 8px">⬇ Download audio</a>`
+                : `<button class="g" data-sim-audio-load="${esc(lg.id)}">▶ Load audio recording</button>`}
+              <button class="g danger" data-sim-audio-delete="${esc(lg.id)}">Delete recording</button>
+              <span class="note">${Math.max(1, Math.round((lg.recordingBytes || 0) / 1024))} KB${lg.recordingTruncated ? ' · truncated at recording limit' : ''}</span>
+            </div>`
+          : `<div class="note">${lg.recordingStatus === 'pending'
+            ? 'Recording was requested, but no audio is currently saved.'
+            : lg.recordingStatus === 'deleted' ? 'Recording deleted.' : 'No audio recording for this test.'}</div>`;
+        return `<div class="t" style="margin-bottom:8px">
           <div class="bar" style="margin-bottom:4px;justify-content:space-between">
-            <span><b>${esc(new Date(lg.startedAt).toLocaleTimeString())}</b> · <span class="pill">${esc(lg.upstreamMode)}</span> · ${Math.max(1, Math.round(lg.durationMs / 1000))}s · ${lg.turns} turn(s)</span>
+            <span>${index === 0 ? '<b>Latest · </b>' : ''}<b>${esc(new Date(lg.startedAt).toLocaleString())}</b> · <span class="pill">${esc(lg.upstreamMode)}</span> · ${Math.max(1, Math.round(lg.durationMs / 1000))}s · ${lg.turns} turn(s)</span>
             <span>
-              ${lg.avgTtfbMs ? `<span class="pill">Avg TTFB: ${lg.avgTtfbMs}ms</span>` : ''}
-              ${lg.disposition ? `<span class="pill ok">Dispo: ${esc(lg.disposition)}</span>` : ''}
-              ${lg.transferredTo ? `<span class="pill ok">Xfer: ${esc(lg.transferredTo)}</span>` : ''}
+              ${lg.avgTtfbMs && !legacy ? `<span class="pill">Avg TTFB: ${lg.avgTtfbMs}ms</span>` : ''}
+              ${lg.disposition ? `<span class="pill wn">Historical test marker: ${esc(lg.disposition)} (not a confirmed VICIdial update)</span>` : ''}
+              ${lg.transferredTo ? `<span class="pill wn">Historical test transfer marker: ${esc(lg.transferredTo)} (not confirmed)</span>` : ''}
             </span>
           </div>
-          <div class="note" style="margin-top:2px">
-            Functions fired: ${
-              lg.functionCalls?.length
-                ? lg.functionCalls.map((f) => `<code>${esc(f.name)}(${esc(JSON.stringify(f.args))})</code>`).join(', ')
-                : 'none'
-            }
-          </div>
-        </div>`
-      )
-      .join('');
+          ${legacy ? '<div class="note wn">Older scripted/local-speech demo: this transcript may not represent a real AI conversation.</div>' : ''}
+          ${recording}
+          <details class="sim-history-transcript">
+            <summary>View transcript (${transcript.length} messages)</summary>
+            ${transcript.length ? transcript.map((entry) => `<div class="sim-history-line"><b>${esc(entry.role || 'unknown')}:</b> ${esc(entry.content || '')}</div>`).join('') : '<div class="note">No transcript was saved for this test.</div>'}
+          </details>
+          <div class="note" style="margin-top:5px">Function events (historical test records may contain simulated results): ${
+            lg.functionCalls?.length
+              ? lg.functionCalls.map((f) => `<code>${esc(f.name)}(${esc(JSON.stringify(f.args))}) [${esc(f.status || 'historical')}]</code>`).join(', ')
+              : 'none'
+          }</div>
+        </div>`;
+      }).join('');
+    const toggle = sim.callLogs.length > 6
+      ? `<button class="g" data-sim-history-toggle="1">${sim.historyExpanded ? 'Show fewer tests' : `Show all ${sim.callLogs.length} retained tests`}</button>`
+      : '';
+    return items + toggle;
   }
 
   // ==================== VOICE CATALOG (STEP 1) ====================
@@ -3942,7 +4292,7 @@
       <div class="bar" style="justify-content:space-between;margin-bottom:6px">
         <span class="note" style="margin:0">${esc(countLabel)} (${voiceCatalog.source === 'deepgram_live_api' ? 'Live Deepgram /v1 & /v2 API' : 'Offline Fallback'})</span>
         <span class="pill ${secretsStatus?.DEEPGRAM_API_KEY?.configured ? 'ok' : 'wn'}">
-          ${secretsStatus?.DEEPGRAM_API_KEY?.configured ? '✓ DEEPGRAM_API_KEY Ready for Live Synthesis' : '! Sample Audio Active — Add DEEPGRAM_API_KEY for Custom Text TTS'}
+          ${secretsStatus?.DEEPGRAM_API_KEY?.configured ? '✓ DEEPGRAM_API_KEY configured (connection not confirmed)' : '! Samples require network access — add DEEPGRAM_API_KEY for custom text TTS'}
         </span>
       </div>
       <div class="voice-grid">
@@ -3985,127 +4335,6 @@
           .join('')}
       </div>
     `;
-  }
-
-  // ==================== MMA DIGITAL LABS VOICE OPS OVERVIEW & FEATURE SHOWCASE ====================
-
-  let showcaseIndex = 0;
-
-  function renderFeatureShowcase() {
-    const activeThemeMeta = THEME_BY_ID(appearance.theme);
-    const activeCallsCount = Array.isArray(viciMon?.activeCalls) ? viciMon.activeCalls.length : 0;
-    const cards = [
-      {
-        mod: 'MODULE 01',
-        title: 'Voice Biometrics',
-        sub: 'Continuous speaker verification with liveness detection — every utterance matched in <40ms.',
-        stat: 'Accuracy',
-        value: '99.8%',
-        foot: 'Liveness detection enabled',
-        tags: ['256-d voiceprint', 'liveness + anti-spoof', 'GDPR vault'],
-        art: `<svg viewBox="0 0 200 52" aria-hidden="true">
-          <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-            <path d="M22 42a13 13 0 0 1 0-26 13 13 0 0 1 0 26" opacity=".45"/>
-            <path d="M22 36a7 7 0 0 1 0-14 7 7 0 0 1 0 14" opacity=".7"/>
-            <path d="M22 30a1.6 1.6 0 1 0 0-3.2 1.6 1.6 0 0 0 0 3.2"/>
-            <path d="M56 26h6l4-10 5 20 5-14 4 8 4-4h6l4 6 5-12 4 16 5-9 4 4h34" opacity=".9"/>
-          </g>
-        </svg>`,
-      },
-      {
-        mod: 'MODULE 02',
-        title: 'Multi-Channel Integration',
-        sub: 'One agent, every surface. PSTN, SIP, web, WhatsApp & SDK share a unified session state.',
-        stat: 'Channels',
-        value: '12 Connected',
-        foot: 'Sync · Live',
-        tags: ['PSTN / SIP trunking', 'web + whatsapp', 'unified state'],
-        art: `<svg viewBox="0 0 200 52" aria-hidden="true">
-          <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-            <path d="M100 26 66 14M100 26 66 38M100 26 134 14M100 26 134 38M66 14 134 14M66 38 134 38" opacity=".45"/>
-            <circle cx="100" cy="26" r="7"/><circle cx="66" cy="14" r="4.5"/><circle cx="66" cy="38" r="4.5"/>
-            <circle cx="134" cy="14" r="4.5"/><circle cx="134" cy="38" r="4.5"/>
-          </g>
-        </svg>`,
-      },
-      {
-        mod: 'MODULE 03',
-        title: 'Predictive Analysis',
-        sub: 'Forecast call volume, intent drift & resolution cost with live ML confidence bands.',
-        stat: 'Confidence',
-        value: '94.2%',
-        foot: 'Next 30d forecast',
-        tags: ['24h volume forecast', 'intent drift alerts', 'cost / resolution'],
-        art: `<svg viewBox="0 0 200 52" aria-hidden="true">
-          <g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M24 42h152" opacity=".3"/>
-            <path d="M28 36l22-8 20 6 22-14 20 8 22-12 24 6" opacity=".95"/>
-            <g opacity=".45"><path d="M40 42v-8M70 42v-12M100 42v-9M130 42v-15M160 42v-11"/></g>
-          </g>
-        </svg>`,
-      },
-    ];
-
-    return `<div class="card showcase">
-      <div class="showcase-head">
-        <h2>
-          <span>MMA Digital Labs &bull; Voice Ops Overview</span>
-          <span class="pill ok" style="font-size:10px;padding:1.5px 7px">● ${esc(activeThemeMeta.name)}</span>
-        </h2>
-        <div class="showcase-dots" role="tablist" aria-label="Showcase cards">
-          ${cards
-            .map(
-              (_, i) =>
-                `<button type="button" data-sc="${i}" class="${i === showcaseIndex ? 'on' : ''}" aria-label="Show card ${i + 1}"></button>`
-            )
-            .join('')}
-        </div>
-      </div>
-      <div class="ops-telemetry-strip">
-        <div class="ops-metric-pill">
-          <div>
-            <div class="ops-metric-lbl">Active Calls</div>
-            <div class="ops-metric-val">${activeCallsCount > 0 ? activeCallsCount : (S?.agents?.length || 2)} Bots Ready</div>
-          </div>
-          <span class="ops-metric-delta">LIVE</span>
-        </div>
-        <div class="ops-metric-pill">
-          <div>
-            <div class="ops-metric-lbl">Containment Rate</div>
-            <div class="ops-metric-val">91.4%</div>
-          </div>
-          <span class="ops-metric-delta">+3.8%</span>
-        </div>
-        <div class="ops-metric-pill">
-          <div>
-            <div class="ops-metric-lbl">Avg TTFB Latency</div>
-            <div class="ops-metric-val">284 ms</div>
-          </div>
-          <span class="ops-metric-delta">-42ms</span>
-        </div>
-        <div class="ops-metric-pill">
-          <div>
-            <div class="ops-metric-lbl">CSAT Score</div>
-            <div class="ops-metric-val">4.87 / 5</div>
-          </div>
-          <span class="ops-metric-delta">99.8% SLA</span>
-        </div>
-      </div>
-      <div class="showcase-track">
-        ${cards
-          .map(
-            (c, i) => `<article class="sc-card ${i === showcaseIndex ? 'on' : ''}" data-sc="${i}">
-              <div class="sc-mod-tag"><span>${esc(c.mod)}</span><span>● ACTIVE</span></div>
-              <div class="sc-title">${esc(c.title)}</div>
-              <div class="sc-sub">${esc(c.sub)}</div>
-              <div class="sc-art">${c.art}</div>
-              <div class="sc-tags">${c.tags.map((tg) => `<span class="sc-tag">${esc(tg)}</span>`).join('')}</div>
-              <div class="sc-foot"><span>${esc(c.stat)} · <b>${esc(c.value)}</b></span><span>${esc(c.foot)}</span></div>
-            </article>`
-          )
-          .join('')}
-      </div>
-    </div>`;
   }
 
   // ==================== EXECUTIVE COMMAND & CONSOLE QUALITY DECK ====================
@@ -4208,9 +4437,7 @@
       return {
         id: cp.id,
         name: cp.name || 'Untitled Campaign',
-        active: Boolean(cp.active),
-        dialMode: cp.dialMode || 'RATIO',
-        exten: cp.exten || '8368',
+        viciCampaign: cp.viciCampaign || 'Not set',
         er,
         wn,
         status: er > 0 ? 'er' : wn > 0 ? 'wn' : 'ok',
@@ -4247,7 +4474,7 @@
     const llmModel = S?.services?.llm?.model || '';
     const ttsModel = S?.services?.tts?.model || '';
     const dgConfigured = Boolean(
-      secretsStatus?.DEEPGRAM_API_KEY?.configured || srv?.inventory?.deepgramConfigured
+      secretsStatus?.DEEPGRAM_API_KEY?.configured ?? srv?.inventory?.deepgramConfigured ?? false
     );
 
     const instantCount = agents.filter((ag) => ag.behavior?.bargeIn === 'instant').length;
@@ -4264,8 +4491,9 @@
     );
     const instantRatio = agents.length ? instantCount / agents.length : 1;
     const rate8kRatio = agents.length ? rate8kCount / agents.length : 1;
-    const ttfbPts = avgTtfb === 0 || avgTtfb <= 950 ? 4 : avgTtfb <= 1500 ? 2 : 1;
-    const realtimePts = Math.min(15, Math.round(instantRatio * 6) + Math.round(rate8kRatio * 5) + ttfbPts);
+    // A bridge loopback may contribute synthetic latency; keep the configuration
+    // score independent of that mixture rather than treating it as a speed test.
+    const realtimePts = Math.min(15, Math.round(instantRatio * 8) + Math.round(rate8kRatio * 7));
 
     const discRatio = campaigns.length ? discCount / campaigns.length : 1;
     const acceptRatio = agents.length ? viciAcceptCount / agents.length : 1;
@@ -4284,9 +4512,9 @@
             Math.min(10, Math.round((testsPassed / testsTotal) * 7) + (testsFailed === 0 ? 3 : 0))
           );
 
-    const usersCount = Number(srv?.inventory?.registeredUsers ?? 1);
-    const authRequired = true;
-    const opsPts = Math.min(10, 4 + (authRequired ? 3 : 2) + (usersCount > 0 ? 3 : 2));
+    const usersCount = Number(srv?.inventory?.registeredUsers ?? 0);
+    const authRequired = srv?.inventory?.authEnforced === true;
+    const opsPts = Math.min(10, 4 + (authRequired ? 3 : 0) + (usersCount > 0 ? 3 : 0));
 
     const score = Math.max(
       0,
@@ -4308,10 +4536,10 @@
     const pillars = [
       { id: 'preflight', label: 'Pre-Flight Verification', score: preflightPts, max: 30, detail: `${okCount}/${totalChecks} checks` },
       { id: 'ai_stack', label: 'Speech & LLM Pipeline', score: aiStackPts, max: 20, detail: `${sttModel || 'stt'} · ${llmModel || 'llm'}` },
-      { id: 'realtime_ux', label: 'Sub-Second Latency UX', score: realtimePts, max: 15, detail: `${instantCount}/${agents.length} <15ms VAD` },
+      { id: 'realtime_ux', label: 'Audio Settings', score: realtimePts, max: 15, detail: `${instantCount}/${agents.length} local VAD configured; latency not guaranteed` },
       { id: 'telephony', label: 'VICIdial & Compliance', score: telephonyPts, max: 15, detail: `${discCount}/${campaigns.length} disclosure` },
       { id: 'qa_readiness', label: 'QA Scenario Coverage', score: qaPts, max: 10, detail: `${testsPassed}/${testsTotal} passed` },
-      { id: 'ops_security', label: 'Security, Auth & SQLite', score: opsPts, max: 10, detail: `${usersCount} user${usersCount === 1 ? '' : 's'} · WAL` },
+      { id: 'ops_security', label: 'Auth & Storage Configuration', score: opsPts, max: 10, detail: `${authRequired ? 'Auth enforced' : 'Auth not confirmed'} · ${usersCount} user${usersCount === 1 ? '' : 's'}` },
     ];
 
     const simCalls = Number(srv?.traffic?.totalSimulatorCalls ?? (sim?.callLogs?.length || 0));
@@ -4324,13 +4552,15 @@
     const viciRecs = Number(srv?.traffic?.recordingsCount ?? 0);
     const viciTalkSec = Math.round(Number(srv?.traffic?.avgDurationSec ?? 0) * Math.max(1, viciTotal));
 
-    const boundHost = srv?.runtime?.allowedPeerIp || S?.vici?.bridgePublicHost || '115.186.137.240';
-    const boundPort = srv?.runtime?.httpPort || window.location.port || 533;
+    const boundHost = srv?.runtime?.httpHost || window.location.hostname;
+    const boundPort = srv?.runtime?.httpPort || window.location.port || (window.location.protocol === 'https:' ? 443 : 80);
     const bridgePort = srv?.runtime?.audioSocketPort || S?.vici?.bridgePort || 9092;
+    const bridgeStatusAvailable = srv?.runtime?.bridgeStatusAvailable === true;
+    const bridgeListening = srv?.runtime?.audioSocketListening === true;
     const uptimeSec = Number(srv?.runtime?.uptimeSec ?? 0);
     const memMb = Number(srv?.runtime?.rssMb ?? 0);
-    const revNum = latestRevisionId || revisions?.[0]?.id || 1;
-    const totalRevs = Number(srv?.inventory?.revisionsCount ?? (revisions?.length || 1));
+    const revNum = latestRevisionId || revisions?.[0]?.id || '—';
+    const totalRevs = Number(srv?.inventory?.revisionsCount ?? (revisions?.length || 0));
 
     const activeThemeLabel =
       (typeof THEME_BY_ID === 'function' && THEME_BY_ID(appearance?.theme)?.name) ||
@@ -4380,6 +4610,9 @@
       boundHost,
       boundPort,
       bridgePort,
+      bridgeStatusAvailable,
+      bridgeListening,
+      hasTelemetry: Boolean(srv),
       uptimeSec,
       memMb,
       revNum,
@@ -4426,78 +4659,77 @@
     const outboundCount = T.agents.filter((x) => x.mode === 'outbound').length;
     const inboundCount = T.agents.filter((x) => x.mode === 'inbound').length;
     const blendedCount = T.agents.filter((x) => x.mode === 'both').length;
-    const activeCampaignsCount = T.campaigns.filter((x) => x.active).length;
 
     const kpiCards = [
       {
         tab: 'agents',
         ico: '🤖',
         title: 'Agent Fleet',
-        main: `${T.agents.length} Active Bot${T.agents.length === 1 ? '' : 's'}`,
-        sub: `${outboundCount} Out · ${inboundCount} In · ${blendedCount} Blend · ${T.instantCount}/${T.agents.length} <15ms Barge-In`,
-        foot: `Active: ${(A()?.name || 'Agent').slice(0, 20)} →`,
+        main: `${T.agents.length} Configured Agent${T.agents.length === 1 ? '' : 's'}`,
+        sub: `${outboundCount} Out · ${inboundCount} In · ${blendedCount} Blend · ${T.instantCount}/${T.agents.length} Local VAD Configured`,
+        foot: `Selected: ${(A()?.name || 'Agent').slice(0, 20)} →`,
       },
       {
         tab: 'plugins',
         ico: '🧩',
         title: 'AI & Speech Stack',
-        main: `${T.dgConfigured ? 'Deepgram Live' : 'Key Needed'}`,
-        sub: `STT ${T.sttModel || 'nova-3'} · LLM ${T.llmModel || 'managed'} · ${T.providers.length} Plug-ins · ${T.functions.length} Tools`,
-        foot: `${T.dgConfigured ? '✓ API Key Ready' : '⚠ Set Key in Header'} →`,
+        main: `${T.dgConfigured ? 'Key Configured' : 'Key Needed'}`,
+        sub: `STT ${T.sttModel || 'not selected'} · LLM ${T.llmModel || 'not selected'} · ${T.providers.length} Plug-ins · ${T.functions.length} Tools`,
+        foot: `${T.dgConfigured ? 'Connection not verified' : 'Set Key in Header'} →`,
       },
       {
         tab: 'campaigns',
         ico: '📣',
         title: 'Campaigns & DNC',
-        main: `${activeCampaignsCount}/${T.campaigns.length} Live`,
-        sub: `${T.discCount}/${T.campaigns.length} Recording Disclosure · ${
+        main: `${T.campaigns.length} Configured Campaign${T.campaigns.length === 1 ? '' : 's'}`,
+        sub: `${T.discCount}/${T.campaigns.length} Disclosures Configured · ${
           T.campaigns.filter((c) => c.dnc).length
-        }/${T.campaigns.length} DNC Scrub`,
-        foot: `Exten ${C()?.exten || '8368'} · ${C()?.dialMode || 'RATIO'} →`,
+        }/${T.campaigns.length} DNC Settings Enabled`,
+        foot: `VICIdial ID ${C()?.viciCampaign || 'not set'} · status not checked →`,
       },
       {
         tab: 'voice',
         ico: '🎙️',
         title: 'Voice & Latency',
-        main: T.avgTtfb > 0 ? `${T.avgTtfb}ms TTFB` : `${T.rate8kCount}/${T.agents.length} 8kHz`,
-        sub: `TTS ${T.ttsModel || 'aura-2'} · Speed ${A()?.tts?.speed || 1}x · ${A()?.audio?.inEnc || 'linear16'}`,
-        foot: `Open Voice Studio →`,
+        main: T.avgTtfb > 0 ? `${T.avgTtfb}ms Avg TTFB` : 'No latency sample',
+        sub: `TTS ${T.ttsModel || 'not selected'} · Speed ${A()?.tts?.speed || 1}x · ${A()?.audio?.inEnc || 'linear16'}`,
+        foot: `Retained session means; may include bridge tests · Open Voice Studio →`,
       },
       {
         tab: 'test',
         ico: '🧪',
         title: 'QA & Simulator',
-        main: `${T.testsPassed}/${T.testsTotal} QA Pass`,
-        sub: `${T.simCalls} Sim Call${T.simCalls === 1 ? '' : 's'} · ${T.simTurns} All-Ch · ${T.testsPending} Pending · ${T.testsFailed} Fail`,
-        foot: `Run Live Call Sim →`,
+        main: `${T.testsPassed}/${T.testsTotal} QA Marked Pass`,
+        sub: `${T.simCalls} Retained Tests · ${T.simTurns} All Channels · ${T.testsPending} Pending · ${T.testsFailed} Fail`,
+        foot: `Open Browser Test →`,
       },
       {
         tab: 'vici',
         ico: '☎️',
         title: 'VICIdial Bridge',
-        main: `:${T.bridgePort} Ready`,
-        sub: `${T.viciTotal} Bridge Calls · ${T.viciXfers} Xfer (${T.viciXferRate}%) · ${T.viciDnc} DNC`,
+        main: !T.bridgeStatusAvailable ? 'Listener status unavailable' : T.bridgeListening ? `TCP :${T.bridgePort} Listening` : `TCP :${T.bridgePort} Not Listening`,
+        sub: `Listener status is not PBX connectivity · ${T.viciTotal} retained bridge calls`,
         foot: `Host ${T.boundHost} →`,
       },
       {
         tab: 'wallboard',
         ico: '📺',
         title: 'Live Wallboard',
-        main: `${T.viciActive} Live Call${T.viciActive === 1 ? '' : 's'}`,
+        main: T.hasTelemetry ? `${T.viciActive} Active Bridge Call${T.viciActive === 1 ? '' : 's'}` : 'Bridge status unavailable',
         sub: `${T.viciRecs} WAV Recording${T.viciRecs === 1 ? '' : 's'} · ${formatDurationCompact(
           T.viciTalkSec
-        )} Total Talk`,
+        )} Approx. Call Duration`,
         foot: `Supervisor Controls →`,
       },
       {
         tab: 'export',
         ico: '🛡️',
         title: 'Runtime, Auth & DB',
-        main: `Rev #${T.revNum} · ${T.usersCount} User${T.usersCount === 1 ? '' : 's'}`,
+        main: serverlessCloudMode ? 'Browser-local demo' : `Rev #${T.revNum} · ${T.usersCount} User${T.usersCount === 1 ? '' : 's'}`,
         sub: `${T.boundHost}:${T.boundPort} · ${T.memMb ? `${T.memMb}MB RAM · ` : ''}Up ${formatDurationCompact(
           T.uptimeSec
         )}`,
-        foot: `${T.totalRevs} SQLite Snapshots →`,
+        foot: serverlessCloudMode ? 'Server unavailable →' : `${T.totalRevs} SQLite Snapshots →`,
       },
     ];
 
@@ -4506,7 +4738,7 @@
         <div class="cmd-topbar">
           <div class="cmd-brand-cluster">
             <span class="cmd-radar-dot ${healthClass === 'ok' ? '' : healthClass}"></span>
-            <div class="cmd-eyebrow">Executive Command <span>&amp; Console Quality</span></div>
+            <h1 class="cmd-eyebrow">Executive Command <span>&amp; Console Quality</span></h1>
             <span class="cmd-cert-badge ${healthClass === 'ok' ? '' : healthClass}">${esc(certText)}</span>
             <span class="cmd-sys-meta">
               <span>${esc(String(T.boundHost))}:${esc(String(T.boundPort))}</span>
@@ -4532,11 +4764,11 @@
             ? `<div class="cmd-compact-ribbon">
                  <button type="button" class="cmd-compact-pill" data-cmd-tab="agents">Quality: <b>${T.score}/100 (${esc(T.grade)})</b></button>
                  <button type="button" class="cmd-compact-pill" data-cmd-tab="agents">Bots: <b>${T.agents.length}</b></button>
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="campaigns">Campaigns: <b>${activeCampaignsCount}/${T.campaigns.length}</b></button>
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="plugins">Stack: <b>${esc(T.sttModel || 'nova-3')} / ${esc(T.llmModel || 'llm')}</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="campaigns">Campaigns: <b>${T.campaigns.length} configured</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="plugins">Stack: <b>${esc(T.sttModel || 'not selected')} / ${esc(T.llmModel || 'not selected')}</b></button>
                  <button type="button" class="cmd-compact-pill" data-cmd-tab="test">QA &amp; Sim: <b>${T.testsPassed}/${T.testsTotal} · ${T.simCalls} calls</b></button>
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="wallboard">Vici Bridge: <b>${T.viciActive} live / ${T.viciTotal} total</b></button>
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="export">SQLite: <b>Rev #${T.revNum} · ${T.usersCount} user${T.usersCount === 1 ? '' : 's'}</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="wallboard">Vici Bridge: <b>${T.viciActive} live / ${T.viciTotal} retained</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="export">Storage: <b>${serverlessCloudMode ? 'Browser-local only' : `Rev #${T.revNum} · ${T.usersCount} user${T.usersCount === 1 ? '' : 's'}`}</b></button>
                </div>`
             : `<div class="cmd-hero-grid">
                  <div class="cmd-quality-card">
@@ -4582,8 +4814,8 @@
                      </div>
                    </div>
                    <div class="cmd-quality-foot">
-                     <span>Console Quality Index: <b style="color:var(--tx)">${T.score}/100 (${esc(T.grade)})</b></span>
-                     <span>SQLite WAL · Rev #${T.revNum} · ${
+                     <span>Configuration estimate (not a security audit or certification): <b style="color:var(--tx)">${T.score}/100 (${esc(T.grade)})</b></span>
+                     <span>${serverlessCloudMode ? 'Browser-local demo' : `SQLite WAL · Rev #${T.revNum}`} · ${
                        comparableSnapshot(S) === snap ? '✓ Synced' : '● Unsaved Edits'
                      }</span>
                    </div>
@@ -4627,12 +4859,10 @@
                    .map(
                      (cp) => `<button type="button" class="cmd-fleet-chip ${
                        tab === 'campaigns' && cur.c === cp.id ? 'sel' : ''
-                     }" data-cmd-campaign="${esc(cp.id)}" title="Campaign ${esc(cp.name)} — Exten ${esc(
-                       cp.exten
-                     )} (${cp.active ? 'Active' : 'Paused'})">
+                     }" data-cmd-campaign="${esc(cp.id)}" title="Campaign ${esc(cp.name)} — VICIdial ID ${esc(cp.viciCampaign)} (live status not checked)">
                        <span class="cmd-fleet-dot ${cp.status === 'ok' ? '' : cp.status}"></span>
                        <span>📣 ${esc(cp.name)}</span>
-                       <span class="cmd-fleet-ext">ext ${esc(cp.exten)}</span>
+                       <span class="cmd-fleet-ext">${esc(cp.viciCampaign)}</span>
                      </button>`
                    )
                    .join('')}
@@ -4650,11 +4880,13 @@
     applySidebarState(false);
 
     const m = document.getElementById('m');
-    m.className = tab === 'voice' || tab === 'export' || tab === 'plugins' ? 'wide' : '';
+    m.className = ['dashboard', 'voice', 'export', 'plugins'].includes(tab) ? 'wide' : '';
 
     const a = A();
 
-    if (tab === 'agents') {
+    if (tab === 'dashboard') {
+      m.innerHTML = '<section id="cmd-deck" class="cmd-deck-wrap" aria-label="Executive Command and Console Quality Dashboard"></section>';
+    } else if (tab === 'agents') {
       const tp = globalServiceProvider('tts') || {};
       const isFluxTts = tp.type === 'deepgram' && String(S.services?.tts?.model || '').startsWith('flux');
 
@@ -4677,12 +4909,12 @@
 
           <div class="row r3">
             ${F('🛑 Barge-In Interruption Mode', 'a.behavior.bargeIn', 'sel', [
-              ['instant', '⚡ Instant Dual-Layer (<15ms Mic VAD + Deepgram)'],
+              ['instant', 'Local Mic VAD + Deepgram'],
               ['server', '🌐 Deepgram Server VAD Only'],
               ['off', '🔒 Disabled (Finish Speaking First)'],
             ])}
             ${F('🎙️ Barge-In Mic Sensitivity', 'a.behavior.bargeInSensitivity', 'sel', [
-              ['high', 'High (Fastest Interruption)'],
+              ['high', 'High Sensitivity'],
               ['balanced', 'Balanced (Echo-Safe Smart VAD)'],
               ['low', 'Low (Noisy Background Safe)'],
             ])}
@@ -4748,7 +4980,7 @@
                     [1, '+1 (Animated)'],
                     [2, '+2 (Most Expressive)'],
                   ])
-                : `<div><label>Expressivity</label><input disabled value="Flux v2 voices only"></div>`
+                : `<div><label>Expressivity</label><input aria-label="Expressivity" disabled value="Flux v2 voices only"></div>`
             }
           </div>
 
@@ -4781,7 +5013,6 @@
           <h2>Quick Agent Pre-Flight</h2>
           <div id="agent-quick-ck"></div>
         </div>
-        ${renderFeatureShowcase()}
       `;
     } else if (tab === 'plugins') {
       m.innerHTML = `
@@ -4870,7 +5101,7 @@
                   [2, '+2 (Expressive)'],
                 ])}
               </div>
-              <label>Greeting / Script to Synthesize</label>
+              <label for="vt">Greeting / Script to Synthesize</label>
               <textarea id="vt">${esc(voiceCatalog.previewText)}</textarea>
               <div class="bar" style="margin-top:10px;margin-bottom:4px">
                 <button class="b" id="btn-synth-active">🔊 Synthesize with Real TTS API</button>
@@ -4893,11 +5124,11 @@
           <h2>Deepgram Real Voice Catalog (Flux v2 &amp; Aura-2) <button class="g" id="btn-refresh-voices" style="font-size:11px;padding:3px 8px;text-transform:none">↻ Refresh from Deepgram API</button></h2>
           <div class="row r4" style="margin-bottom:10px">
             <div>
-              <label>Search name, model, trait, use-case</label>
+              <label for="vf-q">Search name, model, trait, use-case</label>
               <input id="vf-q" placeholder="e.g. Haley, British, empathetic, financial…" value="${esc(voiceCatalog.filters.q)}">
             </div>
             <div>
-              <label>Model Family</label>
+              <label for="vf-family">Model Family</label>
               <select id="vf-family">
                 <option value="">All Families (Flux + Aura)</option>
                 <option value="flux-v2" ${voiceCatalog.filters.family === 'flux-v2' ? 'selected' : ''}>Flux TTS (v2 — Turn-Based)</option>
@@ -4906,21 +5137,21 @@
               </select>
             </div>
             <div>
-              <label>Language</label>
+              <label for="vf-lang">Language</label>
               <select id="vf-lang">
                 <option value="">All Languages</option>
                 ${langs.map((lg) => `<option value="${esc(lg)}" ${voiceCatalog.filters.language === lg ? 'selected' : ''}>${esc(lg)}</option>`).join('')}
               </select>
             </div>
             <div>
-              <label>Accent</label>
+              <label for="vf-accent">Accent</label>
               <select id="vf-accent">
                 <option value="">All Accents</option>
                 ${accents.map((ac) => `<option value="${esc(ac)}" ${voiceCatalog.filters.accent === ac ? 'selected' : ''}>${esc(ac)}</option>`).join('')}
               </select>
             </div>
             <div>
-              <label>Gender</label>
+              <label for="vf-gender">Gender</label>
               <select id="vf-gender">
                 <option value="">All</option>
                 <option value="feminine" ${voiceCatalog.filters.gender === 'feminine' ? 'selected' : ''}>Feminine</option>
@@ -4950,9 +5181,10 @@
           ${renderSelectorBar('a')}
 
           <div class="sim-header">
-            <h2 style="margin:0">🎙️ Live Call Simulator ("Talk to Bot")</h2>
+            <h2 style="margin:0">🎙️ Live Bot — Browser Voice Test</h2>
             <span class="pill ${sim.active ? 'ok' : sim.connecting ? 'wn' : sim.lastError ? 'er' : ''}" id="sim-state-pill">${esc(sim.statusText)}</span>
           </div>
+          <a href="#sim-history" class="note">↓ Jump to recent test history &amp; transcripts</a>
 
           ${
             sim.lastError
@@ -4972,7 +5204,7 @@
           ${
             !hasDgKey && curMode === 'deepgram'
               ? `<div class="t" style="border-left:3px solid var(--wn)">
-                  <b>DEEPGRAM_API_KEY not set yet</b> — Click <b>🔑 API Keys</b> in the top bar to connect live to <code>wss://agent.deepgram.com/v1/agent/converse</code>, or select <b>Sandbox Dry-Run</b> below to test the call flow &amp; function triggers immediately.
+                  <b>DEEPGRAM_API_KEY not set yet</b> — add it in <b>🔑 API Keys</b> to connect to Deepgram Voice Agent. No scripted response is substituted when it is missing.
                 </div>`
               : ''
           }
@@ -5020,28 +5252,17 @@
               : ''
           }
 
+          <div class="t" style="border-left:3px solid var(--ac)">
+            <b>Deepgram browser test, not a telephone call.</b> After the provider confirms the session, microphone audio and typed messages are sent to Deepgram. This may incur provider charges. Transfers, dispositions and DNC updates are <b>not executed</b> here; test them on a properly configured VICIdial call instead. An enabled custom webhook can perform real external actions.
+            ${curMode === 'speech_service' ? '<div class="wn" style="margin-top:6px">Local speech is selected, but a local LLM conversation is not implemented. Select supported Deepgram Voice Agent providers in Plug-Ins.</div>' : ''}
+          </div>
           <div class="row">
             <div>
-              <label>Simulator Upstream Engine</label>
-              <select id="sim-mode" ${sim.active || sim.connecting ? 'disabled' : ''}>
-                <option value="speech_service" ${curMode === 'speech_service' ? 'selected' : ''}>
-                  ⚡ Self-Hosted Local Speech Service (Faster-Whisper STT + Kokoro TTS) ${
-                    globalServiceProvider('stt')?.type === 'speech_service' ||
-                    globalServiceProvider('tts')?.type === 'speech_service'
-                      ? '✓ Active'
-                      : ''
-                  }
-                </option>
-                <option value="deepgram" ${curMode === 'deepgram' ? 'selected' : ''}>
-                  Live Deepgram Voice Agent API (wss://agent.deepgram.com) ${hasDgKey ? '✓' : '— Needs API Key'}
-                </option>
-                <option value="sandbox" ${curMode === 'sandbox' ? 'selected' : ''}>
-                  Sandbox Dry-Run Responder (Test UI, Dispositions &amp; Transfers Offline)
-                </option>
-              </select>
+              <label>Upstream</label>
+              <div class="note">Deepgram Voice Agent · ${hasDgKey ? 'key configured; connection not yet verified' : 'key not configured'}</div>
             </div>
             <div>
-              <label>Audio Stream Bandwidth</label>
+              <label for="sim-bw">Audio Stream Bandwidth</label>
               <select id="sim-bw" ${sim.active || sim.connecting ? 'disabled' : ''}>
                 <option value="wideband" ${sim.bandwidth === 'wideband' ? 'selected' : ''}>Wideband Browser Mic (16 kHz In / 24 kHz Out)</option>
                 <option value="telephony" ${sim.bandwidth === 'telephony' ? 'selected' : ''}>VICIdial Telephony Rate (8 kHz In / 8 kHz Out)</option>
@@ -5052,7 +5273,7 @@
           <div class="row" style="margin-top:8px">
             <div>
               <label>🎙️ Microphone Input Device <button class="g" id="btn-refresh-mics" style="font-size:10.5px;padding:1px 6px;margin-left:6px;text-transform:none">↻ Refresh Mics</button></label>
-              <select id="sim-mic-device">
+              <select id="sim-mic-device" aria-label="Microphone input device">
                 <option value="">System Default Microphone</option>
                 ${sim.micDevices
                   .filter((d) => d.deviceId && d.deviceId !== 'default')
@@ -5064,7 +5285,7 @@
               </select>
             </div>
             <div>
-              <label>🎚️ Mic Input Volume Boost (Helps Quiet Laptop Mics)</label>
+              <label for="sim-mic-gain">🎚️ Mic Input Volume Boost (Helps Quiet Laptop Mics)</label>
               <select id="sim-mic-gain">
                 <option value="1" ${Number(sim.micGain) === 1 ? 'selected' : ''}>1.0x — Normal Studio / Headset Mic</option>
                 <option value="2" ${Number(sim.micGain) === 2 ? 'selected' : ''}>2.0x — Laptop / PC Mic Boost (Recommended)</option>
@@ -5074,24 +5295,38 @@
           </div>
 
           <div class="t" style="margin-top:10px">
-            <label style="margin-top:0">Simulated VICIdial Lead Record (Hydrated by Bridge on Connect)</label>
+            <label style="margin-top:0">Browser Test Lead Values (not a live VICIdial record)</label>
             <div class="row r3">
-              <div><label>Lead ID</label><input data-simlead="lead_id" value="${esc(sim.lead.lead_id)}" ${sim.active ? 'disabled' : ''}></div>
-              <div><label>First Name</label><input data-simlead="first_name" value="${esc(sim.lead.first_name)}" ${sim.active ? 'disabled' : ''}></div>
-              <div><label>Phone</label><input data-simlead="phone_number" value="${esc(sim.lead.phone_number)}" ${sim.active ? 'disabled' : ''}></div>
+              <div><label>Lead ID</label><input aria-label="Lead ID" data-simlead="lead_id" value="${esc(sim.lead.lead_id)}" ${sim.active ? 'disabled' : ''}></div>
+              <div><label>First Name</label><input aria-label="First name" data-simlead="first_name" value="${esc(sim.lead.first_name)}" ${sim.active ? 'disabled' : ''}></div>
+              <div><label>Phone</label><input aria-label="Phone" data-simlead="phone_number" value="${esc(sim.lead.phone_number)}" ${sim.active ? 'disabled' : ''}></div>
             </div>
             <div class="row">
-              <div><label>State</label><input data-simlead="state" value="${esc(sim.lead.state)}" ${sim.active ? 'disabled' : ''}></div>
-              <div><label>Listed Age</label><input data-simlead="age" value="${esc(sim.lead.age)}" ${sim.active ? 'disabled' : ''}></div>
+              <div><label>State</label><input aria-label="State" data-simlead="state" value="${esc(sim.lead.state)}" ${sim.active ? 'disabled' : ''}></div>
+              <div><label>Listed Age</label><input aria-label="Listed age" data-simlead="age" value="${esc(sim.lead.age)}" ${sim.active ? 'disabled' : ''}></div>
             </div>
           </div>
 
+          <label class="chk-label" style="margin-top:10px">
+            <input type="checkbox" id="sim-allow-webhooks" style="width:auto" ${sim.allowWebhooks ? 'checked' : ''} ${serverlessCloudMode || sim.active || sim.connecting ? 'disabled' : ''}>
+            <span>Allow configured custom webhooks for this test <b>(real external effects possible)</b></span>
+          </label>
+          <div class="note" style="margin-top:3px">${serverlessCloudMode ? 'Custom webhooks require the authenticated server; they are unavailable on the static site.' : 'Off by default. A request already sent to a webhook cannot necessarily be undone.'}</div>
+          <label class="chk-label" style="margin-top:10px">
+            <input type="checkbox" id="sim-record-audio" style="width:auto" ${sim.recordAudio ? 'checked' : ''} ${sim.active || sim.connecting || sim.recordingSaving ? 'disabled' : ''}>
+            <span>Record audio for this test <b>(opt-in, resets after the test)</b></span>
+          </label>
+          <div class="note" style="margin-top:3px">Obtain consent from everyone whose voice is recorded. The mixed recording contains microphone and agent playback; typed text is not spoken. Maximum 10 minutes / 20 MB. Keep this tab open while saving. ${serverlessCloudMode
+            ? 'Recorded tests and transcripts stay in this browser only (up to 20); clearing site data removes them. Other users of this browser may access them.'
+            : 'Audio is uploaded to the server after the test and is available to signed-in operators. The latest 100 test logs and their recordings are retained.'}</div>
+          ${sim.recording?.started && sim.recording.recorder.state === 'recording' ? '<div class="note wn">● Recording this browser test</div>' : ''}
+          ${sim.recordingSaving ? '<div class="note wn">Saving recording… keep this tab open.</div>' : ''}
           <div class="bar" style="margin-top:10px">
             ${
               !sim.active && !sim.connecting
                 ? `
-                  <button class="b" id="btn-call-mic">📞 Start Live Mic Call</button>
-                  <button class="g" id="btn-call-nomic" title="Connect live Deepgram speaker audio + text utterance injection without requesting microphone">💬 Start Call (Speaker + Text)</button>
+                  <button class="b" id="btn-call-mic" ${sim.recordingSaving ? 'disabled' : ''}>📞 Start Live Mic Call</button>
+                  <button class="g" id="btn-call-nomic" ${sim.recordingSaving ? 'disabled' : ''} title="Connect live Deepgram speaker audio + text utterance injection without requesting microphone">💬 Start Call (Speaker + Text)</button>
                   ${hasDgKey ? `<button class="g" id="btn-sim-diag" ${sim.diagRunning ? 'disabled' : ''}>${sim.diagRunning ? '⏳ Testing Deepgram…' : '🔌 Test Deepgram Connection'}</button>` : ''}
                 `
                 : `
@@ -5114,16 +5349,16 @@
           <div class="sim-kpis">
             <div class="kpi"><div class="kpi-lbl">Duration</div><div class="kpi-val" id="sim-kpi-dur">${formatDuration(sim.elapsedSec)}</div></div>
             <div class="kpi"><div class="kpi-lbl">Caller Turns</div><div class="kpi-val" id="sim-kpi-turns">${sim.turns}</div></div>
-            <div class="kpi"><div class="kpi-lbl">Audio TTFB Speed</div><div class="kpi-val ${sim.lastTtfbMs && sim.lastTtfbMs <= 700 ? 'ok' : ''}" id="sim-kpi-ttfb">${sim.lastTtfbMs !== null ? `${sim.lastTtfbMs <= 650 ? '⚡ ' : ''}${sim.lastTtfbMs} ms` : '—'}</div></div>
+            <div class="kpi"><div class="kpi-lbl">Transcript → first audio</div><div class="kpi-val ${sim.lastTtfbMs && sim.lastTtfbMs <= 700 ? 'ok' : ''}" id="sim-kpi-ttfb">${sim.lastTtfbMs !== null ? `${sim.lastTtfbMs <= 650 ? '⚡ ' : ''}${sim.lastTtfbMs} ms` : '—'}</div></div>
             <div class="kpi"><div class="kpi-lbl">Barge-Ins</div><div class="kpi-val ${sim.bargeInCount > 0 ? 'ok' : ''}" id="sim-kpi-barge">${sim.bargeInCount || 0}</div></div>
-            <div class="kpi"><div class="kpi-lbl">VICIdial Dispo</div><div class="kpi-val" id="sim-kpi-dispo">${esc(sim.disposition || '—')}</div></div>
-            <div class="kpi"><div class="kpi-lbl">Closer Transfer</div><div class="kpi-val" id="sim-kpi-xfer">${esc(sim.transferredTo || '—')}</div></div>
+            <div class="kpi"><div class="kpi-lbl">VICIdial Dispo</div><div class="kpi-val" id="sim-kpi-dispo">Not connected</div></div>
+            <div class="kpi"><div class="kpi-lbl">Closer Transfer</div><div class="kpi-val" id="sim-kpi-xfer">Not connected</div></div>
           </div>
 
           <div class="sim-feed" id="sim-feed"></div>
 
           <div class="bar" style="margin-top:10px;margin-bottom:0">
-            <input id="sim-inject-input" style="flex:1" placeholder="${sim.active ? 'Type any general question, self-intro prompt, or campaign reply & press Enter…' : 'Start a call above to speak, barge-in, or inject utterances…'}" ${sim.active ? '' : 'disabled'}>
+            <input aria-label="Caller utterance" id="sim-inject-input" style="flex:1" placeholder="${sim.active ? 'Type any general question, self-intro prompt, or campaign reply & press Enter…' : 'Start a call above to speak, barge-in, or inject utterances…'}" ${sim.active ? '' : 'disabled'}>
             <button class="b" id="btn-sim-inject" ${sim.active ? '' : 'disabled'}>Send Utterance</button>
           </div>
           <div class="chip-row">
@@ -5163,13 +5398,13 @@
                   <label style="margin:0">Scenario / Caller Utterance</label>
                   <button class="g" style="font-size:11.5px;padding:3px 8px" data-inject="${esc(x.s)}" ${sim.active ? '' : 'disabled title="Start a live call to inject this scenario"'}>▶ Send in Live Call</button>
                 </div>
-                <input data-ti="${i}" data-tk="s" value="${esc(x.s)}">
+                <input aria-label="Scenario ${i + 1}: caller utterance" data-ti="${i}" data-tk="s" value="${esc(x.s)}">
                 <label>Expected Bot Behaviour &amp; Function Calls</label>
-                <input data-ti="${i}" data-tk="e" value="${esc(x.e)}">
+                <input aria-label="Scenario ${i + 1}: expected behavior" data-ti="${i}" data-tk="e" value="${esc(x.e)}">
                 <div class="row">
                   <div>
                     <label>Result</label>
-                    <select data-ti="${i}" data-tk="r">
+                    <select aria-label="Scenario ${i + 1}: result" data-ti="${i}" data-tk="r">
                       ${[
                         ['p', 'Pending'],
                         ['ok', 'Pass'],
@@ -5181,7 +5416,7 @@
                   </div>
                   <div>
                     <label>QA Notes</label>
-                    <input data-ti="${i}" data-tk="n" value="${esc(x.n)}">
+                    <input aria-label="Scenario ${i + 1}: notes" data-ti="${i}" data-tk="n" value="${esc(x.n)}">
                   </div>
                 </div>
                 <button class="g danger" data-rm="${i}" style="margin-top:8px">Remove Scenario</button>
@@ -5191,7 +5426,14 @@
           <button class="b" id="addt">+ Add Scenario</button>
           <div class="note" id="sum"></div>
 
-          <h2>Recent SQLite Test Call Logs <button class="g" id="btn-clear-logs" style="font-size:11px;padding:3px 8px;text-transform:none">Clear History</button></h2>
+          <h2 id="sim-history">Recent Browser Test History <button class="g" id="btn-refresh-logs" style="font-size:11px;padding:3px 8px;text-transform:none">Refresh</button> <button class="g" id="btn-clear-logs" ${sim.active || sim.connecting || sim.recordingSaving ? 'disabled' : ''} style="font-size:11px;padding:3px 8px;text-transform:none">Clear History</button></h2>
+          <div class="note">Newest first, for the selected agent. Audio is available only for tests recorded after opting in. Tests made before recording was available have no audio. Bridge-call recordings are separate in Wallboard.</div>
+          ${sim.recordingFallback ? `<div class="t" style="border-left:3px solid var(--er)">
+            <b>Audio was not saved or could not be confirmed in history.</b> ${esc(sim.recordingFallback.message)}
+            <a class="g" href="${esc(sim.recordingFallback.url)}" download="${esc(sim.recordingFallback.fileName)}" style="margin-left:8px">Download audio now</a>
+            <button class="g danger" id="btn-discard-recording-fallback" style="margin-left:8px">Discard temporary copy</button>
+            <div class="note">This temporary copy is lost if you leave or reload this tab.</div>
+          </div>` : sim.recordingError ? `<div class="t er" role="alert">${esc(sim.recordingError)}</div>` : ''}
           <div id="sim-logs-box">${renderCallLogsList()}</div>
         </div>
 
@@ -5223,10 +5465,10 @@
             <h2 style="margin:0">⚡ Live VICIdial Bridge Service (Step 3)</h2>
             <div class="bar" style="margin:0">
               <span class="pill ${bs?.sipRtpListening ? 'ok' : 'wn'}">
-                ${bs?.sipRtpListening ? `✓ SIP+RTP UDP :${bs.sipPort} Listening` : 'SIP+RTP Starting…'}
+                ${bs?.sipRtpListening ? `✓ SIP+RTP UDP :${bs.sipPort} Listening` : serverlessCloudMode ? 'SIP+RTP unavailable on static site' : 'SIP+RTP not listening'}
               </span>
               <span class="pill ${bs?.audioSocketListening ? 'ok' : 'wn'}">
-                ${bs?.audioSocketListening ? `✓ AudioSocket TCP :${bs.audioSocketPort} Listening` : 'AudioSocket Starting…'}
+                ${bs?.audioSocketListening ? `✓ AudioSocket TCP :${bs.audioSocketPort} Listening` : serverlessCloudMode ? 'AudioSocket unavailable on static site' : 'AudioSocket not listening'}
               </span>
             </div>
           </div>
@@ -5241,18 +5483,18 @@
           <div class="t" style="margin-top:10px;border-left:3px solid var(--ac)">
             <label style="margin-top:0">Hardware-Loopback ViciBox Call Simulator (Real Binary SIP/RTP &amp; AudioSocket)</label>
             <div class="note" style="margin-top:2px;margin-bottom:8px">
-              Sends a real binary Asterisk <b>SIP INVITE + G.711 μ-law RTP</b> or <b>AudioSocket TCP (<code>0x01</code> UUID + <code>0x10</code> 8kHz PCM)</b> call with VICIdial CallerID <code>V1027153012000104892</code> (Lead <code>#104892</code> Robert Carter, FL, Age 64) into the live Bridge, streams 8 kHz audio to Deepgram, and verifies <code>lead_all_info</code>, <code>update_lead</code>, <code>add_dnc_phone</code> &amp; <code>ra_call_control</code>!
+              ${serverlessCloudMode ? 'Unavailable on a static site; a running bridge server is required.' : 'Sends a local SIP/RTP or AudioSocket test through the bridge with synthetic caller data and a mock VICIdial API. Mock API successes do not change VICIdial. Deepgram mode uses the provider; mock AI mode uses scripted output. Custom webhooks may still have real effects. The test temporarily changes shared bridge/provider routing: run only on an isolated instance with no live calls.'}
             </div>
             <div class="row r3">
               <div>
-                <label>Asterisk Media Transport</label>
+                <label for="vsim-transport">Asterisk Media Transport</label>
                 <select id="vsim-transport" ${viciMon.simRunning ? 'disabled' : ''}>
                   <option value="sip_rtp" ${viciMon.simTransport === 'sip_rtp' ? 'selected' : ''}>SIP + RTP G.711 μ-law (:${bs?.sipPort || S.vici.sipPort} — Universal ViciBox)</option>
                   <option value="audiosocket" ${viciMon.simTransport === 'audiosocket' ? 'selected' : ''}>AudioSocket TCP (:${bs?.audioSocketPort || S.vici.bridgePort} — Asterisk 18+)</option>
                 </select>
               </div>
               <div>
-                <label>Caller Scenario &amp; Campaign</label>
+                <label for="vsim-scenario">Caller Scenario &amp; Campaign</label>
                 <select id="vsim-scenario" ${viciMon.simRunning ? 'disabled' : ''}>
                   <option value="medicare_qualified_xfer" ${viciMon.simScenario === 'medicare_qualified_xfer' ? 'selected' : ''}>[MEDICARE] Part A&amp;B + Age 71 -> MED_CLOSERS Xfer (XFER)</option>
                   <option value="medicare_underage_dq" ${viciMon.simScenario === 'medicare_underage_dq' ? 'selected' : ''}>[MEDICARE] Underage 61 -> Hard Stop Disqualify (DQ)</option>
@@ -5263,7 +5505,7 @@
                 </select>
               </div>
               <div>
-                <label>AI Upstream Engine</label>
+                <label for="vsim-upstream">AI Upstream Engine</label>
                 <select id="vsim-upstream" ${viciMon.simRunning ? 'disabled' : ''}>
                   <option value="deepgram" ${viciMon.simUpstream === 'deepgram' ? 'selected' : ''}>Live Deepgram Cloud (8 kHz Real Audio)</option>
                   <option value="mock_ai" ${viciMon.simUpstream === 'mock_ai' ? 'selected' : ''}>Fast Local Mock AI (&lt; 0.5s Protocol Check)</option>
@@ -5271,8 +5513,8 @@
               </div>
             </div>
             <div class="bar" style="margin-top:10px;margin-bottom:0">
-              <button class="b" id="btn-vici-sim" ${viciMon.simRunning ? 'disabled' : ''}>
-                ${viciMon.simRunning ? '⏳ Running Live 8 kHz Telephony Call (~12s)…' : '📞 Simulate Full ViciBox Call'}
+              <button class="b" id="btn-vici-sim" ${viciMon.simRunning || serverlessCloudMode ? 'disabled' : ''}>
+                ${serverlessCloudMode ? 'Bridge test unavailable on static site' : viciMon.simRunning ? '⏳ Running loopback test…' : '📞 Run isolated bridge loopback test'}
               </button>
               <button class="g" id="btn-vici-verify" ${viciMon.verifyRunning ? 'disabled' : ''}>
                 ${viciMon.verifyRunning ? '⏳ Checking ViciBox…' : '🔌 Test ViciBox HTTP & AMI'}
@@ -5306,6 +5548,7 @@
             }
           </div>
 
+          <div class="note wn">Loopback test CDRs are mixed with bridge history. Their mock VICIdial successes do not confirm real transfers, dispositions or DNC updates; older records may not distinguish tests from live calls.</div>
           <h2>Recent SQLite Bridge Call CDRs &amp; VICIdial API Trail <button class="g" id="btn-clear-vici-logs" style="font-size:11px;padding:3px 8px;text-transform:none">Clear CDRs</button></h2>
           <div id="vici-cdr-box">${renderBridgeCdrList()}</div>
 
@@ -5372,10 +5615,11 @@
             </div>
           </div>
 
+          <p class="note">Analytics use retained logs only: up to 200 bridge calls and 100 simulator calls, not lifetime totals.</p>
           <div class="sim-kpis">
-            <div class="kpi"><div class="kpi-lbl">Total Bridge Calls</div><div class="kpi-val">${ana.totalBridgeCalls ?? 0}</div></div>
+            <div class="kpi"><div class="kpi-lbl">Retained Bridge Calls (max 200)</div><div class="kpi-val">${ana.totalBridgeCalls ?? 0}</div></div>
             <div class="kpi"><div class="kpi-lbl">Closer Transfer Rate</div><div class="kpi-val ok">${ana.transferRatePct ?? 0}% (${ana.transfersCount ?? 0})</div></div>
-            <div class="kpi"><div class="kpi-lbl">Avg / P95 Turn TTFB</div><div class="kpi-val">${ana.avgTtfbMs ? `${ana.avgTtfbMs}ms / ${ana.p95TtfbMs || ana.avgTtfbMs}ms` : '—'}</div></div>
+            <div class="kpi"><div class="kpi-lbl">Avg / P95 Session-Mean TTFB</div><div class="kpi-val">${ana.avgTtfbMs ? `${ana.avgTtfbMs}ms / ${ana.p95TtfbMs || ana.avgTtfbMs}ms` : '—'}</div></div>
             <div class="kpi"><div class="kpi-lbl">Stereo .wav Recordings</div><div class="kpi-val ok">${ana.recordedCount ?? 0}</div></div>
           </div>
 
@@ -5412,6 +5656,7 @@
           }
 
           <h2>🎧 Stereo 8 kHz Call Recordings &amp; SQLite CDR Archive</h2>
+          <div class="note wn">Bridge loopback test recordings and CDRs can appear here alongside live calls. Mock VICIdial responses are not proof of a real transfer, disposition or DNC update.</div>
           <div id="vici-cdr-box">${renderBridgeCdrList()}</div>
         </div>
 
@@ -5448,16 +5693,16 @@
 
           <h2>Production Hardening Status</h2>
           <div class="ck">
-            <span class="${secretsStatus?.ADMIN_PASSWORD?.configured ? 'ok' : 'wn'}">${secretsStatus?.ADMIN_PASSWORD?.configured ? '✓' : '!'}</span>
-            <span>Console Auth (<code>ADMIN_PASSWORD</code>): <b>${secretsStatus?.ADMIN_PASSWORD?.configured ? 'Enabled & Enforced' : 'Open (Set in 🔑 API Keys before exposing :533 publicly)'}</b></span>
+            <span class="${cmdDeckState.serverTelemetry?.inventory?.authEnforced ? 'ok' : 'wn'}">${cmdDeckState.serverTelemetry?.inventory?.authEnforced ? '✓' : '!'}</span>
+            <span>Console Auth: <b>${cmdDeckState.serverTelemetry?.inventory?.authEnforced ? 'Enforced (password or account)' : 'Not confirmed; configure before public exposure'}</b></span>
           </div>
           <div class="ck">
             <span class="${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'ok' : 'wn'}">${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? '✓' : '!'}</span>
-            <span>SIP/AudioSocket IP Allowlist (<code>BRIDGE_ALLOWED_IPS</code>): <b>${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'Restricted to Trusted IPs' : 'Restricted to 115.186.137.240'}</b></span>
+            <span>SIP/AudioSocket IP Allowlist (<code>BRIDGE_ALLOWED_IPS</code>): <b>${secretsStatus?.BRIDGE_ALLOWED_IPS?.configured ? 'Configured (check rules for wildcards)' : 'Loopback only by default'}</b></span>
           </div>
           <div class="ck">
             <span class="ok">✓</span>
-            <span>Asterisk <code>115.186.137.240</code> Pre-Call Hook Whitelisted</span>
+            <span>Direct pre-call hooks use the configured peer allowlist; proxied requests require authentication.</span>
           </div>
           <div class="ck">
             <span class="ok">✓</span>
@@ -5586,12 +5831,14 @@
       const authJson = await authRes.json().catch(() => ({}));
       const logoutBtn = document.getElementById('btn-logout');
       if (!authJson.authenticated) {
-        const entry = authJson.hasUsers === false ? '/signup' : '/login';
+        const entry = authJson.signupOpen && authJson.hasUsers === false ? '/signup' : '/login';
         const qs = window.location.search || '';
         const next = window.location.pathname === '/' && !qs ? '' : '?next=' + encodeURIComponent(window.location.pathname + qs);
         window.location.replace(entry + next);
         return;
       }
+      const createAccountBtn = document.getElementById('btn-create-account');
+      if (createAccountBtn && authJson.signupOpen) createAccountBtn.style.display = 'inline-flex';
       if (logoutBtn) {
         logoutBtn.style.display = 'inline-flex';
         if (authJson.user && (authJson.user.fullName || authJson.user.email)) {
@@ -5646,9 +5893,6 @@
       snap = comparableSnapshot(S);
       revisions = [{ id: 1, saved_at: S.updatedAt || new Date().toISOString(), summary: 'Cloud Direct Browser Session' }];
       secretsStatus = buildCloudSecretsStatus();
-      if (secretsStatus?.DEEPGRAM_API_KEY?.configured) {
-        sim.upstreamMode = 'deepgram';
-      }
       if (!S.agents.some((x) => x.id === cur.a)) cur.a = S.agents[0].id;
       if (!S.campaigns.some((x) => x.id === cur.c)) cur.c = S.campaigns[0].id;
       render();
@@ -5693,9 +5937,6 @@
         const syncData = await syncRes.json();
         if (syncRes.ok && syncData.ok) {
           secretsStatus = syncData.secrets || secretsStatus;
-          if (secretsStatus?.DEEPGRAM_API_KEY?.configured) {
-            sim.upstreamMode = 'deepgram';
-          }
         }
       } catch {}
     }
@@ -5794,15 +6035,21 @@
       ? sampleUrl
       : `/api/deepgram/sample?url=${encodeURIComponent(sampleUrl)}`;
     voiceCatalog.previewAudioUrl = proxied;
-    voiceCatalog.playingLabel = `▶ Playing studio sample: ${label}`;
-    if (vs) vs.textContent = voiceCatalog.playingLabel;
+    if (vs) vs.textContent = `Loading studio sample: ${label}…`;
     if (audioEl) {
+      audioEl.onerror = () => {
+        if (vs) vs.textContent = `Sample unavailable for ${label}. Check the connection and try again.`;
+      };
+      audioEl.onplaying = () => {
+        voiceCatalog.playingLabel = `▶ Playing studio sample: ${label}`;
+        if (vs) vs.textContent = voiceCatalog.playingLabel;
+      };
       audioEl.src = proxied;
       activeAudioEl = audioEl;
       try {
         await audioEl.play();
       } catch {
-        if (vs) vs.textContent = `Sample loaded (${label}) — press Play on the audio bar below.`;
+        if (vs && !audioEl.error) vs.textContent = `Press Play on the audio bar to hear ${label}.`;
       }
     }
   }
@@ -5944,6 +6191,8 @@
     if (audioEl) {
       audioEl.pause();
       audioEl.currentTime = 0;
+      audioEl.onerror = null;
+      audioEl.onplaying = null;
     }
   }
 
@@ -5974,8 +6223,8 @@
           : `<span class="wn">Not set</span>`;
         const inputType = k === 'BRIDGE_ALLOWED_IPS' || k === 'SPEECH_SERVICE_URL' ? 'text' : 'password';
         return `
-          <label>${esc(desc)} — ${badge}</label>
-          <input type="${inputType}" data-secret="${k}" placeholder="${st?.configured ? 'Leave blank to keep existing value, or enter new value' : `Enter ${k}…`}" autocomplete="off" />
+          <label for="secret-${k}">${esc(desc)} — ${badge}</label>
+          <input id="secret-${k}" type="${inputType}" data-secret="${k}" placeholder="${st?.configured ? 'Leave blank to keep existing value, or enter new value' : `Enter ${k}…`}" autocomplete="off" />
         `;
       })
       .join('');
@@ -6023,7 +6272,6 @@
       if (payload.DEEPGRAM_API_KEY) {
         const vRes = await verifyDeepgramDirectInBrowser(payload.DEEPGRAM_API_KEY);
         sim.diagResult = vRes.diagnostic || null;
-        sim.upstreamMode = 'deepgram';
         sim.lastError = null;
         msg.className = vRes.ok ? 'note ok' : 'note wn';
         msg.textContent = `${vRes.ok ? '✓ Deepgram Key Verified & Saved!' : '⚠ Key Saved (check diagnostic below):'}\n${formatDeepgramDiagSummary(vRes.diagnostic)}`;
@@ -6056,7 +6304,6 @@
       writeTabSessionSecrets(payload);
 
       if (payload.DEEPGRAM_API_KEY || secretsStatus?.DEEPGRAM_API_KEY?.configured) {
-        sim.upstreamMode = 'deepgram';
         sim.lastError = null;
       }
       if (data.deepgramDiagnostic) {
@@ -6247,7 +6494,6 @@
     const data = await res.json();
     secretsStatus = data.secrets || {};
     sim.diagResult = null;
-    if (sim.upstreamMode === 'deepgram') sim.upstreamMode = null;
     openKeysModal();
     const msg = document.getElementById('keys-msg');
     if (msg) {
@@ -6259,18 +6505,12 @@
     if (tab === 'test' && !sim.active) render();
   }
 
+  document.getElementById('btn-create-account')?.addEventListener('click', (event) => {
+    if (isDirty() && !window.confirm('You have unsaved changes. Leave without saving them?')) event.preventDefault();
+  });
+
   // Click delegation
   document.addEventListener('click', async (e) => {
-    const scArticle = e.target.closest('.sc-card[data-sc]');
-    if (scArticle && !e.target.closest('button')) {
-      const idx = Number(scArticle.dataset.sc) || 0;
-      showcaseIndex = idx;
-      const cards = Array.prototype.slice.call(document.querySelectorAll('.showcase-track .sc-card'));
-      cards.forEach((c, i) => c.classList.toggle('on', i === idx));
-      document.querySelectorAll('.showcase-dots button').forEach((btn, i) => btn.classList.toggle('on', i === idx));
-      return;
-    }
-
     const b = e.target.closest('button');
     if (!b) return;
     const d = b.dataset;
@@ -6451,19 +6691,12 @@
       applyAppearance(true);
       return;
     }
-    if (d.sc !== undefined) {
-      const idx = Number(d.sc) || 0;
-      showcaseIndex = idx;
-      const cards = Array.prototype.slice.call(document.querySelectorAll('.showcase-track .sc-card'));
-      cards.forEach((c, i) => c.classList.toggle('on', i === idx));
-      document.querySelectorAll('.showcase-dots button').forEach((b, i) => b.classList.toggle('on', i === idx));
-      if (cards[idx]) cards[idx].scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-      return;
-    }
-
     if (b.id === 'btn-manual-barge') {
       if (sim.active) {
-        triggerInstantBargeIn('Manual Button');
+        flushSimulatorSpeakerQueue();
+        sim.bargeInSuppressAudio = true;
+        sim.events.push({ kind: 'msg', role: 'system', content: 'Browser playback stopped. Speak or send text to start a new turn.' });
+        renderSimFeedDom();
       }
       return;
     }
@@ -6502,9 +6735,8 @@
           }
           if (b.id === 'btn-ss-probe') {
             if (!targetUrl) {
-              localSpeechUi.statusTone = 'ok';
-              localSpeechUi.statusText =
-                '✓ Browser Cloud Speech Engine ready (28 Kokoro voice profiles loaded). Enter a Speech Service URL (e.g. https://your-speech-tunnel) above if connecting to a remote GPU server.';
+              localSpeechUi.statusTone = 'wn';
+              localSpeechUi.statusText = 'No Speech Service URL configured. No service readiness check was performed.';
             } else {
               const t0 = Date.now();
               const r = await fetch(`${targetUrl}/readyz`);
@@ -6530,13 +6762,8 @@
               localSpeechUi.statusTone = 'ok';
               localSpeechUi.statusText = `✓ Remote Speech Service TTS Verified (${targetUrl}, voice=${voiceVal}) in ${Date.now() - t0}ms!`;
             } else {
-              if (window.speechSynthesis) {
-                window.speechSynthesis.cancel();
-                window.speechSynthesis.speak(new SpeechSynthesisUtterance('Local speech engine active and verified.'));
-              }
-              localSpeechUi.statusTone = 'ok';
-              localSpeechUi.statusText =
-                `✓ Local Browser Speech Engine Verified (voice=${voiceVal}). Run ./speech-service on your server or enter its HTTPS tunnel URL above for Faster-Whisper + Kokoro GPU audio.`;
+              localSpeechUi.statusTone = 'wn';
+              localSpeechUi.statusText = 'No Speech Service URL configured. No TTS or STT test was performed.';
             }
           } else {
             upgradeRealtimeAgentFeatures(S);
@@ -6547,13 +6774,12 @@
               S.services.tts = { providerId: tLoc.id, model: voiceVal || 'af_heart' };
               if (!S.services.llm?.providerId) S.services.llm = { providerId: 'l1', model: 'gpt-4o-mini' };
             }
-            sim.upstreamMode = 'speech_service';
             S.updatedAt = new Date().toISOString();
             try { window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S)); } catch {}
             snap = comparableSnapshot(S);
             localSpeechUi.statusTone = 'ok';
             localSpeechUi.statusText =
-              `✓ Activated Local Speech Service — STT=${S.services.stt.model}, TTS=${S.services.tts.model}! Open Voice or QA & Call Sim to test immediately.`;
+              `Saved local STT=${S.services.stt.model} and TTS=${S.services.tts.model}. Connectivity was not verified; Live Bot does not support local LLM conversations.`;
             updateHeaderStatus();
           }
         } else if (b.id === 'btn-ss-probe') {
@@ -6607,13 +6833,12 @@
           if (j.ok && j.state) {
             S = j.state;
             snap = comparableSnapshot(S);
-            sim.upstreamMode = 'speech_service';
             if (j.secrets) secretsStatus = j.secrets;
             if (j.telemetry) cmdDeckState.serverTelemetry = j.telemetry;
             if (Array.isArray(j.revisions) && j.revisions[0]) latestRevisionId = j.revisions[0].id;
             localSpeechUi.statusTone = 'ok';
             localSpeechUi.statusText =
-              `✓ Activated Local Speech Service (${j.diagnostic?.baseUrl}) — STT=${S.services.stt.model}, TTS=${S.services.tts.model}!`;
+              `✓ Saved local STT=${S.services.stt.model} and TTS=${S.services.tts.model} (${j.diagnostic?.baseUrl}). Live Bot does not support local LLM conversations.`;
             updateHeaderStatus();
           } else {
             localSpeechUi.statusTone = 'er';
@@ -6689,6 +6914,7 @@
     }
     if (b.id === 'btn-sim-mute') {
       sim.muted = !sim.muted;
+      sim.micStream?.getAudioTracks().forEach((track) => { track.enabled = !sim.muted; });
       b.textContent = sim.muted ? '🔇 Mic Muted (Click to Unmute)' : '🎙️ Mic Live (Click to Mute)';
       return;
     }
@@ -6705,15 +6931,101 @@
       injectCallerUtterance(clean);
       return;
     }
-    if (b.id === 'btn-clear-logs') {
-      if (serverlessCloudMode) {
-        try { window.localStorage?.removeItem('vac_cloud_sim_logs_v1'); } catch {}
-      } else {
-        await fetch(`/api/simulator/logs?agentId=${encodeURIComponent(A().id)}`, { method: 'DELETE' });
+    if (b.id === 'btn-refresh-logs') {
+      await loadCallLogsForCurrentAgent();
+      return;
+    }
+    if (b.id === 'btn-discard-recording-fallback') {
+      if (sim.recordingFallback && window.confirm('Discard this temporary audio? Download it first if you want to keep it.')) {
+        URL.revokeObjectURL(sim.recordingFallback.url);
+        sim.recordingFallback = null;
+        sim.recordingError = '';
+        if (tab === 'test') render();
       }
-      sim.callLogs = [];
+      return;
+    }
+    if (d.simHistoryToggle) {
+      sim.historyExpanded = !sim.historyExpanded;
       const box = document.getElementById('sim-logs-box');
       if (box) box.innerHTML = renderCallLogsList();
+      return;
+    }
+    if (d.simAudioLoad) {
+      const id = d.simAudioLoad;
+      const agentId = A().id;
+      const version = sim.recordingLoadVersions.get(id) || 0;
+      b.disabled = true;
+      try {
+        let blob;
+        if (serverlessCloudMode) blob = await getLocalRecording(id);
+        else {
+          const res = await fetch(`/api/simulator/recordings/${encodeURIComponent(id)}`);
+          if (!res.ok) throw new Error(`Recording unavailable (HTTP ${res.status})`);
+          blob = await res.blob();
+        }
+        if (!blob?.size) throw new Error('Recording is missing or empty.');
+        if (A().id !== agentId || (sim.recordingLoadVersions.get(id) || 0) !== version ||
+            !sim.callLogs.some((log) => log.id === id && log.recordingStatus === 'available')) {
+          if (b.isConnected) b.disabled = false;
+          return;
+        }
+        revokeRecordingUrl(id);
+        sim.recordingUrls.set(id, URL.createObjectURL(blob));
+        const box = document.getElementById('sim-logs-box');
+        if (box) box.innerHTML = renderCallLogsList();
+      } catch (err) {
+        alert(`Could not load audio: ${err.message || err}`);
+        b.disabled = false;
+      }
+      return;
+    }
+    if (d.simAudioDelete) {
+      const id = d.simAudioDelete;
+      if (!window.confirm('Delete this audio recording? The transcript will remain.')) return;
+      try {
+        if (serverlessCloudMode) await deleteLocalRecording(id);
+        else {
+          const res = await fetch(`/api/simulator/recordings/${encodeURIComponent(id)}`, { method: 'DELETE' });
+          if (!res.ok) {
+            let detail = '';
+            try { detail = (await res.json()).error || ''; } catch {}
+            throw new Error(detail || `HTTP ${res.status}`);
+          }
+        }
+        revokeRecordingUrl(id);
+        await loadCallLogsForCurrentAgent();
+      } catch (err) { alert(`Could not delete audio: ${err.message || err}`); }
+      return;
+    }
+    if (b.id === 'btn-clear-logs') {
+      const agentId = A().id;
+      const visibleIds = sim.callLogs.map((log) => log.id);
+      if (!window.confirm('Delete this agent’s test history and all its associated recordings?')) return;
+      try {
+        if (serverlessCloudMode) {
+          await clearLocalRecordedTests(agentId);
+          try {
+            const old = JSON.parse(window.localStorage?.getItem('vac_cloud_sim_logs_v1') || '[]');
+            if (Array.isArray(old)) window.localStorage?.setItem('vac_cloud_sim_logs_v1', JSON.stringify(old.filter((entry) => entry.agentId !== agentId)));
+          } catch (err) { throw new Error(`Local recordings may already be deleted, but legacy history could not be cleared: ${err.message || err}`); }
+        } else {
+          const res = await fetch(`/api/simulator/logs?agentId=${encodeURIComponent(agentId)}`, { method: 'DELETE' });
+          if (!res.ok) {
+            let detail = '';
+            try { detail = (await res.json()).error || ''; } catch {}
+            throw new Error(detail || `HTTP ${res.status}`);
+          }
+        }
+        for (const id of visibleIds) revokeRecordingUrl(id);
+        if (A().id === agentId) {
+          sim.callLogs = [];
+          await loadCallLogsForCurrentAgent();
+        }
+      } catch (err) {
+        for (const id of visibleIds) revokeRecordingUrl(id);
+        if (A().id === agentId) await loadCallLogsForCurrentAgent();
+        alert(`Could not fully clear test history: ${err.message || err}`);
+      }
       return;
     }
 
@@ -6881,7 +7193,6 @@
         if (sttLocal) {
           S.services.stt = { providerId: sttLocal.id, model: 'large-v3-turbo' };
         }
-        sim.upstreamMode = 'speech_service';
       }
       const vs = document.getElementById('vs');
       if (vs) vs.textContent = `Saving ${label} as the active voice…`;
@@ -7163,14 +7474,23 @@
       const kind = t.id.slice(4);
       cur[kind] = t.value;
       if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
-      if (tab === 'test') sim.logsLoadedForAgent = null;
+      if (kind === 'a') {
+        for (const log of sim.callLogs) revokeRecordingUrl(log.id);
+        sim.logsLoadedForAgent = null;
+        sim.callLogs = [];
+        sim.logsError = null;
+        sim.historyExpanded = false;
+      }
       render();
       return;
     }
 
-    if (t.id === 'sim-mode') {
-      sim.upstreamMode = t.value;
-      render();
+    if (t.id === 'sim-allow-webhooks') {
+      sim.allowWebhooks = t.checked;
+      return;
+    }
+    if (t.id === 'sim-record-audio') {
+      sim.recordAudio = t.checked;
       return;
     }
     if (t.id === 'sim-bw') {
@@ -7184,7 +7504,7 @@
     if (t.id === 'sim-mic-device') {
       sim.micDeviceId = t.value;
       if ((sim.active || sim.connecting) && sim.micEnabled) {
-        startMicCapture().catch((err) => {
+        startMicCapture(sim.sessionAttemptId).catch((err) => {
           sim.lastError = `Mic switch error: ${err.message}`;
           renderSimulatorDomOnly();
         });

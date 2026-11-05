@@ -88,6 +88,9 @@ async function run() {
   const prevAdminPass = process.env.ADMIN_PASSWORD;
   const prevAllowedIps = process.env.BRIDGE_ALLOWED_IPS;
   const prevWhSecret = process.env.CUSTOM_WEBHOOK_SECRET;
+  const prevTrustProxy = process.env.TRUST_PROXY;
+  // The iframe-cookie check below simulates a known local TLS proxy.
+  process.env.TRUST_PROXY = 'loopback';
 
   const { server, viciBridge: maybeBridge } = createServerWithSimulator({
     enableBridge: true,
@@ -108,7 +111,7 @@ async function run() {
     const defaultBridgeHost = new VicidialBridgeService().getStatus().bindHost;
     if (previousBridgeBindHost === undefined) delete process.env.BRIDGE_BIND_HOST;
     else process.env.BRIDGE_BIND_HOST = previousBridgeBindHost;
-    assert(defaultBridgeHost === '115.186.137.240', `Expected bridge default bind host to be 115.186.137.240, got ${defaultBridgeHost}`);
+    assert(defaultBridgeHost === '127.0.0.1', `Expected a loopback bridge default, got ${defaultBridgeHost}`);
 
     const projectRoot = path.resolve(__dirname, '..');
     const unsafeBind = childProcess.spawnSync(
@@ -131,7 +134,7 @@ async function run() {
     );
     assert(
       unsafeBind.status === 1 &&
-        `${unsafeBind.stdout || ''}${unsafeBind.stderr || ''}`.includes('Refusing to bind to a non-loopback interface without ADMIN_PASSWORD'),
+        `${unsafeBind.stdout || ''}${unsafeBind.stderr || ''}`.includes('Refusing to bind to a non-loopback interface without an admin password or a registered user'),
       'Expected an unauthenticated public bind to be rejected before listener startup'
     );
 
@@ -224,8 +227,8 @@ async function run() {
     // 2. Test BRIDGE_ALLOWED_IPS untrusted SIP IP block
     const bridgeStatus = viciBridge.getStatus();
     process.env.BRIDGE_ALLOWED_IPS = '';
-    assert(isBridgePeerIpAllowed('115.186.137.240'), 'Expected empty bridge allowlist to keep 115.186.137.240 access');
-    assert(!isBridgePeerIpAllowed([127, 0, 0, 1].join('.')), 'Expected IPv4 loopback to be rejected after removal');
+    assert(!isBridgePeerIpAllowed('115.186.137.240'), 'An unconfigured public peer must be rejected');
+    assert(isBridgePeerIpAllowed([127, 0, 0, 1].join('.')), 'Expected IPv4 loopback to be allowed by default');
     assert(!isBridgePeerIpAllowed('192.0.2.10'), 'Expected empty bridge allowlist to reject remote peers');
     process.env.BRIDGE_ALLOWED_IPS = '10.250.250.1/32'; // Block local test socket temporarily
     const forbiddenLine = await sendRawSipInvite(bridgeStatus.sipPort);
@@ -434,25 +437,26 @@ async function run() {
     );
     const tarList = childProcess.execFileSync('tar', ['-tzf', bundleDiskPath], { encoding: 'utf8' });
     const normalizedTarList = tarList.toLowerCase();
+    const archiveRoot = path.basename(projectRoot).toLowerCase();
     assert(
-      normalizedTarList.includes('voice-agent-console/deploy/vicibox-install.sh') &&
-        normalizedTarList.includes('voice-agent-console/dist/server.js') &&
-        normalizedTarList.includes('voice-agent-console/vicibox-production-runbook.md'),
+      normalizedTarList.includes(`${archiveRoot}/deploy/vicibox-install.sh`) &&
+        normalizedTarList.includes(`${archiveRoot}/dist/server.js`) &&
+        normalizedTarList.includes(`${archiveRoot}/vicibox-production-runbook.md`),
       'Release tarball missing vicibox-install.sh, dist/server.js, or VICIBOX-PRODUCTION-RUNBOOK.md'
     );
     const archiveEntries = normalizedTarList.split(/\r?\n/);
     assert(
       !archiveEntries.some(
         (entry) =>
-          entry === 'voice-agent-console/.env' ||
-          entry.startsWith('voice-agent-console/data/') ||
-          entry.startsWith('voice-agent-console/logs/') ||
-          entry === 'voice-agent-console/tools/cloudflared.exe'
+          entry === `${archiveRoot}/.env` ||
+          entry.startsWith(`${archiveRoot}/data/`) ||
+          entry.startsWith(`${archiveRoot}/logs/`) ||
+          entry === `${archiveRoot}/tools/cloudflared.exe`
       ),
       'Release tarball must not include credentials, runtime data/logs, or the local tunnel binary'
     );
     console.log(
-      `✓ [8/9] Turnkey ViciBox Release Bundle verified (${Math.round(bundleBytes.length / 1024)} KB -> /home/user/voice-agent-vicibox-release.tar.gz)`
+      `✓ [8/13] Turnkey ViciBox Release Bundle verified (${Math.round(bundleBytes.length / 1024)} KB in isolated test data)`
     );
 
     // 9. Verify Medicare Outbound Qualification Agent (a_medicare) & Campaign (c_medicare / MEDICARE)
@@ -618,10 +622,10 @@ async function run() {
       'Expected login/signup page to include active playing soundwave logo plaque (#login-brand-plaque + .eq-bar)'
     );
     assert(
-      authedRootHtml.includes('id="cmd-deck"') &&
+      authedRootHtml.includes('<main id="m"') &&
         authedRootHtml.includes('hdr-tool-dock') &&
         authedRootHtml.includes('hdr-commit-group'),
-      'Expected authenticated index.html to include #cmd-deck and 3-zone strategic header (hdr-tool-dock + hdr-commit-group)'
+      'Expected authenticated index.html to include the main workspace and 3-zone strategic header'
     );
     const telemRes = await fetch(`${httpBase}/api/telemetry/overview`, {
       headers: { Cookie: signedInCookie },
@@ -630,8 +634,11 @@ async function run() {
     const telemJson = (await telemRes.json()) as any;
     assert(telemJson.ok === true && telemJson.telemetry, 'Expected ok + telemetry object');
     assert(
-      typeof telemJson.telemetry.quality?.score === 'number' && telemJson.telemetry.quality.score >= 85,
-      `Expected high Console Quality score (>=85), got ${telemJson.telemetry.quality?.score}`
+      typeof telemJson.telemetry.quality?.score === 'number' &&
+        telemJson.telemetry.quality.score >= 0 && telemJson.telemetry.quality.score <= 100 &&
+        telemJson.telemetry.quality.certified === false &&
+        telemJson.telemetry.quality.assessment.includes('not a security audit'),
+      'Expected a bounded configuration estimate explicitly marked as not certified'
     );
     assert(
       Array.isArray(telemJson.telemetry.quality?.pillars) && telemJson.telemetry.quality.pillars.length === 6,
@@ -654,7 +661,7 @@ async function run() {
       'Expected ok + active + lanIp from /api/demo-tunnel/status'
     );
     console.log(
-      `✓ [11/12] Executive Command & Console Quality Dashboard (#cmd-deck, Score ${telemJson.telemetry.quality.score}/100 ${telemJson.telemetry.quality.grade}, 6 Pillars) + Demo Tunnel Auto-Discovery verified`
+      `✓ [11/13] Command dashboard configuration estimate (${telemJson.telemetry.quality.score}/100, explicitly not certified) + demo tunnel status verified`
     );
 
     // 12. Verify One-Click Local Speech Service Integration (/api/speech-service/status, /test, /activate & /api/tts/preview)
@@ -793,7 +800,7 @@ async function run() {
         '✓ [12/13] One-Click Local Speech Service Integration (/api/speech-service/test, /activate, Clone Sync & /api/tts/preview) verified'
       );
 
-      // 13. Verify Cross-Site HTTPS Iframe Cookie (CHIPS), Cookie-Blocked Bearer/?vac_token/?token Auth, & Live WS Simulator speech_service Audio
+      // 13. Verify iframe auth and that unsupported local speech does not fake an AI session.
       const iframeLoginRes = await fetch(`${httpBase}/api/auth/login`, {
         method: 'POST',
         headers: {
@@ -819,7 +826,7 @@ async function run() {
         'Expected session token in /api/auth/login JSON response for cookie-blocked iframes'
       );
 
-      // Zero-cookie document handoff (?vac_token=...) + Bearer API + ?token= WS Simulator streaming speech_service audio
+      // Zero-cookie document handoff + Bearer API + authenticated simulator rejection
       const tokenOnlyRootRes = await fetch(
         `${httpBase}/?vac_token=${encodeURIComponent(iframeLoginJson.token)}`,
         { redirect: 'manual' }
@@ -833,60 +840,30 @@ async function run() {
       });
       assert(bearerStateRes.status === 200, `Expected 200 on Bearer /api/state, got ${bearerStateRes.status}`);
 
-      const simStreamCheck = await new Promise<{ startedMode: string; audioBytes: number; replyTranscript: boolean }>(
+      const simStreamCheck = await new Promise<{ errorCode: string; started: boolean; audioBytes: number; transcript: boolean }>(
         (resolve, reject) => {
           const ws = new WebSocket(`${wsBase}/ws/simulator?token=${encodeURIComponent(iframeLoginJson.token)}`);
-          let startedMode = '';
+          let errorCode = '';
+          let started = false;
           let audioBytes = 0;
-          let replyTranscript = false;
-          let injected = false;
-          const timer = setTimeout(() => {
-            try { ws.close(); } catch {}
-            reject(new Error(`Simulator speech_service timeout (mode=${startedMode}, bytes=${audioBytes}, reply=${replyTranscript})`));
-          }, 5000);
-          ws.on('open', () => {
-            ws.send(JSON.stringify({ type: 'start', agentId: 'a_medicare', bandwidth: 'wideband' }));
-          });
+          let transcript = false;
+          const timer = setTimeout(() => { ws.close(); reject(new Error('Simulator rejection timed out')); }, 5000);
+          ws.on('open', () => ws.send(JSON.stringify({ type: 'start', agentId: 'a_medicare', bandwidth: 'wideband' })));
           ws.on('message', (data, isBinary) => {
-            if (isBinary) {
-              audioBytes += (data as Buffer).length;
-              if (!injected) {
-                injected = true;
-                ws.send(JSON.stringify({ type: 'inject_user_message', content: 'Are you a robot or a real human?' }));
-              } else if (replyTranscript && audioBytes >= 1920) {
-                clearTimeout(timer);
-                ws.close();
-                resolve({ startedMode, audioBytes, replyTranscript });
-              }
-              return;
-            }
+            if (isBinary) { audioBytes += (data as Buffer).length; return; }
             const m = JSON.parse(data.toString());
-            if (m.type === 'session_started') {
-              startedMode = m.upstreamMode;
-            } else if (m.type === 'transcript' && m.role === 'assistant' && /not a robot/i.test(m.content || '')) {
-              replyTranscript = true;
-              if (audioBytes >= 1920) {
-                clearTimeout(timer);
-                ws.close();
-                resolve({ startedMode, audioBytes, replyTranscript });
-              }
-            }
+            if (m.type === 'error') errorCode = m.code;
+            if (m.type === 'session_started') started = true;
+            if (m.type === 'transcript') transcript = true;
           });
-          ws.on('error', (err) => {
-            clearTimeout(timer);
-            reject(err);
-          });
+          ws.on('close', () => { clearTimeout(timer); resolve({ errorCode, started, audioBytes, transcript }); });
+          ws.on('error', (err) => { clearTimeout(timer); reject(err); });
         }
       );
-      assert(
-        simStreamCheck.startedMode === 'speech_service' &&
-          simStreamCheck.audioBytes >= 1920 &&
-          simStreamCheck.replyTranscript,
-        `Expected live speech_service WS call with >=1920 PCM bytes, got ${JSON.stringify(simStreamCheck)}`
-      );
-      console.log(
-        '✓ [13/13] Cross-Site HTTPS Iframe Auth (SameSite=None+Partitioned + Cookie-less Bearer/?vac_token) & Live speech_service WS Call verified'
-      );
+      assert(simStreamCheck.errorCode === 'LOCAL_SPEECH_AGENT_UNAVAILABLE', 'Expected local speech rejection');
+      assert(!simStreamCheck.started && simStreamCheck.audioBytes === 0 && !simStreamCheck.transcript,
+        'Unsupported local speech must not produce a started session, audio or transcript');
+      console.log('✓ [13/13] Cross-site iframe auth & honest local speech simulator rejection verified');
     } finally {
       await fetch(`${httpBase}/api/state`, {
         method: 'PUT',
@@ -916,6 +893,8 @@ async function run() {
     else process.env.BRIDGE_ALLOWED_IPS = prevAllowedIps;
     if (prevWhSecret === undefined) delete process.env.CUSTOM_WEBHOOK_SECRET;
     else process.env.CUSTOM_WEBHOOK_SECRET = prevWhSecret;
+    if (prevTrustProxy === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = prevTrustProxy;
 
     await viciBridge.stop();
     (server as any).closeAllConnections?.();

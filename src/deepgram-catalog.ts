@@ -146,30 +146,6 @@ function loadStaticVoiceCatalog(): DeepgramVoice[] {
   return FALLBACK_VOICES;
 }
 
-function buildOfflineWavSample(durationMs = 500, sampleRate = 8000): Buffer {
-  const numSamples = Math.max(2600, Math.floor((sampleRate * durationMs) / 1000));
-  const dataBytes = numSamples * 2;
-  const buf = Buffer.alloc(44 + dataBytes);
-  buf.write('RIFF', 0, 'ascii');
-  buf.writeUInt32LE(36 + dataBytes, 4);
-  buf.write('WAVE', 8, 'ascii');
-  buf.write('fmt ', 12, 'ascii');
-  buf.writeUInt32LE(16, 16);
-  buf.writeUInt16LE(1, 20);
-  buf.writeUInt16LE(1, 22);
-  buf.writeUInt32LE(sampleRate, 24);
-  buf.writeUInt32LE(sampleRate * 2, 28);
-  buf.writeUInt16LE(2, 32);
-  buf.writeUInt16LE(16, 34);
-  buf.write('data', 36, 'ascii');
-  buf.writeUInt32LE(dataBytes, 40);
-  for (let i = 0; i < numSamples; i++) {
-    const sample = Math.round(Math.sin((2 * Math.PI * 440 * i) / sampleRate) * 4000);
-    buf.writeInt16LE(sample, 44 + i * 2);
-  }
-  return buf;
-}
-
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 function inferGender(tags: string[]): 'feminine' | 'masculine' | 'neutral' {
@@ -360,18 +336,21 @@ export async function fetchAllowedSampleAudio(sampleUrl: string): Promise<{ buff
   }
 
   try {
-    const res = await fetch(parsed.toString(), { signal: AbortSignal.timeout(12000) });
-    if (!res.ok) {
-      throw new Error(`Upstream sample returned HTTP ${res.status}`);
+    // Do not follow redirects away from an allowlisted sample host.
+    const res = await fetch(parsed.toString(), { signal: AbortSignal.timeout(12000), redirect: 'error' });
+    if (!res.ok) throw new Error(`Upstream sample returned HTTP ${res.status}`);
+    const contentType = res.headers.get('content-type') || '';
+    if (!/^audio\/(?:wav|x-wav|wave|mpeg|mp3|ogg|webm|mp4|x-m4a|aac|flac)(?:\s*;|$)/i.test(contentType)) {
+      throw new Error('Upstream sample is not a supported audio type');
     }
-    const contentType = res.headers.get('content-type') || 'audio/wav';
     const arr = await res.arrayBuffer();
+    if (!arr.byteLength) throw new Error('Upstream audio sample is empty');
     return { buffer: Buffer.from(arr), contentType };
   } catch (err: any) {
-    if (String(err?.message || '').includes('Upstream sample returned HTTP')) {
-      throw err;
-    }
-    return { buffer: buildOfflineWavSample(600, 8000), contentType: 'audio/wav' };
+    const failure = new Error(`Voice sample unavailable: ${err?.message || 'upstream request failed'}`) as Error & { statusCode: number; code: string };
+    failure.statusCode = 502;
+    failure.code = 'SAMPLE_UNAVAILABLE';
+    throw failure;
   }
 }
 

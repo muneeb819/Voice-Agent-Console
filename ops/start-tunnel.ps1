@@ -8,6 +8,35 @@ $urlFile = Join-Path $root "logs\public-demo-url.txt"
 New-Item -ItemType Directory -Force -Path (Join-Path $root "logs") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $root "tools") | Out-Null
 
+# A tunnel exposes the local listener. Never open one for an unauthenticated
+# bootstrap installation, including when attaching to an existing server.
+$port = if ($env:PORT) { $env:PORT } else {
+    # Match the server's dotenv-based PORT when it is not exported in the shell.
+    $envFile = if ($env:VAC_ENV_FILE) { $env:VAC_ENV_FILE } else { Join-Path $root ".env" }
+    $portLine = if (Test-Path $envFile) {
+        Get-Content $envFile | Select-String -Pattern '^\s*(?:export\s+)?PORT\s*=\s*["'']?([0-9]+)["'']?\s*(?:#.*)?$' | Select-Object -Last 1
+    }
+    if ($portLine) { $portLine.Matches[0].Groups[1].Value } else { "533" }
+}
+try {
+    $health = Invoke-RestMethod -Uri "http://127.0.0.1:${port}/api/health" -TimeoutSec 3 -ErrorAction Stop
+    if (-not $health.ok -or -not $health.authEnabled) { throw "Authentication is not configured" }
+} catch {
+    Write-Error "Configure an admin password or create a local account before starting a tunnel. $($_.Exception.Message)"
+    exit 1
+}
+try {
+    $proxyHeaders = @{
+        Origin = "https://vac-proxy-probe.invalid"
+        "X-Forwarded-Host" = "vac-proxy-probe.invalid"
+        "X-Forwarded-Proto" = "https"
+    }
+    $null = Invoke-RestMethod -Uri "http://127.0.0.1:${port}/api/health" -Headers $proxyHeaders -TimeoutSec 3 -ErrorAction Stop
+} catch {
+    Write-Error "Configure TRUST_PROXY for the local cloudflared connection and restart the console before opening a tunnel."
+    exit 1
+}
+
 if (-not (Test-Path $cf)) {
     Write-Host "Downloading official cloudflared.exe into $cf ..." -ForegroundColor Yellow
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -45,18 +74,8 @@ if ($existing) {
 
 Remove-Item $log, $outLog, $urlFile -Force -ErrorAction SilentlyContinue
 
-# Resolve active non-loopback IPv4 LAN address so cloudflared never hits IPv6 [::1] 502 on Windows
-$lanIp = (
-    Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-    Where-Object {
-        $_.IPAddress -notlike "169.254.*" -and
-        $_.IPAddress -notlike "172.*" -and
-        $_.PrefixOrigin -ne "WellKnown"
-    } |
-    Select-Object -First 1 -ExpandProperty IPAddress
-)
-$upstreamHost = if ($lanIp) { $lanIp } else { "localhost" }
-$upstreamUrl = "http://${upstreamHost}:533"
+# IPv4 loopback matches the secure default and avoids localhost/IPv6 ambiguity.
+$upstreamUrl = "http://127.0.0.1:${port}"
 
 Start-Process -FilePath $cf `
     -ArgumentList "tunnel", "--protocol", "http2", "--url", $upstreamUrl, "--no-autoupdate" `

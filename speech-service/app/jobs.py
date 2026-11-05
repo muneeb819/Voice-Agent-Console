@@ -87,15 +87,25 @@ class JobManager:
         return self.result_dir / f"{jid}.json"
 
     async def start(self) -> None:
-        for job in await asyncio.to_thread(self.store.incomplete):
-            if self.upload_path(job["id"]).exists():
-                self.queue.put_nowait(job["id"])
-                log.info("requeued job after restart", extra={"event": "job_requeue"})
-            else:
-                self.store.set_status(job["id"], "failed", "upload lost during restart")
-        metrics.JOBS_QUEUED.set(self.queue.qsize())
+        incomplete = await asyncio.to_thread(self.store.incomplete)
         self._tasks = [asyncio.create_task(self._worker()) for _ in range(self.rt.settings.job_workers)]
         self._tasks.append(asyncio.create_task(self._janitor()))
+        # Running jobs plus the previously full queue can exceed queue_max.
+        # Feed recovery in the background as workers make room instead of
+        # failing startup with QueueFull or dropping persisted jobs.
+        self._tasks.append(asyncio.create_task(self._recover(incomplete)))
+        metrics.JOBS_QUEUED.set(self.queue.qsize())
+
+    async def _recover(self, jobs: list[dict]) -> None:
+        for job in jobs:
+            jid = job["id"]
+            if self.upload_path(jid).exists():
+                await asyncio.to_thread(self.store.set_status, jid, "queued")
+                await self.queue.put(jid)
+                metrics.JOBS_QUEUED.set(self.queue.qsize())
+                log.info("requeued job after restart", extra={"event": "job_requeue"})
+            else:
+                await asyncio.to_thread(self.store.set_status, jid, "failed", "upload lost during restart")
 
     async def stop(self) -> None:
         for t in self._tasks:
@@ -119,23 +129,30 @@ class JobManager:
             if not job:
                 continue
             await asyncio.to_thread(self.store.set_status, jid, "running")
+            finished = False
             try:
                 p = json.loads(job["params"])
                 audio = await asyncio.to_thread(decode_file, self.upload_path(jid), s.max_audio_seconds)
                 result = await self.rt.transcribe(audio, mode="job", wait_forever=True, **p)
                 await asyncio.to_thread(self.result_path(jid).write_text, json.dumps(result, ensure_ascii=False))
                 await asyncio.to_thread(self.store.set_status, jid, "completed")
+                finished = True
                 metrics.JOBS_TOTAL.labels("completed").inc()
             except AudioError as exc:
                 await asyncio.to_thread(self.store.set_status, jid, "failed", str(exc))
+                finished = True
                 metrics.JOBS_TOTAL.labels("failed").inc()
             except Exception as exc:  # noqa: BLE001
                 log.exception("job failed", extra={"event": "job_failed"})
                 await asyncio.to_thread(self.store.set_status, jid, "failed", "internal error")
+                finished = True
                 metrics.JOBS_TOTAL.labels("failed").inc()
                 _ = exc
             finally:
-                self.upload_path(jid).unlink(missing_ok=True)  # source audio is not retained
+                # Cancellation at shutdown is not a terminal outcome: retain
+                # the upload so the persisted job can actually be resumed.
+                if finished:
+                    self.upload_path(jid).unlink(missing_ok=True)
 
     async def _janitor(self) -> None:
         while True:

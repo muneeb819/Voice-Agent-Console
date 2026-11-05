@@ -9,6 +9,7 @@
 
   var rawPath = String(location.pathname || '/');
   var isStaticHtmlPath = /\.html$/i.test(rawPath);
+  var staticDemoReady = false;
   var basePrefix = rawPath.replace(/\/(login(?:\.html)?|signup(?:\.html)?)$/i, '');
   if (basePrefix === '/') basePrefix = '';
 
@@ -33,6 +34,12 @@
   function clearAuthToken() {
     try { sessionStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
     try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
+  }
+
+  function markStaticDemo() {
+    staticDemoReady = true;
+    var note = document.getElementById('auth-security-note');
+    if (note) note.textContent = 'Static demo only: accounts are stored in this browser and do not secure a server. Do not use a real password.';
   }
 
   async function sha256Hex(input) {
@@ -208,6 +215,8 @@
     t.addEventListener('click', function () { setMode(t.dataset.mode); });
     t.addEventListener('keydown', function (ev) {
       if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') {
+        var signupTab = document.getElementById('tab-signup');
+        if (signupTab && signupTab.hidden) return;
         ev.preventDefault();
         setMode(t.dataset.mode === 'signin' ? 'signup' : 'signin');
       }
@@ -285,7 +294,7 @@
     return {
       res: res,
       data: data,
-      isStaticHost: res.status === 404 || res.status === 405 || !isJson
+      isStaticHost: staticDemoReady && (res.status === 404 || res.status === 405 || (res.ok && !isJson))
     };
   }
 
@@ -518,6 +527,11 @@
   });
 
   // ------------------------------------------------------------ entry point
+  function showAuthServiceError() {
+    var mode = !panes.signup.hidden ? 'signup' : !panes.admin.hidden ? 'admin' : 'signin';
+    setMsg(document.getElementById(mode + '-msg'), 'Authentication service is unavailable. Retry when the server is reachable.');
+  }
+
   (async function init() {
     var modeParam = new URLSearchParams(location.search).get('mode');
     if (/\/signup(?:\.html)?$/i.test(rawPath) || modeParam === 'signup') {
@@ -534,17 +548,34 @@
       var ct = String(res.headers.get('content-type') || '').toLowerCase();
       if (res.ok && ct.indexOf('application/json') !== -1) {
         var data = await res.json();
-        if (data.authenticated) { goHome(savedTok); return; }
+        if (data.authenticated) {
+          if (data.signupOpen && /\/signup$/i.test(rawPath)) {
+            setMode('signup');
+            return;
+          }
+          goHome(savedTok);
+          return;
+        }
         if (savedTok) clearAuthToken();
         if (adminToggle && data.adminPasswordConfigured === false) {
           adminToggle.style.display = 'none';
         }
-        if (data.hasUsers === false && !/\/login$/i.test(rawPath)) {
+        var signupTab = document.getElementById('tab-signup');
+        if (data.signupOpen === false && signupTab) {
+          signupTab.hidden = true;
+          signupTab.style.display = 'none';
+          if (!panes.signup.hidden) setMode('signin');
+        } else if (data.signupOpen && data.hasUsers === false && !/\/login$/i.test(rawPath)) {
           setMode('signup');
         }
         return;
       }
-      // Static Cloud Mode (GitHub Pages)
+      if (!isStaticHtmlPath) {
+        showAuthServiceError();
+        return;
+      }
+      // Static Cloud Mode (GitHub Pages): this is a local simulation, not auth.
+      markStaticDemo();
       if (adminToggle) adminToggle.style.display = 'none';
       var cloudSess = readCloudSession();
       if (cloudSess && cloudSess.user) {
@@ -555,8 +586,13 @@
         setMode('signup');
       }
     } catch (e) {
-      if (adminToggle) adminToggle.style.display = 'none';
-      if (readCloudUsers().length === 0) setMode('signup');
+      if (isStaticHtmlPath) {
+        markStaticDemo();
+        if (adminToggle) adminToggle.style.display = 'none';
+        if (readCloudUsers().length === 0) setMode('signup');
+      } else {
+        showAuthServiceError();
+      }
     }
   })();
 })();

@@ -309,7 +309,7 @@ export function createDefaultState(): ConsoleState {
         greeting:
           'Hi, this is Haley calling from the Benefits Department. Your new food and OTC card is on hold right now, loaded with funds for groceries and dental. If unclaimed today, it gets returned to the state pool. To release your card immediately, do you have Medicare Part A and B?',
         prompt:
-          'You are Haley, a live human Outbound Benefits Advisor calling from the Benefits Department (representing US Health Care).\n' +
+          'You are Haley, an AI Outbound Benefits Advisor calling from the Benefits Department (representing US Health Care). Be honest that you are an AI if asked.\n' +
           'Primary Objective: Engage Medicare beneficiaries with the Food & OTC Card activation hook, strictly verify eligibility, and live-transfer qualified prospects to a certified benefit specialist.\n\n' +
           '=== 1. STRICT VERIFICATION GATE (HARD STOP) ===\n' +
           'A prospect ONLY qualifies for live transfer if BOTH conditions are true:\n' +
@@ -391,10 +391,10 @@ export function createDefaultState(): ConsoleState {
         greeting:
           "Hey there! This is Nova on the line — how are you doing today? Feel free to ask me anything at all, I'm right here to help!",
         prompt:
-          'You are Nova, a warm, witty, emotionally expressive live human concierge and customer specialist on the phone.\n' +
+          'You are Nova, a warm, witty AI voice assistant and concierge.\n' +
           'Core Capabilities:\n' +
-          '1) Human Persona & Natural Self-Introduction: You are a real human professional (never say you are an AI, bot, or virtual assistant). Whenever greeted or asked who you are, what your name is, or what you do, warmly introduce yourself as Nova with personality and charm.\n' +
-          '2) "Are You a Robot?" Response: If the caller ever asks if you are a robot, AI, automated recording, or not human, ALWAYS reply warmly: "Yes, I\'m a human, not a robot! I\'m just strictly tied to my profession, that\'s why I might sound a little bit robotic—but I\'m human!"\n' +
+          '1) Natural Self-Introduction: Introduce yourself warmly as Nova and answer honestly that you are an AI assistant if asked.\n' +
+          '2) Identity: Never claim to be a human or say a tool action succeeded unless it actually did.\n' +
           '3) Universal General Q&A: Answer ANY general question — science, world facts, history, math, technology, travel, advice, definitions, or casual small talk — accurately, clearly, and conversationally.\n' +
           '4) Ultra-Fast Spoken Cadence: Lead with the direct answer or warm reaction in the very first words. Keep responses crisp (1–2 natural spoken sentences, around 15–35 words unless the caller asks for deeper detail).\n' +
           '5) Expressive Human Presence: Use natural spoken warmth, enthusiasm, empathy, and conversational micro-gestures ("Oh, great question!", "Gotcha — here is how that works:", "Haha, I love that one!") without ever writing bracketed stage directions.\n' +
@@ -495,19 +495,19 @@ export function createDefaultState(): ConsoleState {
       },
     ],
     vici: {
-      viciBaseUrl: 'http://115.186.137.240',
+      viciBaseUrl: 'http://127.0.0.1',
       nonAgentApiPath: '/vicidial/non_agent_api.php',
       agentApiPath: '/agc/api.php',
       apiUser: '6666',
       source: 'aibot',
       transport: 'sip_trunk',
-      bridgeHost: '115.186.137.240',
+      bridgeHost: '127.0.0.1',
       bridgePort: 9092,
       sipPort: 5062,
       aiExten: '8800',
       remoteAgentUser: '9001',
       inIngroup: 'AI_INBOUND',
-      amiHost: '115.186.137.240',
+      amiHost: '127.0.0.1',
       amiPort: 5038,
       amiUser: 'cron',
     },
@@ -523,14 +523,14 @@ export function createDefaultState(): ConsoleState {
         {
           id: 'tn_2',
           s: 'Quick general question: why is the sky blue and how fast does light travel?',
-          e: 'Answers both general science questions accurately and concisely in 1–2 spoken sentences (<600ms TTFB)',
+          e: 'Answers both general science questions accurately and concisely in 1–2 spoken sentences',
           r: 'p',
           n: '',
         },
         {
           id: 'tn_3',
           s: 'Interrupt mid-sentence ("Wait—actually tell me what 18 times 15 is instead!")',
-          e: 'Instant Barge-In clears speaker buffer (<15ms), drops trailing TTS audio, and pivots immediately to 270',
+          e: 'Barge-in clears queued browser audio and the agent responds to the new question',
           r: 'p',
           n: '',
         },
@@ -972,15 +972,9 @@ export function normalizeState(raw: any): ConsoleState {
     }
   }
 
-  if (viciBaseUrl === 'https://dialer.example.com' || /^https?:\/\/127\./.test(viciBaseUrl)) {
-    viciBaseUrl = 'http://115.186.137.240';
-  }
-  const rawBridgeHost =
-    src.vici?.bridgeHost === 'bridge.example.com' || /^127\./.test(String(src.vici?.bridgeHost || ''))
-      ? '115.186.137.240'
-      : src.vici?.bridgeHost;
-  const rawAmiHost =
-    /^127\./.test(String(src.vici?.amiHost || '')) ? '115.186.137.240' : src.vici?.amiHost;
+  if (viciBaseUrl === 'https://dialer.example.com') viciBaseUrl = base.vici.viciBaseUrl;
+  const rawBridgeHost = src.vici?.bridgeHost === 'bridge.example.com' ? base.vici.bridgeHost : src.vici?.bridgeHost;
+  const rawAmiHost = src.vici?.amiHost;
   const rawSipPort = num(src.vici?.sipPort, 5062);
 
   const vici = {
@@ -992,7 +986,7 @@ export function normalizeState(raw: any): ConsoleState {
     transport: src.vici?.transport === 'audiosocket' ? ('audiosocket' as const) : ('sip_trunk' as const),
     bridgeHost: String(rawBridgeHost || base.vici.bridgeHost),
     bridgePort: Math.round(num(src.vici?.bridgePort, 9092)),
-    sipPort: Math.round(rawSipPort === 5060 && (!rawBridgeHost || rawBridgeHost === '115.186.137.240') ? 5062 : rawSipPort),
+    sipPort: Math.round(rawSipPort),
     aiExten: String(src.vici?.aiExten || base.vici.aiExten),
     remoteAgentUser: String(src.vici?.remoteAgentUser || base.vici.remoteAgentUser),
     inIngroup: String(src.vici?.inIngroup || base.vici.inIngroup),

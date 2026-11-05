@@ -56,19 +56,17 @@ export async function executeCustomFunctionWebhook(
   fnDef: AgentFunction | undefined,
   args: Record<string, any>,
   ctx: WebhookCallContext = {},
-  timeoutMs = 6000
+  timeoutMs = 6000,
+  signal?: AbortSignal
 ): Promise<WebhookExecutionResult> {
   const started = Date.now();
   if (!fnDef || !fnDef.url || !fnDef.url.trim()) {
     return {
-      ok: true,
+      ok: false,
       executedWebhook: false,
       latencyMs: 0,
-      data: {
-        ok: true,
-        note: 'Function executed locally (no webhook URL configured)',
-        received_args: args,
-      },
+      error: 'No webhook URL is configured for this function.',
+      data: { ok: false, error: 'No webhook URL is configured for this function.' },
     };
   }
 
@@ -153,8 +151,15 @@ export async function executeCustomFunctionWebhook(
       method,
       headers,
       body,
-      signal: AbortSignal.timeout(timeoutMs),
+      // Do not forward interpolated credentials or bypass the metadata-host
+      // restriction through a redirect to another destination.
+      redirect: 'manual',
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
     });
+    if (res.status >= 300 && res.status < 400) {
+      return { ok: false, executedWebhook: true, httpStatus: res.status, latencyMs: Date.now() - started,
+        url: targetUrl.toString(), method, error: `Webhook redirects are not followed (HTTP ${res.status}).` };
+    }
 
     const rawText = (await res.text()).slice(0, 65536);
     let parsedData: any = rawText;

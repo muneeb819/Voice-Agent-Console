@@ -4,7 +4,7 @@ import http from 'http';
 import net from 'net';
 import WebSocket, { WebSocketServer } from 'ws';
 import { AsteriskAmiClient } from './ami-client';
-import { isBridgePeerIpAllowed } from './auth-guard';
+import { isBridgePeerIpAllowed, isLoopbackIp } from './auth-guard';
 import { StereoCallRecorder8k } from './call-recorder';
 import { getConsoleState, saveBridgeCallLog } from './db';
 import { getSecret, MANAGED_SECRET_KEYS } from './env-store';
@@ -25,6 +25,14 @@ import {
   parseVicidialCallerCode,
   VicidialApiClient,
 } from './vici-client';
+
+export function resolveSdpAdvertisedHost(peerAddress: string, configuredHost: string, bindHost: string): string {
+  if (isLoopbackIp(peerAddress)) return peerAddress;
+  const configured = configuredHost.trim();
+  const bind = bindHost.trim();
+  const usable = (host: string) => Boolean(host && !isLoopbackIp(host) && !['0.0.0.0', '::', '[::]'].includes(host));
+  return usable(configured) ? configured : usable(bind) ? bind : '127.0.0.1';
+}
 
 export interface PreCallRegistrationInput {
   uniqueid?: string;
@@ -232,7 +240,7 @@ export class VicidialBridgeService {
 
   constructor(opts: ViciBridgeOptions = {}) {
     const st = getConsoleState();
-    this.host = opts.host || process.env.BRIDGE_BIND_HOST || '115.186.137.240';
+    this.host = opts.host || process.env.BRIDGE_BIND_HOST || '127.0.0.1';
     this.audioSocketPort =
       opts.audioSocketPort !== undefined
         ? opts.audioSocketPort
@@ -241,10 +249,8 @@ export class VicidialBridgeService {
       opts.sipPort !== undefined
         ? opts.sipPort
         : Number(process.env.BRIDGE_SIP_PORT || st.vici.sipPort || 5062);
-    // Avoid colliding with local Asterisk 5060 if co-located on ViciBox unless explicitly overridden via env
-    if (!process.env.BRIDGE_SIP_PORT && opts.sipPort === undefined && this.sipPort === 5060) {
-      this.sipPort = 5062;
-    }
+    // New installations default to 5062; an explicitly saved port must not be
+    // silently rewritten, or generated carrier configuration will disagree.
     this.viciApiBaseOverride = opts.viciApiBaseOverride;
   }
 
@@ -409,7 +415,7 @@ export class VicidialBridgeService {
 
   private async startAudioSocketServer(): Promise<void> {
     this.tcpServer = net.createServer((socket) => {
-      if (process.env.VAC_DEBUG !== '1' && !isBridgePeerIpAllowed(socket.remoteAddress)) {
+      if (!isBridgePeerIpAllowed(socket.remoteAddress)) {
         this.stats.rejectedUntrustedIpCount += 1;
         this.stats.lastError = `Rejected untrusted AudioSocket peer IP: ${socket.remoteAddress}`;
         socket.destroy();
@@ -479,7 +485,13 @@ export class VicidialBridgeService {
       socket.on('data', (chunk) => {
         if (httpForwarded) return;
         if (rxBuffer.length === 0 && !sessionStarted && chunk.length > 0 && chunk[0] >= 0x41 && chunk[0] <= 0x5a) {
-          // Incoming HTTP/WebSocket request on the AudioSocket TCP port (e.g. browser preview on :9092)
+          // Forwarding makes the console see a loopback peer. Never let an
+          // allowed remote PBX use this shortcut to gain loopback privileges.
+          if (!isLoopbackIp(socket.remoteAddress)) {
+            stopPacer();
+            socket.destroy();
+            return;
+          }
           httpForwarded = true;
           stopPacer();
           const targetPort = Number(process.env.PORT || 533);
@@ -556,11 +568,6 @@ export class VicidialBridgeService {
       const tryListen = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           this.tcpServer!.removeListener('error', onErr);
-          if (err.code === 'EADDRNOTAVAIL' && candidateHost !== '0.0.0.0') {
-            this.host = '0.0.0.0';
-            tryListen(candidatePort, '0.0.0.0', retriesLeft);
-            return;
-          }
           if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
             const nextPort = candidatePort + 1;
             console.warn(
@@ -757,7 +764,7 @@ export class VicidialBridgeService {
         await new Promise<void>((r) => rtpSocket.bind(0, this.host, () => r()));
         const localRtpPort = (rtpSocket.address() as net.AddressInfo).port;
 
-        const localIpForSdp = rinfo.address.startsWith('127.') ? rinfo.address : getConsoleState().vici.bridgeHost || '115.186.137.240';
+        const localIpForSdp = resolveSdpAdvertisedHost(rinfo.address, getConsoleState().vici.bridgeHost || '', this.host);
         const localTag = `vab${crypto.randomBytes(4).toString('hex')}`;
         const localToWithTag = /;tag=/i.test(toRaw) ? toRaw : `${toRaw};tag=${localTag}`;
 
@@ -925,11 +932,6 @@ export class VicidialBridgeService {
       const tryBind = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           sock.removeListener('error', onErr);
-          if (err.code === 'EADDRNOTAVAIL' && candidateHost !== '0.0.0.0') {
-            this.host = '0.0.0.0';
-            tryBind(candidatePort, '0.0.0.0', retriesLeft);
-            return;
-          }
           if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
             const nextPort = candidatePort + 1;
             console.warn(`[ViciBridge] SIP UDP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);

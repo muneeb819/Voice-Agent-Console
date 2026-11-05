@@ -11,6 +11,8 @@ data/*.sqlite
 data/*.sqlite-shm
 data/*.sqlite-wal
 data/recordings/*.wav
+# VAC_DATA_DIR may point elsewhere inside the checkout.
+**/simulator-recordings/
 
 # OS / Editor
 .DS_Store
@@ -24,7 +26,8 @@ tools/cloudflared.exe
 logs/
 *.zip
 
-# Python test caches & local speech-service runtime state
+# Python environments, test caches & local speech-service runtime state
+.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
