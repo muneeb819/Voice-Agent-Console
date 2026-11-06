@@ -3,7 +3,9 @@
 
 > **Legacy topology examples, not a verified deployment recipe.** The public IP addresses and dialplan values below describe an old environment and are not defaults or automatically trusted peers. Do not copy them or example credentials into production. Current installation requires Node.js 22.5+, defaults to loopback-only listeners and PBX peers, preserves an existing `.env`, and requires explicit proxy trust. Review the current [README](README.md), firewall/TLS configuration, and your own VICIdial/Asterisk setup; validate in staging before handling real calls.
 >
-> **Greeting behavior change:** imported greeting rotation is enabled by default for every bot. All 1,100 supplied rows, including meeting and time-specific language, can be appended after the saved opening and enabled disclosure. Review the library and each agent's complete script and factual claims before real calls. To disable this for a bot, uncheck its random-greeting setting under **Agents** and save. See the README's [greeting rotation section](README.md#imported-greetings-and-call-rotation) for logging and fallback limits.
+> **Status:** VICIdial deployment and integration are paused until the servers are ready. This historical runbook contains environment-specific examples, not proof of a working production connection. Do not apply its PBX settings or make live calls until the operator resumes that work and verifies the environment.
+>
+> **Opening behavior:** rotation selects one of the 1,100 retained rows to vary the saved opening, without appending the full imported greeting. Bot audio is held for at least 0.5 seconds after provider readiness; that fixed wait does not prove the caller has spoken or that the opening was heard. A linked campaign recording notice is optional and existing explicit choices are preserved; disabling it does not disable recording or remove consent obligations. Review the agent's identity, complete script, claims and required disclosures before real calls. See the README's [greeting rotation section](README.md#imported-greetings-and-call-rotation) and [test results](OPENING-TEST-RESULTS.md) for limitations.
 
 ---
 
@@ -150,6 +152,6 @@ exten => _839X.,1,NoOp(VICIdial AI Bot SIP -> Ext ${EXTEN} | ViciCID: ${CALLERID
 2. Open **`Dialer / Vici (Bridge)`** and click **🔌 Test ViciBox HTTP & AMI**:
    - Confirm **`✓ VERSION: 2.14-...`** on `/vicidial/non_agent_api.php` and **`✓ Pong`** on Asterisk AMI `:5038`.
 3. Click **📞 Simulate Full ViciBox Call** (`SIP + RTP G.711 μ-law` + `Live Deepgram Cloud`) to verify end-to-end 8 kHz audio + TTS + function execution.
-4. Place **1 manual test lead** (your cell phone) into list `1001` on campaign `FETEST`, set Remote Agent `9001` to **`ACTIVE`**, answer your phone, confirm you hear the greeting + disclosure, say *"Yes, I'm 64 in Florida and want a quote"*, and verify:
+4. Only after integration is resumed and the setup is reviewed, place **1 manual test lead** (your cell phone) into list `1001` on campaign `FETEST`, set Remote Agent `9001` to **`ACTIVE`**, answer your phone, confirm you hear the configured opening and any required enabled notice, say *"Yes, I'm 64 in Florida and want a quote"*, and verify:
    - Your closer browser logged into `FE_CLOSERS` receives the live call + lead screen-pop with AI notes in `comments`!
    - Open **`Wallboard & QA`** in the Console to listen to the stereo `.wav` recording (`Left = Caller, Right = AI Bot`) and export CSV CDRs.

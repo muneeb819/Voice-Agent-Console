@@ -11,6 +11,7 @@ import {
 } from '../src/db';
 import { createDefaultState, normalizeState } from '../src/defaults';
 import { loadBundledGreetings } from '../src/greetings';
+import { composeOpening } from '../src/opening';
 import { createServerWithSimulator } from '../src/server';
 import { buildDeepgramSettings } from '../src/settings-builder';
 import { runSimulatedViciBridgeCall } from '../src/vici-loopback-tester';
@@ -71,16 +72,21 @@ async function main() {
   migrated.agents[0].randomGreetingEnabled = false;
   assert.equal(normalizeState(migrated).agents[0].randomGreetingEnabled, false);
   const agent = defaults.agents[0], campaign = defaults.campaigns.find((c) => c.agentId === agent.id)!;
+  assert.equal(agent.injectCampaignDisclosure, false, 'New agents do not force a recording notice');
   const preview = buildDeepgramSettings(defaults, agent, campaign);
   const withVariation = buildDeepgramSettings(defaults, agent, campaign, { greetingText: rows[0].greeting_text });
-  assert.equal(preview.agent.greeting, `${campaign.disclosure} ${agent.greeting}`);
-  assert.equal(withVariation.agent.greeting, `${campaign.disclosure} ${agent.greeting} ${rows[0].greeting_text}`);
+  assert.equal(preview.agent.greeting, agent.greeting);
+  assert.equal(withVariation.agent.greeting, composeOpening(agent.greeting, rows[0].greeting_text, false, campaign.disclosure));
+  assert.ok(!withVariation.agent.greeting.includes(rows[0].greeting_text), 'Never append a complete extra greeting');
   assert.equal(buildDeepgramSettings(defaults, { ...agent, randomGreetingEnabled: false }, campaign,
     { greetingText: rows[0].greeting_text }).agent.greeting, preview.agent.greeting);
-  const alreadyDisclosed = { ...agent, greeting: `${campaign.disclosure} ${agent.greeting}` };
-  assert.equal(buildDeepgramSettings(defaults, alreadyDisclosed, campaign, { greetingText: rows[0].greeting_text }).agent.greeting,
-    `${campaign.disclosure} ${agent.greeting} ${rows[0].greeting_text}`);
-  console.log('✓ Existing/new bots enabled by default, per-bot opt-out, deterministic preview and preserved disclosure/introduction');
+  const optedIn = { ...agent, injectCampaignDisclosure: true };
+  assert.equal(buildDeepgramSettings(defaults, optedIn, campaign, { greetingText: rows[0].greeting_text }).agent.greeting,
+    `${campaign.disclosure} ${withVariation.agent.greeting}`);
+  const alreadyDisclosed = { ...agent, injectCampaignDisclosure: true, greeting: `${campaign.disclosure} ${agent.greeting}` };
+  assert.equal(buildDeepgramSettings(defaults, alreadyDisclosed, campaign).agent.greeting,
+    `${campaign.disclosure} ${agent.greeting}`);
+  console.log('✓ Default rotation, saved-opening fallback and optional notice without a second greeting');
 
   // A draw is uniformly random among remaining entries, with an independent
   // persistent cursor per bot and no repeat even across the cycle boundary.
@@ -99,6 +105,32 @@ async function main() {
   assert.equal(listGreetingLibrary().length, 1100, 'Repeated process startup must not duplicate the import');
   console.log('✓ Complete no-repeat cycle, boundary, independent bots, restarts and concurrent SQLite selectors');
 
+  // Distinct IDs can map to identical short openings. Prefer the different
+  // wording without consuming the matching row or breaking the no-repeat cycle.
+  const exampleOpening = 'Hi, this is Jessi from Example. How are you doing?';
+  const wording = (row: typeof rows[number]) => composeOpening(exampleOpening, row.greeting_text, false, '');
+  const firstRow = rows[0];
+  const sameRow = rows.find((row) => row.greeting_id !== firstRow.greeting_id && wording(row) === wording(firstRow))!;
+  const differentRow = rows.find((row) => wording(row) !== wording(firstRow))!;
+  assert.ok(sameRow && differentRow);
+  const rotationDb = getDb();
+  rotationDb.transaction(() => {
+    rotationDb.prepare(`INSERT INTO greeting_rotation_used (agent_id, greeting_id)
+      SELECT ?, greeting_id FROM greeting_library WHERE greeting_id NOT IN (?, ?)`)
+      .run('wording-test', sameRow.greeting_id, differentRow.greeting_id);
+    rotationDb.prepare('INSERT INTO greeting_rotation_state (agent_id, last_greeting_id) VALUES (?, ?)')
+      .run('wording-test', firstRow.greeting_id);
+  })();
+  assert.equal(selectGreetingForAgent('wording-test', exampleOpening)!.greeting_id, differentRow.greeting_id);
+  assert.equal(selectGreetingForAgent('wording-test', exampleOpening)!.greeting_id, sameRow.greeting_id, 'Do not discard the matching ID');
+  rotationDb.prepare(`INSERT INTO greeting_rotation_used (agent_id, greeting_id)
+    SELECT ?, greeting_id FROM greeting_library WHERE greeting_id <> ?`).run('forced-repeat', sameRow.greeting_id);
+  rotationDb.prepare('INSERT INTO greeting_rotation_state (agent_id, last_greeting_id) VALUES (?, ?)')
+    .run('forced-repeat', firstRow.greeting_id);
+  assert.equal(selectGreetingForAgent('forced-repeat', exampleOpening)!.greeting_id, sameRow.greeting_id,
+    'If no other wording remains, finish the ID cycle rather than inventing text or losing rows');
+  console.log('✓ Rotation prefers different wording where possible and preserves every ID when repeats are unavoidable');
+
   const state = getConsoleState();
   state.services = {
     stt: { providerId: 's1', model: 'nova-3' },
@@ -108,6 +140,7 @@ async function main() {
   const a1 = state.agents.find((a) => a.id === 'a1')!;
   a1.greeting = 'Hello {{first_name}}, from the example team.';
   a1.randomGreetingEnabled = true;
+  a1.injectCampaignDisclosure = true;
   saveConsoleState(state, 'Greeting integration fixture');
   const savedState = getConsoleState();
   const disclosure = savedState.campaigns.find((c) => c.agentId === 'a1')!.disclosure;
@@ -116,13 +149,20 @@ async function main() {
   const provider = http.createServer();
   const providerWss = new WebSocketServer({ server: provider, path: '/agent' });
   providerWss.on('connection', (ws) => {
+    let received: any;
     ws.send(JSON.stringify({ type: 'Welcome' }));
     ws.on('message', (data, binary) => {
       if (!binary) {
         const message = JSON.parse(data.toString());
         if (message.type === 'Settings') {
-          settingsReceived.push(message);
+          received = { settings: message, appliedAt: Date.now(), openings: [] };
+          settingsReceived.push(received);
           ws.send(JSON.stringify({ type: 'SettingsApplied' }));
+        } else if (message.type === 'InjectAgentMessage') {
+          received.openings.push({ message: message.message, at: Date.now() });
+          ws.send(JSON.stringify({ type: 'AgentStartedSpeaking' }));
+          ws.send(JSON.stringify({ type: 'ConversationText', role: 'assistant', content: message.message }));
+          ws.send(JSON.stringify({ type: 'AgentAudioDone' }));
         }
       }
     });
@@ -146,14 +186,19 @@ async function main() {
     ws.send(JSON.stringify({ type: 'start', agentId, upstreamMode: 'deepgram',
       lead: { first_name: 'Example', state: 'TX', lead_id: '123' } }));
     const started = await waitFor(events, (event) => event.type === 'session_started', 'session start');
-    const wire = settingsReceived[index];
-    assert.equal(wire.agent.greeting, started.settings.agent.greeting, 'Display and provider must use the same draw');
+    const received = settingsReceived[index];
+    const wire = received.settings;
+    assert.equal(wire.agent.greeting, undefined, 'Do not allow the provider to speak its automatic greeting');
+    const opening = await waitFor(received.openings, () => true, 'delayed opening');
+    assert.equal(opening.message, started.settings.agent.greeting, 'Display and provider must use the same draw');
+    assert.ok(opening.at - received.appliedAt >= 490, 'Opening must wait at least 0.5 s after readiness');
+    assert.equal(received.openings.length, 1);
     ws.send(JSON.stringify({ type: 'stop' }));
     const ended = await waitFor(events, (event) => event.type === 'call_ended', 'session end');
     assert.equal(ended.logSaved, true);
     const log = getSimulatorCallLog(started.callId)!;
     assert.equal(log.greetingId, started.greeting?.greeting_id || null);
-    return { started, ended, wire, log, events };
+    return { started, ended, wire, opening: opening.message as string, log, events };
   }
 
   try {
@@ -163,9 +208,11 @@ async function main() {
     const first = await session();
     const second = await session();
     assert.notEqual(first.started.greeting.greeting_id, second.started.greeting.greeting_id);
+    assert.notEqual(first.opening, second.opening, 'Consecutive sessions prefer different wording');
     for (const call of [first, second]) {
-      assert.equal(call.wire.agent.greeting,
-        `${disclosure} Hello Example, from the example team. ${call.started.greeting.greeting_text}`);
+      assert.equal(call.opening, composeOpening(a1.greeting, call.started.greeting.greeting_text, true, disclosure)
+        .replace('{{first_name}}', 'Example'));
+      assert.ok(!call.opening.includes(call.started.greeting.greeting_text));
     }
     const nova = await session('a_nova');
     assert.ok(nova.started.greeting?.greeting_id, 'All bots should select from the shared catalog');
@@ -173,8 +220,7 @@ async function main() {
     assert.ok(logs.logs.some((log: any) => log.id === first.started.callId && log.greetingId === first.started.greeting.greeting_id));
     console.log('✓ Mock Live Bot sessions select once, hydrate the lead, retain intro/disclosure and log distinct IDs');
 
-    // Exercise placeholders in the selected text even though the attached
-    // dataset contains none. The selected text is not treated as an agent name.
+    // The selected library text is not appended; the saved intro is hydrated.
     const conn = getDb();
     conn.prepare('INSERT INTO greeting_library VALUES (?, ?, ?, ?, ?)')
       .run('fixture-lead', 'Fixture', 'Fixture', 'Extra hello {{first_name}} in {{state}}.', 'Warm');
@@ -186,7 +232,9 @@ async function main() {
     forceFixture();
     const hydrated = await session();
     assert.equal(hydrated.started.greeting.greeting_id, 'fixture-lead');
-    assert.equal(hydrated.wire.agent.greeting, `${disclosure} Hello Example, from the example team. Extra hello Example in TX.`);
+    assert.equal(hydrated.opening, composeOpening(a1.greeting, 'Extra hello {{first_name}} in {{state}}.', true, disclosure)
+      .replace('{{first_name}}', 'Example'));
+    assert.ok(!hydrated.opening.includes('Extra hello'));
 
     forceFixture();
     const bridgeCall = await runSimulatedViciBridgeCall(viciBridge!, {
@@ -194,7 +242,8 @@ async function main() {
     });
     assert.equal(bridgeCall.cdr.greetingId, 'fixture-lead');
     const bridgeGreeting = bridgeCall.cdr.transcript.find((entry) => entry.role === 'assistant')?.content || '';
-    assert.equal(bridgeGreeting, `${disclosure} Hello Robert, from the example team. Extra hello Robert in FL.`);
+    assert.equal(bridgeGreeting, composeOpening(a1.greeting, 'Extra hello {{first_name}} in {{state}}.', true, disclosure)
+      .replace('{{first_name}}', 'Robert'));
     assert.equal(listBridgeCallLogs(10).find((log) => log.id === bridgeCall.cdr.id)?.greetingId, 'fixture-lead');
     assert.match(exportBridgeLogsCsv(), /greeting_id/);
     assert.match(exportBridgeLogsCsv(), /fixture-lead/);
@@ -206,7 +255,7 @@ async function main() {
     const usedBefore = Number(conn.prepare('SELECT COUNT(*) AS n FROM greeting_rotation_used WHERE agent_id = ?').get('a1').n);
     const disabled = await session();
     assert.equal(disabled.started.greeting, null);
-    assert.equal(disabled.wire.agent.greeting, `${disclosure} Hello Example, from the example team.`);
+    assert.equal(disabled.opening, `${disclosure} Hello Example, from the example team.`);
     assert.equal(Number(conn.prepare('SELECT COUNT(*) AS n FROM greeting_rotation_used WHERE agent_id = ?').get('a1').n), usedBefore);
 
     disabledState.agents.find((a) => a.id === 'a1')!.randomGreetingEnabled = true;
@@ -216,7 +265,7 @@ async function main() {
       const fallback = await session();
       assert.equal(fallback.started.greeting, null);
       assert.ok(fallback.events.some((event) => event.type === 'warning' && event.code === 'GREETING_LIBRARY_UNAVAILABLE'));
-      assert.equal(fallback.wire.agent.greeting, `${disclosure} Hello Example, from the example team.`);
+      assert.equal(fallback.opening, `${disclosure} Hello Example, from the example team.`);
       assert.equal(fallback.log.greetingId, null);
     } finally { conn.exec('DROP TRIGGER greeting_test_failure'); }
     console.log('✓ Opt-out and rotation failure fall back to the configured opening without consuming a selection');

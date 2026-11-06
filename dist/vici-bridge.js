@@ -49,6 +49,7 @@ const ami_client_1 = require("./ami-client");
 const auth_guard_1 = require("./auth-guard");
 const call_recorder_1 = require("./call-recorder");
 const db_1 = require("./db");
+const opening_1 = require("./opening");
 const env_store_1 = require("./env-store");
 const webhook_executor_1 = require("./webhook-executor");
 const g711_1 = require("./g711");
@@ -397,6 +398,7 @@ class VicidialBridgeService {
                         return;
                     txPcmQueue = txPcmQueue.length > 0 ? Buffer.concat([txPcmQueue, pcm8kLe]) : Buffer.from(pcm8kLe);
                 },
+                pendingPlaybackMs: () => Math.ceil(txPcmQueue.length / 320) * 20,
                 bargeInFlush: () => {
                     txPcmQueue = Buffer.alloc(0);
                 },
@@ -748,6 +750,7 @@ class VicidialBridgeService {
                             return;
                         txPcmQueue = txPcmQueue.length > 0 ? Buffer.concat([txPcmQueue, pcm8kLe]) : Buffer.from(pcm8kLe);
                     },
+                    pendingPlaybackMs: () => Math.ceil(txPcmQueue.length / 320) * 20,
                     bargeInFlush: () => {
                         txPcmQueue = Buffer.alloc(0);
                         nextTalkspurtMarker = true;
@@ -871,6 +874,8 @@ class VicidialBridgeService {
         let keepAliveTimer = null;
         let comfortSilenceTimer = null;
         let deferredActionTimer = null;
+        let speechDrainTimer = null;
+        let openingGate = null;
         let lastCallerAudioAt = Date.now();
         let turns = 0;
         let lastUserTurnTs = null;
@@ -990,6 +995,12 @@ class VicidialBridgeService {
                 clearTimeout(deferredActionTimer);
                 deferredActionTimer = null;
             }
+            if (speechDrainTimer) {
+                clearTimeout(speechDrainTimer);
+                speechDrainTimer = null;
+            }
+            openingGate?.cancel();
+            openingGate = null;
             if (dgWs && (dgWs.readyState === ws_1.default.OPEN || dgWs.readyState === ws_1.default.CONNECTING)) {
                 try {
                     dgWs.close(1000, reason);
@@ -1110,7 +1121,7 @@ class VicidialBridgeService {
                 await finalizeSession('missing_deepgram_key');
                 return;
             }
-            selectedGreeting = (0, db_1.trySelectGreeting)(agent.id, agent.randomGreetingEnabled !== false);
+            selectedGreeting = (0, db_1.trySelectGreeting)(agent.id, agent.randomGreetingEnabled !== false, agent.greeting);
             if (selectedGreeting) {
                 addTranscript('system', `Selected greeting #${selectedGreeting.greeting_id} (${selectedGreeting.persona}; ${selectedGreeting.context}; ${selectedGreeting.tone}).`);
             }
@@ -1127,7 +1138,38 @@ class VicidialBridgeService {
                 output: { encoding: 'linear16', sample_rate: 8000, container: 'none' },
             };
             hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
-            const wireSettings = interpolateEnvPlaceholders(rawSettings);
+            let wireSettings;
+            let wireGreeting = '';
+            try {
+                const prepared = (0, opening_1.prepareDelayedOpening)(interpolateEnvPlaceholders(rawSettings));
+                wireSettings = prepared.settings;
+                wireGreeting = prepared.greeting;
+            }
+            catch (err) {
+                this.stats.lastError = err.message || 'Could not prepare the opening.';
+                addTranscript('system', `✗ ${this.stats.lastError}`);
+                await finalizeSession('opening_settings_error');
+                return;
+            }
+            openingGate = (0, opening_1.createOpeningGate)({
+                greeting: wireGreeting,
+                sendOpening: (message) => {
+                    if (!closed && dgWs?.readyState === ws_1.default.OPEN) {
+                        dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
+                    }
+                },
+                playAudio: (pcm8k) => {
+                    if (closed)
+                        return;
+                    if (awaitingFirstAudioForTurn && lastUserTurnTs !== null) {
+                        ttfbSamples.push(Math.max(1, Date.now() - lastUserTurnTs));
+                        awaitingFirstAudioForTurn = false;
+                    }
+                    recorder.recordBotPcm8k(pcm8k);
+                    opts.hooks.enqueueBotPcm8k(pcm8k);
+                },
+                onOverflow: () => addTranscript('system', 'Early provider audio exceeded the opening buffer and was dropped.'),
+            });
             updateState('connecting_deepgram');
             dgWs = new ws_1.default(targetUrl, {
                 headers: dgKey ? { Authorization: `Token ${dgKey}` } : {},
@@ -1158,12 +1200,7 @@ class VicidialBridgeService {
                         return;
                     }
                     const pcm8k = Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
-                    if (awaitingFirstAudioForTurn && lastUserTurnTs !== null) {
-                        ttfbSamples.push(Math.max(1, Date.now() - lastUserTurnTs));
-                        awaitingFirstAudioForTurn = false;
-                    }
-                    recorder.recordBotPcm8k(pcm8k);
-                    opts.hooks.enqueueBotPcm8k(pcm8k);
+                    openingGate?.audio(pcm8k);
                     return;
                 }
                 let evt;
@@ -1179,7 +1216,10 @@ class VicidialBridgeService {
                         break;
                     }
                     case 'SettingsApplied': {
+                        if (settingsApplied)
+                            break;
                         settingsApplied = true;
+                        openingGate?.start();
                         lastCallerAudioAt = Date.now();
                         updateState('listening');
                         while (preSettingsAudioQueue.length > 0) {
@@ -1201,6 +1241,7 @@ class VicidialBridgeService {
                         break;
                     }
                     case 'UserStartedSpeaking': {
+                        openingGate?.userStarted();
                         if (agent.behavior?.bargeIn !== 'off') {
                             // Instant <20ms barge-in flush on Asterisk AudioSocket / RTP queue + gate trailing TTS chunks!
                             suppressStaleBotAudio = true;
@@ -1213,34 +1254,55 @@ class VicidialBridgeService {
                     case 'ConversationText': {
                         const role = evt.role === 'user' ? 'user' : 'assistant';
                         if (role === 'user') {
+                            openingGate?.userTurn();
                             turns += 1;
                             lastUserTurnTs = Date.now();
                             awaitingFirstAudioForTurn = true;
+                        }
+                        else {
+                            openingGate?.agentTurn();
                         }
                         suppressStaleBotAudio = false;
                         addTranscript(role, String(evt.content || ''));
                         break;
                     }
                     case 'AgentThinking': {
+                        openingGate?.agentTurn();
                         suppressStaleBotAudio = false;
                         updateState('thinking');
                         break;
                     }
                     case 'AgentStartedSpeaking': {
+                        openingGate?.agentTurn();
                         suppressStaleBotAudio = false;
                         updateState('bot_speaking');
                         break;
                     }
                     case 'AgentAudioDone': {
-                        updateState('listening');
-                        if (pendingTransferArgs) {
-                            const args = pendingTransferArgs;
-                            pendingTransferArgs = null;
-                            await executeTransferAction(args);
-                        }
-                        else if (awaitingHangupAfterSpeech) {
-                            await finalizeSession('bot_end_call');
-                        }
+                        openingGate?.afterRelease(() => {
+                            if (closed)
+                                return;
+                            updateState('listening');
+                            if (!pendingTransferArgs && !awaitingHangupAfterSpeech)
+                                return;
+                            // AgentAudioDone means the provider finished generating audio,
+                            // not that our paced SIP/AudioSocket queue has reached the caller.
+                            if (speechDrainTimer)
+                                clearTimeout(speechDrainTimer);
+                            speechDrainTimer = setTimeout(() => {
+                                speechDrainTimer = null;
+                                if (closed)
+                                    return;
+                                if (pendingTransferArgs) {
+                                    const args = pendingTransferArgs;
+                                    pendingTransferArgs = null;
+                                    executeTransferAction(args).catch(() => { });
+                                }
+                                else if (awaitingHangupAfterSpeech) {
+                                    finalizeSession('bot_end_call').catch(() => { });
+                                }
+                            }, Math.min(opts.hooks.pendingPlaybackMs() + 40, 9000));
+                        });
                         break;
                     }
                     case 'FunctionCallCancelled': {
@@ -1397,6 +1459,14 @@ class VicidialBridgeService {
                         }
                         break;
                     }
+                    case 'InjectionRefused': {
+                        addTranscript('system', 'Deepgram declined an injected message while a turn was active; playback was not confirmed.');
+                        break;
+                    }
+                    case 'Warning': {
+                        addTranscript('system', `Deepgram warning ${evt.code || 'WARNING'}: ${evt.description || evt.message || 'No details provided.'}`);
+                        break;
+                    }
                     case 'Error': {
                         this.stats.lastError = `${evt.code || 'DG_ERROR'}: ${evt.description || JSON.stringify(evt)}`;
                         addTranscript('system', `✗ Deepgram Error: ${this.stats.lastError}`);
@@ -1438,6 +1508,7 @@ class VicidialBridgeService {
                     return;
                 addTranscript('system', `Caller pressed keypad DTMF '${digit}'`);
                 if (settingsApplied && dgWs && dgWs.readyState === ws_1.default.OPEN) {
+                    openingGate?.userTurn();
                     dgWs.send(JSON.stringify({
                         type: 'InjectUserMessage',
                         content: `[Caller pressed keypad digit ${digit}]`,

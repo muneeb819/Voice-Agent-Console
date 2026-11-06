@@ -1047,7 +1047,7 @@
         mode: 'both',
         language: 'en',
         greeting:
-          "Hey there! This is Nova on the line — how are you doing today? Feel free to ask me anything at all, I'm right here to help!",
+          "Hey there! This is Nova on the line. How are you doing today?",
         prompt:
           'You are Nova, a warm, witty AI voice assistant and concierge.\n' +
           'Core Capabilities:\n' +
@@ -1059,7 +1059,7 @@
           '6) Live Specialist Transfer: Whenever the caller asks to speak with a live specialist, closer, or supervisor, or confirms qualification for a benefit/coverage review, call set_disposition with code "XFER" and call transfer_to_live_agent.\n' +
           '7) Do-Not-Call (DNC) & Call Control: If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with code "DNC", and call end_call immediately. If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.',
         acceptViciCalls: true,
-        injectCampaignDisclosure: true,
+        injectCampaignDisclosure: false,
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
@@ -1122,6 +1122,12 @@
     }
 
     for (const ag of state.agents) {
+      const migratedOpening = window.VacOpening.migrateStockOpening(ag.greeting);
+      if (migratedOpening !== ag.greeting) { ag.greeting = migratedOpening; mutated = true; }
+      if (typeof ag.injectCampaignDisclosure !== 'boolean') {
+        ag.injectCampaignDisclosure = false;
+        mutated = true;
+      }
       if (typeof ag.randomGreetingEnabled !== 'boolean') {
         ag.randomGreetingEnabled = true;
         mutated = true;
@@ -1414,20 +1420,28 @@
       </details>`;
   }
 
-  function drawStaticGreeting(previous, rows) {
+  function drawStaticGreeting(previous, rows, savedOpening) {
     const ids = rows.map((row) => row.greeting_id);
+    const byId = new Map(rows.map((row) => [row.greeting_id, row]));
     const fingerprint = ids.join('\u001f');
     const validIds = new Set(ids);
     const sameCatalog = previous?.fingerprint === fingerprint && Array.isArray(previous.remaining);
     let remaining = sameCatalog ? [...new Set(previous.remaining.filter((id) => validIds.has(id)))] : [];
     const newCycle = remaining.length === 0;
     if (newCycle) remaining = ids.slice();
-    const candidates = newCycle && remaining.length > 1 && previous?.last
+    let candidates = newCycle && remaining.length > 1 && previous?.last
       ? remaining.filter((id) => id !== previous.last) : remaining;
+    const lastRow = byId.get(previous?.last);
+    if (savedOpening && lastRow) {
+      const prior = window.VacOpening.composeOpening(savedOpening, lastRow.greeting_text, false, '');
+      const different = candidates.filter((id) =>
+        window.VacOpening.composeOpening(savedOpening, byId.get(id).greeting_text, false, '') !== prior);
+      if (different.length) candidates = different;
+    }
     const selectedId = candidates[Math.floor(Math.random() * candidates.length)];
     remaining.splice(remaining.indexOf(selectedId), 1);
     return {
-      row: rows.find((row) => row.greeting_id === selectedId),
+      row: byId.get(selectedId),
       state: { fingerprint, remaining, last: selectedId },
     };
   }
@@ -1458,7 +1472,7 @@
     });
   }
 
-  async function selectStaticGreeting(agentId, rows) {
+  async function selectStaticGreeting(agentId, rows, savedOpening) {
     if (!rows.length) return { row: null, storageWarning: false };
     let db;
     try {
@@ -1469,7 +1483,7 @@
         const request = store.get(agentId);
         let chosen = null;
         request.onsuccess = () => {
-          const draw = drawStaticGreeting(request.result, rows);
+          const draw = drawStaticGreeting(request.result, rows, savedOpening);
           chosen = draw.row;
           store.put(draw.state, agentId);
         };
@@ -1480,7 +1494,7 @@
       return { row, storageWarning: false };
     } catch {
       // In private/blocked storage, preserve a no-repeat cycle in this tab only.
-      const draw = drawStaticGreeting(fallbackGreetingRotations.get(agentId), rows);
+      const draw = drawStaticGreeting(fallbackGreetingRotations.get(agentId), rows, savedOpening);
       fallbackGreetingRotations.set(agentId, draw.state);
       return { row: draw.row, storageWarning: true };
     } finally {
@@ -2121,17 +2135,10 @@
       speak.endpoint = { url: tp.endpoint.trim(), headers: th.ok ? th.value : {} };
     }
 
-    let finalGreeting = (agent.greeting || '').trim();
-    if (
-      agent.injectCampaignDisclosure &&
-      linkedCampaign?.disclosure?.trim() &&
-      !finalGreeting.toLowerCase().includes(linkedCampaign.disclosure.trim().toLowerCase())
-    ) {
-      finalGreeting = `${linkedCampaign.disclosure.trim()} ${finalGreeting}`.trim();
-    }
-    if (agent.randomGreetingEnabled !== false && String(greetingText || '').trim()) {
-      finalGreeting = `${finalGreeting} ${String(greetingText).trim()}`.trim();
-    }
+    const finalGreeting = window.VacOpening.composeOpening(
+      agent.greeting, agent.randomGreetingEnabled !== false ? greetingText : '',
+      agent.injectCampaignDisclosure, linkedCampaign?.disclosure || ''
+    );
 
     return {
       type: 'Settings',
@@ -2357,7 +2364,7 @@
       `; === Call Lifecycle Executed by Bridge Server ===`,
       `; 1. On Connect : Extracts 20-char caller_code & lead_id from VICIdial CALLERID(name) (VmmddhhmmssLLLLLLLLL)`,
       `; 2. Hydrate    : GET ${nonAgentUrl}?function=lead_all_info (fallback: lead_field_info) &user=${v.apiUser}&source=${v.source}`,
-      `; 3. Converse   : Opens Deepgram Voice Agent WebSocket (8000 Hz) with hydrated lead prompt + campaign disclosure`,
+      `; 3. Converse   : Opens Deepgram Voice Agent WebSocket (8000 Hz) with hydrated lead prompt + any enabled campaign notice`,
       `; 4. Transfer   : Saves AI qualification notes via update_lead, then GET ${agentApiUrl}?function=ra_call_control&stage=INGROUPTRANSFER|EXTENSIONTRANSFER`,
       `; 5. Dispo/DNC  : Updates status via ${nonAgentUrl} (update_lead + add_dnc_phone) & releases Remote Agent via ${agentApiUrl} (stage=HANGUP)`,
       ``,
@@ -2895,7 +2902,8 @@
     updateSimStatusDom();
     updateSimKpisDom();
     updatePersonaStageDom();
-    if (sim.ws && !sim.ws._directDg && sim.ws.readyState === WebSocket.OPEN) {
+    if (sim.ws?._directDg) sim.ws.markUserStarted();
+    else if (sim.ws && sim.ws.readyState === WebSocket.OPEN) {
       try {
         sim.ws.send(JSON.stringify({ type: 'client_barge_in' }));
       } catch {}
@@ -3651,7 +3659,7 @@
     if (agent.randomGreetingEnabled !== false) {
       const rows = await ensureGreetingCatalogLoaded();
       if (attemptId !== sim.sessionAttemptId || !sim.connecting) return;
-      const selected = await selectStaticGreeting(agent.id, rows);
+      const selected = await selectStaticGreeting(agent.id, rows, agent.greeting);
       if (attemptId !== sim.sessionAttemptId || !sim.connecting) return;
       sim.selectedGreeting = selected.row || null;
       if (!sim.selectedGreeting) {
@@ -3704,6 +3712,13 @@
     }
     settings.agent.think.prompt += testConstraints;
     sim.sessionSettings = settings;
+    let prepared;
+    try { prepared = window.VacOpening.prepareDelayedOpening(settings); }
+    catch (err) {
+      sim.lastError = err.message || 'Could not prepare the opening.';
+      finishSimulatorSession('opening_settings_error');
+      return;
+    }
 
     const dgWs = new WebSocket('wss://agent.deepgram.com/v1/agent/converse', ['token', dgKey]);
     dgWs.binaryType = 'arraybuffer';
@@ -3718,6 +3733,29 @@
     let pendingEndId = null;
     const cancelledFunctionIds = new Set();
     let endTimer = null;
+    const openingGate = window.VacOpening.createOpeningGate({
+      greeting: prepared.greeting,
+      sendOpening(message) {
+        if (attemptId === sim.sessionAttemptId && dgWs.readyState === WebSocket.OPEN) {
+          dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
+        }
+      },
+      playAudio(chunk) {
+        if (awaitingFirstAudio && lastUserTurnAt > 0) {
+          awaitingFirstAudio = false;
+          const ttfb = Date.now() - lastUserTurnAt;
+          ttfbArr.push(ttfb);
+          sim.lastTtfbMs = ttfb;
+          sim.avgTtfbMs = Math.round(ttfbArr.reduce((a, b) => a + b, 0) / ttfbArr.length);
+          updateSimKpisDom();
+        }
+        enqueuePcm16Playback(chunk);
+      },
+      onOverflow() {
+        sim.events.push({ kind: 'msg', role: 'system', content: 'Early provider audio exceeded the opening buffer and was dropped.' });
+        renderSimFeedDom();
+      },
+    });
     const connectTimer = setTimeout(() => {
       if (attemptId === sim.sessionAttemptId && !settingsApplied) {
         sim.lastError = 'Deepgram did not confirm the session settings in time.';
@@ -3742,17 +3780,20 @@
       },
       injectText(text) {
         if (dgWs.readyState === WebSocket.OPEN && settingsApplied) {
+          openingGate.userTurn();
           lastUserTurnAt = Date.now();
           awaitingFirstAudio = true;
           dgWs.send(JSON.stringify({ type: 'InjectUserMessage', content: text }));
         }
       },
+      markUserStarted() { openingGate.userStarted(); },
       close() {
         endDirect('user_hangup');
       },
     };
 
     const endDirect = (reason) => {
+      openingGate.cancel();
       if (silenceTimer) { clearInterval(silenceTimer); silenceTimer = null; }
       if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
       if (endTimer) { clearTimeout(endTimer); endTimer = null; }
@@ -3764,15 +3805,7 @@
     dgWs.onmessage = (ev) => {
       if (attemptId !== sim.sessionAttemptId) return;
       if (ev.data instanceof ArrayBuffer) {
-        if (awaitingFirstAudio && lastUserTurnAt > 0) {
-          awaitingFirstAudio = false;
-          const ttfb = Date.now() - lastUserTurnAt;
-          ttfbArr.push(ttfb);
-          sim.lastTtfbMs = ttfb;
-          sim.avgTtfbMs = Math.round(ttfbArr.reduce((a, b) => a + b, 0) / ttfbArr.length);
-          updateSimKpisDom();
-        }
-        enqueuePcm16Playback(ev.data);
+        openingGate.audio(ev.data);
         return;
       }
 
@@ -3782,9 +3815,11 @@
       if (msg.type === 'Welcome') {
         sim.statusText = 'Sending Agent Settings to Deepgram…';
         updateSimStatusDom();
-        dgWs.send(JSON.stringify(settings));
+        dgWs.send(JSON.stringify(prepared.settings));
       } else if (msg.type === 'SettingsApplied') {
+        if (settingsApplied) return;
         settingsApplied = true;
+        openingGate.start();
         clearTimeout(connectTimer);
         sim.connecting = false;
         sim.active = true;
@@ -3818,6 +3853,7 @@
         }, 5000);
         if (tab === 'test') render();
       } else if (msg.type === 'UserStartedSpeaking') {
+        openingGate.userStarted();
         if ((agent.behavior?.bargeIn || 'instant') !== 'off') {
           if (Date.now() - sim.lastLocalBargeInAt > 500) {
             triggerInstantBargeIn('Deepgram VAD');
@@ -3827,30 +3863,37 @@
           }
         }
       } else if (msg.type === 'AgentThinking') {
+        openingGate.agentTurn();
         sim.bargeInSuppressAudio = false;
         sim.agentState = 'thinking';
         sim.statusText = 'LLM Thinking…';
         applyPersonaExpressionAndGesture('think', '🧠 Agent processing', 'think', '💭', 'Decorative animation');
         updateSimStatusDom();
       } else if (msg.type === 'AgentStartedSpeaking') {
+        openingGate.agentTurn();
         sim.bargeInSuppressAudio = false;
         sim.agentState = 'speaking';
         sim.statusText = 'Bot Speaking…';
         updateSimStatusDom();
         updatePersonaStageDom();
       } else if (msg.type === 'AgentAudioDone') {
-        if (endRequested) { endDirect('bot_end_call'); return; }
-        sim.agentState = 'listening';
-        sim.statusText = 'Listening for Caller…';
-        applyPersonaExpressionAndGesture('smile', '🙂 Ready & Attentive', 'ready', '✨', 'Open Turn');
-        updateSimStatusDom();
+        openingGate.afterRelease(() => {
+          if (attemptId !== sim.sessionAttemptId) return;
+          if (endRequested) { endDirect('bot_end_call'); return; }
+          sim.agentState = 'listening';
+          sim.statusText = 'Listening for Caller…';
+          applyPersonaExpressionAndGesture('smile', '🙂 Ready & Attentive', 'ready', '✨', 'Open Turn');
+          updateSimStatusDom();
+        });
       } else if (msg.type === 'ConversationText') {
         sim.bargeInSuppressAudio = false;
         if (msg.role === 'user') {
+          openingGate.userTurn();
           sim.turns += 1;
           lastUserTurnAt = Date.now();
           awaitingFirstAudio = true;
         } else if (msg.role === 'assistant') {
+          openingGate.agentTurn();
           classifyBotUtterancePresence(msg.content);
         }
         sim.events.push({ kind: 'msg', role: msg.role, content: msg.content });
@@ -5096,12 +5139,14 @@
             ['both', 'Both Outbound & Inbound'],
           ])}
           ${F('Bridge VICIdial call-connect & automatic lead hydration (recommended — replaces hallucinated LLM accept tool)', 'a.acceptViciCalls', 'chk')}
-          ${F('Auto-prepend linked Campaign Recording Disclosure to spoken greeting', 'a.injectCampaignDisclosure', 'chk')}
-          ${F('Saved opening (spoken when the session opens)', 'a.greeting', 'ta')}
-          ${F('Randomly add an imported greeting for this bot', 'a.randomGreetingEnabled', 'chk')}
-          <div class="note wn" style="margin:5px 0">The selected text is added after the saved opening and configured disclosure. Entries may contain extra questions, meeting language or time-specific phrases; review them before live calls. Persona and tone are labels, not guaranteed vocal delivery. The settings preview below shows only the saved opening.</div>
+          ${F('Include the linked campaign recording notice (optional)', 'a.injectCampaignDisclosure', 'chk')}
+          <div class="note wn">This controls the spoken campaign notice only; it does not turn off recording. Obtain any consent required for your calls. Existing notice settings are preserved. Notice text written inside the saved opening is not removed.</div>
+          ${F('Saved opening and identity (keep it brief)', 'a.greeting', 'ta')}
+          ${F('Vary this opening using the imported greeting library', 'a.randomGreetingEnabled', 'chk')}
+          <div class="note" style="margin:5px 0">Each call uses the saved opening, not an additional full greeting. A library entry varies its salutation or general question without inventing an identity; matching consecutive wording is avoided when another unused option is available. The 1,100 original entries remain below. Output is held for at least 0.5 seconds after the provider is ready; the provider is instructed to respond if the caller speaks first.</div>
           <div id="greeting-catalog-panel">${renderGreetingCatalog()}</div>
           ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
+          <div class="note wn">Before calling, verify your identity and every factual or benefit claim. Example Medicare / Food &amp; OTC scripts are unverified; review them and any required consent or disclosures for your campaign.</div>
 
           <h2>⚡ Barge-In, Expressions, Gestures, Speed &amp; General Q&amp;A</h2>
           <div class="note">Service provider and model are controlled globally from Plug-Ins. This agent can tune its conversation behavior, while all agents use the same saved LLM, STT, and TTS channels.</div>
@@ -5207,7 +5252,8 @@
         </div>
 
         <div class="card sticky">
-          <h2>Deepgram Settings Payload (Live)</h2>
+          <h2>Deepgram Settings Preview</h2>
+          <div class="note">The preview includes the opening. If no caller turn is detected, it is requested separately after the wait rather than as an automatic provider greeting.</div>
           <pre id="pv"></pre>
           <h2>Quick Agent Pre-Flight</h2>
           <div id="agent-quick-ck"></div>
@@ -5510,6 +5556,11 @@
           </div>
 
           <label class="chk-label" style="margin-top:10px">
+            <input type="checkbox" id="sim-disclosure" data-p="a.injectCampaignDisclosure" style="width:auto" ${a.injectCampaignDisclosure ? 'checked' : ''} ${sim.active || sim.connecting ? 'disabled' : ''}>
+            <span>Include this agent's campaign recording notice (optional)</span>
+          </label>
+          <div class="note wn" style="margin-top:3px">Uncheck to omit the linked campaign notice from the next test; Save to retain your choice for this agent. This does not disable recording. Obtain required consent. A notice written directly in the saved opening is still spoken. Verify the agent's identity and factual claims; the example Medicare / Food &amp; OTC scripts are unverified.</div>
+          <label class="chk-label" style="margin-top:10px">
             <input type="checkbox" id="sim-allow-webhooks" style="width:auto" ${sim.allowWebhooks ? 'checked' : ''} ${serverlessCloudMode || sim.active || sim.connecting ? 'disabled' : ''}>
             <span>Allow configured custom webhooks for this test <b>(real external effects possible)</b></span>
           </label>
@@ -5644,7 +5695,7 @@
           <div id="test-ck">${renderCheckList(validateAgentLocal(a))}</div>
           ${
             sim.sessionSettings
-              ? `<h2>Hydrated Session Settings Sent</h2><pre style="max-height:320px">${esc(JSON.stringify(sim.sessionSettings, null, 2))}</pre>`
+              ? `<h2>Hydrated Session Preview</h2><div class="note">If no caller turn is detected, the opening is requested separately after the wait, not as the provider's automatic greeting.</div><pre style="max-height:320px">${esc(JSON.stringify(sim.sessionSettings, null, 2))}</pre>`
               : ''
           }
         </div>
@@ -6083,14 +6134,28 @@
         const localRaw = window.localStorage?.getItem(CLOUD_STATE_KEY);
         if (localRaw) loadedState = JSON.parse(localRaw);
       } catch {}
+      let shippedState = null;
+      if (!loadedState || loadedState.agents?.some((ag) =>
+        String(ag.prompt || '').includes('You already asked if they have Medicare Part A and B to release their Food & OTC card.'))) {
+        try {
+          const staticRes = await fetch('./default-state.json', { cache: 'no-store' });
+          if (staticRes.ok) shippedState = await staticRes.json();
+        } catch {}
+      }
       if (!loadedState) {
-        const staticRes = await fetch('./default-state.json');
-        loadedState = await staticRes.json();
+        if (!shippedState) throw new Error('Could not load the bundled console defaults.');
+        loadedState = shippedState;
       }
       S = loadedState;
+      const stockMedicarePrompt = shippedState?.agents?.find((ag) => ag.id === 'a_medicare')?.prompt || '';
+      let mig3 = false;
+      for (const ag of S.agents || []) {
+        const migrated = window.VacOpening.migrateStockMedicarePrompt(ag.prompt, stockMedicarePrompt);
+        if (migrated !== ag.prompt) { ag.prompt = migrated; mig3 = true; }
+      }
       const mig1 = enforceDeepgramOnlyLlms(S);
       const mig2 = upgradeRealtimeAgentFeatures(S);
-      if (mig1 || mig2) {
+      if (mig1 || mig2 || mig3) {
         try {
           window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
         } catch {}
@@ -7604,7 +7669,10 @@
       } else {
         const clone = JSON.parse(JSON.stringify(act === 'dup' ? currentObj : arr[0]));
         clone.id = uid(kind === 'a' ? 'ag' : 'cp');
-        if (kind === 'a' && act === 'new') clone.randomGreetingEnabled = true;
+        if (kind === 'a' && act === 'new') {
+          clone.randomGreetingEnabled = true;
+          clone.injectCampaignDisclosure = false;
+        }
         const nextNum = arr.length + 1;
         clone.name = act === 'dup' ? `${currentObj.name} (Copy)` : `Untitled ${kind === 'a' ? 'Agent' : 'Campaign'} ${nextNum}`;
         arr.push(clone);

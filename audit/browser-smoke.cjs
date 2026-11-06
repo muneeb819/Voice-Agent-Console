@@ -240,6 +240,31 @@ async function run() {
     await page.check('[data-p="a.randomGreetingEnabled"]');
     await Promise.all([page.waitForResponse((r) => r.url().endsWith('/api/state') && r.request().method() === 'PUT' && r.ok()), page.click('#sv')]);
   });
+  await check('Recording notice is optional, easy to change from Live Bot, and persists per agent', async () => {
+    await page.locator('#nav [data-t="test"]').click();
+    await page.waitForSelector('#sim-disclosure');
+    const editedAgentId = await page.locator('#sel-a').inputValue();
+    const otherAgentId = await page.locator('#sel-a option').evaluateAll((items, id) => items.find((item) => item.value !== id).value, editedAgentId);
+    assert.equal(await page.locator('#sim-disclosure').isChecked(), false, 'New/default agents omit the stock notice');
+    assert.match(await page.locator('main').innerText(), /does not disable recording/i);
+    await page.check('#sim-disclosure');
+    await Promise.all([page.waitForResponse((r) => r.url().endsWith('/api/state') && r.request().method() === 'PUT' && r.ok()), page.click('#sv')]);
+    // Tab and agent selection are not persisted in the URL. Reopen the same
+    // agent explicitly to verify the saved setting rather than the default bot.
+    await page.goto(`${base}/?tab=test`);
+    await page.waitForSelector('#sim-disclosure');
+    await page.selectOption('#sel-a', editedAgentId);
+    assert.equal(await page.locator('#sim-disclosure').isChecked(), true, 'Explicit opt-in survives reload');
+    await page.selectOption('#sel-a', otherAgentId);
+    assert.equal(await page.locator('#sim-disclosure').isChecked(), false, 'Another agent remains unchanged');
+    await page.selectOption('#sel-a', editedAgentId);
+    await page.uncheck('#sim-disclosure');
+    await Promise.all([page.waitForResponse((r) => r.url().endsWith('/api/state') && r.request().method() === 'PUT' && r.ok()), page.click('#sv')]);
+    await page.goto(`${base}/?tab=test`);
+    await page.waitForSelector('#sim-disclosure');
+    await page.selectOption('#sel-a', editedAgentId);
+    assert.equal(await page.locator('#sim-disclosure').isChecked(), false, 'Opt-out survives reload');
+  });
   await check('Theme, exposure and API-key modals', async () => {
     await page.click('#btn-theme');
     await page.waitForSelector('#theme-modal:not([hidden])');

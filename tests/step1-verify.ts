@@ -220,10 +220,12 @@ async function run() {
 
   await check('11. Bug Fix Regression: Campaign disclosure + dispo enum + multi-campaign Vici config + legacy vac-v2 migration', () => {
     const st = configureTestServices(createDefaultState());
+    assert.equal(st.agents[0].injectCampaignDisclosure, false);
+    st.agents[0].injectCampaignDisclosure = true;
     const settings = buildDeepgramSettings(st, st.agents[0]);
     assert.ok(
       settings.agent.greeting.startsWith('This call may be recorded'),
-      'Campaign disclosure should prepend to greeting'
+      'The opted-in campaign disclosure should prepend to the opening'
     );
     const dispoFn = settings.agent.think.functions.find((f: any) => f.name === 'set_disposition');
     assert.deepStrictEqual(dispoFn.parameters.properties.code.enum, ['XFER', 'NI', 'DNC', 'NA', 'CALLBK', 'DEC']);

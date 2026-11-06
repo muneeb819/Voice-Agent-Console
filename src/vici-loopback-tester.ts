@@ -251,12 +251,13 @@ export async function runSimulatedViciBridgeCall(
         const msg = JSON.parse(raw.toString());
         if (msg.type === 'Settings') {
           ws.send(JSON.stringify({ type: 'SettingsApplied' }));
+        } else if (msg.type === 'InjectAgentMessage' && typeof msg.message === 'string') {
           ws.send(JSON.stringify({ type: 'AgentStartedSpeaking' }));
           ws.send(
             JSON.stringify({
               type: 'ConversationText',
               role: 'assistant',
-              content: msg.agent?.greeting || 'Hello Robert, this is Sarah!',
+              content: msg.message,
             })
           );
           // Send 4 frames (1280 bytes = 80ms) of 8kHz bot greeting tone

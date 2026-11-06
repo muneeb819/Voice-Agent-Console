@@ -13,6 +13,7 @@ exports.validateState = validateState;
 exports.diffStates = diffStates;
 exports.generateViciConfig = generateViciConfig;
 const defaults_1 = require("./defaults");
+const opening_1 = require("./opening");
 function isPlainObject(val) {
     return typeof val === 'object' && val !== null && !Array.isArray(val);
 }
@@ -302,18 +303,11 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
             headers: hdrs.ok ? hdrs.value : {},
         };
     }
-    // Greeting + optional Campaign Recording Disclosure injection
-    let finalGreeting = agent.greeting.trim();
-    if (agent.injectCampaignDisclosure &&
-        linkedCampaign?.disclosure?.trim() &&
-        !finalGreeting.toLowerCase().includes(linkedCampaign.disclosure.trim().toLowerCase())) {
-        finalGreeting = `${linkedCampaign.disclosure.trim()} ${finalGreeting}`.trim();
-    }
-    // Call/session code chooses once. Previews remain deterministic and never
-    // consume the rotation. Preserve the saved introduction and disclosure.
-    const variation = agent.randomGreetingEnabled !== false ? (options?.greetingText || '').trim() : '';
-    if (variation)
-        finalGreeting = `${finalGreeting} ${variation}`.trim();
+    // The saved opening supplies the identity. A library draw varies its short
+    // salutation/question instead of appending a second, unrelated greeting.
+    // Previews have no draw and therefore never consume the rotation.
+    const variation = agent.randomGreetingEnabled !== false ? (options?.greetingText || '') : '';
+    const finalGreeting = (0, opening_1.composeOpening)(agent.greeting, variation, agent.injectCampaignDisclosure, linkedCampaign?.disclosure || '');
     return {
         type: 'Settings',
         tags: ['voice-console', agent.mode, ...(linkedCampaign?.viciCampaign ? [linkedCampaign.viciCampaign] : [])],

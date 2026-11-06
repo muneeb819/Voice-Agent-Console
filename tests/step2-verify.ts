@@ -292,7 +292,8 @@ async function run() {
       assert.strictEqual(endedEvt.disposition, null);
       assert.strictEqual(endedEvt.transferredTo, null);
       assert.strictEqual(clientAudioBytes, 960, 'Expected 960 bytes of binary TTS PCM16 audio');
-      assert.strictEqual(receivedBinaryFrames.length, 2, 'Expected both pre- and post-SettingsApplied mic frames');
+      assert.strictEqual(receivedBinaryFrames.filter((frame) => frame.some((byte) => byte !== 0)).length, 2,
+        'Expected both pre- and post-SettingsApplied mic frames in addition to comfort silence');
 
       // Ensure cancelled speculative function was NOT answered
       assert.ok(

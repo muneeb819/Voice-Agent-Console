@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import WebSocket, { WebSocketServer } from 'ws';
 import { getConsoleState, saveSimulatorCallLog, SimulatorCallLogRecord, trySelectGreeting } from './db';
 import { GreetingRecord } from './greetings';
+import { createOpeningGate, OpeningGate, prepareDelayedOpening } from './opening';
 import { normalizeState } from './defaults';
 import { getSecret, MANAGED_SECRET_KEYS } from './env-store';
 import { buildDeepgramSettings } from './settings-builder';
@@ -113,6 +114,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
     let comfortSilenceTimer: NodeJS.Timeout | null = null;
     let pendingEndTimer: NodeJS.Timeout | null = null;
     let connectTimer: NodeJS.Timeout | null = null;
+    let openingGate: OpeningGate | null = null;
 
     let activeState: ConsoleState | null = null;
     let activeAgent: Agent | null = null;
@@ -332,6 +334,8 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         pendingEndTimer = null;
       }
       if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
+      openingGate?.cancel();
+      openingGate = null;
       for (const controller of activeFunctionAborts.values()) controller.abort();
       activeFunctionAborts.clear();
 
@@ -436,6 +440,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
       }
 
       if (msg.type === 'client_barge_in') {
+        openingGate?.userStarted();
         if (activeAgent?.behavior?.bargeIn !== 'off') {
           suppressStaleAgentAudio = true;
           sendClientJson({ type: 'barge_in', source: 'client_vad' });
@@ -449,7 +454,8 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         if (!content) return;
         suppressStaleAgentAudio = false;
         if (dgWs && dgWs.readyState === WebSocket.OPEN && settingsApplied) {
-          dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', content }));
+          openingGate?.agentTurn();
+          dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message: content }));
         }
         return;
       }
@@ -463,6 +469,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         if (!settingsApplied) {
           pendingInjectedMessages.push(injectPayload);
         } else if (dgWs && dgWs.readyState === WebSocket.OPEN) {
+          openingGate?.userTurn();
           lastUserTurnTs = Date.now();
           awaitingFirstAudioForTurn = true;
           dgWs.send(injectPayload);
@@ -551,7 +558,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           return;
         }
 
-        selectedGreeting = trySelectGreeting(activeAgent.id, activeAgent.randomGreetingEnabled !== false);
+        selectedGreeting = trySelectGreeting(activeAgent.id, activeAgent.randomGreetingEnabled !== false, activeAgent.greeting);
         if (activeAgent.randomGreetingEnabled !== false && !selectedGreeting) {
           sendClientJson({ type: 'warning', code: 'GREETING_LIBRARY_UNAVAILABLE',
             message: 'The greeting library is unavailable; this test will use the configured opening.' });
@@ -593,7 +600,27 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         // Browser tests never hand a webhook endpoint to Deepgram. If the operator
         // opts in, the authenticated backend executes it only after turn confirmation.
         for (const fn of rawSettings.agent.think.functions || []) fn.defer_until_eot = true;
-        const wireSettings = interpolateEnvPlaceholders(rawSettings);
+        let wireSettings: any;
+        let wireGreeting = '';
+        try {
+          const prepared = prepareDelayedOpening(interpolateEnvPlaceholders(rawSettings));
+          wireSettings = prepared.settings;
+          wireGreeting = prepared.greeting;
+        } catch (err: any) {
+          sendFatalError('PROMPT_TOO_LONG', err.message || 'Could not prepare the opening.');
+          finalizeCall('prompt_too_long');
+          return;
+        }
+        openingGate = createOpeningGate({
+          greeting: wireGreeting,
+          sendOpening: (message) => {
+            if (!closed && dgWs?.readyState === WebSocket.OPEN) {
+              dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
+            }
+          },
+          playAudio: sendClientAudio,
+          onOverflow: () => sendClientJson({ type: 'warning', message: 'Early provider audio exceeded the opening buffer and was dropped.' }),
+        });
 
         const targetUrl = customAgentUrl || 'wss://agent.deepgram.com/v1/agent/converse';
         const wsHeaders: Record<string, string> = {};
@@ -658,7 +685,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
               return;
             }
             const audioBuf = Buffer.isBuffer(dgRaw) ? dgRaw : Buffer.from(dgRaw as ArrayBuffer);
-            sendClientAudio(audioBuf);
+            openingGate?.audio(audioBuf);
             return;
           }
 
@@ -679,6 +706,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             case 'SettingsApplied': {
               if (settingsApplied) break;
               settingsApplied = true;
+              openingGate?.start();
               if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
               lastBrowserAudioAt = Date.now();
               sendClientJson({
@@ -706,6 +734,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
               }
               while (pendingInjectedMessages.length > 0) {
                 const injected = pendingInjectedMessages.shift()!;
+                openingGate?.userTurn();
                 lastUserTurnTs = Date.now();
                 awaitingFirstAudioForTurn = true;
                 if (dgWs?.readyState === WebSocket.OPEN) dgWs.send(injected);
@@ -729,6 +758,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             }
 
             case 'UserStartedSpeaking': {
+              openingGate?.userStarted();
               if (activeAgent?.behavior?.bargeIn !== 'off') {
                 suppressStaleAgentAudio = true;
                 sendClientJson({ type: 'barge_in', source: 'deepgram_server' });
@@ -740,11 +770,13 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             case 'ConversationText': {
               const role = evt.role === 'user' ? 'user' : 'assistant';
               if (role === 'user') {
+                openingGate?.userTurn();
                 turns += 1;
                 lastUserTurnTs = Date.now();
                 awaitingFirstAudioForTurn = true;
                 suppressStaleAgentAudio = false;
               } else {
+                openingGate?.agentTurn();
                 suppressStaleAgentAudio = false;
               }
               recordTranscript(role, String(evt.content || ''), {
@@ -754,6 +786,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             }
 
             case 'AgentThinking': {
+              openingGate?.agentTurn();
               lastThinkingTs = Date.now();
               suppressStaleAgentAudio = false;
               sendClientJson({ type: 'agent_state', state: 'thinking' });
@@ -761,16 +794,18 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             }
 
             case 'AgentStartedSpeaking': {
+              openingGate?.agentTurn();
               suppressStaleAgentAudio = false;
               sendClientJson({ type: 'agent_state', state: 'speaking' });
               break;
             }
 
             case 'AgentAudioDone': {
-              sendClientJson({ type: 'agent_state', state: 'listening' });
-              if (awaitingHangupAudioDone) {
-                finalizeCall('bot_end_call');
-              }
+              openingGate?.afterRelease(() => {
+                if (closed) return;
+                sendClientJson({ type: 'agent_state', state: 'listening' });
+                if (awaitingHangupAudioDone) finalizeCall('bot_end_call');
+              });
               break;
             }
 

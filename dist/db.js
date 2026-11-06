@@ -29,6 +29,7 @@ const defaults_1 = require("./defaults");
 const settings_builder_1 = require("./settings-builder");
 const data_paths_1 = require("./data-paths");
 const greetings_1 = require("./greetings");
+const opening_1 = require("./opening");
 function openSqliteEngine(dbPath) {
     const normArgs = (args) => args.map((v) => (v === undefined ? null : v));
     // 1) Primary engine: better-sqlite3 (fast C++ native binding with prebuilds for Node 20..25)
@@ -227,11 +228,13 @@ function listGreetingLibrary() {
     FROM greeting_library ORDER BY CAST(greeting_id AS INTEGER), greeting_id`).all();
 }
 /**
- * Choose uniformly among this agent's unused greetings, atomically across server
- * processes. After a full cycle, reset the pool but avoid an immediate repeat.
- * Browser tests and real bridge calls share the same per-agent server cursor.
+ * Randomly choose an unused library row under a cross-process SQLite lock.
+ * When the saved opening is available, prefer a row that produces different
+ * wording from the previous draw. IDs still complete their entire cycle; if
+ * every remaining row produces the same wording, an occasional repeat is
+ * unavoidable without discarding rows or changing the operator's script.
  */
-function selectGreetingForAgent(agentId) {
+function selectGreetingForAgent(agentId, savedOpening = '') {
     if (!agentId)
         return null;
     const conn = getDb();
@@ -239,19 +242,23 @@ function selectGreetingForAgent(agentId) {
         const findUnused = conn.prepare(`SELECT g.greeting_id, g.persona, g.context, g.greeting_text, g.tone
       FROM greeting_library g WHERE NOT EXISTS (
         SELECT 1 FROM greeting_rotation_used u WHERE u.agent_id = ? AND u.greeting_id = g.greeting_id
-      ) ORDER BY RANDOM() LIMIT 1`);
-        let row = findUnused.get(agentId);
-        if (!row) {
+      ) ORDER BY RANDOM()`);
+        const last = conn.prepare(`SELECT g.greeting_id, g.greeting_text FROM greeting_rotation_state s
+      LEFT JOIN greeting_library g ON g.greeting_id = s.last_greeting_id WHERE s.agent_id = ?`).get(agentId);
+        let candidates = findUnused.all(agentId);
+        if (!candidates.length) {
             const total = conn.prepare('SELECT COUNT(*) AS count FROM greeting_library').get();
             if (!Number(total.count))
                 return null;
-            const last = conn.prepare('SELECT last_greeting_id FROM greeting_rotation_state WHERE agent_id = ?').get(agentId);
             conn.prepare('DELETE FROM greeting_rotation_used WHERE agent_id = ?').run(agentId);
-            row = (Number(total.count) > 1 && last
-                ? conn.prepare(`SELECT greeting_id, persona, context, greeting_text, tone FROM greeting_library
-            WHERE greeting_id <> ? ORDER BY RANDOM() LIMIT 1`).get(last.last_greeting_id)
-                : findUnused.get(agentId));
+            candidates = findUnused.all(agentId);
+            if (candidates.length > 1 && last?.greeting_id) {
+                candidates = candidates.filter((row) => row.greeting_id !== last.greeting_id);
+            }
         }
+        const prior = savedOpening && last?.greeting_text
+            ? (0, opening_1.composeOpening)(savedOpening, last.greeting_text, false, '') : '';
+        const row = (prior && candidates.find((candidate) => (0, opening_1.composeOpening)(savedOpening, candidate.greeting_text, false, '') !== prior)) || candidates[0];
         if (!row)
             return null;
         conn.prepare('INSERT INTO greeting_rotation_used (agent_id, greeting_id) VALUES (?, ?)').run(agentId, row.greeting_id);
@@ -261,11 +268,11 @@ function selectGreetingForAgent(agentId) {
     })();
 }
 /** Continue with the configured opening if the library or rotation is unavailable. */
-function trySelectGreeting(agentId, enabled) {
+function trySelectGreeting(agentId, enabled, savedOpening = '') {
     if (!enabled)
         return null;
     try {
-        return selectGreetingForAgent(agentId);
+        return selectGreetingForAgent(agentId, savedOpening);
     }
     catch (err) {
         console.error('[greetings] Could not select a greeting; using the configured opening:', err instanceof Error ? err.message : err);
