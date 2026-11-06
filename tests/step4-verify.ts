@@ -441,8 +441,11 @@ async function run() {
     assert(
       normalizedTarList.includes(`${archiveRoot}/deploy/vicibox-install.sh`) &&
         normalizedTarList.includes(`${archiveRoot}/dist/server.js`) &&
+        normalizedTarList.includes(`${archiveRoot}/dist/opening.js`) &&
+        normalizedTarList.includes(`${archiveRoot}/public/opening.js`) &&
+        normalizedTarList.includes(`${archiveRoot}/opening-test-results.md`) &&
         normalizedTarList.includes(`${archiveRoot}/vicibox-production-runbook.md`),
-      'Release tarball missing vicibox-install.sh, dist/server.js, or VICIBOX-PRODUCTION-RUNBOOK.md'
+      'Release tarball is missing a required installer, runtime, opening helper, runbook, or test-results document'
     );
     const archiveEntries = normalizedTarList.split(/\r?\n/);
     assert(

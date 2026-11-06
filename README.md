@@ -19,6 +19,7 @@ voice-agent-console/
 │   ├── defaults.ts               # Default console state & legacy vac-v2 state migration
 │   ├── settings-builder.ts       # Deepgram Settings builder, 18-rule validator & ViciBox dialplan generator
 │   ├── greetings.ts              # Validated CSV-derived greeting catalog loader
+│   ├── opening.ts                # Shared opening-composer/timing adapter
 │   ├── env-store.ts              # Server .env secret manager, sanitizer & Deepgram connection verifier
 │   ├── db.ts                     # SQLite WAL persistence, revisions, CDRs, analytics & CSV exporter
 │   ├── deepgram-catalog.ts       # Live Deepgram /v2/models + /v1/models catalog & TTS synthesizer
@@ -37,15 +38,19 @@ voice-agent-console/
 │   ├── index.html                # Single-Page Operator & Supervisor Console
 │   ├── styles.css                # Dark-mode responsive telemetry & studio styling
 │   ├── greetings.json             # Generated greeting catalog, also mirrored to docs/
+│   ├── opening.js                 # Opening composer & 500 ms gate, also mirrored to docs/
 │   └── app.js                    # Console UI, WebAudio engine, Wallboard & Live Bridge controls
 ├── deploy/
 │   ├── vicibox-install.sh        # One-command co-located ViciBox (OpenSUSE / Ubuntu / Debian) installer
 │   └── voice-agent-bridge.service # Hardened systemd service unit (Restart=always)
 ├── tests/
-│   ├── step1-verify.ts           # 12 automated checks (Catalog, TTS, Schema & UI bug regressions, SQLite)
-│   ├── step2-verify.ts           # 7 automated checks (Live Simulator WS, Comfort Silence, Live Deepgram E2E)
-│   ├── step3-verify.ts           # 9 automated checks (G.711/RTP, AudioSocket, Live 8kHz SIP+RTP, AMI, Vici APIs)
-│   └── step4-verify.ts           # 9 automated checks (Auth, IP/Capacity guards, Stereo WAV, Webhooks, CSV, Medicare E2E)
+│   ├── opening-verify.ts         # Composition, migration, timing, cancellation & early caller
+│   ├── bridge-opening-verify.ts  # Local AudioSocket/SIP+RTP timing and playback-drain fixtures
+│   ├── greetings-verify.ts       # Catalog, rotation, fallback and selection logging
+│   ├── step1-verify.ts           # Catalog, TTS, schema & UI bug regressions, SQLite
+│   ├── step2-verify.ts           # Simulator WS, comfort silence & optional live Deepgram
+│   ├── step3-verify.ts           # G.711/RTP, mock bridge, AMI & Vici APIs
+│   └── step4-verify.ts           # Auth, guards, recordings, webhooks & mock Medicare scenarios
 ├── docs/
 │   ├── AUDIT-REPORT.md           # Original architectural & protocol audit report
 │   └── MEDICARE-BOT-TRAINING-BLUEPRINT.md # Full Medicare Food & OTC Lead Qualification Bot script & gate rules
@@ -60,7 +65,7 @@ voice-agent-console/
 
 ## 🤖 Built-In Outbound Qualification Agents & Multi-Campaign Routing
 
-Out of the box, the Console ships with two production-ready outbound voice qualification bots mapped to dedicated VICIdial extensions & Remote Agents:
+The Console includes example outbound qualification bots with sample VICIdial extension and Remote Agent mappings. They are **not verified as production-ready**; review the identity, benefit claims, scripts, eligibility rules, disclosures and actual routing before any calls:
 
 | Slot | Agent | VICIdial Campaign | Dialplan Exten / Remote Agent | Closer In-Group | Key Gate & Compliance Rules |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -85,13 +90,17 @@ Open **`http://127.0.0.1:533`**. With no admin password or users, create the fir
 
 ### Imported greetings and call rotation
 
-- The supplied `datasets/Greetings-Dataset.csv` contains **1,100** greetings. Each row retains its ID, persona, context, full text and tone. On server startup the bundled catalog is imported idempotently into SQLite. The **Agents** page lets you search and browse the library by these fields. Persona, context and tone are descriptive labels: they do not match existing bot names, filter the pool, or change the provider's voice or delivery.
-- Rotation is enabled by default for existing and newly created agents. For each VICIdial call or Live Bot session, the bot's selected greeting is appended **after** its saved opening and any enabled campaign disclosure. Nothing is removed from the saved agent introduction. To stop adding variations for one bot, uncheck **Randomly add an imported greeting for this bot** under **Agents** and **Save & Verify**; a duplicated bot copies the source bot's setting. The normal settings preview shows the saved opening only, because the variation is chosen when the session starts.
-- Each bot randomly draws from all 1,100 rows without repeating until its pool is exhausted, and avoids an immediate repeat at the cycle boundary. Server-backed bridge calls and Live Bot tests share that bot's SQLite rotation, including across process restarts and concurrent processes using the same database. A failed or interrupted connection can still advance the rotation. Separate server databases have separate rotations.
-- The selected ID appears in Live Bot session details and saved server test history, bridge CDRs and bridge CSV export. It records the selection, **not proof that the caller heard the entire greeting**. If selection fails or the library is empty, the configured opening remains in use and the session reports a warning. Existing VICIdial/test-lead placeholders are hydrated when lead hydration is enabled.
-- **Static hosting:** the bundled `docs/greetings.json` is used for direct-browser Live Bot tests. Rotation is separate from server calls and shared only within that browser profile via IndexedDB. If browser storage is blocked, a temporary no-repeat cycle is kept in the current tab and a warning is shown; clearing site data resets it. Static-site history is saved only for opted-in recorded tests, so unrecorded static tests display the selected ID during the session but do not retain it.
+- The supplied `datasets/Greetings-Dataset.csv` contains **1,100** greetings, each retaining its ID, persona, context, full text and tone. Server startup imports the bundled catalog idempotently into SQLite. Browse or search it under **Agents**. Labels do not select a bot or provider voice.
+- For each agent, set a **brief saved opening and identity** under **Agents** and save. For example: “Hi! This is Jessi from Example Services. How are you doing today?” Use your own verified identity. Rotation is enabled by default; a selected row varies the saved salutation and/or general question using suitable fragments or a short fallback, rather than appending the full imported greeting. To keep the saved opening unchanged, uncheck **Vary this opening using the imported greeting library** and save. Duplicates copy the source setting; newly created agents default to rotation on. Previews do not consume a selection.
+- Each bot randomly draws all 1,100 IDs without repeating until the pool is exhausted, avoiding the last ID at the next cycle boundary. The selector prefers a different composed wording from the preceding draw when another unused row permits it; different IDs can map to identical wording, so an occasional repeat remains possible, especially near the end of a cycle or with an unvaryable custom opening. Server-backed bridge calls and Live Bot tests share the bot's SQLite rotation across restarts and concurrent processes using the same database. Failed or interrupted starts can advance the rotation. Separate databases have separate rotations.
+- The campaign's spoken recording notice is **optional**. New agents and settings with no prior choice default to off; existing explicit choices are preserved. Change **Include the linked campaign recording notice** under **Agents** or **Live Bot**, then **Save & verify** to retain the per-agent choice. An unsaved Live Bot change applies to that test; bridge calls use saved settings. This controls the spoken notice only, not recording. A notice written inside the saved opening is not removed. Obtain any consent and make any disclosure required in your jurisdiction.
+- **Opening timing:** once the provider acknowledges settings, the app holds outgoing bot audio for at least **500 ms** and continues sending caller input. With no detected turn it requests the one composed opening; if speech is detected first, it avoids a second injection and instructs the provider to respond to the caller. A noise-only onset gets one delayed fallback. This is a fixed wait after provider readiness, not a guarantee that the customer has spoken or finished; real provider detection, message acceptance, network and playback timing have not been verified by the offline tests. Provider refusal or an early caller may mean the exact opening is not spoken.
+- Selected IDs appear in Live Bot session details and saved server test history, bridge CDRs and CSV export. An ID records the selection, **not proof that audio was heard**. If selection fails or the library is empty, the saved opening is used and the session reports a warning. Lead placeholders are hydrated when enabled.
+- **Static hosting:** `docs/greetings.json` supports direct-browser Live Bot tests. Rotation is separate from server calls and shared only within that browser profile via IndexedDB. If storage is blocked, a temporary cycle is kept in the current tab and a warning is shown; clearing site data resets it. Static history is retained only for opted-in recorded tests.
 
-**Review before placing calls:** all rows are eligible as provided, including meeting/informal-chat language and phrases such as “Good morning” or “Wonderful to see you.” Some contain questions, so appending them can make openings longer or ask multiple questions. Review the complete dataset, existing agent scripts, identity, purpose, recording disclosures and any factual or benefit claims for the campaign and applicable rules; the console does not verify them. The existing Food & OTC Advisor opening, for example, asserts that a card is loaded and will be returned if unclaimed; those claims have not been verified and must not be used unless substantiated. If the imported variations are unsuitable, turn rotation off for that agent before saving and using it. Tone labels alone do not guarantee different vocal prosody.
+The exact old stock Nova and Food & OTC openings are migrated to shorter defaults; the exact old stock Medicare prompt's “already asked” line is corrected. Customized openings and prompts are not silently shortened or replaced. A long or multi-question custom opening can therefore remain long; edit it yourself if needed. The library's tone labels do not guarantee vocal prosody.
+
+**Review before placing calls:** the example Medicare / Food & OTC prompts and historical blueprint contain unverified representations, affiliations, eligibility rules and benefit claims, including state approval and card availability. Do not use these assertions without substantiation and appropriate review. Review all other agent scripts, identity, purpose, notice and consent requirements as well. The console does not verify them.
 
 The original CSV is the source for the two browser catalogs. After intentionally changing it, run `python3 tools/build-greetings.py` (or `--check` to verify parity) and update the pinned dataset hash, counts and example assertions in `tests/greetings-verify.ts`. The server seeds missing IDs on startup but does not overwrite already imported database rows; editing the file alone does not update existing SQLite records. Back up the database before any manual changes.
 
@@ -112,11 +121,11 @@ The original CSV is the source for the two browser catalogs. After intentionally
 
 Bridge loopback tests use a mock VICIdial API, so their transfer, disposition and DNC responses do not prove real updates. Historical bridge records do not reliably distinguish tests from live calls. **Run bridge loopback tests only on an isolated instance with no live calls**: they temporarily change shared bridge/provider routing, and configured custom webhooks may still execute for real. Static-site mode cannot run a bridge test and no longer displays its old synthetic browser-local bridge records as live CDRs.
 
-Scripted sandbox responses and the fake local-speech conversation have been removed. The local speech service still supports standalone health checks and voice previews, but it does not currently provide an LLM-backed Live Bot conversation. The avatar gestures are decorative text-driven animations; microphone byte counts show data queued to the socket, not proof of transcription. Review existing custom agent prompts and deployments before placing real calls; older saved prompts are preserved, not silently rewritten.
+Scripted sandbox responses and the fake local-speech conversation have been removed. The local speech service still supports standalone health checks and voice previews, but it does not currently provide an LLM-backed Live Bot conversation. The avatar gestures are decorative text-driven animations; microphone byte counts show data queued to the socket, not proof of transcription. Review existing custom agent prompts and deployments before placing real calls; apart from the exact stock migration noted above, customized prompts are preserved.
 
 The **Dashboard** is the first navigation item and the default page; existing `?tab=` links to individual sections still work. Its scores are configuration estimates, not certifications or proof of live connectivity.
 
-The tests use temporary data and environment files, loopback ports, synthetic credentials and mocked services. External `fetch` calls are blocked by default and the live Deepgram test is reported as skipped. A live run may incur provider charges and requires explicit opt-in with `VAC_TEST_LIVE=1` and a test key:
+See [opening test results](OPENING-TEST-RESULTS.md) for this release's commands, results and limitations. The tests use temporary data and environment files, loopback ports, synthetic credentials and mocked services. External `fetch` calls are blocked by default and the live Deepgram test is reported as skipped. A live run may incur provider charges and requires explicit opt-in with `VAC_TEST_LIVE=1` and a test key:
 
 ```bash
 npm run build

@@ -8,6 +8,7 @@ import { isBridgePeerIpAllowed, isLoopbackIp } from './auth-guard';
 import { StereoCallRecorder8k } from './call-recorder';
 import { getConsoleState, saveBridgeCallLog, trySelectGreeting } from './db';
 import { GreetingRecord } from './greetings';
+import { createOpeningGate, OpeningGate, prepareDelayedOpening } from './opening';
 import { getSecret, MANAGED_SECRET_KEYS } from './env-store';
 import { executeCustomFunctionWebhook } from './webhook-executor';
 import {
@@ -201,6 +202,7 @@ function hydrateRealLeadIntoSettings(settings: any, agent: Agent, campaign: Camp
 
 interface TransportHooks {
   enqueueBotPcm8k: (pcm8kLe: Buffer) => void;
+  pendingPlaybackMs: () => number;
   bargeInFlush: () => void;
   hangupTransport: () => void;
 }
@@ -471,6 +473,7 @@ export class VicidialBridgeService {
           if (socketClosed || pcm8kLe.length === 0) return;
           txPcmQueue = txPcmQueue.length > 0 ? Buffer.concat([txPcmQueue, pcm8kLe]) : Buffer.from(pcm8kLe);
         },
+        pendingPlaybackMs: () => Math.ceil(txPcmQueue.length / 320) * 20,
         bargeInFlush: () => {
           txPcmQueue = Buffer.alloc(0);
         },
@@ -882,6 +885,7 @@ export class VicidialBridgeService {
             if (rtpClosed || pcm8kLe.length === 0) return;
             txPcmQueue = txPcmQueue.length > 0 ? Buffer.concat([txPcmQueue, pcm8kLe]) : Buffer.from(pcm8kLe);
           },
+          pendingPlaybackMs: () => Math.ceil(txPcmQueue.length / 320) * 20,
           bargeInFlush: () => {
             txPcmQueue = Buffer.alloc(0);
             nextTalkspurtMarker = true;
@@ -1019,6 +1023,8 @@ export class VicidialBridgeService {
     let keepAliveTimer: NodeJS.Timeout | null = null;
     let comfortSilenceTimer: NodeJS.Timeout | null = null;
     let deferredActionTimer: NodeJS.Timeout | null = null;
+    let speechDrainTimer: NodeJS.Timeout | null = null;
+    let openingGate: OpeningGate | null = null;
 
     let lastCallerAudioAt = Date.now();
     let turns = 0;
@@ -1164,6 +1170,9 @@ export class VicidialBridgeService {
         clearTimeout(deferredActionTimer);
         deferredActionTimer = null;
       }
+      if (speechDrainTimer) { clearTimeout(speechDrainTimer); speechDrainTimer = null; }
+      openingGate?.cancel();
+      openingGate = null;
 
       if (dgWs && (dgWs.readyState === WebSocket.OPEN || dgWs.readyState === WebSocket.CONNECTING)) {
         try {
@@ -1297,7 +1306,7 @@ export class VicidialBridgeService {
         return;
       }
 
-      selectedGreeting = trySelectGreeting(agent.id, agent.randomGreetingEnabled !== false);
+      selectedGreeting = trySelectGreeting(agent.id, agent.randomGreetingEnabled !== false, agent.greeting);
       if (selectedGreeting) {
         addTranscript('system', `Selected greeting #${selectedGreeting.greeting_id} (${selectedGreeting.persona}; ${selectedGreeting.context}; ${selectedGreeting.tone}).`);
       } else if (agent.randomGreetingEnabled !== false) {
@@ -1314,7 +1323,36 @@ export class VicidialBridgeService {
         output: { encoding: 'linear16', sample_rate: 8000, container: 'none' },
       };
       hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
-      const wireSettings = interpolateEnvPlaceholders(rawSettings);
+      let wireSettings: any;
+      let wireGreeting = '';
+      try {
+        const prepared = prepareDelayedOpening(interpolateEnvPlaceholders(rawSettings));
+        wireSettings = prepared.settings;
+        wireGreeting = prepared.greeting;
+      } catch (err: any) {
+        this.stats.lastError = err.message || 'Could not prepare the opening.';
+        addTranscript('system', `✗ ${this.stats.lastError}`);
+        await finalizeSession('opening_settings_error');
+        return;
+      }
+      openingGate = createOpeningGate({
+        greeting: wireGreeting,
+        sendOpening: (message) => {
+          if (!closed && dgWs?.readyState === WebSocket.OPEN) {
+            dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
+          }
+        },
+        playAudio: (pcm8k) => {
+          if (closed) return;
+          if (awaitingFirstAudioForTurn && lastUserTurnTs !== null) {
+            ttfbSamples.push(Math.max(1, Date.now() - lastUserTurnTs));
+            awaitingFirstAudioForTurn = false;
+          }
+          recorder.recordBotPcm8k(pcm8k);
+          opts.hooks.enqueueBotPcm8k(pcm8k);
+        },
+        onOverflow: () => addTranscript('system', 'Early provider audio exceeded the opening buffer and was dropped.'),
+      });
 
       updateState('connecting_deepgram');
       dgWs = new WebSocket(targetUrl, {
@@ -1350,12 +1388,7 @@ export class VicidialBridgeService {
             return;
           }
           const pcm8k = Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
-          if (awaitingFirstAudioForTurn && lastUserTurnTs !== null) {
-            ttfbSamples.push(Math.max(1, Date.now() - lastUserTurnTs));
-            awaitingFirstAudioForTurn = false;
-          }
-          recorder.recordBotPcm8k(pcm8k);
-          opts.hooks.enqueueBotPcm8k(pcm8k);
+          openingGate?.audio(pcm8k);
           return;
         }
 
@@ -1373,7 +1406,9 @@ export class VicidialBridgeService {
           }
 
           case 'SettingsApplied': {
+            if (settingsApplied) break;
             settingsApplied = true;
+            openingGate?.start();
             lastCallerAudioAt = Date.now();
             updateState('listening');
 
@@ -1399,6 +1434,7 @@ export class VicidialBridgeService {
           }
 
           case 'UserStartedSpeaking': {
+            openingGate?.userStarted();
             if (agent.behavior?.bargeIn !== 'off') {
               // Instant <20ms barge-in flush on Asterisk AudioSocket / RTP queue + gate trailing TTS chunks!
               suppressStaleBotAudio = true;
@@ -1412,9 +1448,12 @@ export class VicidialBridgeService {
           case 'ConversationText': {
             const role = evt.role === 'user' ? 'user' : 'assistant';
             if (role === 'user') {
+              openingGate?.userTurn();
               turns += 1;
               lastUserTurnTs = Date.now();
               awaitingFirstAudioForTurn = true;
+            } else {
+              openingGate?.agentTurn();
             }
             suppressStaleBotAudio = false;
             addTranscript(role, String(evt.content || ''));
@@ -1422,26 +1461,39 @@ export class VicidialBridgeService {
           }
 
           case 'AgentThinking': {
+            openingGate?.agentTurn();
             suppressStaleBotAudio = false;
             updateState('thinking');
             break;
           }
 
           case 'AgentStartedSpeaking': {
+            openingGate?.agentTurn();
             suppressStaleBotAudio = false;
             updateState('bot_speaking');
             break;
           }
 
           case 'AgentAudioDone': {
-            updateState('listening');
-            if (pendingTransferArgs) {
-              const args = pendingTransferArgs;
-              pendingTransferArgs = null;
-              await executeTransferAction(args);
-            } else if (awaitingHangupAfterSpeech) {
-              await finalizeSession('bot_end_call');
-            }
+            openingGate?.afterRelease(() => {
+              if (closed) return;
+              updateState('listening');
+              if (!pendingTransferArgs && !awaitingHangupAfterSpeech) return;
+              // AgentAudioDone means the provider finished generating audio,
+              // not that our paced SIP/AudioSocket queue has reached the caller.
+              if (speechDrainTimer) clearTimeout(speechDrainTimer);
+              speechDrainTimer = setTimeout(() => {
+                speechDrainTimer = null;
+                if (closed) return;
+                if (pendingTransferArgs) {
+                  const args = pendingTransferArgs;
+                  pendingTransferArgs = null;
+                  executeTransferAction(args).catch(() => {});
+                } else if (awaitingHangupAfterSpeech) {
+                  finalizeSession('bot_end_call').catch(() => {});
+                }
+              }, Math.min(opts.hooks.pendingPlaybackMs() + 40, 9000));
+            });
             break;
           }
 
@@ -1603,6 +1655,16 @@ export class VicidialBridgeService {
             break;
           }
 
+          case 'InjectionRefused': {
+            addTranscript('system', 'Deepgram declined an injected message while a turn was active; playback was not confirmed.');
+            break;
+          }
+
+          case 'Warning': {
+            addTranscript('system', `Deepgram warning ${evt.code || 'WARNING'}: ${evt.description || evt.message || 'No details provided.'}`);
+            break;
+          }
+
           case 'Error': {
             this.stats.lastError = `${evt.code || 'DG_ERROR'}: ${evt.description || JSON.stringify(evt)}`;
             addTranscript('system', `✗ Deepgram Error: ${this.stats.lastError}`);
@@ -1644,6 +1706,7 @@ export class VicidialBridgeService {
         if (closed) return;
         addTranscript('system', `Caller pressed keypad DTMF '${digit}'`);
         if (settingsApplied && dgWs && dgWs.readyState === WebSocket.OPEN) {
+          openingGate?.userTurn();
           dgWs.send(
             JSON.stringify({
               type: 'InjectUserMessage',

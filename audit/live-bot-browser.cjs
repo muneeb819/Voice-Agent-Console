@@ -16,6 +16,9 @@ let child, browser, mock, mockWss, staticServer;
 let childLog = '';
 const requests = [];
 const settingsReceived = [];
+const settingsAppliedTimes = [];
+const openingMessages = [];
+const { composeOpening } = require('../public/opening.js');
 const importedGreetings = JSON.parse(fs.readFileSync(path.join(root, 'public/greetings.json'), 'utf8')).greetings;
 const fnResponses = [];
 let nonSilentAudioBytes = 0;
@@ -62,8 +65,15 @@ async function run() {
       }
       const message = JSON.parse(raw.toString());
       if (message.type === 'Settings') {
-        settingsReceived.push(message);
-        setTimeout(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'SettingsApplied' })); }, 180);
+        const index = settingsReceived.push(message) - 1;
+        ws._fixtureSettingsIndex = index;
+        setTimeout(() => { if (ws.readyState === 1) { settingsAppliedTimes[index] = Date.now(); ws.send(JSON.stringify({ type: 'SettingsApplied' })); } }, 180);
+      } else if (message.type === 'InjectAgentMessage') {
+        openingMessages.push({ index: ws._fixtureSettingsIndex, message: message.message, at: Date.now() });
+        ws.send(JSON.stringify({ type: 'AgentStartedSpeaking' }));
+        ws.send(JSON.stringify({ type: 'ConversationText', role: 'assistant', content: message.message }));
+        ws.send(mockAudio(0.25), { binary: true });
+        ws.send(JSON.stringify({ type: 'AgentAudioDone' }));
       } else if (message.type === 'InjectUserMessage') {
         requests.push(message.content);
         ws.send(JSON.stringify({ type: 'ConversationText', role: 'user', content: message.content }));
@@ -160,15 +170,23 @@ async function run() {
   const serverGreetingId = /Selected greeting #(\d+)/.exec(serverGreetingLabel)?.[1];
   const serverGreeting = importedGreetings.find((row) => row.greeting_id === serverGreetingId);
   assert(serverGreeting, `Selected server greeting should be in the imported catalog: ${serverGreetingLabel}`);
-  assert(settingsReceived[0].agent.greeting.endsWith(serverGreeting.greeting_text));
+  assert.equal(settingsReceived[0].agent.greeting, undefined, 'Automatic provider greeting must be disabled');
+  assert.match(await page.locator('main').innerText(), /Hydrated Session Preview/i);
+  assert.doesNotMatch(await page.locator('main').innerText(), /Hydrated Session Settings Sent/i);
   const savedAgentData = await page.evaluate(async () => {
     const { state } = await (await fetch('/api/state')).json();
     const agent = state.agents.find((item) => item.id === document.querySelector('#sel-a').value);
     return { agent, campaign: state.campaigns.find((item) => item.agentId === agent.id) };
   });
-  assert(settingsReceived[0].agent.greeting.includes(savedAgentData.agent.greeting));
-  assert(settingsReceived[0].agent.greeting.startsWith(savedAgentData.campaign.disclosure));
-  console.log('PASS Browser microphone -> actual local mock Voice Agent PCM stream, with selected greeting and saved opening');
+  await until(() => openingMessages.some((entry) => entry.index === 0), 'single delayed opening');
+  const firstOpening = openingMessages.find((entry) => entry.index === 0);
+  assert(firstOpening.at - settingsAppliedTimes[0] >= 490, 'Server opening must wait at least 500 ms');
+  assert.equal(firstOpening.message, composeOpening(savedAgentData.agent.greeting, serverGreeting.greeting_text,
+    savedAgentData.agent.injectCampaignDisclosure, savedAgentData.campaign.disclosure));
+  assert(!firstOpening.message.includes(serverGreeting.greeting_text));
+  assert.equal(openingMessages.filter((entry) => entry.index === 0).length, 1);
+  assert.equal(await page.locator('#sim-disclosure').isDisabled(), true);
+  console.log('PASS Browser mic and server send one concise opening after the 500 ms wait');
 
   await page.click('#btn-sim-mute');
   await page.waitForTimeout(500);
@@ -207,6 +225,26 @@ async function run() {
   assert.equal(fs.existsSync(path.join(temp, 'simulator-recordings')), false, 'No audio should be saved by default');
   assert.match(await page.locator('#sim-history').locator('..').innerText(), /Tests made before recording was available have no audio/i);
   console.log('PASS Provider transcript is saved without default audio; PBX actions fail without side effects');
+
+  // A Live Bot notice change is usable as an unsaved test draft; a saved
+  // agent's normal value remains unchanged until Save & verify is pressed.
+  const noticeCallIndex = settingsReceived.length;
+  assert.equal(await page.locator('#sim-disclosure').isChecked(), false);
+  await page.check('#sim-disclosure');
+  await page.click('#btn-call-nomic');
+  await page.waitForSelector('#sim-inject-input:enabled');
+  await until(() => openingMessages.some((entry) => entry.index === noticeCallIndex), 'draft notice opening');
+  const withNotice = openingMessages.find((entry) => entry.index === noticeCallIndex);
+  assert.ok(withNotice.message.startsWith(savedAgentData.campaign.disclosure), 'Draft notice must reach the next test');
+  const persistedNotice = await page.evaluate(async (id) => {
+    const { state } = await (await fetch('/api/state')).json();
+    return state.agents.find((agent) => agent.id === id).injectCampaignDisclosure;
+  }, savedAgentData.agent.id);
+  assert.equal(persistedNotice, false, 'An unsaved test draft must not modify server settings');
+  await page.click('#btn-call-hangup');
+  await page.waitForSelector('#btn-call-nomic:enabled');
+  await page.uncheck('#sim-disclosure');
+  console.log('PASS Live Bot notice toggle affects the next test without silently saving the agent');
 
   await page.check('#sim-record-audio');
   await page.click('#btn-call-nomic');
@@ -356,6 +394,34 @@ async function run() {
     fs.createReadStream(file).pipe(res);
   });
   const staticPort = await listen(staticServer);
+  // An old bundled Medicare prompt is migrated only when the complete text
+  // matches; an operator's customized version must remain unchanged.
+  const migrationState = JSON.parse(fs.readFileSync(path.join(docs, 'default-state.json'), 'utf8'));
+  const stockPrompt = migrationState.agents.find((a) => a.id === 'a_medicare').prompt;
+  const newPhase = '- Phase 1 (After the opening):\n' +
+    '  If Medicare status has not been established, ask whether they have Medicare Part A or Part B; do not assume the opening asked this.\n';
+  const oldPhase = '- Phase 1 (Delivered in Greeting — Food & OTC Card Hook):\n' +
+    '  You already asked if they have Medicare Part A and B to release their Food & OTC card.\n';
+  const oldPrompt = stockPrompt.replace(newPhase, oldPhase);
+  assert.notEqual(oldPrompt, stockPrompt);
+  migrationState.agents.find((a) => a.id === 'a_medicare').prompt = oldPrompt;
+  migrationState.agents[0].prompt = `${oldPrompt}\nOperator custom content.`;
+  const migrationContext = await browser.newContext();
+  await blockExternal(migrationContext);
+  await migrationContext.addInitScript((fixture) => {
+    localStorage.setItem('vac_cloud_session_v1', JSON.stringify({ user: { fullName: 'Synthetic user' } }));
+    if (!localStorage.getItem('vac_cloud_state_v1')) localStorage.setItem('vac_cloud_state_v1', JSON.stringify(fixture));
+  }, migrationState);
+  const migrationPage = await migrationContext.newPage();
+  migrationPage.on('pageerror', (err) => pageErrors.push(String(err)));
+  await migrationPage.goto(`http://127.0.0.1:${staticPort}/index.html?tab=agents`);
+  await migrationPage.waitForSelector('[data-p="a.greeting"]');
+  const migratedState = await migrationPage.evaluate(() => JSON.parse(localStorage.getItem('vac_cloud_state_v1')));
+  assert.equal(migratedState.agents.find((a) => a.id === 'a_medicare').prompt, stockPrompt);
+  assert.equal(migratedState.agents[0].prompt, `${oldPrompt}\nOperator custom content.`);
+  await migrationContext.close();
+  console.log('PASS Static migration corrects only the exact stock Medicare prompt');
+
   const staticContext = await browser.newContext();
   await blockExternal(staticContext);
   const state = JSON.parse(fs.readFileSync(path.join(docs, 'default-state.json'), 'utf8'));
@@ -367,7 +433,12 @@ async function run() {
     localStorage.setItem('vac_cloud_session_v1', JSON.stringify({ user: { fullName: 'Synthetic user' } }));
     localStorage.setItem('vac_cloud_state_v1', JSON.stringify(initialState));
     localStorage.setItem('vac_cloud_vici_logs_v1', JSON.stringify([{ id: 'old-demo', callerCode: 'SYNTHETIC-OLD-ENTRY', disposition: 'XFER', startedAt: new Date().toISOString() }]));
-    window.__mockWs = { created: 0, settings: null, responses: [] };
+    window.__mockWs = { created: 0, settings: null, responses: [], openings: [], playbackTimes: [], appliedAt: 0 };
+    const nativeAudioStart = AudioBufferSourceNode.prototype.start;
+    AudioBufferSourceNode.prototype.start = function (...args) {
+      window.__mockWs.playbackTimes.push(Date.now());
+      return nativeAudioStart.apply(this, args);
+    };
     class FakeWebSocket {
       static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
       constructor() {
@@ -380,7 +451,13 @@ async function run() {
         const message = JSON.parse(payload);
         if (message.type === 'Settings') {
           window.__mockWs.settings = message;
-          setTimeout(() => this.onmessage?.({ data: JSON.stringify({ type: 'SettingsApplied' }) }), 5);
+          setTimeout(() => { window.__mockWs.appliedAt = Date.now(); this.onmessage?.({ data: JSON.stringify({ type: 'SettingsApplied' }) }); }, 5);
+        } else if (message.type === 'InjectAgentMessage') {
+          window.__mockWs.openings.push({ message: message.message, at: Date.now() });
+          this.onmessage?.({ data: JSON.stringify({ type: 'AgentStartedSpeaking' }) });
+          this.onmessage?.({ data: JSON.stringify({ type: 'ConversationText', role: 'assistant', content: message.message }) });
+          this.onmessage?.({ data: new Int16Array(2400).buffer });
+          this.onmessage?.({ data: JSON.stringify({ type: 'AgentAudioDone' }) });
         } else if (message.type === 'InjectUserMessage') {
           const emit = (event) => this.onmessage?.({ data: JSON.stringify(event) });
           emit({ type: 'ConversationText', role: 'user', content: message.content });
@@ -416,6 +493,7 @@ async function run() {
   await staticPage.click('#btn-call-nomic');
   await staticPage.waitForSelector('#sim-inject-input:enabled');
   assert(await staticPage.locator('#sim-allow-webhooks').isDisabled());
+  await staticPage.waitForFunction(() => window.__mockWs.openings.length === 1);
   await staticPage.fill('#sim-inject-input', 'static mock question');
   await staticPage.click('#btn-sim-inject');
   await staticPage.waitForFunction(() => window.__mockWs.responses.length === 2);
@@ -426,7 +504,12 @@ async function run() {
   assert(staticGreeting, `Selected static greeting should be in the catalog: ${staticLabel}`);
   const staticAgent = state.agents.find((agent) => agent.id === 'a_nova');
   const staticCampaign = state.campaigns.find((campaign) => campaign.agentId === staticAgent.id);
-  assert.equal(staticWire.settings.agent.greeting, `${staticCampaign.disclosure} ${staticAgent.greeting} ${staticGreeting.greeting_text}`);
+  assert.equal(staticWire.settings.agent.greeting, undefined);
+  assert.equal(staticWire.openings.length, 1);
+  assert.ok(staticWire.openings[0].at - staticWire.appliedAt >= 490, 'Static opening must wait at least 500 ms');
+  assert.equal(staticWire.openings[0].message, composeOpening(staticAgent.greeting, staticGreeting.greeting_text,
+    staticAgent.injectCampaignDisclosure, staticCampaign.disclosure));
+  assert.ok(!staticWire.openings[0].message.includes(staticGreeting.greeting_text));
   assert.ok(staticWire.settings.agent.think.functions.every((f) => !f.endpoint && f.defer_until_eot === true));
   assert.ok(!staticWire.responses.some((r) => r.id === 'cancelled'));
   assert.equal(JSON.parse(staticWire.responses.find((r) => r.id === 'custom').content).ok, false);
@@ -445,8 +528,36 @@ async function run() {
   const afterReloadLabel = await staticPage.locator('#sim-selected-greeting').innerText();
   const afterReloadId = /Selected greeting #(\d+)/.exec(afterReloadLabel)?.[1];
   assert(afterReloadId && afterReloadId !== staticId, 'Static IndexedDB rotation survives reload without repeating');
+  const afterReloadGreeting = importedGreetings.find((row) => row.greeting_id === afterReloadId);
+  assert.notEqual(composeOpening(staticAgent.greeting, staticGreeting.greeting_text, false, ''),
+    composeOpening(staticAgent.greeting, afterReloadGreeting.greeting_text, false, ''),
+    'Static rotation prefers a different opening across reload');
   await staticPage.click('#btn-call-hangup');
   await staticPage.waitForSelector('#btn-call-nomic:enabled');
+
+  // Send a caller turn immediately after SettingsApplied in direct-browser
+  // mode. The mock replies immediately, but the browser must not play early
+  // audio or inject a second opening over that response.
+  const beforeEarly = await staticPage.evaluate(() => ({ openings: window.__mockWs.openings.length, playback: window.__mockWs.playbackTimes.length }));
+  await staticPage.click('#btn-call-nomic');
+  await staticPage.waitForSelector('#sim-inject-input:enabled');
+  const earlyTiming = await staticPage.evaluate(() => {
+    const input = document.querySelector('#sim-inject-input');
+    input.value = 'Hello before the opening';
+    const sentAt = Date.now();
+    document.querySelector('#btn-sim-inject').click();
+    return { sentAt, appliedAt: window.__mockWs.appliedAt };
+  });
+  assert.ok(earlyTiming.sentAt - earlyTiming.appliedAt < 450, 'Fixture must inject its caller turn before the gate opens');
+  await staticPage.waitForFunction((count) => window.__mockWs.playbackTimes.length > count, beforeEarly.playback);
+  const afterEarly = await staticPage.evaluate(() => window.__mockWs);
+  assert.ok(afterEarly.playbackTimes[beforeEarly.playback] - earlyTiming.appliedAt >= 490, 'Direct-browser response must wait for the gate');
+  await staticPage.waitForTimeout(100);
+  assert.equal(await staticPage.evaluate(() => window.__mockWs.openings.length), beforeEarly.openings, 'Early caller must not get a second opening');
+  assert.match(await staticPage.locator('#sim-feed').innerText(), /Hello before the opening/);
+  await staticPage.click('#btn-call-hangup');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled');
+  console.log('PASS Direct-browser early caller gets delayed audio without a duplicate opening');
 
   // Two tabs in the same profile must serialize their per-bot IndexedDB draws.
   const secondStaticPage = await staticContext.newPage();
@@ -462,6 +573,33 @@ async function run() {
   await Promise.all([staticPage.click('#btn-call-hangup'), secondStaticPage.click('#btn-call-hangup')]);
   await Promise.all([staticPage.waitForSelector('#btn-call-nomic:enabled'), secondStaticPage.waitForSelector('#btn-call-nomic:enabled')]);
   await secondStaticPage.close();
+  // Two eligible IDs with different output and a third whose wording matches
+  // the previous selection: prefer the different one without discarding IDs.
+  const wordFor = (row) => composeOpening(staticAgent.greeting, row.greeting_text, false, '');
+  const priorRow = importedGreetings[0];
+  const matchingRow = importedGreetings.find((row) => row.greeting_id !== priorRow.greeting_id && wordFor(row) === wordFor(priorRow));
+  const differentRow = importedGreetings.find((row) => wordFor(row) !== wordFor(priorRow));
+  assert(matchingRow && differentRow);
+  await staticPage.evaluate(({ ids, prior, matching, different }) => new Promise((resolve, reject) => {
+    const open = indexedDB.open('vac-greeting-rotation-v1', 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result, tx = db.transaction('rotations', 'readwrite');
+      tx.objectStore('rotations').put({ fingerprint: ids.join('\u001f'), remaining: [matching, different], last: prior }, 'a_nova');
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = tx.onabort = () => reject(tx.error);
+    };
+  }), { ids: importedGreetings.map((row) => row.greeting_id), prior: priorRow.greeting_id, matching: matchingRow.greeting_id, different: differentRow.greeting_id });
+  await staticPage.click('#btn-call-nomic');
+  await staticPage.waitForSelector('#sim-inject-input:enabled');
+  assert.match(await staticPage.locator('#sim-selected-greeting').innerText(), new RegExp(`Selected greeting #${differentRow.greeting_id}\\b`));
+  await staticPage.click('#btn-call-hangup');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled');
+  await staticPage.click('#btn-call-nomic');
+  await staticPage.waitForSelector('#sim-inject-input:enabled');
+  assert.match(await staticPage.locator('#sim-selected-greeting').innerText(), new RegExp(`Selected greeting #${matchingRow.greeting_id}\\b`));
+  await staticPage.click('#btn-call-hangup');
+  await staticPage.waitForSelector('#btn-call-nomic:enabled');
   // Seed the last remaining ID of a cycle to exercise the boundary without
   // starting 1,100 browser sessions.
   await staticPage.evaluate((ids) => new Promise((resolve, reject) => {
@@ -495,7 +633,9 @@ async function run() {
   await fallbackPage.click('#btn-call-nomic');
   await fallbackPage.waitForSelector('#sim-inject-input:enabled');
   assert.match(await fallbackPage.locator('#sim-feed').innerText(), /Greeting library unavailable; using the configured opening/i);
-  assert.equal(await fallbackPage.evaluate(() => window.__mockWs.settings.agent.greeting), `${staticCampaign.disclosure} ${staticAgent.greeting}`);
+  await fallbackPage.waitForFunction(() => window.__mockWs.openings.length === 1);
+  assert.equal(await fallbackPage.evaluate(() => window.__mockWs.openings[0].message),
+    composeOpening(staticAgent.greeting, '', staticAgent.injectCampaignDisclosure, staticCampaign.disclosure));
   await fallbackPage.click('#btn-call-hangup');
   await fallbackPage.close();
   await staticContext.unroute('**/greetings.json', rejectCatalog);

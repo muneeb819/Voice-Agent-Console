@@ -7,6 +7,7 @@ exports.defaultSelfIntroForAgent = defaultSelfIntroForAgent;
 exports.deepgramModelsForProviderType = deepgramModelsForProviderType;
 exports.createDefaultState = createDefaultState;
 exports.normalizeState = normalizeState;
+const opening_1 = require("./opening");
 // Deepgram Voice Agent listens with either Nova (general purpose) or Flux v2.
 // The Voice Agent's own verified baseline is Nova-3; Flux models remain available.
 exports.VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'];
@@ -182,7 +183,7 @@ function createDefaultState() {
                     '- Once the lead confirms qualification and interest, call set_disposition with code "XFER" and call transfer_to_live_agent.\n' +
                     '- If the lead says stop, take me off your list, not interested, or do not call, apologise politely, call set_disposition with "DNC" (or "NI"), and call end_call immediately.',
                 acceptViciCalls: true,
-                injectCampaignDisclosure: true,
+                injectCampaignDisclosure: false,
                 randomGreetingEnabled: true,
                 behavior: {
                     bargeIn: 'instant',
@@ -221,7 +222,7 @@ function createDefaultState() {
                 name: 'Medicare — Food & OTC Advisor',
                 mode: 'outbound',
                 language: 'en,es',
-                greeting: 'Hi, this is Haley calling from the Benefits Department. Your new food and OTC card is on hold right now, loaded with funds for groceries and dental. If unclaimed today, it gets returned to the state pool. To release your card immediately, do you have Medicare Part A and B?',
+                greeting: 'Hi, this is Haley calling from the Benefits Department. How are you doing today?',
                 prompt: 'You are Haley, an AI Outbound Benefits Advisor calling from the Benefits Department (representing US Health Care). Be honest that you are an AI if asked.\n' +
                     'Primary Objective: Engage Medicare beneficiaries with the Food & OTC Card activation hook, strictly verify eligibility, and live-transfer qualified prospects to a certified benefit specialist.\n\n' +
                     '=== 1. STRICT VERIFICATION GATE (HARD STOP) ===\n' +
@@ -231,8 +232,8 @@ function createDefaultState() {
                     'Always ask and trust the prospect\'s spoken current age rather than any pre-filled lead file age (file records may be outdated or blank).\n' +
                     'Never transfer anyone under 65, over 85, or without Medicare Part A/B.\n\n' +
                     '=== 2. SCRIPTED FLOW & DIALOGUE TREE ===\n' +
-                    '- Phase 1 (Delivered in Greeting — Food & OTC Card Hook):\n' +
-                    '  You already asked if they have Medicare Part A and B to release their Food & OTC card.\n' +
+                    '- Phase 1 (After the opening):\n' +
+                    '  If Medicare status has not been established, ask whether they have Medicare Part A or Part B; do not assume the opening asked this.\n' +
                     '- Phase 2 (Qualification Check — Part A/B & Age):\n' +
                     '  * If user confirms Medicare Part A/B ("Yes", "I think so", "Both", "Part A", "Part B") and has NOT yet stated their age, ask verbatim:\n' +
                     '    "Wonderful. Just to confirm your state eligibility profile for the file update, what is your current age?"\n' +
@@ -263,7 +264,7 @@ function createDefaultState() {
                     '3) Speak verbatim:\n' +
                     '   "All right, everything looks good on my end. Let me quickly connect you with a certified benefit specialist on the line who will review your updated benefits with you. Just hold for one moment, here you go!"',
                 acceptViciCalls: true,
-                injectCampaignDisclosure: true,
+                injectCampaignDisclosure: false,
                 randomGreetingEnabled: true,
                 behavior: {
                     bargeIn: 'instant',
@@ -302,7 +303,7 @@ function createDefaultState() {
                 name: 'Nova — Expressive Live Concierge & General Q&A',
                 mode: 'both',
                 language: 'en',
-                greeting: "Hey there! This is Nova on the line — how are you doing today? Feel free to ask me anything at all, I'm right here to help!",
+                greeting: "Hey there! This is Nova on the line. How are you doing today?",
                 prompt: 'You are Nova, a warm, witty AI voice assistant and concierge.\n' +
                     'Core Capabilities:\n' +
                     '1) Natural Self-Introduction: Introduce yourself warmly as Nova and answer honestly that you are an AI assistant if asked.\n' +
@@ -313,7 +314,7 @@ function createDefaultState() {
                     '6) Live Specialist Transfer: Whenever the caller asks to speak with a live specialist, closer, or supervisor, or confirms qualification for a benefit/coverage review, call set_disposition with code "XFER" and call transfer_to_live_agent.\n' +
                     '7) Do-Not-Call (DNC) & Call Control: If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with code "DNC", and call end_call immediately. If the caller says goodbye or asks to hang up, wish them a wonderful day and call end_call.',
                 acceptViciCalls: true,
-                injectCampaignDisclosure: true,
+                injectCampaignDisclosure: false,
                 randomGreetingEnabled: true,
                 behavior: {
                     bargeIn: 'instant',
@@ -714,7 +715,9 @@ function normalizeState(raw) {
                         fnIds.push(reqFnId);
                 }
             }
-            let cleanPrompt = String(a.prompt ?? '').replace(/When the call connects,\s*call accept_vicidial_call\.?\s*/gi, '').trim();
+            const stockMedicarePrompt = base.agents.find((entry) => entry.id === 'a_medicare')?.prompt || '';
+            let cleanPrompt = (0, opening_1.migrateStockMedicarePrompt)(String(a.prompt ?? ''), stockMedicarePrompt)
+                .replace(/When the call connects,\s*call accept_vicidial_call\.?\s*/gi, '').trim();
             if (cleanPrompt.length > 0) {
                 if (xferFnId && fnIds.includes(xferFnId) && !/transfer_to_live_agent/i.test(cleanPrompt)) {
                     cleanPrompt +=
@@ -757,11 +760,11 @@ function normalizeState(raw) {
                 name: agentName,
                 mode: ['outbound', 'inbound', 'both'].includes(a.mode) ? a.mode : 'outbound',
                 language: String(a.language || 'en'),
-                greeting: String(a.greeting ?? ''),
+                greeting: (0, opening_1.migrateStockOpening)(String(a.greeting ?? '')),
                 randomGreetingEnabled: a.randomGreetingEnabled !== false,
                 prompt: cleanPrompt,
                 acceptViciCalls: isNovaAgent ? true : a.acceptViciCalls !== undefined ? Boolean(a.acceptViciCalls) : hadLegacyAccept,
-                injectCampaignDisclosure: a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : true,
+                injectCampaignDisclosure: a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : false,
                 behavior,
                 stt: {
                     keyterms: String(a.stt?.keyterms ?? ''),

@@ -39,7 +39,7 @@ export interface Agent {
   mode: 'outbound' | 'inbound' | 'both';
   language: string;
   greeting: string;
-  randomGreetingEnabled: boolean; // Append one shared-library greeting when a call/test starts.
+  randomGreetingEnabled: boolean; // Vary one saved opening using a shared-library selection.
   prompt: string;
   acceptViciCalls: boolean; // Bridge lifecycle flag (hydrates lead before Deepgram session)
   injectCampaignDisclosure: boolean; // Prepends campaign disclosure to greeting when linked

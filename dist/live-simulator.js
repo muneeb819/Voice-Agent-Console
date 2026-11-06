@@ -40,6 +40,7 @@ exports.attachLiveSimulator = attachLiveSimulator;
 const crypto_1 = __importDefault(require("crypto"));
 const ws_1 = __importStar(require("ws"));
 const db_1 = require("./db");
+const opening_1 = require("./opening");
 const defaults_1 = require("./defaults");
 const env_store_1 = require("./env-store");
 const settings_builder_1 = require("./settings-builder");
@@ -116,6 +117,7 @@ function attachLiveSimulator(server, noServer = false) {
         let comfortSilenceTimer = null;
         let pendingEndTimer = null;
         let connectTimer = null;
+        let openingGate = null;
         let activeState = null;
         let activeAgent = null;
         let activeCampaign;
@@ -323,6 +325,8 @@ function attachLiveSimulator(server, noServer = false) {
                 clearTimeout(connectTimer);
                 connectTimer = null;
             }
+            openingGate?.cancel();
+            openingGate = null;
             for (const controller of activeFunctionAborts.values())
                 controller.abort();
             activeFunctionAborts.clear();
@@ -423,6 +427,7 @@ function attachLiveSimulator(server, noServer = false) {
                 return;
             }
             if (msg.type === 'client_barge_in') {
+                openingGate?.userStarted();
                 if (activeAgent?.behavior?.bargeIn !== 'off') {
                     suppressStaleAgentAudio = true;
                     sendClientJson({ type: 'barge_in', source: 'client_vad' });
@@ -436,7 +441,8 @@ function attachLiveSimulator(server, noServer = false) {
                     return;
                 suppressStaleAgentAudio = false;
                 if (dgWs && dgWs.readyState === ws_1.default.OPEN && settingsApplied) {
-                    dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', content }));
+                    openingGate?.agentTurn();
+                    dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message: content }));
                 }
                 return;
             }
@@ -450,6 +456,7 @@ function attachLiveSimulator(server, noServer = false) {
                     pendingInjectedMessages.push(injectPayload);
                 }
                 else if (dgWs && dgWs.readyState === ws_1.default.OPEN) {
+                    openingGate?.userTurn();
                     lastUserTurnTs = Date.now();
                     awaitingFirstAudioForTurn = true;
                     dgWs.send(injectPayload);
@@ -522,7 +529,7 @@ function attachLiveSimulator(server, noServer = false) {
                     finalizeCall('missing_api_key');
                     return;
                 }
-                selectedGreeting = (0, db_1.trySelectGreeting)(activeAgent.id, activeAgent.randomGreetingEnabled !== false);
+                selectedGreeting = (0, db_1.trySelectGreeting)(activeAgent.id, activeAgent.randomGreetingEnabled !== false, activeAgent.greeting);
                 if (activeAgent.randomGreetingEnabled !== false && !selectedGreeting) {
                     sendClientJson({ type: 'warning', code: 'GREETING_LIBRARY_UNAVAILABLE',
                         message: 'The greeting library is unavailable; this test will use the configured opening.' });
@@ -552,7 +559,28 @@ function attachLiveSimulator(server, noServer = false) {
                 // opts in, the authenticated backend executes it only after turn confirmation.
                 for (const fn of rawSettings.agent.think.functions || [])
                     fn.defer_until_eot = true;
-                const wireSettings = interpolateEnvPlaceholders(rawSettings);
+                let wireSettings;
+                let wireGreeting = '';
+                try {
+                    const prepared = (0, opening_1.prepareDelayedOpening)(interpolateEnvPlaceholders(rawSettings));
+                    wireSettings = prepared.settings;
+                    wireGreeting = prepared.greeting;
+                }
+                catch (err) {
+                    sendFatalError('PROMPT_TOO_LONG', err.message || 'Could not prepare the opening.');
+                    finalizeCall('prompt_too_long');
+                    return;
+                }
+                openingGate = (0, opening_1.createOpeningGate)({
+                    greeting: wireGreeting,
+                    sendOpening: (message) => {
+                        if (!closed && dgWs?.readyState === ws_1.default.OPEN) {
+                            dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
+                        }
+                    },
+                    playAudio: sendClientAudio,
+                    onOverflow: () => sendClientJson({ type: 'warning', message: 'Early provider audio exceeded the opening buffer and was dropped.' }),
+                });
                 const targetUrl = customAgentUrl || 'wss://agent.deepgram.com/v1/agent/converse';
                 const wsHeaders = {};
                 if (dgApiKey) {
@@ -609,7 +637,7 @@ function attachLiveSimulator(server, noServer = false) {
                             return;
                         }
                         const audioBuf = Buffer.isBuffer(dgRaw) ? dgRaw : Buffer.from(dgRaw);
-                        sendClientAudio(audioBuf);
+                        openingGate?.audio(audioBuf);
                         return;
                     }
                     let evt;
@@ -629,6 +657,7 @@ function attachLiveSimulator(server, noServer = false) {
                             if (settingsApplied)
                                 break;
                             settingsApplied = true;
+                            openingGate?.start();
                             if (connectTimer) {
                                 clearTimeout(connectTimer);
                                 connectTimer = null;
@@ -656,6 +685,7 @@ function attachLiveSimulator(server, noServer = false) {
                             }
                             while (pendingInjectedMessages.length > 0) {
                                 const injected = pendingInjectedMessages.shift();
+                                openingGate?.userTurn();
                                 lastUserTurnTs = Date.now();
                                 awaitingFirstAudioForTurn = true;
                                 if (dgWs?.readyState === ws_1.default.OPEN)
@@ -676,6 +706,7 @@ function attachLiveSimulator(server, noServer = false) {
                             break;
                         }
                         case 'UserStartedSpeaking': {
+                            openingGate?.userStarted();
                             if (activeAgent?.behavior?.bargeIn !== 'off') {
                                 suppressStaleAgentAudio = true;
                                 sendClientJson({ type: 'barge_in', source: 'deepgram_server' });
@@ -686,12 +717,14 @@ function attachLiveSimulator(server, noServer = false) {
                         case 'ConversationText': {
                             const role = evt.role === 'user' ? 'user' : 'assistant';
                             if (role === 'user') {
+                                openingGate?.userTurn();
                                 turns += 1;
                                 lastUserTurnTs = Date.now();
                                 awaitingFirstAudioForTurn = true;
                                 suppressStaleAgentAudio = false;
                             }
                             else {
+                                openingGate?.agentTurn();
                                 suppressStaleAgentAudio = false;
                             }
                             recordTranscript(role, String(evt.content || ''), {
@@ -700,21 +733,26 @@ function attachLiveSimulator(server, noServer = false) {
                             break;
                         }
                         case 'AgentThinking': {
+                            openingGate?.agentTurn();
                             lastThinkingTs = Date.now();
                             suppressStaleAgentAudio = false;
                             sendClientJson({ type: 'agent_state', state: 'thinking' });
                             break;
                         }
                         case 'AgentStartedSpeaking': {
+                            openingGate?.agentTurn();
                             suppressStaleAgentAudio = false;
                             sendClientJson({ type: 'agent_state', state: 'speaking' });
                             break;
                         }
                         case 'AgentAudioDone': {
-                            sendClientJson({ type: 'agent_state', state: 'listening' });
-                            if (awaitingHangupAudioDone) {
-                                finalizeCall('bot_end_call');
-                            }
+                            openingGate?.afterRelease(() => {
+                                if (closed)
+                                    return;
+                                sendClientJson({ type: 'agent_state', state: 'listening' });
+                                if (awaitingHangupAudioDone)
+                                    finalizeCall('bot_end_call');
+                            });
                             break;
                         }
                         case 'FunctionCallCancelled': {

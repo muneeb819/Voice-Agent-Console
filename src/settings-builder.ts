@@ -1,5 +1,6 @@
 import { Agent, Campaign, ConsoleState, Provider, ValidationItem } from './types';
 import { deepgramModelsForProviderType, VOICE_AGENT_STT_MODELS } from './defaults';
+import { composeOpening } from './opening';
 
 export function isPlainObject(val: unknown): val is Record<string, any> {
   return typeof val === 'object' && val !== null && !Array.isArray(val);
@@ -327,19 +328,11 @@ export function buildDeepgramSettings(
     };
   }
 
-  // Greeting + optional Campaign Recording Disclosure injection
-  let finalGreeting = agent.greeting.trim();
-  if (
-    agent.injectCampaignDisclosure &&
-    linkedCampaign?.disclosure?.trim() &&
-    !finalGreeting.toLowerCase().includes(linkedCampaign.disclosure.trim().toLowerCase())
-  ) {
-    finalGreeting = `${linkedCampaign.disclosure.trim()} ${finalGreeting}`.trim();
-  }
-  // Call/session code chooses once. Previews remain deterministic and never
-  // consume the rotation. Preserve the saved introduction and disclosure.
-  const variation = agent.randomGreetingEnabled !== false ? (options?.greetingText || '').trim() : '';
-  if (variation) finalGreeting = `${finalGreeting} ${variation}`.trim();
+  // The saved opening supplies the identity. A library draw varies its short
+  // salutation/question instead of appending a second, unrelated greeting.
+  // Previews have no draw and therefore never consume the rotation.
+  const variation = agent.randomGreetingEnabled !== false ? (options?.greetingText || '') : '';
+  const finalGreeting = composeOpening(agent.greeting, variation, agent.injectCampaignDisclosure, linkedCampaign?.disclosure || '');
 
   return {
     type: 'Settings',

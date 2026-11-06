@@ -1,5 +1,7 @@
 # Medicare Outbound Lead Qualification & Cold Calling Bot — Training Blueprint
 
+> **Historical, unverified example — not approved call copy.** The affiliation, card availability, state approval and eligibility statements below have not been verified. Do not use them without substantiation and appropriate legal/compliance review. The current stock opening is shorter than the historical example below; customized prompts may still contain old language. See [opening behavior and test limits](../README.md#imported-greetings-and-call-rotation). VICIdial integration remains paused.
+
 ## 1. Bot Profile & Core Objectives
 
 - **Role:** Outbound Benefits Advisor / Lead Qualification Bot (representing `"Benefits Department"` / `"US Health Care"`).
