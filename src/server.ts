@@ -165,8 +165,13 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     return subKey ? `${baseIp}:${subKey}` : baseIp;
   };
 
-  const canCreateAccount = (req: Request): boolean =>
-    hasActiveAuthSession(req) || (!isAuthEnabled() && isRequestAuthorized(req));
+  const canCreateAccount = (req: Request): boolean => {
+    if (!isAuthEnabled() && isRequestAuthorized(req)) return true;
+    if (!hasActiveAuthSession(req)) return false;
+    const account = getAuthenticatedUser(req);
+    // Legacy ADMIN_PASSWORD sessions remain owner-equivalent for recovery.
+    return !account || account.role === 'owner' || account.role === 'admin';
+  };
 
   const rateLimited = (
     key: string,
@@ -269,7 +274,6 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       authEnabled: true,
       authenticated: true,
       user: result.user,
-      token,
     });
   });
 
@@ -295,7 +299,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       loginAttempts.delete(key);
       const token = createUserSession(user.id);
       setAuthCookie(res, token, req);
-      res.json({ ok: true, authEnabled: true, authenticated: true, user, token });
+      res.json({ ok: true, authEnabled: true, authenticated: true, user });
       return;
     }
 
@@ -316,7 +320,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     loginAttempts.delete(key);
     const token = createSessionToken();
     setAuthCookie(res, token, req);
-    res.json({ ok: true, authEnabled: true, authenticated: true, token });
+    res.json({ ok: true, authEnabled: true, authenticated: true });
   });
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {
