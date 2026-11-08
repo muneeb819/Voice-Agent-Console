@@ -341,6 +341,29 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
   }
 
   if (isRequestAuthorized(req)) {
+    const account = getAuthenticatedUser(req);
+    const role = account?.role || 'owner'; // legacy ADMIN_PASSWORD session is owner-equivalent
+    const adminOnly =
+      p === '/secrets' ||
+      p === '/state/reset' ||
+      p === '/demo-tunnel/start' ||
+      p === '/demo-tunnel/stop' ||
+      p === '/vici/deploy-script' ||
+      p === '/vici/release-bundle' ||
+      p === '/functions/test-webhook' ||
+      p === '/speech-service/activate' ||
+      p === '/speech-service/test' ||
+      p === '/vici/verify' ||
+      /^\/vici\/calls\/[^/]+\/(?:hangup|transfer)$/.test(p);
+    const readOnly = req.method === 'GET' || req.method === 'HEAD';
+    if (adminOnly && role !== 'owner' && role !== 'admin') {
+      res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Administrator permission required.' });
+      return;
+    }
+    if (role === 'viewer' && !readOnly) {
+      res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'This account has read-only access.' });
+      return;
+    }
     next();
     return;
   }
