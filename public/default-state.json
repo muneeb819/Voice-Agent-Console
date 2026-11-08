@@ -348,10 +348,7 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality purposes.",
-      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC",
-      "agentIds": [
-        "a1"
-      ]
+      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC"
     },
     {
       "id": "c_medicare",
@@ -370,10 +367,7 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality and benefit verification.",
-      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK",
-      "agentIds": [
-        "a_medicare"
-      ]
+      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK"
     },
     {
       "id": "c_nova",
@@ -392,10 +386,7 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality and training purposes.",
-      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC",
-      "agentIds": [
-        "a_nova"
-      ]
+      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC"
     },
     {
       "id": "c_med_fronter",
@@ -414,10 +405,7 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality and benefit verification.",
-      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK",
-      "agentIds": [
-        "a_jessica"
-      ]
+      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK"
     }
   ],
   "vici": {

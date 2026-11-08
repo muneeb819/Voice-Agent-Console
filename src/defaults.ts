@@ -447,7 +447,6 @@ export function createDefaultState(): ConsoleState {
         id: 'c1',
         name: 'FE Fronter – Test',
         agentId: 'a1',
-        agentIds: ['a1'],
         viciCampaign: 'FETEST',
         lists: '1001',
         start: '09:00',
@@ -478,7 +477,6 @@ export function createDefaultState(): ConsoleState {
         id: 'c_medicare',
         name: 'Medicare — Food & OTC Outbound',
         agentId: 'a_medicare',
-        agentIds: ['a_medicare'],
         viciCampaign: 'MEDICARE',
         lists: '2001,2002',
         start: '09:00',
@@ -509,7 +507,6 @@ export function createDefaultState(): ConsoleState {
         id: 'c_nova',
         name: 'Nova — Live Concierge & General Q&A',
         agentId: 'a_nova',
-        agentIds: ['a_nova'],
         viciCampaign: 'NOVACONC',
         lists: '3001',
         start: '09:00',
@@ -947,17 +944,11 @@ export function normalizeState(raw: any): ConsoleState {
         const defaultDisclosure = /medicare/i.test(cName)
           ? 'This call may be recorded for quality and benefit verification.'
           : 'This call may be recorded for quality purposes.';
-        const agentId = String(c.agentId ?? '').trim();
-        const rawAgentIds = Array.isArray(c.agentIds) ? c.agentIds : agentId ? [agentId] : [];
-        const agentIds = [...new Set(rawAgentIds.map((value: unknown) => String(value || '').trim()).filter(Boolean))];
-        // Legacy single-bot campaigns migrate to an explicit list; never invent an assignment.
-        if (agentId && !agentIds.includes(agentId)) agentIds.unshift(agentId);
         return {
           id: String(c.id || `c_${idx + 1}`),
           name: cName,
           // Missing assignments stay missing. Never silently attach a campaign to the first bot.
-          agentId,
-          agentIds,
+          agentId: String(c.agentId ?? ''),
           viciCampaign: String(c.viciCampaign ?? '').trim(),
           lists: String(c.lists ?? ''),
           start: String(c.start || '09:00'),

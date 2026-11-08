@@ -71,10 +71,7 @@ export interface Agent {
 export interface Campaign {
   id: string;
   name: string;
-  /** Primary VICIdial bridge bot; retained for backwards compatibility. */
   agentId: string;
-  /** All bots explicitly assigned to this campaign. */
-  agentIds: string[];
   viciCampaign: string;
   lists: string;
   start: string;
