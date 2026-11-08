@@ -7,6 +7,8 @@ export interface PublicUser {
   fullName: string;
   createdAt: string;
   lastLoginAt: string | null;
+  role: 'owner' | 'admin' | 'operator' | 'qa' | 'viewer';
+  active: boolean;
 }
 
 export interface SignupInput {
@@ -27,27 +29,25 @@ function ensureSchema(): void {
   const db = getDb();
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-      full_name TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      last_login_at TEXT
+      id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      full_name TEXT NOT NULL, password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL, last_login_at TEXT
     );
     CREATE TABLE IF NOT EXISTS user_sessions (
-      token TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL
+      token TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_user_sessions_expiry ON user_sessions(expires_at);
-    CREATE TABLE IF NOT EXISTS revoked_admin_sessions (
-      token_hash TEXT PRIMARY KEY,
-      expires_at TEXT NOT NULL
-    );
+    CREATE TABLE IF NOT EXISTS revoked_admin_sessions (token_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_revoked_admin_sessions_expiry ON revoked_admin_sessions(expires_at);
   `);
+  const columns = db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'role')) {
+    db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'operator'");
+    const first = db.prepare('SELECT id FROM users ORDER BY created_at ASC, id ASC LIMIT 1').get() as { id?: string } | undefined;
+    if (first?.id) db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(first.id);
+  }
+  if (!columns.some((column) => column.name === 'active')) db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
   schemaReady = true;
 }
 
@@ -121,6 +121,8 @@ function rowToUser(row: any): PublicUser {
     fullName: String(row.full_name),
     createdAt: String(row.created_at),
     lastLoginAt: row.last_login_at ? String(row.last_login_at) : null,
+    role: (['owner', 'admin', 'operator', 'qa', 'viewer'].includes(String(row.role)) ? String(row.role) : 'operator') as PublicUser['role'],
+    active: Number(row.active ?? 1) === 1,
   };
 }
 
@@ -154,10 +156,11 @@ export function createUser(input: SignupInput): CreateUserResult {
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  const role: PublicUser['role'] = countUsers() === 0 ? 'owner' : 'operator';
   try {
     db.prepare(
-      'INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, NULL)'
-    ).run(id, email, fullName, hashPassword(password), now);
+      'INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at, role, active) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)'
+    ).run(id, email, fullName, hashPassword(password), now, role);
   } catch (err: any) {
     if (String(err?.message || '').toLowerCase().includes('unique')) {
       return { ok: false, field: 'email', error: 'An account with this email already exists.' };
@@ -167,7 +170,7 @@ export function createUser(input: SignupInput): CreateUserResult {
 
   return {
     ok: true,
-    user: { id, email, fullName, createdAt: now, lastLoginAt: null },
+    user: { id, email, fullName, createdAt: now, lastLoginAt: null, role, active: true },
   };
 }
 
@@ -185,7 +188,7 @@ export function authenticateUser(rawEmail: unknown, password: string): PublicUse
   if (!email) return null;
   const row: any = getDb().prepare('SELECT * FROM users WHERE email = ?').get(email);
   if (!row) return null;
-  if (!verifyPassword(password, String(row.password_hash))) return null;
+  if (Number(row.active ?? 1) !== 1 || !verifyPassword(password, String(row.password_hash))) return null;
   const now = new Date().toISOString();
   getDb().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(now, row.id);
   const user = rowToUser(row);
@@ -232,7 +235,8 @@ export function getUserBySessionToken(token?: string | null): PublicUser | null 
     db.prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
     return null;
   }
-  return getUserById(String(row.user_id));
+  const user = getUserById(String(row.user_id));
+  return user?.active ? user : null;
 }
 
 export function destroyUserSession(token?: string | null): void {
