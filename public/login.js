@@ -17,24 +17,11 @@
     return (basePrefix || '') + rel;
   }
 
-  function saveAuthToken(token) {
-    if (!token) return;
-    try { sessionStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e) {}
-    try { localStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e) {}
-  }
-
-  function readAuthToken() {
-    try {
-      return sessionStorage.getItem(AUTH_TOKEN_KEY) || localStorage.getItem(AUTH_TOKEN_KEY) || '';
-    } catch (e) {
-      return '';
-    }
-  }
-
-  function clearAuthToken() {
+  function clearLegacyAuthToken() {
     try { sessionStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
     try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
   }
+  clearLegacyAuthToken();
 
   function markStaticDemo() {
     staticDemoReady = true;
@@ -277,8 +264,6 @@
 
   async function postJson(relUrl, body) {
     var headers = { 'Content-Type': 'application/json' };
-    var existingTok = readAuthToken();
-    if (existingTok) headers['Authorization'] = 'Bearer ' + existingTok;
     var res = await fetch(apiPath(relUrl), {
       method: 'POST',
       headers: headers,
@@ -298,15 +283,10 @@
     };
   }
 
-  function goHome(handoffToken) {
+  function goHome() {
     var next = new URLSearchParams(location.search).get('next');
     var defaultHome = (basePrefix || '') + '/';
     var target = next && next.charAt(0) === '/' && next.charAt(1) !== '/' ? next : defaultHome;
-    if (handoffToken) {
-      saveAuthToken(handoffToken);
-      var sep = target.indexOf('?') === -1 ? '?' : '&';
-      target = target + sep + 'vac_token=' + encodeURIComponent(handoffToken);
-    }
     location.replace(target);
   }
 
@@ -379,10 +359,9 @@
         password.select();
         return;
       }
-      if (out.data.token) saveAuthToken(out.data.token);
       if (progressBar) progressBar.style.width = '100%';
       if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
-      window.setTimeout(function () { goHome(out.data.token || ''); }, 320);
+      window.setTimeout(function () { goHome(); }, 320);
     } catch (err) {
       finishLoader();
       setMsg(msg, 'Network error. Check your connection and try again.');
@@ -539,8 +518,6 @@
     }
     try {
       var headers = {};
-      var savedTok = readAuthToken();
-      if (savedTok) headers['Authorization'] = 'Bearer ' + savedTok;
       var res = await fetch(apiPath('/api/auth/status'), {
         headers: headers,
         credentials: 'same-origin'
@@ -553,10 +530,10 @@
             setMode('signup');
             return;
           }
-          goHome(savedTok);
+          goHome();
           return;
         }
-        if (savedTok) clearAuthToken();
+        clearLegacyAuthToken();
         if (adminToggle && data.adminPasswordConfigured === false) {
           adminToggle.style.display = 'none';
         }
