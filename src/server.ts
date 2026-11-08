@@ -563,6 +563,30 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     };
   };
 
+  // Container/orchestrator probes. Liveness must not depend on external providers.
+  app.get('/health/live', (_req: Request, res: Response) => {
+    res.status(200).json({ ok: true, status: 'live', service: 'voice-agent-console' });
+  });
+
+  // Readiness verifies local persisted state only; upstream outages must not cause restart loops.
+  app.get('/health/ready', (_req: Request, res: Response) => {
+    try {
+      const state = getConsoleState();
+      const stateUsable = Boolean(
+        state && Array.isArray(state.agents) && Array.isArray(state.campaigns) &&
+        Array.isArray(state.providers) && state.services && typeof state.services === 'object'
+      );
+      if (!stateUsable) {
+        res.status(503).json({ ok: false, status: 'not_ready', service: 'voice-agent-console', reason: 'application_state_unavailable' });
+        return;
+      }
+      res.status(200).json({ ok: true, status: 'ready', service: 'voice-agent-console', checks: { applicationState: 'ok' } });
+    } catch {
+      // Never expose filesystem paths, database errors, secrets, or configuration in probes.
+      res.status(503).json({ ok: false, status: 'not_ready', service: 'voice-agent-console', reason: 'application_state_unavailable' });
+    }
+  });
+
   app.get('/api/health', (req: Request, res: Response) => {
     const authed = isRequestAuthorized(req);
     res.json({
