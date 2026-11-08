@@ -87,6 +87,7 @@ import {
   createUserSession,
   destroyUserSession,
   purgeExpiredSessions,
+  revokeAllUserSessions,
 } from './user-store';
 import {
   discoverActiveTunnelUrl,
@@ -326,6 +327,17 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     const token = createSessionToken();
     setAuthCookie(res, token, req);
     res.json({ ok: true, authEnabled: true, authenticated: true });
+  });
+
+  app.post('/api/auth/logout-all', (req: Request, res: Response) => {
+    const user = getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ ok: false, code: 'AUTH_REQUIRED', error: 'A signed-in user account is required.' });
+      return;
+    }
+    const revoked = revokeAllUserSessions(user.id);
+    clearAuthCookie(res, req);
+    res.json({ ok: true, authenticated: false, revokedSessions: revoked });
   });
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {
