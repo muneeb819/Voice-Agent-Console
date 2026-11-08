@@ -6,7 +6,7 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-const allSteps = ['step1', 'step2', 'live-bot', 'simulator-recording', 'greetings', 'opening', 'bridge-opening', 'step3', 'step4', 'security', 'health', 'static-site'];
+const allSteps = ['step1', 'step2', 'live-bot', 'simulator-recording', 'greetings', 'opening', 'bridge-opening', 'step3', 'step4', 'security', 'backend-audit', 'health', 'static-site'];
 const requestedSteps = process.argv.slice(2);
 const steps = requestedSteps.length ? requestedSteps : allSteps;
 
@@ -102,7 +102,7 @@ async function main() {
       console.log(`\n=== Running ${step} verification ===`);
       // These suites create their own server and need a fresh account store.
       const stepEnv = { ...env };
-      if (step === 'security' || step === 'live-bot' || step === 'greetings' || step === 'opening' || step === 'bridge-opening') {
+      if (step === 'security' || step === 'backend-audit' || step === 'live-bot' || step === 'greetings' || step === 'opening' || step === 'bridge-opening') {
         stepEnv.VAC_DATA_DIR = path.join(testDataDir, step);
         fs.mkdirSync(stepEnv.VAC_DATA_DIR, { recursive: true });
         stepEnv.VAC_ENV_FILE = path.join(stepEnv.VAC_DATA_DIR, '.env');

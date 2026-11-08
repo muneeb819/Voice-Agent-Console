@@ -62,6 +62,7 @@ interface PreCallRecord {
 
 export interface ActiveBridgeCallSummary {
   callId: string;
+  campaignId: string;
   transport: 'audiosocket' | 'sip_rtp';
   exten: string;
   callerCode: string;
@@ -87,7 +88,7 @@ function interpolateEnvPlaceholders(obj: any): any {
       if (varName === 'ELEVEN_KEY' || varName === 'ELEVEN_LABS_API_KEY') return getSecret('ELEVENLABS_API_KEY');
       if (varName === 'GROQ_KEY') return getSecret('GROQ_API_KEY');
       if (varName === 'CARTESIA_KEY') return getSecret('CARTESIA_API_KEY');
-      return process.env[varName] || '';
+      return ''; // unknown environment variables are not provider secrets
     });
   }
   if (Array.isArray(obj)) return obj.map(interpolateEnvPlaceholders);
@@ -239,8 +240,9 @@ export class VicidialBridgeService {
   private monitorWss: WebSocketServer | null = null;
 
   private readonly preCallRegistry = new Map<string, PreCallRecord>();
+  private preCallSweepTimer: NodeJS.Timeout | null = null;
   private readonly activeCalls = new Map<string, ActiveBridgeCallSummary>();
-  private readonly activeSessionClosers = new Map<string, (reason: string) => void>();
+  private readonly activeSessionClosers = new Map<string, (reason: string) => void | Promise<void>>();
   private readonly activeSessionTransferrers = new Map<string, (reason: string) => Promise<void>>();
 
   private stats = {
@@ -272,7 +274,7 @@ export class VicidialBridgeService {
   }
 
   public createMonitorWebSocketServer(): WebSocketServer {
-    this.monitorWss = new WebSocketServer({ noServer: true });
+    this.monitorWss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
     this.monitorWss.on('connection', (ws) => {
       ws.send(
         JSON.stringify({
@@ -325,7 +327,7 @@ export class VicidialBridgeService {
     }
     let activeOnCampaign = 0;
     for (const c of this.activeCalls.values()) {
-      if (c.viciCampaign === campaign.viciCampaign && c.campaignName === campaign.name) {
+      if (c.campaignId === campaign.id) {
         activeOnCampaign += 1;
       }
     }
@@ -375,6 +377,7 @@ export class VicidialBridgeService {
       campaignId: campaign?.viciCampaign,
     });
 
+    if (this.preCallRegistry.size >= 512) throw new Error('Too many unclaimed pre-call registrations.');
     const uuid = crypto.randomUUID();
     this.preCallRegistry.set(uuid, {
       uuid,
@@ -401,16 +404,32 @@ export class VicidialBridgeService {
   }
 
   public async start(): Promise<void> {
+    this.preCallSweepTimer = setInterval(() => {
+      const cutoff = Date.now() - 45000;
+      for (const [key, rec] of this.preCallRegistry) if (rec.createdAt <= cutoff) this.preCallRegistry.delete(key);
+    }, 15000);
+    this.preCallSweepTimer.unref();
     await this.startAudioSocketServer();
-    await this.startSipRtpServer();
+    try {
+      await this.startSipRtpServer();
+    } catch (err) {
+      await this.stop();
+      throw err;
+    }
   }
 
   public async stop(): Promise<void> {
-    for (const closer of this.activeSessionClosers.values()) {
-      try {
-        closer('bridge_shutdown');
-      } catch {}
+    if (this.preCallSweepTimer) { clearInterval(this.preCallSweepTimer); this.preCallSweepTimer = null; }
+    this.preCallRegistry.clear();
+    if (this.monitorWss) {
+      for (const client of this.monitorWss.clients) client.terminate();
+      this.monitorWss.close();
+      this.monitorWss = null;
     }
+    const closing = Array.from(this.activeSessionClosers.values()).map(async (closer) => {
+      try { await closer('bridge_shutdown'); } catch {}
+    });
+    await Promise.allSettled(closing);
     this.activeSessionClosers.clear();
     this.activeCalls.clear();
 
@@ -590,14 +609,6 @@ export class VicidialBridgeService {
       const tryListen = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           this.tcpServer!.removeListener('error', onErr);
-          if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
-            const nextPort = candidatePort + 1;
-            console.warn(
-              `[ViciBridge] AudioSocket TCP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`
-            );
-            tryListen(nextPort, candidateHost, retriesLeft - 1);
-            return;
-          }
           reject(err);
         };
         this.tcpServer!.once('error', onErr);
@@ -611,7 +622,7 @@ export class VicidialBridgeService {
           resolve();
         });
       };
-      tryListen(this.audioSocketPort, this.host, 100);
+      tryListen(this.audioSocketPort, this.host, 0);
     });
   }
 
@@ -690,13 +701,15 @@ export class VicidialBridgeService {
     };
 
     sock.on('message', async (msgBuf, rinfo) => {
+      try {
       const raw = msgBuf.toString('utf8');
       const { startLine, headers, body } = parseSipMessage(raw);
       if (!startLine || startLine.startsWith('SIP/2.0')) return;
 
       const [methodRaw, requestUri] = startLine.split(/\s+/);
       const method = (methodRaw || '').toUpperCase();
-      const callId = firstHeader(headers, 'call-id', 'i');
+      const callId = firstHeader(headers, 'call-id', 'i').slice(0, 256);
+      if (!callId || /[\r\n\x00]/.test(callId)) return;
       const toRaw = firstHeader(headers, 'to', 't');
       const fromRaw = firstHeader(headers, 'from', 'f');
 
@@ -778,17 +791,35 @@ export class VicidialBridgeService {
         // Parse remote RTP endpoint from SDP
         const cMatch = /^c=IN IP4\s+([^\r\n\s]+)/m.exec(body);
         const mMatch = /^m=audio\s+(\d+)\s+RTP\/AVP/m.exec(body);
-        const remoteRtpIp = cMatch ? cMatch[1].trim() : rinfo.address;
+        const rawRemoteRtpIp = cMatch ? cMatch[1].trim() : rinfo.address;
+        const remoteRtpIp = rawRemoteRtpIp.toLowerCase() === 'localhost' ? '127.0.0.1' : rawRemoteRtpIp;
+        if (net.isIP(remoteRtpIp) === 0) {
+          sendSipResponse('488 Not Acceptable Here', headers, toRaw, [], '', rinfo);
+          return;
+        }
         const remoteRtpPort = mMatch ? Number(mMatch[1]) : 0;
 
-        if (!remoteRtpPort) {
+        if (!Number.isInteger(remoteRtpPort) || remoteRtpPort < 1024 || remoteRtpPort > 65535 || !isBridgePeerIpAllowed(remoteRtpIp)) {
+          this.stats.lastError = 'SIP SDP media endpoint is missing or outside the trusted PBX allowlist.';
           sendSipResponse('488 Not Acceptable Here', headers, toRaw, [], '', rinfo);
           return;
         }
 
         // Bind dedicated UDP RTP socket for this call
         const rtpSocket = dgram.createSocket('udp4');
-        await new Promise<void>((r) => rtpSocket.bind(0, this.host, () => r()));
+        rtpSocket.on('error', () => { try { rtpSocket.close(); } catch {} });
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const onError = (err: Error) => reject(err);
+            rtpSocket.once('error', onError);
+            rtpSocket.bind(0, this.host, () => { rtpSocket.removeListener('error', onError); resolve(); });
+          });
+        } catch {
+          sendSipResponse('503 Service Unavailable', headers, toRaw, [], '', rinfo);
+          return;
+        }
+        // An earlier concurrent INVITE may have won while this socket was binding.
+        if (dialogs.has(callId)) { try { rtpSocket.close(); } catch {} return; }
         const localRtpPort = (rtpSocket.address() as net.AddressInfo).port;
 
         const localIpForSdp = resolveSdpAdvertisedHost(rinfo.address, getConsoleState().vici.bridgeHost || '', this.host);
@@ -937,8 +968,8 @@ export class VicidialBridgeService {
           hooks,
         });
 
-        rtpSocket.on('message', (pktBuf) => {
-          if (rtpClosed) return;
+        rtpSocket.on('message', (pktBuf, peer) => {
+          if (rtpClosed || peer.address !== remoteRtpIp || peer.port !== remoteRtpPort) return;
           const parsed = parseRtpPacket(pktBuf);
           if (!parsed) return;
           if (parsed.payloadType === 0 && parsed.payload.length > 0) {
@@ -966,18 +997,15 @@ export class VicidialBridgeService {
           },
         });
       }
+      } catch (err: any) {
+        this.stats.lastError = `SIP request failed: ${err?.message || 'unknown error'}`;
+      }
     });
 
     await new Promise<void>((resolve, reject) => {
       const tryBind = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           sock.removeListener('error', onErr);
-          if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
-            const nextPort = candidatePort + 1;
-            console.warn(`[ViciBridge] SIP UDP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);
-            tryBind(nextPort, candidateHost, retriesLeft - 1);
-            return;
-          }
           reject(err);
         };
         sock.once('error', onErr);
@@ -991,7 +1019,7 @@ export class VicidialBridgeService {
           resolve();
         });
       };
-      tryBind(this.sipPort, this.host, 100);
+      tryBind(this.sipPort, this.host, 0);
     });
   }
 
@@ -1082,6 +1110,8 @@ export class VicidialBridgeService {
     let transferredTo: string | null = null;
     let dncAdded = false;
     let transferExecuted = false;
+    let transferCompletion: Promise<void> | null = null;
+    let resolveTransferCompletion: (() => void) | null = null;
     let pendingTransferArgs: {
       reason: string;
       prospect_name?: string;
@@ -1105,6 +1135,7 @@ export class VicidialBridgeService {
 
     const summary: ActiveBridgeCallSummary = {
       callId,
+      campaignId: campaign.id,
       transport: opts.transport,
       exten,
       callerCode: parsedCaller.callerCode,
@@ -1141,6 +1172,7 @@ export class VicidialBridgeService {
     const executeTransferAction = async (args: { reason: string; confirmed_age?: string }) => {
       if (transferExecuted || closed) return;
       transferExecuted = true;
+      transferCompletion = new Promise<void>((resolve) => { resolveTransferCompletion = resolve; });
 
       const xferType = campaign?.xferType || 'ingroup';
       const xferTarget = campaign?.xferTarget || 'DEFAULTINGROUP';
@@ -1190,17 +1222,20 @@ export class VicidialBridgeService {
           addTranscript('system', `Transfer failed (${detail}); campaign fallback disposition ${fbCode} is not in the selected campaign’s allowed status list, so no fallback status was applied.`);
         } else {
           disposition = fbCode;
-          await viciClient.updateLeadDisposition({
+          const fallbackUpdate = await viciClient.updateLeadDisposition({
             leadId: summary.leadId,
             phone: summary.phone,
             status: fbCode,
             notes: `Transfer fallback (${detail}) — AI qualified: ${args.reason}`,
           });
-          addTranscript('system', `Transfer failed (${detail}); applied fallback disposition ${fbCode}`);
+          if (fallbackUpdate.ok) disposition = fbCode;
+          addTranscript('system', `Transfer failed (${detail}); fallback disposition ${fbCode} ${fallbackUpdate.ok ? 'was accepted' : 'was NOT accepted'} by VICIdial.`);
         }
       }
 
       updateState('transferred');
+      resolveTransferCompletion?.();
+      resolveTransferCompletion = null;
       finalizeSession('transferred_to_closer');
     };
 
@@ -1229,6 +1264,13 @@ export class VicidialBridgeService {
           dgWs.close(1000, reason);
         } catch {}
       }
+
+      // Do not race a HANGUP ahead of an in-flight EXTENSIONTRANSFER when the
+      // mock/transport closes immediately after requesting the transfer.
+      if (transferCompletion && reason !== 'transferred_to_closer') {
+        await Promise.race([transferCompletion, new Promise((resolve) => setTimeout(resolve, 12000))]);
+      }
+      opts.hooks.hangupTransport();
 
       // Dead air is a campaign-specific status update, never a generic no-answer alias.
       // Attempt update_lead first; retain the configured code for the Remote Agent hangup
@@ -1275,13 +1317,10 @@ export class VicidialBridgeService {
           .catch(() => {});
       }
 
-      opts.hooks.hangupTransport();
-
-      this.activeCalls.delete(callId);
-      this.activeSessionClosers.delete(callId);
-      this.activeSessionTransferrers.delete(callId);
-
-      const savedRec = recorder.finalizeAndSave(callId);
+      let savedRec: ReturnType<StereoCallRecorder8k['finalizeAndSave']> = null;
+      try { savedRec = recorder.finalizeAndSave(callId); } catch (err: any) {
+        this.stats.lastError = `Call recording could not be saved: ${err?.message || 'storage error'}`;
+      }
 
       const endedAtIso = new Date().toISOString();
       const durationMs = Math.max(1, Date.now() - startedAtMs);
@@ -1319,8 +1358,13 @@ export class VicidialBridgeService {
 
       try {
         saveBridgeCallLog(cdr);
-      } catch {}
+      } catch (err: any) {
+        this.stats.lastError = `Call history could not be saved: ${err?.message || 'database error'}`;
+      }
 
+      this.activeCalls.delete(callId);
+      this.activeSessionClosers.delete(callId);
+      this.activeSessionTransferrers.delete(callId);
       this.broadcastMonitor({
         type: 'call_ended',
         callId,
@@ -1443,6 +1487,8 @@ export class VicidialBridgeService {
 
       updateState('connecting_deepgram');
       dgWs = new WebSocket(targetUrl, {
+        maxPayload: 4 * 1024 * 1024,
+        handshakeTimeout: 15000,
         headers: dgKey ? { Authorization: `Token ${dgKey}` } : {},
         family: 4,
       });
@@ -1604,6 +1650,7 @@ export class VicidialBridgeService {
                 args = { _raw: fnItem.arguments || '' };
               }
 
+              if (closed || cancelledFnIds.has(fnItem.id)) continue;
               let resultPayload: Record<string, any> = { ok: true };
 
               if (fnItem.name === 'set_disposition') {
@@ -1656,7 +1703,7 @@ export class VicidialBridgeService {
                 const noteSummary = `[AI Qualified${metaParts.length ? ' | ' + metaParts.join(' | ') : ''}] ${reason}`;
 
                 // Push structured metadata into vicidial_list BEFORE transfer so closer screen-pop shows Name, Age, Medicare Status & Hook Type!
-                await viciClient.updateLeadDisposition({
+                const notesUpdate = await viciClient.updateLeadDisposition({
                   leadId: summary.leadId,
                   phone: summary.phone,
                   status: disposition,
@@ -1682,7 +1729,7 @@ export class VicidialBridgeService {
                 resultPayload = {
                   ok: true,
                   transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
-                  closer_screen_pop_notes_saved: true,
+                  closer_screen_pop_notes_saved: notesUpdate.ok,
                   metadata_passed: {
                     prospect_name: args.prospect_name || hydratedLead.first_name || null,
                     confirmed_age: args.confirmed_age || null,
@@ -1699,7 +1746,7 @@ export class VicidialBridgeService {
                 }, 9000);
                 resultPayload = { ok: true, action: 'hangup_after_speech' };
               } else {
-                const fnConfig = state.functions.find((f) => f.name === fnItem.name);
+                const fnConfig = state.functions.find((f) => f.name === fnItem.name && agent.fnIds.includes(f.id));
                 const whRes = await executeCustomFunctionWebhook(fnConfig, args, {
                   callId,
                   callerCode: parsedCaller.callerCode,
@@ -1720,12 +1767,13 @@ export class VicidialBridgeService {
                   : whRes.data;
               }
 
+              if (closed || cancelledFnIds.has(fnItem.id)) continue;
               functionCalls.push({
                 ts: new Date().toISOString(),
                 id: fnItem.id,
                 name: fnItem.name,
                 args,
-                status: 'completed',
+                status: resultPayload.ok === false ? 'failed' : 'completed',
                 response: resultPayload,
               });
 
@@ -1783,7 +1831,10 @@ export class VicidialBridgeService {
         this.stats.lastError = err.message;
         if (!closed) finalizeSession('deepgram_ws_error').catch(() => {});
       });
-    })();
+    })().catch((err: any) => {
+      this.stats.lastError = `Bridge session failed: ${err?.message || 'unknown error'}`;
+      void finalizeSession('bridge_session_error').catch(() => {});
+    });
 
     return {
       onCallerPcm8k: (pcm8k: Buffer) => {

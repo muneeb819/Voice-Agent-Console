@@ -1,4 +1,4 @@
-import { AgentBehavior, AgentFunction, Campaign, ConsoleState, Provider } from './types';
+import { Agent,  AgentBehavior, AgentFunction, Campaign, ConsoleState, Provider } from './types';
 import { migrateStockMedicarePrompt, migrateStockOpening } from './opening';
 
 // Deepgram Voice Agent listens with either Nova (general purpose) or Flux v2.
@@ -673,7 +673,7 @@ export function normalizeState(raw: any): ConsoleState {
   const usedFnIds = new Set<string>();
   const functions: AgentFunction[] = Array.isArray(src.functions) && src.functions.length
     ? src.functions
-        .filter((f: any) => f?.name !== 'accept_vicidial_call') // Migrate legacy anti-pattern out of LLM tools
+        .filter((f: any) => f && typeof f === 'object' && !Array.isArray(f) && f?.name !== 'accept_vicidial_call') // Migrate legacy anti-pattern out of LLM tools
         .map((f: any, idx: number) => {
           let id = String(f.id || `fn_${idx + 1}`);
           if (usedFnIds.has(id) || id === 'f_new_function') {
@@ -697,7 +697,7 @@ export function normalizeState(raw: any): ConsoleState {
   const fnIdSet = new Set(functions.map((f) => f.id));
 
   const providers: Provider[] = Array.isArray(src.providers) && src.providers.length
-    ? src.providers.map((p: any, idx: number) => {
+    ? src.providers.filter((p: any) => p && typeof p === 'object' && !Array.isArray(p)).map((p: any, idx: number) => {
         const kind: Provider['kind'] = ['stt', 'llm', 'tts'].includes(p.kind) ? p.kind : 'llm';
         if (kind === 'llm') {
           const llmType = DEEPGRAM_LLM_PROVIDERS.includes(p.type) ? String(p.type) : 'open_ai';
@@ -821,17 +821,17 @@ export function normalizeState(raw: any): ConsoleState {
     tts: normalizeSelection('tts'),
   };
 
-  const num = (val: any, fallback: number): number => {
+  const num = (val: any, fallback: number, min = -1e6, max = 1e6): number => {
     const n = Number(val);
-    return Number.isFinite(n) ? n : fallback;
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
   };
 
   const xferFnId = fnNameMap.get('transfer_to_live_agent');
   const dispoFnId = fnNameMap.get('set_disposition');
   const endFnId = fnNameMap.get('end_call');
 
-  const agents = Array.isArray(src.agents) && src.agents.length
-    ? src.agents.map((a: any, idx: number) => {
+  const agents: Agent[] = Array.isArray(src.agents) && src.agents.length
+    ? src.agents.filter((a: any) => a && typeof a === 'object' && !Array.isArray(a)).map((a: any, idx: number) => {
         let fnIds: string[] = [];
         if (Array.isArray(a.fnIds)) {
           fnIds = a.fnIds.filter((id: string) => fnIdSet.has(id));
@@ -911,21 +911,21 @@ export function normalizeState(raw: any): ConsoleState {
           behavior,
           stt: {
             keyterms: String(a.stt?.keyterms ?? ''),
-            eot: num(a.stt?.eot, 0.55),
-            eager: num(a.stt?.eager, 0.35),
-            eotms: Math.round(num(a.stt?.eotms, 2000)),
+            eot: num(a.stt?.eot, 0.55, 0.1, 0.9),
+            eager: num(a.stt?.eager, 0.35, 0.1, 0.9),
+            eotms: Math.round(num(a.stt?.eotms, 2000, 100, 10000)),
             smartFormat: Boolean(a.stt?.smartFormat),
           },
           llm: {
-            temp: num(a.llm?.temp, 0.7),
+            temp: num(a.llm?.temp, 0.7, 0, 2),
             reasoning: (['low', 'medium', 'high'].includes(a.llm?.reasoning) ? a.llm.reasoning : 'low') as
               | 'low'
               | 'medium'
               | 'high',
           },
           tts: {
-            speed: num(a.tts?.speed, 1.0),
-            expr: Math.round(num(a.tts?.expr, 0)),
+            speed: num(a.tts?.speed, 1.0, 0.5, 1.5),
+            expr: Math.round(num(a.tts?.expr, 0, -2, 2)),
           },
           audio: {
             inEnc: ['linear16', 'mulaw', 'alaw'].includes(a.audio?.inEnc) ? a.audio.inEnc : 'linear16',
@@ -939,7 +939,7 @@ export function normalizeState(raw: any): ConsoleState {
     : base.agents;
 
   const campaigns: Campaign[] = Array.isArray(src.campaigns)
-    ? src.campaigns.map((c: any, idx: number) => {
+    ? src.campaigns.filter((c: any) => c && typeof c === 'object' && !Array.isArray(c)).map((c: any, idx: number) => {
         const cName = String(c.name || `Campaign ${idx + 1}`);
         const defaultDisclosure = /medicare/i.test(cName)
           ? 'This call may be recorded for quality and benefit verification.'
@@ -954,9 +954,9 @@ export function normalizeState(raw: any): ConsoleState {
           start: String(c.start || '09:00'),
           end: String(c.end || '20:00'),
           tz: String(c.tz || 'America/New_York'),
-          attempts: Math.round(num(c.attempts, 3)),
-          retry: Math.round(num(c.retry, 120)),
-          maxCalls: Math.round(num(c.maxCalls, 10)),
+          attempts: Math.round(num(c.attempts, 3, 1, 20)),
+          retry: Math.round(num(c.retry, 120, 0, 86400)),
+          maxCalls: Math.round(num(c.maxCalls, 10, 1, 1000)),
           xferType: (['ingroup', 'extension', 'number'].includes(c.xferType) ? c.xferType : 'ingroup') as
             | 'ingroup'
             | 'extension'
@@ -970,7 +970,7 @@ export function normalizeState(raw: any): ConsoleState {
           // Legacy campaigns must be reviewed instead of inheriting a fabricated compliance policy.
           complianceRules: typeof c.complianceRules === 'string' ? c.complianceRules : MISSING_CAMPAIGN_RULES,
           presenceCheckText: typeof c.presenceCheckText === 'string' ? c.presenceCheckText : DEFAULT_PRESENCE_CHECK_TEXT,
-          deadAirTimeoutSec: Math.round(num(c.deadAirTimeoutSec, 8)),
+          deadAirTimeoutSec: Math.round(num(c.deadAirTimeoutSec, 8, 1, 120)),
           deadAirDisposition: String(c.deadAirDisposition ?? '').trim().toUpperCase(),
           deadAirDispositionVerified: c.deadAirDispositionVerified === true,
         };
@@ -1003,13 +1003,13 @@ export function normalizeState(raw: any): ConsoleState {
     source: String(src.vici?.source || base.vici.source),
     transport: src.vici?.transport === 'audiosocket' ? ('audiosocket' as const) : ('sip_trunk' as const),
     bridgeHost: String(rawBridgeHost || base.vici.bridgeHost),
-    bridgePort: Math.round(num(src.vici?.bridgePort, 9092)),
-    sipPort: Math.round(rawSipPort),
+    bridgePort: Math.round(num(src.vici?.bridgePort, 9092, 1, 65535)),
+    sipPort: Math.round(Math.min(65535, Math.max(1, rawSipPort))),
     aiExten: String(src.vici?.aiExten || base.vici.aiExten),
     remoteAgentUser: String(src.vici?.remoteAgentUser || base.vici.remoteAgentUser),
     inIngroup: String(src.vici?.inIngroup || base.vici.inIngroup),
     amiHost: String(rawAmiHost || base.vici.amiHost),
-    amiPort: Math.round(num(src.vici?.amiPort, 5038)),
+    amiPort: Math.round(num(src.vici?.amiPort, 5038, 1, 65535)),
     amiUser: String(src.vici?.amiUser === 'bridge' ? 'cron' : src.vici?.amiUser || base.vici.amiUser),
   };
 
@@ -1017,7 +1017,7 @@ export function normalizeState(raw: any): ConsoleState {
   if (src.tests && typeof src.tests === 'object') {
     for (const [aid, list] of Object.entries(src.tests)) {
       if (Array.isArray(list)) {
-        tests[aid] = list.map((item: any, idx: number) => ({
+        tests[aid] = list.filter((item: any) => item && typeof item === 'object' && !Array.isArray(item)).map((item: any, idx: number) => ({
           id: String(item.id || `t_${aid}_${idx + 1}`),
           s: String(item.s ?? ''),
           e: String(item.e ?? ''),
@@ -1028,15 +1028,37 @@ export function normalizeState(raw: any): ConsoleState {
     }
   }
 
+  function dedupe<T extends { id: string }>(items: T[]): T[] {
+    const seen = new Set<string>();
+    const out: T[] = [];
+    for (const [index, item] of items.entries()) {
+      let id = item.id;
+      while (!id || seen.has(id)) id = `${item.id || 'item'}_${index + 1}_${seen.size}`;
+      seen.add(id);
+      out.push({ ...item, id });
+    }
+    return out;
+  }
+  const uniqueAgents = dedupe(agents);
+  const agentIds = new Set(uniqueAgents.map((a) => a.id));
+  const uniqueCampaigns = dedupe(campaigns).map((c) => ({ ...c, agentId: agentIds.has(c.agentId) ? c.agentId : '' }));
+  const campaignIds = new Set(uniqueCampaigns.map((c) => c.id));
+  const uniqueFunctions = dedupe(functions);
+  const functionIds = new Set(uniqueFunctions.map((f) => f.id));
+  for (const agent of uniqueAgents) agent.fnIds = [...new Set(agent.fnIds.filter((id) => functionIds.has(id)))];
+  const cleanTests: ConsoleState['tests'] = {};
+  for (const [aid, list] of Object.entries(tests)) if (agentIds.has(aid)) cleanTests[aid] = dedupe(list);
+  void campaignIds;
+
   return {
     version: 5,
     updatedAt: new Date().toISOString(),
     services,
     providers,
-    functions,
-    agents,
-    campaigns,
+    functions: uniqueFunctions,
+    agents: uniqueAgents,
+    campaigns: uniqueCampaigns,
     vici,
-    tests,
+    tests: cleanTests,
   };
 }

@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import { getSecret } from './env-store';
+import { readResponseBuffer, readResponseText } from './http-limits';
 
 export const KOKORO_STOCK_VOICES = [
   'af_heart',
@@ -38,8 +39,13 @@ export function getSpeechServiceBaseUrl(explicitUrl?: string): string {
   const raw = String(
     explicitUrl || getSecret('SPEECH_SERVICE_URL') || process.env.SPEECH_SERVICE_URL || ''
   ).trim();
-  if (raw) return raw.replace(/\/+$/, '');
-  return 'http://127.0.0.1:8000';
+  const value = (raw || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+  let parsed: URL;
+  try { parsed = new URL(value); } catch { throw new Error('Speech Service URL is invalid.'); }
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('Speech Service URL must be an http(s) base URL without credentials, query, or fragment.');
+  }
+  return value;
 }
 
 export function getSpeechServiceWsBaseUrl(explicitUrl?: string): string {
@@ -81,7 +87,7 @@ export async function verifySpeechServiceConnection(
   };
 
   try {
-    const readyRes = await fetch(`${baseUrl}/readyz`, { signal: AbortSignal.timeout(6000) });
+    const readyRes = await fetch(`${baseUrl}/readyz`, { redirect: 'error', signal: AbortSignal.timeout(6000) });
     out.latencyMs = Date.now() - started;
     if (!readyRes.ok) {
       out.error = `/readyz returned HTTP ${readyRes.status}`;
@@ -90,9 +96,10 @@ export async function verifySpeechServiceConnection(
     out.ready = (await readyRes.json()) as SpeechServiceDiagnostic['ready'];
 
     const [stockRes, cloneRes, ttsRes] = await Promise.all([
-      fetch(`${baseUrl}/v1/voices/stock`, { headers, signal: AbortSignal.timeout(6000) }),
-      fetch(`${baseUrl}/v1/voices`, { headers, signal: AbortSignal.timeout(6000) }),
+      fetch(`${baseUrl}/v1/voices/stock`, { redirect: 'error', headers, signal: AbortSignal.timeout(6000) }),
+      fetch(`${baseUrl}/v1/voices`, { redirect: 'error', headers, signal: AbortSignal.timeout(6000) }),
       fetch(`${baseUrl}/v1/audio/speech`, {
+        redirect: 'error',
         method: 'POST',
         headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -117,10 +124,10 @@ export async function verifySpeechServiceConnection(
       if (Array.isArray(cj?.voices)) out.clonedVoices = cj.voices;
     }
     if (ttsRes.ok) {
-      const wav = await ttsRes.arrayBuffer();
-      out.ttsSmokeOk = wav.byteLength > 44;
+      const wav = await readResponseBuffer(ttsRes, 20 * 1024 * 1024);
+      out.ttsSmokeOk = wav.length > 44;
     } else {
-      const errTxt = await ttsRes.text();
+      const errTxt = await readResponseText(ttsRes, 4096);
       out.error = `TTS check failed (${ttsRes.status}): ${errTxt.slice(0, 160)}`;
       return out;
     }
@@ -172,7 +179,7 @@ export async function runSpeechServiceRoundTripSmoke(opts?: {
   };
 
   try {
-    const readyRes = await fetch(`${baseUrl}/readyz`, { signal: AbortSignal.timeout(5000) });
+    const readyRes = await fetch(`${baseUrl}/readyz`, { redirect: 'error', signal: AbortSignal.timeout(5000) });
     if (!readyRes.ok) {
       out.error = `/readyz returned HTTP ${readyRes.status}`;
       return out;
@@ -183,6 +190,7 @@ export async function runSpeechServiceRoundTripSmoke(opts?: {
 
     const t0 = Date.now();
     const ttsRes = await fetch(`${baseUrl}/v1/audio/speech`, {
+      redirect: 'error',
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -195,20 +203,21 @@ export async function runSpeechServiceRoundTripSmoke(opts?: {
     });
     out.ttsMs = Math.max(1, Date.now() - t0);
     if (!ttsRes.ok) {
-      const txt = await ttsRes.text();
+      const txt = await readResponseText(ttsRes, 4096);
       out.error = `TTS HTTP ${ttsRes.status}: ${txt.slice(0, 180)}`;
       return out;
     }
-    const wavBuf = Buffer.from(await ttsRes.arrayBuffer());
+    const wavBuf = await readResponseBuffer(ttsRes, 20 * 1024 * 1024);
     out.ttsBytes = wavBuf.length;
     out.audioBase64 = wavBuf.toString('base64');
 
     const form = new FormData();
-    form.append('file', new Blob([wavBuf], { type: 'audio/wav' }), 'roundtrip.wav');
+    form.append('file', new Blob([new Uint8Array(wavBuf)], { type: 'audio/wav' }), 'roundtrip.wav');
     form.append('response_format', 'json');
 
     const t1 = Date.now();
     const sttRes = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
+      redirect: 'error',
       method: 'POST',
       headers,
       body: form,
@@ -216,7 +225,7 @@ export async function runSpeechServiceRoundTripSmoke(opts?: {
     });
     out.sttMs = Math.max(1, Date.now() - t1);
     if (!sttRes.ok) {
-      const txt = await sttRes.text();
+      const txt = await readResponseText(sttRes, 4096);
       out.error = `STT HTTP ${sttRes.status}: ${txt.slice(0, 180)}`;
       return out;
     }
@@ -263,14 +272,14 @@ export async function synthesizeWithSpeechService(opts: {
     signal: AbortSignal.timeout(15000),
   });
   if (!res.ok) {
-    const txt = await res.text();
+    const txt = await readResponseText(res, 4096);
     throw Object.assign(new Error(`Speech Service TTS (${res.status}): ${txt.slice(0, 200)}`), {
       statusCode: res.status === 401 ? 401 : 400,
       code: 'SPEECH_SERVICE_TTS_FAILED',
     });
   }
   return {
-    buffer: Buffer.from(await res.arrayBuffer()),
+    buffer: await readResponseBuffer(res, 20 * 1024 * 1024),
     contentType: res.headers.get('content-type') || 'audio/wav',
     usedVoice: voice,
   };
@@ -287,6 +296,8 @@ export function openSpeechServiceSttStream(opts: {
   onError?: (err: string) => void;
 }): WebSocket {
   const ws = new WebSocket(`${getSpeechServiceWsBaseUrl()}/v1/stream/stt`, {
+    maxPayload: 1024 * 1024,
+    handshakeTimeout: 10000,
     headers: getSpeechServiceHeaders(),
     family: 4,
   });
@@ -334,6 +345,8 @@ export function openSpeechServiceTtsStream(opts: {
   let configured = false;
   const pendingUtterances: Array<{ id: string; text: string }> = [];
   const ws = new WebSocket(`${getSpeechServiceWsBaseUrl()}/v1/stream/tts`, {
+    maxPayload: 4 * 1024 * 1024,
+    handshakeTimeout: 10000,
     headers: getSpeechServiceHeaders(),
     family: 4,
   });

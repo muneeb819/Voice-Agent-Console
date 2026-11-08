@@ -57,7 +57,16 @@ async def stream_stt(ws: WebSocket):
     try:
         first = await asyncio.wait_for(ws.receive(), 10)
         if first.get("text"):
-            cfg.update({k: v for k, v in json.loads(first["text"]).items() if k in cfg})
+            parsed = json.loads(first["text"])
+            if not isinstance(parsed, dict):
+                raise ValueError("config must be a JSON object")
+            cfg.update({k: v for k, v in parsed.items() if k in cfg})
+            if not isinstance(cfg["language"], str) or len(cfg["language"]) > 32:
+                raise ValueError("language must be a short string")
+            if cfg["prompt"] is not None and (not isinstance(cfg["prompt"], str) or len(cfg["prompt"]) > 2000):
+                raise ValueError("prompt must be at most 2000 characters")
+            if not isinstance(cfg["partials"], bool):
+                raise ValueError("partials must be boolean")
             pending = None
         else:
             pending = first
@@ -71,7 +80,10 @@ async def stream_stt(ws: WebSocket):
             await ws.send_json({"type": "error", "message": "sample_rate must be 8000/16000/24000/48000"})
             return
         language = None if cfg["language"] == "auto" else cfg["language"]
-        endpoint = int(cfg["endpoint_ms"]) * SR // 1000
+        endpoint_ms = int(cfg["endpoint_ms"])
+        if not 100 <= endpoint_ms <= 5000:
+            raise ValueError("endpoint_ms must be between 100 and 5000")
+        endpoint = endpoint_ms * SR // 1000
         await ws.send_json({"type": "ready", "sample_rate": in_rate, "encoding": "ulaw" if is_ulaw else "pcm"})
 
         idle = np.zeros(0, dtype=np.float32)       # rolling pre-roll while waiting for speech
@@ -114,8 +126,12 @@ async def stream_stt(ws: WebSocket):
                 msg = await asyncio.wait_for(ws.receive(), s.live_idle_timeout_s)
             if msg["type"] == "websocket.disconnect":
                 break
+            if not rt.auth.check_ws_rate(p):
+                await ws.close(code=4429, reason="message rate exceeded")
+                break
             if msg.get("text"):
-                cmd = json.loads(msg["text"]).get("type")
+                parsed = json.loads(msg["text"])
+                cmd = parsed.get("type") if isinstance(parsed, dict) else None
                 if cmd == "flush":
                     await finalize()
                 elif cmd == "close":
@@ -127,6 +143,9 @@ async def stream_stt(ws: WebSocket):
             msg = None
             if not data:
                 continue
+            if len(data) > 256 * 1024:
+                await ws.close(code=1009, reason="audio frame too large")
+                break
             samples = ulaw_to_float(data) if is_ulaw else pcm16_to_float(data)
             x = await asyncio.to_thread(resample, samples, in_rate, SR) if in_rate != SR else samples
             total += len(x)
@@ -172,7 +191,7 @@ async def stream_stt(ws: WebSocket):
                     pass
     except (WebSocketDisconnect, asyncio.TimeoutError):
         pass
-    except (ValueError, KeyError, json.JSONDecodeError, AudioError) as exc:
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError, AudioError) as exc:
         try:
             await ws.send_json({"type": "error", "message": f"bad request: {exc}"})
         except Exception:  # noqa: BLE001
@@ -245,6 +264,9 @@ async def stream_tts(ws: WebSocket):
             await ws.send_json({"type": "error", "id": sid, "message": "busy"})
         except (ValueError, KeyError, AudioError) as exc:
             await ws.send_json({"type": "error", "id": sid, "message": str(exc)})
+        except Exception:  # noqa: BLE001
+            log.exception("tts utterance failed")
+            await ws.send_json({"type": "error", "id": sid, "message": "synthesis failed"})
 
     async def consumer() -> None:
         while True:
@@ -264,14 +286,35 @@ async def stream_tts(ws: WebSocket):
     try:
         while True:
             msg = await asyncio.wait_for(ws.receive_text(), s.live_idle_timeout_s)
+            if len(msg) > 256 * 1024 or not rt.auth.check_ws_rate(p):
+                await ws.close(code=1009 if len(msg) > 256 * 1024 else 4429)
+                break
             req = json.loads(msg)
+            if not isinstance(req, dict):
+                raise AttributeError("expected object")
             t = req.get("type")
             if t == "config":
-                cfg.update({k: v for k, v in req.items() if k in cfg})
+                if current["task"] is not None or not queue.empty():
+                    await ws.send_json({"type": "error", "message": "cancel active speech before reconfiguring"})
+                    continue
+                candidate = {k: v for k, v in req.items() if k in cfg}
+                try:
+                    if not isinstance(candidate.get("voice", cfg["voice"]), str):
+                        raise ValueError("voice must be a string")
+                    speed = float(candidate.get("speed", cfg["speed"]))
+                    if not 0.25 <= speed <= 4.0:
+                        raise ValueError("speed must be between 0.25 and 4")
+                    fmt = candidate.get("format", cfg["format"])
+                    StreamEncoder(fmt, 24000, candidate.get("sample_rate", cfg["sample_rate"]))
+                    candidate["speed"] = speed
+                except (TypeError, ValueError, AudioError) as exc:
+                    await ws.send_json({"type": "error", "message": str(exc)})
+                    continue
+                cfg.update(candidate)
                 await ws.send_json({"type": "configured"})
             elif t == "speak":
                 text = str(req.get("text", "")).strip()
-                if not text or len(text) > s.max_tts_chars:
+                if not text or not any(ch.isalnum() for ch in text) or len(text) > s.max_tts_chars:
                     await ws.send_json({"type": "error", "message": "invalid text length"})
                 elif queue.full():
                     await ws.send_json({"type": "error", "message": "too many queued requests"})
@@ -293,7 +336,7 @@ async def stream_tts(ws: WebSocket):
                 break
     except (WebSocketDisconnect, asyncio.TimeoutError):
         pass
-    except (json.JSONDecodeError, AttributeError):
+    except (json.JSONDecodeError, AttributeError, TypeError):
         try:
             await ws.send_json({"type": "error", "message": "messages must be JSON objects"})
         except Exception:  # noqa: BLE001

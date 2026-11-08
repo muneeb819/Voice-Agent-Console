@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -53,7 +54,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def observe(request: Request, call_next):
-        rid = request.headers.get("x-request-id") or uuid.uuid4().hex[:12]
+        incoming_rid = request.headers.get("x-request-id", "")
+        rid = incoming_rid if re.fullmatch(r"[A-Za-z0-9._-]{1,64}", incoming_rid) else uuid.uuid4().hex[:12]
         t0 = time.perf_counter()
         try:
             response = await call_next(request)

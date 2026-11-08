@@ -1,4 +1,5 @@
-import { sanitizeSecretValue } from './env-store';
+import { getSecret, sanitizeSecretValue } from './env-store';
+import { readResponseText } from './http-limits';
 import { parseJsonObject } from './settings-builder';
 import { AgentFunction } from './types';
 
@@ -34,10 +35,8 @@ function interpolateTemplate(raw: string, ctx: WebhookCallContext): string {
       const val = ctx.lead?.[key] ?? ctx.lead?.custom?.[key];
       return val !== undefined && val !== null ? String(val) : '';
     }
-    const envVal = process.env[token];
-    if (envVal !== undefined) {
-      return sanitizeSecretValue(envVal);
-    }
+    // Never expose arbitrary process environment (cloud credentials, PATH, etc.).
+    if (token === 'CUSTOM_WEBHOOK_SECRET') return sanitizeSecretValue(getSecret('CUSTOM_WEBHOOK_SECRET'));
     return '';
   });
 }
@@ -84,6 +83,9 @@ export async function executeCustomFunctionWebhook(
     };
   }
 
+  if (targetUrl.username || targetUrl.password) {
+    return { ok: false, executedWebhook: true, latencyMs: Date.now() - started, error: 'Webhook URL must not embed credentials.' };
+  }
   if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
     return {
       ok: false,
@@ -161,7 +163,7 @@ export async function executeCustomFunctionWebhook(
         url: targetUrl.toString(), method, error: `Webhook redirects are not followed (HTTP ${res.status}).` };
     }
 
-    const rawText = (await res.text()).slice(0, 65536);
+    const rawText = await readResponseText(res, 65536);
     let parsedData: any = rawText;
     try {
       parsedData = JSON.parse(rawText);

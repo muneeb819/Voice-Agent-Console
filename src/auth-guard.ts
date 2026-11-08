@@ -330,7 +330,9 @@ export function clearAuthCookie(res: Response, req?: http.IncomingMessage): void
  * unauthorized requests and 403 for role restrictions.
  */
 export function apiAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const p = req.path;
+  // Express route matching is case-insensitive and tolerates a trailing slash.
+  // Authorization must use the same canonical shape, or /SECRETS/ bypasses it.
+  const p = req.path.toLowerCase().replace(/\/+$/, '') || '/';
   if (
     p === '/health' ||
     p.startsWith('/auth/')
@@ -365,6 +367,8 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
       p === '/speech-service/activate' ||
       p === '/speech-service/test' ||
       p === '/vici/verify' ||
+      p === '/deepgram/verify' ||
+      (p === '/speech-service/status' && (req.query.url !== undefined || req.query.apiKey !== undefined)) ||
       /^\/vici\/calls\/[^/]+\/(?:hangup|transfer)$/.test(p);
     const readOnly = req.method === 'GET' || req.method === 'HEAD';
     if (adminOnly && role !== 'owner' && role !== 'admin') {

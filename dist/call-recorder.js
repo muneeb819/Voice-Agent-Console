@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StereoCallRecorder8k = exports.RECORDINGS_DIR = void 0;
 exports.resolveRecordingPath = resolveRecordingPath;
+exports.removeBridgeRecording = removeBridgeRecording;
 exports.pruneOldRecordings = pruneOldRecordings;
 exports.clearAllRecordings = clearAllRecordings;
 const fs_1 = __importDefault(require("fs"));
@@ -100,7 +101,11 @@ class StereoCallRecorder8k {
         if (totalSamples === 0 || this.totalRawBytes === 0) {
             return null;
         }
-        fs_1.default.mkdirSync(exports.RECORDINGS_DIR, { recursive: true });
+        fs_1.default.mkdirSync(exports.RECORDINGS_DIR, { recursive: true, mode: 0o700 });
+        const dirStat = fs_1.default.lstatSync(exports.RECORDINGS_DIR);
+        if (!dirStat.isDirectory() || dirStat.isSymbolicLink())
+            throw new Error('Recording directory is not a private directory');
+        fs_1.default.chmodSync(exports.RECORDINGS_DIR, 0o700);
         const safeId = callId.replace(/[^a-zA-Z0-9._-]/g, '_');
         const fileName = `${safeId}.wav`;
         const filePath = path_1.default.join(exports.RECORDINGS_DIR, fileName);
@@ -148,7 +153,15 @@ class StereoCallRecorder8k {
             wavBuf.writeInt16LE(right[i], outOffset + 2);
             outOffset += 4;
         }
-        fs_1.default.writeFileSync(filePath, wavBuf);
+        const fd = fs_1.default.openSync(filePath, 'wx', 0o600);
+        try {
+            fs_1.default.writeFileSync(fd, wavBuf);
+        }
+        finally {
+            fs_1.default.closeSync(fd);
+        }
+        this.callerChunks = [];
+        this.botChunks = [];
         pruneOldRecordings();
         return {
             fileName,
@@ -168,7 +181,22 @@ function resolveRecordingPath(fileOrCallId) {
     if (!/^[a-zA-Z0-9._-]+\.wav$/.test(fileName))
         return null;
     const full = path_1.default.join(exports.RECORDINGS_DIR, fileName);
-    return fs_1.default.existsSync(full) ? full : null;
+    try {
+        const dir = fs_1.default.lstatSync(exports.RECORDINGS_DIR);
+        const stat = fs_1.default.lstatSync(full);
+        return dir.isDirectory() && !dir.isSymbolicLink() && stat.isFile() && !stat.isSymbolicLink() ? full : null;
+    }
+    catch {
+        return null;
+    }
+}
+function removeBridgeRecording(fileName) {
+    if (!fileName)
+        return;
+    const full = resolveRecordingPath(fileName);
+    if (!full)
+        return;
+    fs_1.default.unlinkSync(full);
 }
 function pruneOldRecordings(maxKeep = MAX_STORED_RECORDINGS) {
     try {
@@ -179,9 +207,12 @@ function pruneOldRecordings(maxKeep = MAX_STORED_RECORDINGS) {
             .filter((f) => f.endsWith('.wav'))
             .map((f) => {
             const full = path_1.default.join(exports.RECORDINGS_DIR, f);
-            const st = fs_1.default.statSync(full);
+            const st = fs_1.default.lstatSync(full);
+            if (!st.isFile() || st.isSymbolicLink())
+                return null;
             return { full, mtimeMs: st.mtimeMs };
         })
+            .filter((entry) => entry !== null)
             .sort((a, b) => b.mtimeMs - a.mtimeMs);
         for (const stale of files.slice(maxKeep)) {
             try {

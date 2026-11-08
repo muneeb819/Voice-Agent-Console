@@ -4,6 +4,7 @@ exports.VicidialApiClient = void 0;
 exports.parseVicidialCallerCode = parseVicidialCallerCode;
 exports.sanitizeViciText = sanitizeViciText;
 const env_store_1 = require("./env-store");
+const http_limits_1 = require("./http-limits");
 /**
  * Extracts VICIdial 20-char caller_code (VmmddhhmmssLLLLLLLLLL / Y... / M...)
  * and strips leading zeros from the embedded lead_id while keeping the full
@@ -143,11 +144,14 @@ class VicidialApiClient {
         try {
             const res = await fetch(fullUrl, {
                 method: 'GET',
+                redirect: 'error',
                 headers: { 'Accept-Encoding': 'identity' },
                 signal: AbortSignal.timeout(timeoutMs),
             });
-            const text = (await res.text()).trim();
+            const text = (await (0, http_limits_1.readResponseText)(res, 1024 * 1024)).trim();
             const ok = res.ok && !/^ERROR:/i.test(text);
+            if (this.auditLog.length >= 200)
+                this.auditLog.shift();
             this.auditLog.push({
                 ts: new Date().toISOString(),
                 api: apiKind,
@@ -161,6 +165,8 @@ class VicidialApiClient {
         }
         catch (err) {
             const errMsg = err?.message || 'HTTP request failed';
+            if (this.auditLog.length >= 200)
+                this.auditLog.shift();
             this.auditLog.push({
                 ts: new Date().toISOString(),
                 api: apiKind,

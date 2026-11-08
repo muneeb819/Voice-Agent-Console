@@ -36,10 +36,14 @@ function downloadWithRedirects(url: string, destPath: string, redirectsLeft = 6)
       reject(new Error('Too many redirects while downloading cloudflared'));
       return;
     }
-    https
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:' || !['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'].includes(parsed.hostname)) {
+      reject(new Error('Blocked untrusted cloudflared download host')); return;
+    }
+    const request = https
       .get(
         url,
-        { headers: { 'User-Agent': 'Voice-Agent-Console-Tunnel/1.0' } },
+        { headers: { 'User-Agent': 'Voice-Agent-Console-Tunnel/1.0' }, timeout: 30000 },
         (res) => {
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
             res.resume();
@@ -53,8 +57,11 @@ function downloadWithRedirects(url: string, destPath: string, redirectsLeft = 6)
             return;
           }
           fs.mkdirSync(path.dirname(destPath), { recursive: true });
-          const tmpPath = `${destPath}.part`;
-          const out = fs.createWriteStream(tmpPath);
+          const tmpPath = `${destPath}.${process.pid}.part`;
+          const out = fs.createWriteStream(tmpPath, { mode: 0o755 });
+          let bytes = 0;
+          res.on('data', (chunk: Buffer) => { bytes += chunk.length; if (bytes > 100 * 1024 * 1024) request.destroy(new Error('cloudflared download exceeds 100 MiB')); });
+          res.on('error', (err) => { out.destroy(err); try { fs.unlinkSync(tmpPath); } catch {} reject(err); });
           res.pipe(out);
           out.on('finish', () => {
             out.close(() => {
@@ -78,6 +85,7 @@ function downloadWithRedirects(url: string, destPath: string, redirectsLeft = 6)
           });
         }
       )
+      .on('timeout', () => request.destroy(new Error('cloudflared download timed out')))
       .on('error', reject);
   });
 }
@@ -225,12 +233,14 @@ export async function startPublicDemoTunnel(
       managedTunnelProc = proc;
       managedTunnelUrl = null;
 
+      let onChunk: (chunk: Buffer) => void = () => {};
       const foundUrl = await new Promise<string>((resolve, reject) => {
         const timer = setTimeout(() => {
+          proc.kill();
           reject(new Error('Timed out waiting for Cloudflare Quick Tunnel URL (check outbound internet).'));
         }, 22_000);
 
-        const onChunk = (chunk: Buffer) => {
+        onChunk = (chunk: Buffer) => {
           const txt = chunk.toString('utf8');
           const m = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i.exec(txt);
           if (m) {
@@ -251,6 +261,8 @@ export async function startPublicDemoTunnel(
         });
       });
 
+      proc.stdout?.removeListener('data', onChunk);
+      proc.stderr?.removeListener('data', onChunk);
       managedTunnelUrl = foundUrl;
       try {
         fs.writeFileSync(DEMO_URL_FILE, `${foundUrl}\n`, 'utf8');

@@ -119,14 +119,14 @@ export function composeBehavioralPrompt(agent: Agent, campaign?: Campaign): stri
   }
 
   if (campaign) {
-    const rules = String(campaign.complianceRules || '').trim();
+    const rules = String(campaign.complianceRules || '').trim().slice(0, 8000);
     lines.push(
       '',
       '=== MANDATORY CAMPAIGN-SPECIFIC COMPLIANCE & RULES ===',
       `- The only campaign assigned to this call is ${JSON.stringify(campaign.name)} (VICIdial campaign ${JSON.stringify(campaign.viciCampaign)}). Do not use another campaign’s rules.`,
       '- The rules below are mandatory and override any conflicting persona, sales script, saved agent prompt, or general-answer instruction. Follow them throughout the call.',
       `- Campaign rules:\n${rules || '[NO CAMPAIGN RULES CONFIGURED — do not start a live call.]'}`,
-      `- If the caller is silent for one second, the bridge sends this one presence-check line: ${JSON.stringify(campaign.presenceCheckText || '')}. Say it briefly, then wait for a caller turn; do not continue the sales script until they respond.`,
+      `- If the caller is silent for one second, the bridge sends this one presence-check line: ${JSON.stringify(String(campaign.presenceCheckText || '').slice(0, 500))}. Say it briefly, then wait for a caller turn; do not continue the sales script until they respond.`,
       `- After the presence check, the bridge waits ${Number(campaign.deadAirTimeoutSec) || 8} seconds for a caller response. The bridge, not the model, applies dead-air status ${JSON.stringify(campaign.deadAirDisposition || '')} and hangs up; do not claim a status update succeeded.`
     );
     if (campaign.disclosure && campaign.disclosure.trim()) {
