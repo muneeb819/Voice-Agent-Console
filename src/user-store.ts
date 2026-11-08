@@ -1,8 +1,11 @@
 import crypto from 'crypto';
 import { getDb } from './db';
 
+export type UserRole = 'owner' | 'admin' | 'operator' | 'qa' | 'viewer';
+
 export interface PublicUser {
   id: string;
+  role: UserRole;
   email: string;
   fullName: string;
   createdAt: string;
@@ -30,6 +33,7 @@ function ensureSchema(): void {
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE COLLATE NOCASE,
       full_name TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'operator',
       password_hash TEXT NOT NULL,
       created_at TEXT NOT NULL,
       last_login_at TEXT
@@ -48,6 +52,17 @@ function ensureSchema(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_revoked_admin_sessions_expiry ON revoked_admin_sessions(expires_at);
   `);
+  const columns = db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'role')) {
+    db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'operator'");
+  }
+  // Preserve access for existing installations: promote the oldest account once
+  // when migrating a database that predates roles and has no owner yet.
+  const hasOwner = db.prepare("SELECT 1 FROM users WHERE role = 'owner' LIMIT 1").get();
+  if (!hasOwner) {
+    const firstUser = db.prepare('SELECT id FROM users ORDER BY created_at ASC, rowid ASC LIMIT 1').get() as { id: string } | undefined;
+    if (firstUser) db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(firstUser.id);
+  }
   schemaReady = true;
 }
 
@@ -117,6 +132,7 @@ export function validateFullName(raw: unknown): string | null {
 function rowToUser(row: any): PublicUser {
   return {
     id: String(row.id),
+    role: (['owner', 'admin', 'operator', 'qa', 'viewer'].includes(String(row.role)) ? String(row.role) : 'operator') as UserRole,
     email: String(row.email),
     fullName: String(row.full_name),
     createdAt: String(row.created_at),
@@ -131,7 +147,7 @@ export interface CreateUserResult {
   user?: PublicUser;
 }
 
-export function createUser(input: SignupInput): CreateUserResult {
+export function createUser(input: SignupInput, role: UserRole = 'operator'): CreateUserResult {
   ensureSchema();
 
   const email = normalizeEmail(input.email);
@@ -156,8 +172,8 @@ export function createUser(input: SignupInput): CreateUserResult {
   const now = new Date().toISOString();
   try {
     db.prepare(
-      'INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, NULL)'
-    ).run(id, email, fullName, hashPassword(password), now);
+      'INSERT INTO users (id, email, full_name, role, password_hash, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, ?, NULL)'
+    ).run(id, email, fullName, role, hashPassword(password), now);
   } catch (err: any) {
     if (String(err?.message || '').toLowerCase().includes('unique')) {
       return { ok: false, field: 'email', error: 'An account with this email already exists.' };
@@ -167,7 +183,7 @@ export function createUser(input: SignupInput): CreateUserResult {
 
   return {
     ok: true,
-    user: { id, email, fullName, createdAt: now, lastLoginAt: null },
+    user: { id, email, fullName, role, createdAt: now, lastLoginAt: null },
   };
 }
 
