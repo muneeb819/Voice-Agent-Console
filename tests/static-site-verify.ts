@@ -69,6 +69,7 @@ function loginFixture(pathname: string, responses: Record<string, () => Response
       return responder();
     },
   });
+  vm.runInContext(read('public/brand-logos.js'), context, { filename: 'public/brand-logos.js' });
   vm.runInContext(read('public/login.js'), context, { filename: 'public/login.js' });
   return { get, requests, timers, storage, navigations };
 }
@@ -87,7 +88,7 @@ async function run() {
     }
     assert(!html.includes("setItem('vac_auth_token'"), `${file} must not persist browser session tokens`);
   }
-  for (const file of ['app.js', 'login.js', 'opening.js']) {
+  for (const file of ['app.js', 'login.js', 'opening.js', 'brand-logos.js']) {
     childProcess.execFileSync(process.execPath, ['--check', path.join(publicDir, file)]);
     assert(!/saveAuthToken|vacReadAuthToken|Bearer \$\{tok\}/.test(read(`public/${file}`)), `${file} retains a legacy bearer handoff`);
   }

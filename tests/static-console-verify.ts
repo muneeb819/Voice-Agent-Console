@@ -36,6 +36,7 @@ async function fixture(options: { state?: any; storageFails?: boolean; tab?: str
   (w as any).WebSocket = class { readyState = 0; send() {} close() {} };
   (w as any).indexedDB = undefined;
   w.eval(read('opening.js'));
+  w.eval(read('brand-logos.js'));
   w.eval(read('app.js'));
   for (let i = 0; i < 30 && !w.document.getElementById('m')?.children.length; i++) await tick();
   assert.deepStrictEqual(errors, [], 'Console boot must not throw');
@@ -81,6 +82,15 @@ async function run() {
   assert(!(d.getElementById('btn-call-mic') as HTMLButtonElement).disabled, 'Blocked setup explains requirements instead of a dead button');
   click(d.getElementById('btn-call-mic')!); await tick();
   assert.match(d.getElementById('m')!.textContent || '', /Live Call Error|Deepgram key needed|Campaign setup required/);
+  // Theme Studio must swap the supplied banner logo, favicon and loader preview.
+  click(d.getElementById('btn-theme')!);
+  const initialLogo = (d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src');
+  assert.match(initialLogo || '', /mma-cyan-signal-icon\.jpg/);
+  click(d.querySelector('[data-pick-theme="ember_pulse"]')!);
+  assert.match((d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src') || '', /mma-gold-ember-icon\.jpg/);
+  assert.match((d.querySelector('link[rel="icon"]') as HTMLLinkElement).href, /mma-gold-ember-icon\.jpg/);
+  assert.match((d.querySelector('#theme-loader-logo img') as HTMLImageElement).getAttribute('src') || '', /mma-gold-ember\.jpg/);
+  assert(d.querySelectorAll('#theme-swatch-grid .theme-preview-logo img').length >= 10);
   assert.deepEqual(f.errors, []);
   w.close();
 

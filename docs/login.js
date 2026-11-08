@@ -84,73 +84,45 @@
     }
   } catch (e) {}
 
-  // ---------------------------------------------------------------- Active Playing Soundwave Engine
-  (function initPlayingLogoSoundwaves() {
-    var plaque = document.getElementById('login-brand-plaque');
-    if (!plaque) return;
-    var bars = Array.prototype.slice.call(plaque.querySelectorAll('.eq-bar'));
-    if (!bars.length) return;
-
-    plaque.classList.add('raf-driven');
-
-    // Envelope weights shaped like a live vocal spectrum (tapered outer edges, rich mid-formants)
-    var envelopeByCh = [0.46, 0.64, 0.86, 0.68, 0.92, 1.00, 0.76, 0.94, 0.62, 0.84, 0.96, 0.58];
-    var barMeta = bars.map(function (el, idx) {
-      var ch = Number(el.getAttribute('data-ch') || idx % 12);
-      var isRight = el.getAttribute('data-side') === 'R';
-      return {
-        el: el,
-        ch: ch,
-        distFromM: 11 - ch,
-        stereoOffset: isRight ? 0.52 : 0.0,
-        env: envelopeByCh[ch] || 0.75,
-        freqA: 5.4 + (ch % 5) * 0.85,
-        freqB: 8.9 + ((ch * 3) % 7) * 0.62
-      };
+  // ---------------------------------------------------------------- Theme-bound animated brand logo
+  // The supplied MMA banners are the logo source. Waves are a smooth CSS loop,
+  // not microphone/audio-reactive, and follow the saved console theme.
+  function applyLoginBrandTheme(themeId) {
+    var api = window.VACBrandLogos;
+    if (!api) return;
+    var theme = themeId || document.documentElement.dataset.theme || 'cyan_signal';
+    document.documentElement.dataset.theme = theme;
+    api.applyTo(document.getElementById('login-brand-plaque'), theme, 'full');
+    var foot = document.getElementById('login-foot-mark');
+    var loaderMark = document.getElementById('login-loader-mark');
+    if (foot) foot.innerHTML = api.iconHtml(theme);
+    if (loaderMark) loaderMark.innerHTML = api.iconHtml(theme);
+    var asset = api.assetFor(theme);
+    ['icon', 'alternate icon', 'apple-touch-icon'].forEach(function (rel) {
+      var links = document.querySelectorAll ? document.querySelectorAll('link[rel="' + rel + '"]') : [];
+      Array.prototype.forEach.call(links, function (link) {
+        link.type = 'image/jpeg';
+        link.href = asset.icon;
+      });
     });
+  }
 
-    var hoverBoost = 0;
-    var typingBoost = 0;
-    plaque.addEventListener('mouseenter', function () { hoverBoost = 1; });
-    plaque.addEventListener('mouseleave', function () { hoverBoost = 0; });
-    document.addEventListener('input', function () { typingBoost = 1; }, { passive: true });
+  try {
+    var savedBrandApp = JSON.parse(localStorage.getItem('vac_appearance_v2') || localStorage.getItem('vac_appearance_v1') || '{}');
+    applyLoginBrandTheme(savedBrandApp && savedBrandApp.theme);
+  } catch (e) {
+    applyLoginBrandTheme('cyan_signal');
+  }
 
-    var currentEnergy = 0;
-    function tick(nowMs) {
-      if (!document.hidden) {
-        var t = nowMs * 0.001;
-        typingBoost *= 0.94;
-        var targetEnergy = Math.max(hoverBoost * 0.28, typingBoost * 0.34);
-        currentEnergy += (targetEnergy - currentEnergy) * 0.12;
-
-        // Natural AI speech cadence (active playing syllables + brief vocal phrasing)
-        var speechCadence =
-          0.68 +
-          0.22 * Math.sin(t * 2.7) +
-          0.14 * Math.sin(t * 6.1 + 0.8) +
-          currentEnergy;
-
-        for (var i = 0; i < barMeta.length; i++) {
-          var b = barMeta[i];
-          var travelPhase = b.distFromM * 0.38 + b.stereoOffset;
-          var w1 = Math.sin(t * b.freqA - travelPhase);
-          var w2 = Math.sin(t * b.freqB + travelPhase * 0.7);
-          var w3 = Math.cos(t * 3.6 - b.ch * 0.55);
-          var norm = 0.5 + 0.26 * w1 + 0.15 * w2 + 0.09 * w3; // ~[0.0 .. 1.0]
-          var amp = Math.max(0.14, Math.min(1.06, norm * b.env * speechCadence * 1.38));
-          var h = 10 + amp * 76; // 10px min .. 86px peak centered at y = 105
-          var y = 105 - h * 0.5;
-          var op = 0.68 + amp * 0.32;
-          b.el.setAttribute('y', y.toFixed(1));
-          b.el.setAttribute('height', h.toFixed(1));
-          b.el.setAttribute('opacity', Math.min(1, op).toFixed(2));
-        }
-      }
-      window.requestAnimationFrame(tick);
-    }
-
-    window.requestAnimationFrame(tick);
-  })();
+  if (window.addEventListener) {
+    window.addEventListener('storage', function (event) {
+      if (event.key !== 'vac_appearance_v2' && event.key !== 'vac_appearance_v1') return;
+      try {
+        var next = JSON.parse(event.newValue || '{}');
+        applyLoginBrandTheme(next && next.theme);
+      } catch (e) {}
+    });
+  }
 
   var loader = document.getElementById('loader');
   var loaderText = document.getElementById('loader-text');
