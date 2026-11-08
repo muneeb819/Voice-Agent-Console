@@ -15,6 +15,7 @@
   } catch {}
   function vacWithWsAuth(wsUrl) { return wsUrl; }
   const _nativeFetch = window.fetch.bind(window);
+  /** Defaults credentials to same-origin for recognized API URLs; init can override that default. */
   window.fetch = function (input, init) {
     const urlStr = typeof input === 'string' ? input : input && input.url ? String(input.url) : '';
     const isLocalApi = urlStr.startsWith('/api/') || urlStr.startsWith('./api/') ||

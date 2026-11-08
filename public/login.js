@@ -245,6 +245,12 @@
     else input.removeAttribute('aria-invalid');
   }
 
+  /**
+   * Posts JSON with same-origin credentials and returns the response, parsed data,
+   * and static-host detection result. Invalid JSON falls back to an empty object;
+   * serialization and request errors reject. Missing apiPath or staticDemoReady
+   * bindings also reject with a ReferenceError when accessed.
+   */
   async function postJson(relUrl, body) {
     var headers = { 'Content-Type': 'application/json' };
     var res = await fetch(apiPath(relUrl), {
@@ -266,6 +272,11 @@
     };
   }
 
+  /**
+   * Replaces the current location with a next path starting with / but not //,
+   * or the default home path. Throws a ReferenceError if basePrefix is absent
+   * when the default is needed.
+   */
   function goHome() {
     var next = new URLSearchParams(location.search).get('next');
     var target = next && next.charAt(0) === '/' && next.charAt(1) !== '/' ? next : (basePrefix || '') + '/';

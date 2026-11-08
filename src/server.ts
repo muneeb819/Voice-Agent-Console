@@ -165,6 +165,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     return subKey ? `${baseIp}:${subKey}` : baseIp;
   };
 
+  /** Allows direct bootstrap or an active session with an owner, admin, or no resolved account. */
   const canCreateAccount = (req: Request): boolean => {
     if (!isAuthEnabled() && isRequestAuthorized(req)) return true;
     if (!hasActiveAuthSession(req)) return false;

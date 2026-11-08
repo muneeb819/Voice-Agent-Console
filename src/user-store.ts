@@ -24,6 +24,11 @@ const MAX_NAME_LENGTH = 80;
 
 let schemaReady = false;
 
+/**
+ * Creates the account and session tables and adds missing role and active
+ * columns. When adding roles, the oldest account becomes owner and the others
+ * default to operator. Database errors propagate to the caller.
+ */
 function ensureSchema(): void {
   if (schemaReady) return;
   const db = getDb();
@@ -114,6 +119,7 @@ export function validateFullName(raw: unknown): string | null {
 
 // ---------------------------------------------------------------- users
 
+/** Converts a user row to its public form, defaulting unknown roles to operator and a missing active value to active. */
 function rowToUser(row: any): PublicUser {
   return {
     id: String(row.id),
@@ -133,6 +139,11 @@ export interface CreateUserResult {
   user?: PublicUser;
 }
 
+/**
+ * Creates an active account, assigning owner when there are no users and
+ * operator otherwise. Returns a field error for invalid input or a duplicate
+ * email; other database or password hashing errors can propagate.
+ */
 export function createUser(input: SignupInput): CreateUserResult {
   ensureSchema();
 
@@ -182,6 +193,11 @@ export function findUserByEmail(rawEmail: unknown): PublicUser | null {
   return row ? rowToUser(row) : null;
 }
 
+/**
+ * Authenticates an active account and updates its last login time. Returns null
+ * for a missing account, inactive account, or invalid credentials. Database
+ * errors propagate.
+ */
 export function authenticateUser(rawEmail: unknown, password: string): PublicUser | null {
   ensureSchema();
   const email = normalizeEmail(rawEmail);
@@ -225,6 +241,11 @@ export function createUserSession(userId: string): string {
   return token;
 }
 
+/**
+ * Resolves a user session to an active account, or returns null for a rejected,
+ * unknown, or expired token or a missing or inactive account. Deletes an expired
+ * session; database errors propagate.
+ */
 export function getUserBySessionToken(token?: string | null): PublicUser | null {
   if (!token || token.length < 32 || token.includes('.')) return null;
   ensureSchema();
