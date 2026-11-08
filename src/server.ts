@@ -563,6 +563,37 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     };
   };
 
+  // Container/orchestrator probes. Keep liveness independent from external providers
+  // so a Deepgram/VICIdial outage does not trigger a restart loop.
+  app.get('/health/live', (_req: Request, res: Response) => {
+    res.status(200).json({ ok: true, status: 'live', service: 'voice-agent-console' });
+  });
+
+  // Readiness checks only the local application state required to serve requests.
+  // It deliberately does not claim that providers, PBX peers, or carriers are healthy.
+  app.get('/health/ready', (_req: Request, res: Response) => {
+    try {
+      const state = getConsoleState();
+      const stateUsable = Boolean(
+        state &&
+        Array.isArray(state.agents) &&
+        Array.isArray(state.campaigns) &&
+        Array.isArray(state.providers) &&
+        state.services &&
+        typeof state.services === 'object'
+      );
+      if (!stateUsable) {
+        res.status(503).json({ ok: false, status: 'not_ready', service: 'voice-agent-console', reason: 'application_state_unavailable' });
+        return;
+      }
+      res.status(200).json({ ok: true, status: 'ready', service: 'voice-agent-console', checks: { applicationState: 'ok' } });
+    } catch {
+      // Do not expose filesystem paths, database errors, or configuration values
+      // through a public orchestration probe.
+      res.status(503).json({ ok: false, status: 'not_ready', service: 'voice-agent-console', reason: 'application_state_unavailable' });
+    }
+  });
+
   app.get('/api/health', (req: Request, res: Response) => {
     const authed = isRequestAuthorized(req);
     res.json({
