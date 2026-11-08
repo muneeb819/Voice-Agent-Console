@@ -117,10 +117,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   const signupAttemptLimit = 10;
 
   app.use((req, res, next) => {
-    // Login handoff and WebSocket URLs can carry a session token; do not send
-    // the current URL as a Referer on subsequent browser requests.
+    // Avoid leaking console URLs to external providers or sample hosts.
     res.setHeader('Referrer-Policy', 'no-referrer');
-    // Cookies can be sent cross-site (including when HTTPS uses SameSite=None).
+    // Session cookies are first-party (SameSite=Lax).
     // Do not grant cross-origin API access, and reject browser requests with a
     // mismatched Origin even when they would not need a CORS preflight.
     if (req.path.startsWith('/api/') && !isSameOriginRequest(req, app.get('trust proxy fn'))) {

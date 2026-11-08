@@ -49,10 +49,9 @@ function createApp(viciBridge) {
     const loginAttemptLimit = 5;
     const signupAttemptLimit = 10;
     app.use((req, res, next) => {
-        // Login handoff and WebSocket URLs can carry a session token; do not send
-        // the current URL as a Referer on subsequent browser requests.
+        // Avoid leaking console URLs to external providers or sample hosts.
         res.setHeader('Referrer-Policy', 'no-referrer');
-        // Cookies can be sent cross-site (including when HTTPS uses SameSite=None).
+        // Session cookies are first-party (SameSite=Lax).
         // Do not grant cross-origin API access, and reject browser requests with a
         // mismatched Origin even when they would not need a CORS preflight.
         if (req.path.startsWith('/api/') && !(0, request_origin_1.isSameOriginRequest)(req, app.get('trust proxy fn'))) {
@@ -92,7 +91,16 @@ function createApp(viciBridge) {
         const baseIp = String(req.ip || req.socket?.remoteAddress || 'unknown');
         return subKey ? `${baseIp}:${subKey}` : baseIp;
     };
-    const canCreateAccount = (req) => (0, auth_guard_1.hasActiveAuthSession)(req) || (!(0, auth_guard_1.isAuthEnabled)() && (0, auth_guard_1.isRequestAuthorized)(req));
+    /** Allows direct bootstrap or an active session with an owner, admin, or no resolved account. */
+    const canCreateAccount = (req) => {
+        if (!(0, auth_guard_1.isAuthEnabled)() && (0, auth_guard_1.isRequestAuthorized)(req))
+            return true;
+        if (!(0, auth_guard_1.hasActiveAuthSession)(req))
+            return false;
+        const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+        // Legacy ADMIN_PASSWORD sessions remain owner-equivalent for recovery.
+        return !account || account.role === 'owner' || account.role === 'admin';
+    };
     const rateLimited = (key, bucket = loginAttempts, limit = loginAttemptLimit) => {
         const now = Date.now();
         const attempts = bucket.get(key);
@@ -174,14 +182,17 @@ function createApp(viciBridge) {
         signupAttempts.delete(key);
         (0, auth_guard_1.invalidateUserCountCache)();
         (0, user_store_1.purgeExpiredSessions)();
-        const token = (0, user_store_1.createUserSession)(result.user.id);
-        (0, auth_guard_1.setAuthCookie)(res, token, req);
+        // Preserve an existing administrator's session when provisioning an account.
+        // Only the first loopback bootstrap account needs an automatically issued session.
+        if (!(0, auth_guard_1.hasActiveAuthSession)(req)) {
+            const token = (0, user_store_1.createUserSession)(result.user.id);
+            (0, auth_guard_1.setAuthCookie)(res, token, req);
+        }
         res.status(201).json({
             ok: true,
             authEnabled: true,
             authenticated: true,
             user: result.user,
-            token,
         });
     });
     app.post('/api/auth/login', (req, res) => {
@@ -205,7 +216,7 @@ function createApp(viciBridge) {
             loginAttempts.delete(key);
             const token = (0, user_store_1.createUserSession)(user.id);
             (0, auth_guard_1.setAuthCookie)(res, token, req);
-            res.json({ ok: true, authEnabled: true, authenticated: true, user, token });
+            res.json({ ok: true, authEnabled: true, authenticated: true, user });
             return;
         }
         // --- Legacy admin password sign-in ---
@@ -225,7 +236,7 @@ function createApp(viciBridge) {
         loginAttempts.delete(key);
         const token = (0, auth_guard_1.createSessionToken)();
         (0, auth_guard_1.setAuthCookie)(res, token, req);
-        res.json({ ok: true, authEnabled: true, authenticated: true, token });
+        res.json({ ok: true, authEnabled: true, authenticated: true });
     });
     app.post('/api/auth/logout', (req, res) => {
         const token = (0, auth_guard_1.getRequestSessionToken)(req);
@@ -446,6 +457,27 @@ function createApp(viciBridge) {
             telemetry: buildTelemetryOverview(state, validations, pubUrl),
         };
     };
+    // Container/orchestrator probes. Liveness must not depend on external providers.
+    app.get('/health/live', (_req, res) => {
+        res.status(200).json({ ok: true, status: 'live', service: 'voice-agent-console' });
+    });
+    // Readiness verifies local persisted state only; upstream outages must not cause restart loops.
+    app.get('/health/ready', (_req, res) => {
+        try {
+            const state = (0, db_1.getConsoleState)();
+            const stateUsable = Boolean(state && Array.isArray(state.agents) && Array.isArray(state.campaigns) &&
+                Array.isArray(state.providers) && state.services && typeof state.services === 'object');
+            if (!stateUsable) {
+                res.status(503).json({ ok: false, status: 'not_ready', service: 'voice-agent-console', reason: 'application_state_unavailable' });
+                return;
+            }
+            res.status(200).json({ ok: true, status: 'ready', service: 'voice-agent-console', checks: { applicationState: 'ok' } });
+        }
+        catch {
+            // Never expose filesystem paths, database errors, secrets, or configuration in probes.
+            res.status(503).json({ ok: false, status: 'not_ready', service: 'voice-agent-console', reason: 'application_state_unavailable' });
+        }
+    });
     app.get('/api/health', (req, res) => {
         const authed = (0, auth_guard_1.isRequestAuthorized)(req);
         res.json({

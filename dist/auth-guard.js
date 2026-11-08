@@ -198,30 +198,16 @@ function constantTimePasswordMatch(candidate) {
         return false;
     return crypto_1.default.timingSafeEqual(a, b);
 }
-function extractQueryToken(req) {
-    const rawUrl = String(req.url || '');
-    const qIdx = rawUrl.indexOf('?');
-    if (qIdx < 0)
-        return null;
-    try {
-        const params = new URLSearchParams(rawUrl.slice(qIdx + 1));
-        const tok = (params.get('vac_token') || params.get('token') || '').trim();
-        return tok || null;
-    }
-    catch {
-        return null;
-    }
-}
+/** Resolves an explicit machine-client bearer credential or first-party cookie.
+ * Query-string credentials are deliberately ignored to keep secrets out of URLs.
+ */
 function getRequestSessionToken(req) {
     const authHdr = String(req.headers.authorization || '').trim();
     if (/^Bearer\s+/i.test(authHdr)) {
         return authHdr.replace(/^Bearer\s+/i, '').trim() || null;
     }
     const cookies = parseCookies(req.headers.cookie);
-    if (cookies[SESSION_COOKIE_NAME]) {
-        return cookies[SESSION_COOKIE_NAME];
-    }
-    return extractQueryToken(req);
+    return cookies[SESSION_COOKIE_NAME] || null;
 }
 /**
  * Resolves a signed-in end user (email/password account) from the request.
@@ -263,16 +249,12 @@ function hasActiveAuthSession(req) {
             catch { }
         }
     }
-    // 2. Check signed HttpOnly session cookie or query handoff token (admin password session)
+    // 2. Check the signed HttpOnly admin-password session cookie.
     const cookies = parseCookies(req.headers.cookie);
     if (cookies[SESSION_COOKIE_NAME] && verifySessionToken(cookies[SESSION_COOKIE_NAME])) {
         return true;
     }
-    const queryTok = extractQueryToken(req);
-    if (queryTok && (constantTimePasswordMatch(queryTok) || verifySessionToken(queryTok))) {
-        return true;
-    }
-    // 3. Check email/password user session (cookie, bearer token, or query handoff token)
+    // 3. Check an email/password user session from a cookie or explicit bearer header.
     if (getAuthenticatedUser(req)) {
         return true;
     }
@@ -310,26 +292,46 @@ function isRequestAuthorized(req) {
 function isHttpsRequest(req) {
     if (!req)
         return false;
-    // Express only considers X-Forwarded-Proto when its proxy is trusted.
-    return req.secure === true || Boolean(req.socket?.encrypted);
+    const expressReq = req;
+    // Trust the actual TLS connection first.
+    if (expressReq.secure === true || Boolean(req.socket?.encrypted)) {
+        return true;
+    }
+    // Never trust forwarded protocol headers from arbitrary clients.
+    const trustProxy = expressReq.app?.get?.('trust proxy fn');
+    const peerAddress = req.socket?.remoteAddress;
+    if (!peerAddress || !trustProxy || !trustProxy(peerAddress, 0)) {
+        return false;
+    }
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '')
+        .split(',')
+        .map((value) => value.trim().toLowerCase())
+        .find(Boolean);
+    return forwardedProto === 'https';
 }
+/**
+ * Sets the HttpOnly session cookie for seven days with SameSite=Lax.
+ * Secure is added when the request is recognized as HTTPS; without a request
+ * it is omitted. Replaces any existing Set-Cookie header on the response.
+ * Throws URIError if the token contains an unpaired surrogate.
+ */
 function setAuthCookie(res, token, req) {
     const maxAgeSec = Math.floor(SESSION_TTL_MS / 1000);
-    const cookiePolicy = isHttpsRequest(req)
-        ? 'SameSite=None; Secure; Partitioned'
-        : 'SameSite=Lax';
+    const cookiePolicy = isHttpsRequest(req) ? 'SameSite=Lax; Secure' : 'SameSite=Lax';
     res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; ${cookiePolicy}; Max-Age=${maxAgeSec}`);
 }
+/** Expires the first-party session cookie using the same security policy as login. */
 function clearAuthCookie(res, req) {
-    const cookiePolicy = isHttpsRequest(req)
-        ? 'SameSite=None; Secure; Partitioned'
-        : 'SameSite=Lax';
+    const cookiePolicy = isHttpsRequest(req) ? 'SameSite=Lax; Secure' : 'SameSite=Lax';
     res.setHeader('Set-Cookie', `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; ${cookiePolicy}; Max-Age=0`);
 }
 /**
- * Express middleware protecting /api/* routes when ADMIN_PASSWORD is set,
- * while whitelisting /api/health, /api/auth/*, and trusted/loopback Asterisk
- * pre-call hooks (/api/vici/register-call & /api/vici/precall).
+ * Protects API routes, allowing health, auth, and eligible direct Asterisk
+ * pre-call hooks through before authorization. Other requests require a session
+ * or the direct loopback bootstrap exemption. Selected routes require owner or
+ * admin access; viewers may otherwise use only GET and HEAD. An authorized
+ * request with no resolved account is treated as owner. Responds with 401 for
+ * unauthorized requests and 403 for role restrictions.
  */
 function apiAuthMiddleware(req, res, next) {
     const p = req.path;
@@ -350,6 +352,28 @@ function apiAuthMiddleware(req, res, next) {
         }
     }
     if (isRequestAuthorized(req)) {
+        const account = getAuthenticatedUser(req);
+        const role = account?.role || 'owner'; // legacy ADMIN_PASSWORD session is owner-equivalent
+        const adminOnly = p === '/secrets' ||
+            p === '/state/reset' ||
+            p === '/demo-tunnel/start' ||
+            p === '/demo-tunnel/stop' ||
+            p === '/vici/deploy-script' ||
+            p === '/vici/release-bundle' ||
+            p === '/functions/test-webhook' ||
+            p === '/speech-service/activate' ||
+            p === '/speech-service/test' ||
+            p === '/vici/verify' ||
+            /^\/vici\/calls\/[^/]+\/(?:hangup|transfer)$/.test(p);
+        const readOnly = req.method === 'GET' || req.method === 'HEAD';
+        if (adminOnly && role !== 'owner' && role !== 'admin') {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Administrator permission required.' });
+            return;
+        }
+        if (role === 'viewer' && !readOnly) {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'This account has read-only access.' });
+            return;
+        }
         next();
         return;
     }
