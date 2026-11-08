@@ -338,7 +338,7 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
   if (isRequestAuthorized(req)) {
     const privileged = p.startsWith('/secrets') || p.startsWith('/auth/signup') ||
       p.startsWith('/users') || p.startsWith('/vici/release-bundle');
-    if (privileged && !hasAdminAccess(req)) {
+    if (privileged && isAuthEnabled() && !hasAdminAccess(req)) {
       res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Owner or administrator permission required.' });
       return;
     }
