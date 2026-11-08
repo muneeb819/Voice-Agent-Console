@@ -407,7 +407,7 @@
         if (out.data.token) saveAuthToken(out.data.token);
         if (progressBar) progressBar.style.width = '100%';
         if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
-        window.setTimeout(function () { goHome(out.data.token || ''); }, 320);
+        window.setTimeout(function () { goHome(); }, 320);
       } catch (err) {
         finishLoader();
         setMsg(msg, 'Network error. Check your connection and try again.');
