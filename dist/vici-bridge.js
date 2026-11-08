@@ -54,6 +54,7 @@ const env_store_1 = require("./env-store");
 const webhook_executor_1 = require("./webhook-executor");
 const g711_1 = require("./g711");
 const settings_builder_1 = require("./settings-builder");
+const campaign_assignment_1 = require("./campaign-assignment");
 const vici_client_1 = require("./vici-client");
 function resolveSdpAdvertisedHost(peerAddress, configuredHost, bindHost) {
     if ((0, auth_guard_1.isLoopbackIp)(peerAddress))
@@ -122,7 +123,7 @@ function resolveCampaignAndAgent(state, dialedExten) {
         };
     }
     const campaign = state.campaigns[idx];
-    const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+    const agent = (0, campaign_assignment_1.primaryCampaignAgent)(state, campaign);
     if (!agent) {
         return {
             campaign,
