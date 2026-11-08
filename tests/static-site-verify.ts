@@ -30,7 +30,7 @@ function element() {
   };
 }
 
-function loginFixture(pathname: string, responses: Record<string, () => Response>) {
+function loginFixture(pathname: string, responses: Record<string, () => Response>, initialStorage: Array<[string, string]> = []) {
   const elements = new Map<string, ReturnType<typeof element>>();
   const get = (id: string) => {
     if (!elements.has(id)) elements.set(id, element());
@@ -39,7 +39,7 @@ function loginFixture(pathname: string, responses: Record<string, () => Response
   const tabs = ['signin', 'signup', 'admin'].map((mode) => Object.assign(element(), { dataset: { mode } }));
   const requests: Array<{ url: string; init: any }> = [];
   const timers: Function[] = [];
-  const storage = new Map<string, string>();
+  const storage = new Map<string, string>(initialStorage);
   const location = new URL(`https://console.example${pathname}`);
   const navigations: string[] = [];
   Object.defineProperty(location, 'replace', { value: (url: string) => navigations.push(url) });
@@ -112,6 +112,28 @@ async function run() {
   assert.deepStrictEqual(staticLogin.navigations, ['/Voice-Agent-Console/'], 'Static signup must return to the project base path');
   assert(!staticLogin.storage.has('vac_auth_token'), 'Static signup must not create a server-session token');
   console.log('✓ GitHub Pages project-path login initialization and browser-local signup');
+
+  // Regression: the console and login page must share the same browser-local
+  // session key. A missing/undefined key made app.js discard a valid demo
+  // session, redirect to login.html, and login.js immediately redirect back.
+  const appSource = read('public/app.js');
+  const loginSource = read('public/login.js');
+  const appSessionKey = appSource.match(/const VAC_CLOUD_SESSION_KEY = '([^']+)'/);
+  const loginSessionKey = loginSource.match(/var CLOUD_SESSION_KEY = '([^']+)'/);
+  assert(appSessionKey, 'app.js must define VAC_CLOUD_SESSION_KEY before reading the static demo session');
+  assert(loginSessionKey, 'login.js must define CLOUD_SESSION_KEY');
+  assert.strictEqual(appSessionKey![1], loginSessionKey![1], 'Static demo session keys must match');
+  assert(appSource.indexOf('const VAC_CLOUD_SESSION_KEY') < appSource.indexOf('getItem(VAC_CLOUD_SESSION_KEY)'), 'Session key must be declared before use');
+  assert(appSource.includes("fetch('./api/auth/status'") && appSource.includes("fetch('./api/state')"), 'Static-host probes must stay inside the GitHub Pages project path');
+
+  const existingSession = JSON.stringify({ user: { id: 'usr_demo', fullName: 'Demo User', email: 'demo@example.test' }, signedInAt: new Date().toISOString() });
+  const prefilledNext = '/Voice-Agent-Console/?tab=agents';
+  const returningLogin = loginFixture('/Voice-Agent-Console/login.html?next=' + encodeURIComponent(prefilledNext), {
+    '/Voice-Agent-Console/api/auth/status': htmlResponse,
+  }, [[loginSessionKey![1], existingSession]]);
+  await flush();
+  assert.deepStrictEqual(returningLogin.navigations, [prefilledNext], 'A valid static session must return to the project path once, without double-prefixing next');
+  console.log('✓ Static demo session key parity and redirect-loop regression');
 
   const serverLogin = loginFixture('/login', {
     '/api/auth/status': () => jsonResponse({ ok: true, authenticated: false, signupOpen: true, hasUsers: true, adminPasswordConfigured: false }),

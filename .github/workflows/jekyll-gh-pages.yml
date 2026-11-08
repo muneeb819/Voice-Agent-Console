@@ -81,5 +81,8 @@ jobs:
           node --check "$RUNNER_TEMP/login.js"
           grep -F 'var rawPath' "$RUNNER_TEMP/login.js"
           grep -F 'parsed.origin === location.origin' "$RUNNER_TEMP/login.js"
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 3 --retry-all-errors "${SITE_URL}app.js?v=${ASSET_VERSION}" -o "$RUNNER_TEMP/app.js"
+          node --check "$RUNNER_TEMP/app.js"
+          grep -F "const VAC_CLOUD_SESSION_KEY = 'vac_cloud_session_v1'" "$RUNNER_TEMP/app.js"
           curl --fail --silent --show-error --location "${SITE_URL}login.html?v=${ASSET_VERSION}" | grep -F 'id="signup-form"'
           curl --fail --silent --show-error --location "${SITE_URL}index.html?v=${ASSET_VERSION}" | grep -F "CURRENT_BUILD = '${ASSET_VERSION}'"

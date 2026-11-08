@@ -48,7 +48,12 @@
   }
 
   function writeCloudUsers(users) {
-    try { localStorage.setItem(CLOUD_USERS_KEY, JSON.stringify(users)); } catch (e) {}
+    try {
+      localStorage.setItem(CLOUD_USERS_KEY, JSON.stringify(users));
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   function writeCloudSession(user) {
@@ -57,7 +62,10 @@
         user: user,
         signedInAt: new Date().toISOString()
       }));
-    } catch (e) {}
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   function readCloudSession() {
@@ -279,14 +287,20 @@
   /** Navigates to a local next path or the home page without a token handoff. */
   function goHome() {
     var next = new URLSearchParams(location.search).get('next');
-    var target = (basePrefix || '') + '/';
+    var home = (basePrefix || '') + '/';
+    var target = home;
     if (next && next.charAt(0) === '/' && next.charAt(1) !== '/' && next.indexOf('\\') === -1 && !/[\x00-\x1f\x7f]/.test(next)) {
       try {
         var parsed = new URL(next, location.origin);
-        if (parsed.origin === location.origin) target = (basePrefix || '') + parsed.pathname + parsed.search;
+        if (parsed.origin === location.origin && !/\/(login|signup)(\.html)?$/i.test(parsed.pathname)) {
+          // `next` may already contain the GitHub Pages project prefix. Do not
+          // prepend it twice, or the demo bounces through a nonexistent path.
+          var alreadyPrefixed = basePrefix && (parsed.pathname === basePrefix || parsed.pathname.indexOf(basePrefix + '/') === 0);
+          target = (alreadyPrefixed ? '' : (basePrefix || '')) + parsed.pathname + parsed.search;
+        }
       } catch (_) {}
     }
-    location.replace(target);
+    location.replace(target || home);
   }
 
   // ---------------------------------------------------------------- sign in
@@ -344,7 +358,11 @@
           password.select();
           return;
         }
-        writeCloudSession({ id: matched.id, fullName: matched.fullName, email: matched.email });
+        if (!writeCloudSession({ id: matched.id, fullName: matched.fullName, email: matched.email })) {
+          finishLoader();
+          setMsg(msg, 'Browser storage is unavailable, so the demo cannot keep you signed in. Enable site storage and retry.');
+          return;
+        }
         if (progressBar) progressBar.style.width = '100%';
         if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
         window.setTimeout(function () { goHome(''); }, 320);
@@ -474,8 +492,11 @@
           createdAt: new Date().toISOString()
         };
         users.push(newUser);
-        writeCloudUsers(users);
-        writeCloudSession({ id: newUser.id, fullName: newUser.fullName, email: newUser.email });
+        if (!writeCloudUsers(users) || !writeCloudSession({ id: newUser.id, fullName: newUser.fullName, email: newUser.email })) {
+          finishLoader();
+          setMsg(msg, 'Browser storage is unavailable, so the demo cannot save this account. Enable site storage and retry.');
+          return;
+        }
         if (progressBar) progressBar.style.width = '100%';
         if (loaderText) loaderText.textContent = 'ACCOUNT READY';
         window.setTimeout(function () { goHome(''); }, 360);
