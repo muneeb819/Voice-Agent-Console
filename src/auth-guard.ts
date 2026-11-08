@@ -288,10 +288,22 @@ export function isRequestAuthorized(req: http.IncomingMessage): boolean {
 
 function isHttpsRequest(req?: http.IncomingMessage): boolean {
   if (!req) return false;
-  // Express considers X-Forwarded-Proto only when the proxy is trusted. The
-  // server also relies on this for TLS-terminating reverse proxies.
-  if ((req as Request).secure === true || Boolean((req.socket as any)?.encrypted)) {
+
+  const expressReq = req as Request;
+
+  // Trust the actual TLS connection first.
+  if (expressReq.secure === true || Boolean((req.socket as any)?.encrypted)) {
     return true;
+  }
+
+  // Never trust forwarded protocol headers from arbitrary clients.
+  const trustProxy = expressReq.app?.get?.('trust proxy fn') as
+    | ((address: string, hop: number) => boolean)
+    | undefined;
+  const peerAddress = req.socket?.remoteAddress;
+
+  if (!peerAddress || !trustProxy || !trustProxy(peerAddress, 0)) {
+    return false;
   }
 
   const forwardedProto = String(req.headers['x-forwarded-proto'] || '')
@@ -299,7 +311,7 @@ function isHttpsRequest(req?: http.IncomingMessage): boolean {
     .map((value) => value.trim().toLowerCase())
     .find(Boolean);
 
-  return Boolean(forwardedProto) && forwardedProto === 'https' && Boolean(process.env.TRUST_PROXY);
+  return forwardedProto === 'https';
 }
 
 export function setAuthCookie(res: Response, token: string, req?: http.IncomingMessage): void {
