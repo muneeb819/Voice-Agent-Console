@@ -288,8 +288,18 @@ export function isRequestAuthorized(req: http.IncomingMessage): boolean {
 
 function isHttpsRequest(req?: http.IncomingMessage): boolean {
   if (!req) return false;
-  // Express only considers X-Forwarded-Proto when its proxy is trusted.
-  return (req as Request).secure === true || Boolean((req.socket as any)?.encrypted);
+  // Express considers X-Forwarded-Proto only when the proxy is trusted. The
+  // server also relies on this for TLS-terminating reverse proxies.
+  if ((req as Request).secure === true || Boolean((req.socket as any)?.encrypted)) {
+    return true;
+  }
+
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .find(Boolean);
+
+  return Boolean(forwardedProto) && forwardedProto === 'https' && Boolean(process.env.TRUST_PROXY);
 }
 
 export function setAuthCookie(res: Response, token: string, req?: http.IncomingMessage): void {
