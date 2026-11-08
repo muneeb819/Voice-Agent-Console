@@ -77,33 +77,45 @@ async function main() {
   assert.ok(prepared.settings.agent.think.prompt.includes(selected));
   assert.match(prepared.settings.agent.think.prompt, /requests to stop/i);
   assert.throws(() => prepareDelayedOpening({ agent: { greeting: selected, think: { prompt: 'x'.repeat(25000) } } }), /too long/i);
-  assert.equal(OPENING_DELAY_MS, 500);
+  assert.equal(OPENING_DELAY_MS, 1000);
   console.log('✓ Provider settings omit automatic greeting, preserve preview, and guard the prompt limit');
 
   const sent: Array<{ text: string; at: number }> = [];
   const played: Array<{ text: string; at: number }> = [];
   const callbacks: string[] = [];
+  const deadAir: string[] = [];
   const start = Date.now();
-  const silentGate = createOpeningGate({ greeting: selected,
-    sendOpening: (text) => sent.push({ text, at: Date.now() }),
+  const silentGate = createOpeningGate({
+    presenceCheck: 'Can you hear me okay?',
+    responseTimeoutMs: 45,
+    sendPresenceCheck: (text) => sent.push({ text, at: Date.now() }),
     playAudio: (buf) => played.push({ text: buf.toString(), at: Date.now() }),
+    onDeadAir: () => deadAir.push('dead-air'),
   });
   silentGate.start();
   silentGate.start();
-  silentGate.audio(Buffer.from('early'));
+  silentGate.audio(Buffer.from('stale early audio'));
   silentGate.afterRelease(() => callbacks.push('released'));
-  await wait(200);
+  await wait(250);
   assert.equal(sent.length, 0); assert.equal(played.length, 0); assert.deepEqual(callbacks, []);
-  await until(() => sent.length === 1 && played.length === 1, 'opening delay');
-  assert.ok(sent[0].at - start >= 490 && played[0].at - start >= 490);
+  await until(() => sent.length === 1, 'one-second presence check');
+  assert.ok(sent[0].at - start >= 990, 'The presence check waits a full second');
+  assert.equal(sent[0].text, 'Can you hear me okay?');
+  assert.equal(played.length, 0, 'Initial unsolicited audio is discarded rather than played over the check');
   assert.deepEqual(callbacks, ['released']);
+  silentGate.agentAudioDone();
+  await until(() => deadAir.length === 1, 'configured dead-air callback', 500);
+  assert.deepEqual(deadAir, ['dead-air']);
   silentGate.cancel();
-  console.log('✓ Silent caller: one opening and no early audio before the 500 ms gate');
+  console.log('✓ Silent caller: one-second listen, one presence check, then one dead-air callback');
 
   const early: string[] = [];
   const earlyStart = Date.now();
-  const userGate = createOpeningGate({ greeting: selected,
-    sendOpening: () => early.push('injected'), playAudio: (buf) => early.push(`audio:${buf}`) });
+  const userGate = createOpeningGate({
+    presenceCheck: 'Can you hear me?',
+    sendPresenceCheck: () => early.push('presence'),
+    playAudio: (buf) => early.push(`audio:${buf}`),
+  });
   userGate.start();
   userGate.audio(Buffer.from('interrupted'));
   userGate.userStarted();
@@ -111,34 +123,46 @@ async function main() {
   userGate.agentTurn();
   userGate.audio(Buffer.from('reply'));
   userGate.afterRelease(() => early.push('done'));
-  await wait(200); assert.deepEqual(early, []);
+  await wait(250); assert.deepEqual(early, []);
   await until(() => early.includes('done'), 'early caller reply');
-  assert.ok(Date.now() - earlyStart >= 490);
-  assert.deepEqual(early, ['audio:reply', 'done'], 'Do not inject a second opening or play interrupted audio');
+  assert.ok(Date.now() - earlyStart >= 990);
+  assert.deepEqual(early, ['audio:reply', 'done'], 'Do not inject a presence check or play stale audio after caller speech');
   userGate.cancel();
 
   let cancelledSent = 0, cancelledCallbacks = 0;
-  const cancelled = createOpeningGate({ greeting: selected, sendOpening: () => cancelledSent++, playAudio: () => cancelledCallbacks++ });
+  const cancelled = createOpeningGate({ presenceCheck: 'Can you hear me?', sendPresenceCheck: () => cancelledSent++, playAudio: () => cancelledCallbacks++ });
   cancelled.start(); cancelled.audio(Buffer.from('x')); cancelled.afterRelease(() => cancelledCallbacks++); cancelled.cancel();
-  await wait(550); assert.equal(cancelledSent, 0); assert.equal(cancelledCallbacks, 0);
-  console.log('✓ Early caller gets one provider response; barge-in clears stale audio and hangup cancels timers');
+  await wait(1100); assert.equal(cancelledSent, 0); assert.equal(cancelledCallbacks, 0);
+  console.log('✓ Early caller gets one response; stale audio is cleared and hangup cancels timers');
 
   let noiseSent = 0, overflow = 0;
-  const noise = createOpeningGate({ greeting: selected, sendOpening: () => noiseSent++, playAudio: () => {}, onOverflow: () => overflow++ });
+  const noise = createOpeningGate({ presenceCheck: 'Can you hear me?', sendPresenceCheck: () => noiseSent++, playAudio: () => {}, onOverflow: () => overflow++ });
   noise.start(); noise.userStarted(); noise.audio(Buffer.alloc(300000)); noise.audio(Buffer.alloc(300000));
-  await wait(650); assert.equal(noiseSent, 0); assert.equal(overflow, 1);
-  await until(() => noiseSent === 1, 'single no-transcript fallback', 3500);
+  await wait(1100); assert.equal(noiseSent, 0); assert.equal(overflow, 1);
+  await until(() => noiseSent === 1, 'single no-transcript presence-check fallback', 3000);
   await wait(50); assert.equal(noiseSent, 1); noise.cancel();
-  console.log('✓ False VAD onset has one bounded fallback and early audio memory is capped');
+  console.log('✓ False VAD onset gets one bounded presence fallback and early audio memory stays capped');
 
   // Real local simulator WebSockets, with a synthetic caller who speaks before
-  // the 500 ms deadline and an end_call immediately after the mock reply.
+  // the one-second deadline and an end_call immediately after the mock reply.
   const state = getConsoleState();
+  const sttProvider = state.providers.find((provider) => provider.kind === 'stt')!;
+  const llmProvider = state.providers.find((provider) => provider.kind === 'llm' && provider.type === 'open_ai')!;
+  const ttsProvider = state.providers.find((provider) => provider.kind === 'tts' && provider.type === 'deepgram')!;
   state.services = {
-    stt: { providerId: 's1', model: 'nova-3' },
-    llm: { providerId: 'l1', model: 'gpt-4o-mini' },
-    tts: { providerId: 't1', model: 'aura-2-thalia-en' },
+    stt: { providerId: sttProvider.id, model: 'nova-3' },
+    llm: { providerId: llmProvider.id, model: 'gpt-4o-mini' },
+    tts: { providerId: ttsProvider.id, model: 'aura-2-thalia-en' },
   };
+  const campaign = state.campaigns.find((entry) => entry.agentId === state.agents[0].id) || state.campaigns[0];
+  assert.ok(campaign, 'Opening fixture requires an explicit campaign');
+  campaign.agentId = state.agents[0].id;
+  campaign.complianceRules = 'Reviewed test campaign rules: be truthful, do not claim unverified benefits, and honor do-not-call requests immediately.';
+  campaign.presenceCheckText = 'Can you hear me okay?';
+  campaign.deadAirTimeoutSec = 8;
+  campaign.deadAirDisposition = 'DAIR';
+  campaign.deadAirDispositionVerified = true;
+  if (!campaign.dispos.split(/[ ,]+/).includes('DAIR')) campaign.dispos += ',DAIR';
   state.agents[0].greeting = 'Hi, this is Jessi from Example Services. How are you doing?';
   state.agents[0].injectCampaignDisclosure = false;
   saveConsoleState(state, 'Early caller timing fixture');
@@ -181,19 +205,19 @@ async function main() {
   });
   try {
     await new Promise<void>((r, reject) => { client.once('open', () => r()); client.once('error', reject); });
-    client.send(JSON.stringify({ type: 'start', agentId: state.agents[0].id, upstreamMode: 'deepgram' }));
+    client.send(JSON.stringify({ type: 'start', agentId: state.agents[0].id, campaignId: campaign.id, upstreamMode: 'deepgram' }));
     await until(() => events.some((e) => e.type === 'session_started'), 'session_started');
     client.send(Buffer.alloc(320, 7), { binary: true });
     await until(() => events.some((e) => e.type === 'call_ended'), 'early end_call');
     assert.equal(wire.agent.greeting, undefined);
     assert.ok(wire.agent.think.prompt.includes('Jessi from Example Services'));
     assert.ok(callerAudio > 0, 'Caller audio continues flowing during the wait');
-    assert.ok(audioAt - appliedAt >= 490, `Early response leaked after ${audioAt - appliedAt} ms`);
+    assert.ok(audioAt - appliedAt >= 990, `Early response leaked after ${audioAt - appliedAt} ms`);
     assert.equal(unexpectedOpenings, 0, 'Never inject another greeting over the first caller turn');
     assert.ok(events.findIndex((e) => e.type === 'audio') < events.findIndex((e) => e.type === 'call_ended'),
       'The early reply reaches the client before end_call finalizes the session');
     assert.equal(events.filter((e) => e.type === 'transcript' && e.role === 'assistant').length, 1);
-    console.log('✓ Mock Live Bot early hello: audio flows in, one reply waits 500 ms, no double greeting, end_call drains');
+    console.log('✓ Mock Live Bot early hello: audio flows in, one reply waits 1 second, no double greeting, end_call drains');
   } finally {
     client.terminate(); wss.clients.forEach((ws) => ws.terminate()); wss.close(); upstream.close();
     await new Promise<void>((r) => server.close(() => r()));

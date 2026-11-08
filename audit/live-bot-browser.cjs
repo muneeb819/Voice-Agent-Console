@@ -154,10 +154,27 @@ async function run() {
       llm: { providerId: 'l1', model: 'gpt-4o-mini' },
       tts: { providerId: 't1', model: 'aura-2-thalia-en' },
     };
+    for (const campaign of data.state.campaigns) {
+      campaign.complianceRules = 'Browser fixture campaign rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
+      campaign.presenceCheckText = 'Can you hear me okay?';
+      campaign.deadAirTimeoutSec = 8;
+      campaign.deadAirDisposition = 'DAIR';
+      const dispositions = String(campaign.dispos || '').split(/[ ,]+/).filter(Boolean);
+      if (!dispositions.includes('DAIR')) campaign.dispos = [...dispositions, 'DAIR'].join(',');
+      campaign.deadAirDispositionVerified = true;
+    }
     const result = await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: data.state }) });
     if (!result.ok) throw new Error('Could not save isolated test services');
   });
   await page.goto(`${base}/?tab=test`);
+  await page.waitForSelector('#sim-campaign');
+  const serverCampaignId = await page.evaluate(async () => {
+    const { state } = await (await fetch('/api/state')).json();
+    const agentId = document.querySelector('#sel-a').value;
+    return state.campaigns.find((campaign) => campaign.agentId === agentId)?.id || '';
+  });
+  assert(serverCampaignId, 'The selected server agent must have an assigned campaign');
+  await page.selectOption('#sim-campaign', serverCampaignId);
   await page.waitForSelector('#btn-call-mic:enabled');
   assert.equal(await page.locator('#sim-record-audio').isChecked(), false, 'Audio recording must default off');
   await page.click('#btn-call-mic');
@@ -176,17 +193,16 @@ async function run() {
   const savedAgentData = await page.evaluate(async () => {
     const { state } = await (await fetch('/api/state')).json();
     const agent = state.agents.find((item) => item.id === document.querySelector('#sel-a').value);
-    return { agent, campaign: state.campaigns.find((item) => item.agentId === agent.id) };
+    return { agent, campaign: state.campaigns.find((item) => item.id === document.querySelector('#sim-campaign').value) };
   });
-  await until(() => openingMessages.some((entry) => entry.index === 0), 'single delayed opening');
+  await until(() => openingMessages.some((entry) => entry.index === 0), 'single delayed presence check');
   const firstOpening = openingMessages.find((entry) => entry.index === 0);
-  assert(firstOpening.at - settingsAppliedTimes[0] >= 490, 'Server opening must wait at least 500 ms');
-  assert.equal(firstOpening.message, composeOpening(savedAgentData.agent.greeting, serverGreeting.greeting_text,
-    savedAgentData.agent.injectCampaignDisclosure, savedAgentData.campaign.disclosure));
+  assert(firstOpening.at - settingsAppliedTimes[0] >= 990, 'Server presence check must wait at least one second');
+  assert.equal(firstOpening.message, savedAgentData.campaign.presenceCheckText);
   assert(!firstOpening.message.includes(serverGreeting.greeting_text));
   assert.equal(openingMessages.filter((entry) => entry.index === 0).length, 1);
   assert.equal(await page.locator('#sim-disclosure').isDisabled(), true);
-  console.log('PASS Browser mic and server send one concise opening after the 500 ms wait');
+  console.log('PASS Browser mic and server send one campaign presence check after the one-second listen');
 
   await page.click('#btn-sim-mute');
   await page.waitForTimeout(500);
@@ -233,9 +249,11 @@ async function run() {
   await page.check('#sim-disclosure');
   await page.click('#btn-call-nomic');
   await page.waitForSelector('#sim-inject-input:enabled');
-  await until(() => openingMessages.some((entry) => entry.index === noticeCallIndex), 'draft notice opening');
+  await until(() => openingMessages.some((entry) => entry.index === noticeCallIndex), 'draft notice call presence check');
   const withNotice = openingMessages.find((entry) => entry.index === noticeCallIndex);
-  assert.ok(withNotice.message.startsWith(savedAgentData.campaign.disclosure), 'Draft notice must reach the next test');
+  assert.equal(withNotice.message, savedAgentData.campaign.presenceCheckText, 'The presence check must remain distinct from the greeting');
+  assert.ok(settingsReceived[noticeCallIndex].agent.think.prompt.includes(savedAgentData.campaign.disclosure),
+    'The unsaved notice draft must reach the next test prompt');
   const persistedNotice = await page.evaluate(async (id) => {
     const { state } = await (await fetch('/api/state')).json();
     return state.agents.find((agent) => agent.id === id).injectCampaignDisclosure;
@@ -426,9 +444,24 @@ async function run() {
   await blockExternal(staticContext);
   const state = JSON.parse(fs.readFileSync(path.join(docs, 'default-state.json'), 'utf8'));
   state.services = { stt: { providerId: 's1', model: 'nova-3' }, llm: { providerId: 'l1', model: 'gpt-4o-mini' }, tts: { providerId: 't1', model: 'aura-2-thalia-en' } };
+  for (const campaign of state.campaigns) {
+    campaign.complianceRules = 'Static browser fixture campaign rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
+    campaign.presenceCheckText = 'Can you hear me okay?';
+    campaign.deadAirTimeoutSec = 8;
+    campaign.deadAirDisposition = 'DAIR';
+    const dispositions = String(campaign.dispos || '').split(/[ ,]+/).filter(Boolean);
+    if (!dispositions.includes('DAIR')) campaign.dispos = [...dispositions, 'DAIR'].join(',');
+    campaign.deadAirDispositionVerified = true;
+  }
   state.functions.push({ id: 'browser_custom', name: 'custom_demo', description: 'test', params: '{"type":"object","properties":{}}', defer: false,
     url: 'https://example.invalid/never-execute', method: 'post', headers: '{}' });
   state.agents.find((a) => a.id === 'a_nova').fnIds.push('browser_custom');
+  const staticCampaignId = state.campaigns.find((campaign) => campaign.agentId === 'a_nova')?.id;
+  assert(staticCampaignId, 'Static fixture agent must have an assigned campaign');
+  const selectStaticCampaign = async (page) => {
+    await page.waitForSelector('#sim-campaign');
+    await page.selectOption('#sim-campaign', staticCampaignId);
+  };
   await staticContext.addInitScript((initialState) => {
     localStorage.setItem('vac_cloud_session_v1', JSON.stringify({ user: { fullName: 'Synthetic user' } }));
     localStorage.setItem('vac_cloud_state_v1', JSON.stringify(initialState));
@@ -483,12 +516,14 @@ async function run() {
   staticPage.on('pageerror', (err) => pageErrors.push(String(err)));
   const staticBase = `http://127.0.0.1:${staticPort}`;
   await staticPage.goto(`${staticBase}/index.html?tab=test`);
+  await selectStaticCampaign(staticPage);
   await staticPage.waitForSelector('#btn-call-nomic:enabled');
   await staticPage.click('#btn-call-nomic');
   assert.match(await staticPage.locator('#sim-state-pill').innerText(), /key needed/i);
   assert.equal(await staticPage.evaluate(() => window.__mockWs.created), 0, 'Missing key must not start a fake session');
   await staticPage.evaluate(() => localStorage.setItem('vac_cloud_secrets_v1', JSON.stringify({ DEEPGRAM_API_KEY: 'synthetic-static-key' })));
   await staticPage.reload();
+  await selectStaticCampaign(staticPage);
   await staticPage.waitForSelector('#btn-call-nomic:enabled');
   await staticPage.click('#btn-call-nomic');
   await staticPage.waitForSelector('#sim-inject-input:enabled');
@@ -506,9 +541,8 @@ async function run() {
   const staticCampaign = state.campaigns.find((campaign) => campaign.agentId === staticAgent.id);
   assert.equal(staticWire.settings.agent.greeting, undefined);
   assert.equal(staticWire.openings.length, 1);
-  assert.ok(staticWire.openings[0].at - staticWire.appliedAt >= 490, 'Static opening must wait at least 500 ms');
-  assert.equal(staticWire.openings[0].message, composeOpening(staticAgent.greeting, staticGreeting.greeting_text,
-    staticAgent.injectCampaignDisclosure, staticCampaign.disclosure));
+  assert.ok(staticWire.openings[0].at - staticWire.appliedAt >= 990, 'Static presence check must wait at least one second');
+  assert.equal(staticWire.openings[0].message, staticCampaign.presenceCheckText);
   assert.ok(!staticWire.openings[0].message.includes(staticGreeting.greeting_text));
   assert.ok(staticWire.settings.agent.think.functions.every((f) => !f.endpoint && f.defer_until_eot === true));
   assert.ok(!staticWire.responses.some((r) => r.id === 'cancelled'));
@@ -522,6 +556,7 @@ async function run() {
   await staticPage.click('#btn-call-hangup');
   await staticPage.waitForSelector('#btn-call-nomic:enabled');
   await staticPage.reload();
+  await selectStaticCampaign(staticPage);
   await staticPage.waitForSelector('#btn-call-nomic:enabled');
   await staticPage.click('#btn-call-nomic');
   await staticPage.waitForSelector('#sim-inject-input:enabled');
@@ -537,7 +572,7 @@ async function run() {
 
   // Send a caller turn immediately after SettingsApplied in direct-browser
   // mode. The mock replies immediately, but the browser must not play early
-  // audio or inject a second opening over that response.
+  // audio or inject a second presence check over that response.
   const beforeEarly = await staticPage.evaluate(() => ({ openings: window.__mockWs.openings.length, playback: window.__mockWs.playbackTimes.length }));
   await staticPage.click('#btn-call-nomic');
   await staticPage.waitForSelector('#sim-inject-input:enabled');
@@ -551,18 +586,19 @@ async function run() {
   assert.ok(earlyTiming.sentAt - earlyTiming.appliedAt < 450, 'Fixture must inject its caller turn before the gate opens');
   await staticPage.waitForFunction((count) => window.__mockWs.playbackTimes.length > count, beforeEarly.playback);
   const afterEarly = await staticPage.evaluate(() => window.__mockWs);
-  assert.ok(afterEarly.playbackTimes[beforeEarly.playback] - earlyTiming.appliedAt >= 490, 'Direct-browser response must wait for the gate');
+  assert.ok(afterEarly.playbackTimes[beforeEarly.playback] - earlyTiming.appliedAt >= 990, 'Direct-browser response must wait for the one-second listen');
   await staticPage.waitForTimeout(100);
-  assert.equal(await staticPage.evaluate(() => window.__mockWs.openings.length), beforeEarly.openings, 'Early caller must not get a second opening');
+  assert.equal(await staticPage.evaluate(() => window.__mockWs.openings.length), beforeEarly.openings, 'Early caller must not get a second presence check');
   assert.match(await staticPage.locator('#sim-feed').innerText(), /Hello before the opening/);
   await staticPage.click('#btn-call-hangup');
   await staticPage.waitForSelector('#btn-call-nomic:enabled');
-  console.log('PASS Direct-browser early caller gets delayed audio without a duplicate opening');
+  console.log('PASS Direct-browser early caller gets delayed audio without a duplicate presence check');
 
   // Two tabs in the same profile must serialize their per-bot IndexedDB draws.
   const secondStaticPage = await staticContext.newPage();
   secondStaticPage.on('pageerror', (err) => pageErrors.push(String(err)));
   await secondStaticPage.goto(`${staticBase}/index.html?tab=test`);
+  await selectStaticCampaign(secondStaticPage);
   await secondStaticPage.waitForSelector('#btn-call-nomic:enabled');
   await Promise.all([staticPage.click('#btn-call-nomic'), secondStaticPage.click('#btn-call-nomic')]);
   await Promise.all([staticPage.waitForSelector('#sim-inject-input:enabled'), secondStaticPage.waitForSelector('#sim-inject-input:enabled')]);
@@ -629,13 +665,13 @@ async function run() {
   const fallbackPage = await staticContext.newPage();
   fallbackPage.on('pageerror', (err) => pageErrors.push(String(err)));
   await fallbackPage.goto(`${staticBase}/index.html?tab=test`);
+  await selectStaticCampaign(fallbackPage);
   await fallbackPage.waitForSelector('#btn-call-nomic:enabled');
   await fallbackPage.click('#btn-call-nomic');
   await fallbackPage.waitForSelector('#sim-inject-input:enabled');
-  assert.match(await fallbackPage.locator('#sim-feed').innerText(), /Greeting library unavailable; using the configured opening/i);
+  assert.match(await fallbackPage.locator('#sim-feed').innerText(), /Greeting library unavailable; the configured campaign opening will be used after the caller responds/i);
   await fallbackPage.waitForFunction(() => window.__mockWs.openings.length === 1);
-  assert.equal(await fallbackPage.evaluate(() => window.__mockWs.openings[0].message),
-    composeOpening(staticAgent.greeting, '', staticAgent.injectCampaignDisclosure, staticCampaign.disclosure));
+  assert.equal(await fallbackPage.evaluate(() => window.__mockWs.openings[0].message), staticCampaign.presenceCheckText);
   await fallbackPage.click('#btn-call-hangup');
   await fallbackPage.close();
   await staticContext.unroute('**/greetings.json', rejectCatalog);

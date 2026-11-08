@@ -221,20 +221,27 @@ function attachLiveSimulator(server, noServer = false) {
                 resultPayload = { ok: false, error: 'Function is not enabled for this agent.' };
             }
             else if (fnReq.name === 'set_disposition') {
-                resultPayload = {
-                    ok: false,
-                    simulated: true,
-                    requested_code: String(parsedArgs.code || '').trim().toUpperCase(),
-                    error: 'Browser tests are not VICIdial calls. No disposition or do-not-call record was changed.',
-                };
+                const requestedCode = String(parsedArgs.code || '').trim().toUpperCase();
+                const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(activeCampaign);
+                resultPayload = !allowedCodes.includes(requestedCode)
+                    ? { ok: false, error: `Disposition ${requestedCode || '(empty)'} is not allowed by the selected campaign.` }
+                    : {
+                        ok: false,
+                        simulated: true,
+                        requested_code: requestedCode,
+                        error: 'Browser tests are not VICIdial calls. No disposition or do-not-call record was changed.',
+                    };
             }
             else if (fnReq.name === 'transfer_to_live_agent') {
-                resultPayload = {
-                    ok: false,
-                    simulated: true,
-                    requested_target: activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : null,
-                    error: 'Browser tests cannot transfer a real call. No VICIdial or PBX transfer was made.',
-                };
+                const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(activeCampaign);
+                resultPayload = !allowedCodes.includes('XFER')
+                    ? { ok: false, error: 'XFER is not allowed by the explicitly selected campaign. No transfer was simulated.' }
+                    : {
+                        ok: false,
+                        simulated: true,
+                        requested_target: activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : null,
+                        error: 'Browser tests cannot transfer a real call. No VICIdial or PBX transfer was made.',
+                    };
             }
             else if (fnReq.name === 'end_call') {
                 awaitingHangupAudioDone = true;
@@ -484,11 +491,31 @@ function attachLiveSimulator(server, noServer = false) {
                     else
                         activeState.providers.push(savedProvider);
                 }
-                activeAgent =
-                    activeState.agents.find((a) => a.id === startMsg.agentId) || activeState.agents[0];
-                activeCampaign = startMsg.campaignId
-                    ? activeState.campaigns.find((c) => c.id === startMsg.campaignId)
-                    : activeState.campaigns.find((c) => c.agentId === activeAgent.id);
+                const requestedAgent = activeState.agents.find((a) => a.id === startMsg.agentId);
+                if (!requestedAgent) {
+                    sendFatalError('INVALID_AGENT', 'The selected bot agent no longer exists. Refresh the console and select a valid agent.');
+                    finalizeCall('invalid_agent');
+                    return;
+                }
+                activeAgent = requestedAgent;
+                if (!startMsg.campaignId) {
+                    sendFatalError('CAMPAIGN_REQUIRED', 'Choose a campaign explicitly before starting a browser call.');
+                    finalizeCall('campaign_required');
+                    return;
+                }
+                const requestedCampaign = activeState.campaigns.find((c) => c.id === startMsg.campaignId);
+                if (!requestedCampaign || requestedCampaign.agentId !== requestedAgent.id) {
+                    sendFatalError('CAMPAIGN_ASSIGNMENT_MISMATCH', 'The selected campaign is not assigned to this bot. Assign it in Campaigns and retry.');
+                    finalizeCall('campaign_assignment_mismatch');
+                    return;
+                }
+                const campaignBlockers = (0, settings_builder_1.getCampaignCallReadinessBlockers)(activeState, requestedCampaign);
+                if (campaignBlockers.length) {
+                    sendFatalError('CAMPAIGN_NOT_READY', `Campaign “${requestedCampaign.name}” is not ready: ${campaignBlockers.join('; ')}.`);
+                    finalizeCall('campaign_not_ready');
+                    return;
+                }
+                activeCampaign = requestedCampaign;
                 const sessionState = activeState;
                 const missingGlobalServices = ['stt', 'llm', 'tts'].filter((kind) => {
                     const selected = sessionState?.services?.[kind];
@@ -560,11 +587,9 @@ function attachLiveSimulator(server, noServer = false) {
                 for (const fn of rawSettings.agent.think.functions || [])
                     fn.defer_until_eot = true;
                 let wireSettings;
-                let wireGreeting = '';
                 try {
                     const prepared = (0, opening_1.prepareDelayedOpening)(interpolateEnvPlaceholders(rawSettings));
                     wireSettings = prepared.settings;
-                    wireGreeting = prepared.greeting;
                 }
                 catch (err) {
                     sendFatalError('PROMPT_TOO_LONG', err.message || 'Could not prepare the opening.');
@@ -572,13 +597,21 @@ function attachLiveSimulator(server, noServer = false) {
                     return;
                 }
                 openingGate = (0, opening_1.createOpeningGate)({
-                    greeting: wireGreeting,
-                    sendOpening: (message) => {
+                    presenceCheck: activeCampaign?.presenceCheckText || 'Hello? Are you there? Can you hear me?',
+                    responseTimeoutMs: Math.max(1, Number(activeCampaign?.deadAirTimeoutSec || 8)) * 1000,
+                    sendPresenceCheck: (message) => {
                         if (!closed && dgWs?.readyState === ws_1.default.OPEN) {
                             dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
                         }
                     },
                     playAudio: sendClientAudio,
+                    onDeadAir: () => {
+                        if (closed)
+                            return;
+                        detectedDisposition = activeCampaign?.deadAirDisposition || null;
+                        recordTranscript('system', `No caller response to campaign presence check. Simulated dead-air status ${detectedDisposition || '(unset)'}; no VICIdial update was made.`);
+                        finalizeCall('dead_air');
+                    },
                     onOverflow: () => sendClientJson({ type: 'warning', message: 'Early provider audio exceeded the opening buffer and was dropped.' }),
                 });
                 const targetUrl = customAgentUrl || 'wss://agent.deepgram.com/v1/agent/converse';
@@ -746,6 +779,7 @@ function attachLiveSimulator(server, noServer = false) {
                             break;
                         }
                         case 'AgentAudioDone': {
+                            openingGate?.agentAudioDone();
                             openingGate?.afterRelease(() => {
                                 if (closed)
                                     return;

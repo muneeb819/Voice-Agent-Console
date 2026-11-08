@@ -3,6 +3,8 @@
 
   const VAC_AUTH_TOKEN_KEY = 'vac_auth_token';
   const VAC_CLOUD_SESSION_KEY = 'vac_cloud_session_v1';
+  const DEFAULT_PRESENCE_CHECK_TEXT = 'Hello? Are you there? Can you hear me?';
+  const MISSING_CAMPAIGN_RULES = 'REVIEW REQUIRED: Add and review campaign-specific compliance and call rules before deployment.';
 
   function vacReadAuthToken() {
     try {
@@ -93,6 +95,10 @@
   let revisions = [];
   let secretsStatus = {};
   let latestRevisionId = null;
+  let autoSaveTimer = null;
+  let autoSaveInFlight = null;
+  let autoSaveError = '';
+  const STATE_DRAFT_KEY = 'vac_console_unsaved_draft_v1';
 
   let tab = (() => {
     try {
@@ -297,11 +303,15 @@
           const wasDirty = isDirty();
           const changed = enforceDeepgramOnlyLlms(S);
           if (changed && !wasDirty) {
-            snap = comparableSnapshot(S);
             if (serverlessCloudMode) {
+              snap = comparableSnapshot(S);
               try {
                 window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
               } catch {}
+            } else {
+              // Keep the persisted baseline intact; the debounced save below
+              // commits client-side migrations instead of silently dropping them.
+              queueAutoSave(250);
             }
           }
         }
@@ -522,20 +532,11 @@
 
   const THEME_BY_ID = (id) => APPEARANCE_THEMES.find((t) => t.id === id) || APPEARANCE_THEMES[0];
 
-  let brandMarkSeq = 0;
   function brandMarkSvg(meta, opts = {}) {
     const pkg = BRAND_PACKAGES[meta.id] || BRAND_PACKAGES.cyan_signal;
-    const gid = `bmg${++brandMarkSeq}`;
     const stroke = opts.thin ? 4.4 : 5.2;
     return `<svg viewBox="0 0 64 64" class="brand-mark-svg" aria-hidden="true" focusable="false">
-      <defs>
-        <linearGradient id="${gid}" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="${meta.dots[0]}"/>
-          <stop offset="0.55" stop-color="${meta.dots[1]}"/>
-          <stop offset="1" stop-color="${meta.dots[2] || meta.dots[1]}"/>
-        </linearGradient>
-      </defs>
-      <g fill="none" stroke="url(#${gid})" stroke-linecap="round" stroke-linejoin="round">
+      <g fill="none" stroke="${meta.dots[0]}" stroke-linecap="round" stroke-linejoin="round">
         ${pkg.frame}
         <path d="M20 46V20l12 14 12-14v26" stroke-width="${stroke}"/>
       </g>
@@ -579,7 +580,7 @@
     const lbl = document.getElementById('theme-active-lbl');
     if (lbl) lbl.textContent = meta.short;
     const dot = document.getElementById('theme-active-dot');
-    if (dot) dot.style.background = meta.bar;
+    if (dot) dot.style.background = meta.dots[0];
     renderBrandMark();
     updateThemeFavicon(meta);
     renderThemeStudioControls();
@@ -655,7 +656,7 @@
               <div class="theme-preview-dots">
                 ${t.dots.map((c) => `<span style="background:${c}"></span>`).join('')}
               </div>
-              <div class="theme-preview-bar" style="background:${t.bar}"></div>
+              <div class="theme-preview-bar" style="background:${t.dots[0]}"></div>
             </div>
             <div class="theme-name">
               <span>${esc(t.name)}</span>
@@ -1218,53 +1219,52 @@
             : 'This call may be recorded for quality purposes.';
           mutated = true;
         }
-        if (!String(cp.viciCampaign || '').trim()) {
-          cp.viciCampaign = 'AUTOCAMP';
+        if (typeof cp.viciCampaign !== 'string') {
+          cp.viciCampaign = '';
           mutated = true;
         }
-        if (!String(cp.xferTarget || '').trim()) {
-          cp.xferTarget = /medicare/i.test(cp.name || '') ? 'MED_CLOSERS' : 'FE_CLOSERS';
+        if (typeof cp.xferTarget !== 'string') {
+          cp.xferTarget = '';
           mutated = true;
         }
         if (cp.dnc === undefined) {
           cp.dnc = true;
           mutated = true;
         }
-      }
-      for (const ag of state.agents) {
-        if (!state.campaigns.some((c) => c.agentId === ag.id) && !/^Untitled\b/i.test(ag.name || '')) {
-          const isNova = ag.id === 'a_nova' || /nova/i.test(ag.name || '');
-          const isMed = /medicare/i.test(ag.name || '');
-          state.campaigns.push({
-            id: isNova && !state.campaigns.some((c) => c.id === 'c_nova') ? 'c_nova' : `c_${ag.id}`,
-            name: isNova ? 'Nova — Live Concierge & General Q&A' : `${ag.name} — Outbound`,
-            agentId: ag.id,
-            viciCampaign: isNova
-              ? 'NOVACONC'
-              : isMed
-              ? 'MEDICARE'
-              : (ag.name || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 8) || 'AUTOCAMP',
-            lists: isNova ? '3001' : isMed ? '2001,2002' : '1001',
-            start: '09:00',
-            end: '20:00',
-            tz: 'America/New_York',
-            attempts: 3,
-            retry: 120,
-            maxCalls: 10,
-            xferType: 'ingroup',
-            xferTarget: isNova ? 'CONCIERGE_CLOSERS' : isMed ? 'MED_CLOSERS' : 'FE_CLOSERS',
-            fallback: 'Dispo CALLBK',
-            dnc: true,
-            disclosure: isMed
-              ? 'This call may be recorded for quality and benefit verification.'
-              : isNova
-              ? 'This call may be recorded for quality and training purposes.'
-              : 'This call may be recorded for quality purposes.',
-            dispos: isMed ? 'XFER,DQ,LANG,DNC,NI,NA,CALLBK' : 'XFER,NI,DNC,NA,CALLBK,DEC',
-          });
+        if (cp.agentId === undefined || cp.agentId === null) {
+          cp.agentId = '';
+          mutated = true;
+        }
+        if (typeof cp.complianceRules !== 'string') {
+          cp.complianceRules = MISSING_CAMPAIGN_RULES;
+          mutated = true;
+        }
+        if (typeof cp.presenceCheckText !== 'string') {
+          cp.presenceCheckText = DEFAULT_PRESENCE_CHECK_TEXT;
+          mutated = true;
+        }
+        if (!Number.isFinite(Number(cp.deadAirTimeoutSec))) {
+          cp.deadAirTimeoutSec = 8;
+          mutated = true;
+        } else {
+          cp.deadAirTimeoutSec = Math.round(Number(cp.deadAirTimeoutSec));
+        }
+        if (typeof cp.deadAirDisposition !== 'string') {
+          cp.deadAirDisposition = '';
+          mutated = true;
+        }
+        const normalizedDeadAirCode = String(cp.deadAirDisposition || '').trim().toUpperCase();
+        if (cp.deadAirDisposition !== normalizedDeadAirCode) {
+          cp.deadAirDisposition = normalizedDeadAirCode;
+          mutated = true;
+        }
+        if (typeof cp.deadAirDispositionVerified !== 'boolean') {
+          cp.deadAirDispositionVerified = false;
           mutated = true;
         }
       }
+      // Missing campaign assignments stay visible and block calls; never generate a
+      // campaign for a bot behind the operator's back.
     }
 
     if (Array.isArray(state.providers)) {
@@ -1302,11 +1302,9 @@
     return mutated;
   }
 
-  function composeBehavioralPromptClient(agent) {
+  function composeBehavioralPromptClient(agent, campaign) {
     const basePrompt = (agent.prompt || '').trim();
     const b = agent.behavior;
-    if (!b || basePrompt.length > 23500) return basePrompt;
-
     const toneMap = {
       warm_empathetic: 'Warm, caring, empathetic, and reassuring — sound genuinely attentive and human.',
       energetic_upbeat: 'Bright, upbeat, friendly, and enthusiastic — speak with a natural smile in your voice.',
@@ -1314,39 +1312,65 @@
       calm_concierge: 'Calm, composed, clear, and soothing — smooth concierge presence.',
     };
 
-    const lines = [
-      '',
-      '=== REAL-TIME VOICE ASSISTANT, BARGE-IN, EXPRESSIONS & GENERAL Q&A ===',
-      '- Be honest about being an AI assistant if asked. Do not claim an external action succeeded unless its tool result confirms success.',
-    ];
-    if ((b.selfIntro || '').trim()) {
+    const lines = [];
+    if (b) {
       lines.push(
-        `- SELF-INTRODUCTION: Whenever greeted casually or asked "Who are you?", "What is your name?", "Introduce yourself", or "What can you do?", warmly introduce yourself in 1–2 natural spoken sentences based on: "${b.selfIntro.trim()}"`
+        '',
+        '=== REAL-TIME VOICE ASSISTANT, BARGE-IN, EXPRESSIONS & GENERAL Q&A ===',
+        '- Be honest about being an AI assistant if asked. Do not claim an external action succeeded unless its tool result confirms success.'
       );
+      if ((b.selfIntro || '').trim()) {
+        lines.push(
+          `- SELF-INTRODUCTION: Whenever greeted casually or asked "Who are you?", "What is your name?", "Introduce yourself", or "What can you do?", warmly introduce yourself in 1–2 natural spoken sentences based on: "${b.selfIntro.trim()}"`
+        );
+      }
+      if (b.allowGeneralQa !== false) {
+        lines.push(
+          '- GENERAL KNOWLEDGE & OPEN Q&A: If the caller asks ANY general question (science, math, geography, technology, definitions, advice, trivia, or everyday small talk), answer it directly, accurately, and warmly in 1–2 concise spoken sentences instead of deflecting. Always honor the assigned campaign rules, DNC, language barriers, and eligibility gates first.'
+        );
+      }
+      if (b.bargeIn !== 'off') {
+        lines.push(
+          '- LIVE BARGE-IN AWARENESS: The caller can interrupt you mid-sentence at any time. If interrupted, never repeat cut-off sentences — pivot immediately and naturally to their latest question or remark.'
+        );
+      }
+      lines.push(`- VOCAL EXPRESSION STYLE: ${toneMap[b.expressionStyle] || toneMap.warm_empathetic}`);
+      if (b.vocalGestures !== false) {
+        lines.push(
+          '- NATURAL VOCAL GESTURES: Use subtle, authentic spoken micro-gestures when natural (e.g., "Oh, great question!", "Gotcha —", "Mm-hmm, I hear you.", "Right, so—", light warmth) and natural conversational pauses ("—"). NEVER output bracketed or asterisk tags like [laughs], [smiles], (sighs), or *waves* because TTS speaks brackets literally.'
+        );
+      }
+      if (b.latencyProfile === 'ultra') {
+        lines.push(
+          '- ULTRA-LOW LATENCY STREAMING: Begin every reply immediately with the core answer or reaction in the first 4–6 words. Keep turns crisp (1–2 spoken sentences, ~15–35 words unless asked for detail) in plain spoken words with zero markdown (*, #, bullets).'
+        );
+      }
     }
-    if (b.allowGeneralQa !== false) {
+    if (campaign) {
       lines.push(
-        '- GENERAL KNOWLEDGE & OPEN Q&A: If the caller asks ANY general question (science, math, geography, technology, definitions, advice, trivia, or everyday small talk), answer it directly, accurately, and warmly in 1–2 concise spoken sentences instead of deflecting. (Always still honor compliance rules like DNC, language barriers, or campaign eligibility gates when applicable.)'
+        '',
+        '=== MANDATORY CAMPAIGN-SPECIFIC COMPLIANCE & RULES ===',
+        `- The only campaign assigned to this call is ${JSON.stringify(campaign.name)} (VICIdial campaign ${JSON.stringify(campaign.viciCampaign)}). Do not use another campaign’s rules.`,
+        '- The rules below are mandatory and override any conflicting persona, sales script, saved agent prompt, or general-answer instruction. Follow them throughout the call.',
+        `- Campaign rules:\n${String(campaign.complianceRules || '').trim() || '[NO CAMPAIGN RULES CONFIGURED — do not start a live call.]'}`,
+        `- If the caller is silent for one second, the bridge sends this one presence-check line: ${JSON.stringify(campaign.presenceCheckText || '')}. Say it briefly, then wait for a caller turn; do not continue the sales script until they respond.`,
+        `- After the presence check, the bridge waits ${Number(campaign.deadAirTimeoutSec) || 8} seconds for a caller response. The bridge, not the model, applies dead-air status ${JSON.stringify(campaign.deadAirDisposition || '')} and hangs up; do not claim a status update succeeded.`
       );
+      if (campaign.disclosure && campaign.disclosure.trim()) {
+        lines.push(
+          `- Campaign disclosure text is ${JSON.stringify(campaign.disclosure.trim())}. It is prepended to the opening only when this agent’s campaign-disclosure setting is enabled; never claim a recording or practice that is not actually in effect.`
+        );
+      }
     }
-    if (b.bargeIn !== 'off') {
-      lines.push(
-        '- LIVE BARGE-IN AWARENESS: The caller can interrupt you mid-sentence at any time. If interrupted, never repeat cut-off sentences — pivot immediately and naturally to their latest question or remark.'
-      );
-    }
-    lines.push(`- VOCAL EXPRESSION STYLE: ${toneMap[b.expressionStyle] || toneMap.warm_empathetic}`);
-    if (b.vocalGestures !== false) {
-      lines.push(
-        '- NATURAL VOCAL GESTURES: Use subtle, authentic spoken micro-gestures when natural (e.g., "Oh, great question!", "Gotcha —", "Mm-hmm, I hear you.", "Right, so—", light warmth) and natural conversational pauses ("—"). NEVER output bracketed or asterisk tags like [laughs], [smiles], (sighs), or *waves* because TTS speaks brackets literally.'
-      );
-    }
-    if (b.latencyProfile === 'ultra') {
-      lines.push(
-        '- ULTRA-LOW LATENCY STREAMING: Begin every reply immediately with the core answer or reaction in the first 4–6 words. Keep turns crisp (1–2 spoken sentences, ~15–35 words unless asked for detail) in plain spoken words with zero markdown (*, #, bullets).'
-      );
-    }
-    const combined = `${basePrompt}\n${lines.join('\n')}`.trim();
-    return combined.length <= 24950 ? combined : basePrompt;
+    const suffix = lines.join('\n').trim();
+    if (!suffix) return basePrompt;
+    const maxPromptLength = 24950;
+    const availableBaseLength = Math.max(0, maxPromptLength - suffix.length - 1);
+    const safeBase = basePrompt.slice(0, availableBaseLength);
+    const truncationNote = basePrompt.length > safeBase.length
+      ? '\n[Agent prompt shortened to preserve the mandatory campaign rules below.]'
+      : '';
+    return `${safeBase}${truncationNote}\n${suffix}`.trim();
   }
 
   // The server exposes its SQLite catalog; static hosting ships the same
@@ -1517,6 +1541,7 @@
     recordingUrls: new Map(),
     recordingLoadVersions: new Map(),
     callId: '',
+    campaignId: '',
     logSaved: null,
     selectedGreeting: null,
     bandwidth: 'wideband', // 'wideband' (16k/24k) or 'telephony' (8k/8k)
@@ -1902,6 +1927,7 @@
     simRunning: false,
     simTransport: 'sip_rtp',
     simScenario: 'medicare_qualified_xfer',
+    simCampaignId: '',
     simUpstream: 'deepgram',
     simError: null,
     webhookTests: {},
@@ -1947,7 +1973,12 @@
   };
 
   const A = () => S.agents.find((x) => x.id === cur.a) || S.agents[0];
-  const C = () => S.campaigns.find((x) => x.id === cur.c) || S.campaigns[0];
+  const C = () => S.campaigns.find((x) => x.id === cur.c);
+  const campaignsForAgent = (agentId) => (S?.campaigns || []).filter((campaign) => campaign.agentId === agentId);
+  function simulatorCampaign(agentId = A()?.id) {
+    if (!sim.campaignId) return null;
+    return campaignsForAgent(agentId).find((campaign) => campaign.id === sim.campaignId) || null;
+  }
   const prov = (id) => S.providers.find((x) => x.id === id);
 
   const rootRefs = () => ({ a: A(), c: C(), v: S.vici, p: S.providers, f: S.functions, services: S.services });
@@ -1975,19 +2006,64 @@
 
   const isDirty = () => S && comparableSnapshot(S) !== snap;
 
+  function persistDraftLocally() {
+    if (!S) return;
+    try {
+      if (serverlessCloudMode) {
+        window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
+      } else {
+        window.localStorage?.setItem(STATE_DRAFT_KEY, JSON.stringify({
+          baseSnapshot: snap,
+          savedAt: new Date().toISOString(),
+          state: S,
+        }));
+      }
+    } catch {}
+  }
+
+  function clearLocalDraft() {
+    try { window.localStorage?.removeItem(STATE_DRAFT_KEY); } catch {}
+  }
+
+  function queueAutoSave(delayMs) {
+    if (!S) return;
+    persistDraftLocally();
+    if (serverlessCloudMode) {
+      try {
+        S.updatedAt = new Date().toISOString();
+        window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
+        snap = comparableSnapshot(S);
+        autoSaveError = '';
+      } catch (err) {
+        autoSaveError = err?.message || 'Browser storage is unavailable';
+      }
+      return;
+    }
+    if (autoSaveInFlight) return;
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    const delay = Number.isFinite(delayMs) ? delayMs : (autoSaveError ? 3500 : 900);
+    autoSaveTimer = setTimeout(() => {
+      autoSaveTimer = null;
+      void autoSaveState();
+    }, Math.max(100, delay));
+  }
+
   function updateHeaderStatus() {
     if (!S) return;
+    if (isDirty()) queueAutoSave();
     const dirty = isDirty();
     const st = document.getElementById('st');
     if (dirty) {
-      st.textContent = '● Unsaved changes';
+      st.textContent = autoSaveError ? '● Save pending — retrying' : autoSaveInFlight ? '◌ Saving…' : '● Saving automatically…';
       st.className = 'd';
+      if (autoSaveError) st.title = `Changes are preserved in this browser draft. Last save failed: ${autoSaveError}`;
     } else {
-      st.textContent = latestRevisionId ? `✓ Saved (Rev #${latestRevisionId})` : '✓ All changes saved';
+      st.textContent = serverlessCloudMode ? '✓ Saved in this browser' : latestRevisionId ? `✓ Saved (Rev #${latestRevisionId})` : '✓ All changes saved';
       st.className = '';
+      st.title = '';
     }
-    document.getElementById('sv').disabled = !dirty;
-    document.getElementById('dc').disabled = !dirty;
+    document.getElementById('sv').disabled = !dirty || Boolean(autoSaveInFlight);
+    document.getElementById('dc').disabled = !dirty || Boolean(autoSaveInFlight);
 
     const dgKey = secretsStatus?.DEEPGRAM_API_KEY?.configured;
     const btnKeys = document.getElementById('btn-keys');
@@ -2010,11 +2086,13 @@
     }
   }
 
-  function buildSettings(agent, greetingText = '') {
+  function buildSettings(agent, greetingText = '', campaign) {
     const sp = globalServiceProvider('stt') || {};
     const lp = globalServiceProvider('llm') || {};
     const tp = globalServiceProvider('tts') || {};
-    const linkedCampaign = S.campaigns.find((c) => c.agentId === agent.id);
+    const linkedCampaign = campaign
+      ? campaign.agentId === agent.id ? campaign : undefined
+      : agent.id === A()?.id ? simulatorCampaign(agent.id) : S.campaigns.find((c) => c.agentId === agent.id);
 
     const isSpeechServiceStt = sp.type === 'speech_service';
     const spModels = String(sp.models || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -2078,7 +2156,10 @@
     delete thinkProvider.model;
     if (llmModel) thinkProvider.model = llmModel;
 
-    const campaignDispos = (linkedCampaign?.dispos || '').split(',').map((d) => d.trim()).filter(Boolean);
+    const campaignDispos = String(linkedCampaign?.dispos || '')
+      .split(/[ ,\t\r\n]+/)
+      .map((code) => code.trim().toUpperCase())
+      .filter((code, index, all) => Boolean(code) && all.indexOf(code) === index);
     const fns = (agent.fnIds || [])
       .map((id) => S.functions.find((f) => f.id === id))
       .filter(Boolean)
@@ -2097,7 +2178,7 @@
         return o;
       });
 
-    const think = { provider: thinkProvider, prompt: composeBehavioralPromptClient(agent), functions: fns };
+    const think = { provider: thinkProvider, prompt: composeBehavioralPromptClient(agent, linkedCampaign), functions: fns };
 
     const ttsModel = String(S.services?.tts?.model || '').trim();
     const speakProvider = { type: tp.type || '' };
@@ -2265,7 +2346,7 @@
     push(/(dnc|do not call|take me off|stop)/i.test(agent.prompt), 'System prompt handles Do-Not-Call requests');
     push(fnNames.includes('end_call'), 'end_call function enabled');
     push(Number(agent.audio.inRate) === 8000, '8000 Hz input sample rate matches Asterisk/VICIdial telephony', true);
-    push(S.campaigns.some((c) => c.agentId === agent.id), 'Assigned to at least one campaign', true);
+    push(S.campaigns.some((c) => c.agentId === agent.id), 'Explicitly assigned to at least one campaign before deployment');
 
     return items;
   }
@@ -2273,17 +2354,59 @@
   function validateCampaignLocal(c) {
     const items = [];
     const push = (ok, m, w = false) => items.push([ok ? 'ok' : w ? 'wn' : 'er', ok ? '✓' : w ? '!' : '✗', m]);
+    if (!c) {
+      push(false, 'Create a campaign and explicitly assign a bot agent before testing or deployment');
+      return items;
+    }
+    const rules = String(c.complianceRules || '').trim();
+    const presence = String(c.presenceCheckText || '').trim();
+    const deadAir = String(c.deadAirDisposition || '').trim().toUpperCase();
+    const allowed = String(c.dispos || '').split(/[ ,\t\r\n]+/).map((code) => code.trim().toUpperCase()).filter(Boolean);
     push(Boolean((c.viciCampaign || '').trim()), 'VICIdial campaign ID set');
     push(Boolean((c.xferTarget || '').trim()), 'Live-agent transfer target set');
     push(Boolean(c.dnc), 'DNC scrub enabled');
     push(Boolean((c.disclosure || '').trim()), 'Recording disclosure line present', true);
     push(c.start < c.end, `Calling window valid (${c.start} – ${c.end})`);
-    push(S.agents.some((a) => a.id === c.agentId), 'Assigned bot agent exists');
+    const assignedAgent = S.agents.find((agent) => agent.id === c.agentId);
+    push(Boolean(assignedAgent), 'Explicitly assigned to an existing bot agent');
+    push(allowed.length > 0, 'At least one allowed VICIdial disposition code is configured');
+    const transferFunction = S.functions.find((fn) => fn.name === 'transfer_to_live_agent');
+    const transferEnabled = Boolean(assignedAgent && transferFunction && assignedAgent.fnIds.includes(transferFunction.id));
+    push(!transferEnabled || allowed.includes('XFER'), 'XFER is in the allowed disposition list when live-agent transfer is enabled');
+    push(rules.length >= 20 && rules.length <= 8000 && !/^REVIEW REQUIRED\b/i.test(rules), 'Campaign-specific compliance & rules are written and reviewed (20–8,000 characters)');
+    push(presence.length >= 8 && presence.length <= 280, 'Brief campaign presence-check line configured (8–280 characters)');
+    push(Number.isInteger(Number(c.deadAirTimeoutSec)) && Number(c.deadAirTimeoutSec) >= 3 && Number(c.deadAirTimeoutSec) <= 30, 'Dead-air response timeout is 3–30 seconds');
+    const validCode = /^[A-Z0-9_-]{2,6}$/.test(deadAir);
+    push(validCode, 'Campaign-specific dead-air disposition code configured');
+    push(validCode && allowed.includes(deadAir), `Dead-air code ${deadAir || '(unset)'} is in this campaign’s allowed disposition list`);
+    push(c.deadAirDispositionVerified === true, 'Operator confirmed this code exists in this VICIdial campaign status list');
     return items;
+  }
+
+  function deploymentReadinessBlockersLocal() {
+    const blockers = [];
+    for (const agent of S.agents || []) {
+      if (!(S.campaigns || []).some((campaign) => campaign.agentId === agent.id)) {
+        blockers.push(`Agent “${agent.name}” must be explicitly assigned to at least one campaign.`);
+      }
+      for (const item of validateAgentLocal(agent)) {
+        if (item[0] === 'er') blockers.push(`Agent “${agent.name}”: ${item[2]}.`);
+      }
+    }
+    for (const campaign of S.campaigns || []) {
+      for (const item of validateCampaignLocal(campaign)) {
+        if (item[0] === 'er') blockers.push(`Campaign “${campaign.name}”: ${item[2]}.`);
+      }
+    }
+    return [...new Set(blockers)];
   }
 
   function buildViciConfigLocal() {
     const v = S.vici;
+    const selectedCampaign = C();
+    const selectedCampaignIndex = selectedCampaign ? S.campaigns.findIndex((campaign) => campaign.id === selectedCampaign.id) + 1 : 0;
+    const selectedRemoteAgentUser = selectedCampaign ? String(Number(v.remoteAgentUser || 9001) + selectedCampaignIndex - 1) : v.remoteAgentUser;
+    const selectedCampaignExten = selectedCampaign ? `${v.aiExten}${selectedCampaignIndex}` : '';
     const nonAgentUrl = `${v.viciBaseUrl}${v.nonAgentApiPath}`;
     const agentApiUrl = `${v.viciBaseUrl}${v.agentApiPath}`;
     const campaignBlock = S.campaigns
@@ -2301,6 +2424,9 @@
           `;   Remote Agent Exten   : ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + idx})`,
           `;   Live Closer Transfer : ${xfer}`,
           `;   Allowed Dispositions : ${c.dispos}`,
+          `;   Dead-Air Disposition : ${c.deadAirDisposition || '(unset)'} after ${c.deadAirTimeoutSec}s; verified in VICIdial: ${c.deadAirDispositionVerified ? 'YES' : 'NO'}`,
+          `;   Presence Check       : ${String(c.presenceCheckText || '').replace(/[\r\n]+/g, ' ')}`,
+          `;   Campaign Rules       : ${String(c.complianceRules || '').trim() ? `${String(c.complianceRules).trim().length} characters; injected into the assigned bot prompt` : 'MISSING — deployment blocked'}`,
         ].join('\n');
       })
       .join('\n;\n');
@@ -2355,8 +2481,13 @@
       ``,
       `; === VICIdial Admin Setup Checklist (Co-Located on ViciBox ${v.bridgeHost}) ===`,
       `; 1. Users -> API User "${v.apiUser}": User Level=8, Modify Leads=1, Modify Lists=1, Agent API Access=1`,
-      `; 2. Remote Agents -> Create User ${v.remoteAgentUser} (Lines=${S.campaigns[0]?.maxCalls || 10}, External Exten=${v.aiExten}1, On-Hook=N, Status=ACTIVE)`,
-      `; 3. Inbound Groups -> Create Closer In-Group "${S.campaigns[0]?.xferTarget || 'FE_CLOSERS'}" & enable in Campaign "Allowed Transfer Groups"`,
+      selectedCampaign
+        ? `; 2. Remote Agents -> Create User ${selectedRemoteAgentUser} (Lines=${selectedCampaign.maxCalls}, External Exten=${selectedCampaignExten}, On-Hook=N, Status=ACTIVE)`
+        : `; 2. Remote Agents -> Configure a user, line limit, and external extension for each assigned campaign.`,
+      selectedCampaign
+        ? `; 3. Inbound Groups -> Configure approved ${selectedCampaign.xferType === 'ingroup' ? 'Closer In-Group' : 'transfer target'} "${selectedCampaign.xferTarget || '(unset in selected campaign)'}" for VICIdial campaign "${selectedCampaign.viciCampaign || selectedCampaign.name}".`
+        : `; 3. Configure an explicit, approved transfer target for each campaign; none is selected.`,
+
       `; 4. Inbound Routing -> Point "${v.inIngroup}" Drop/No-Agent Action -> EXTENSION ${v.aiExten}1`,
       ``,
       dialplan,
@@ -2562,7 +2693,7 @@
         ${arr.map((x) => `<option value="${esc(x.id)}" ${x.id === cur[kind] ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
       </select>
       <button class="g" id="new-${kind}" ${locked ? 'disabled' : ''}>+ New</button>
-      <button class="g" id="dup-${kind}" ${locked ? 'disabled' : ''}>Duplicate</button>
+      <button class="g" id="dup-${kind}" ${locked || !arr.length ? 'disabled' : ''}>Duplicate</button>
       <button class="g danger" id="del-${kind}" ${arr.length <= 1 || locked ? 'disabled title="At least one required"' : ''}>Delete</button>
     </div>`;
   };
@@ -3314,6 +3445,24 @@
 
   async function startLiveCall(withMic = true) {
     if (sim.active || sim.connecting || sim.recordingSaving) return;
+    const callAgent = A();
+    const callCampaign = simulatorCampaign(callAgent?.id);
+    if (!callCampaign) {
+      sim.lastError = 'Assign this bot to a campaign before starting a browser call.';
+      sim.statusText = 'Campaign assignment required';
+      render();
+      return;
+    }
+    const campaignBlockers = [
+      ...validateCampaignLocal(callCampaign).filter((item) => item[0] === 'er').map((item) => `Campaign: ${item[2]}`),
+      ...validateAgentLocal(callAgent).filter((item) => item[0] === 'er').map((item) => `Agent: ${item[2]}`),
+    ];
+    if (campaignBlockers.length) {
+      sim.lastError = `Campaign “${callCampaign.name}” is not ready: ${campaignBlockers.join('; ')}.`;
+      sim.statusText = 'Campaign setup required';
+      render();
+      return;
+    }
     if (sim.recordAudio && !recordingMime()) {
       sim.lastError = 'This browser does not support the required audio recorder. Uncheck recording or use a supported browser.';
       sim.statusText = 'Recording unavailable';
@@ -3461,7 +3610,7 @@
 
     renderSimulatorDomOnly();
 
-    const linkedCamp = S.campaigns.find((c) => c.agentId === A().id) || C();
+    const linkedCamp = simulatorCampaign(A().id);
 
     // ---- SERVERLESS CLOUD DIRECT MODE (GitHub Pages / Vercel / Static Host) ----
     if (serverlessCloudMode) {
@@ -3663,7 +3812,7 @@
       if (attemptId !== sim.sessionAttemptId || !sim.connecting) return;
       sim.selectedGreeting = selected.row || null;
       if (!sim.selectedGreeting) {
-        sim.events.push({ kind: 'msg', role: 'system', content: 'Greeting library unavailable; using the configured opening.' });
+        sim.events.push({ kind: 'msg', role: 'system', content: 'Greeting library unavailable; the configured campaign opening will be used after the caller responds.' });
       } else if (selected.storageWarning) {
         sim.events.push({ kind: 'msg', role: 'system', content: 'Greeting rotation storage is unavailable; the no-repeat cycle lasts only in this tab.' });
       }
@@ -4289,9 +4438,10 @@
     viciMon.simError = null;
     render();
     try {
-      const isMed = String(viciMon.simScenario || '').startsWith('medicare_');
-      const medIdx = S.campaigns.findIndex((c) => c.id === 'c_medicare' || /medicare/i.test(c.viciCampaign || c.name));
-      const targetExten = isMed && medIdx >= 0 ? `${S.vici.aiExten}${medIdx + 1}` : `${S.vici.aiExten}1`;
+      const campaignId = String(viciMon.simCampaignId || '');
+      if (!S.campaigns.some((campaign) => campaign.id === campaignId)) {
+        throw new Error('Select an existing campaign explicitly before running the loopback call.');
+      }
       const res = await fetch('/api/vici/simulate-call', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -4301,7 +4451,7 @@
           upstream: viciMon.simUpstream,
           callerCode: 'V1027153012000104892',
           phone: '3055550192',
-          exten: targetExten,
+          campaignId,
         }),
       });
       const data = await res.json();
@@ -5143,7 +5293,7 @@
           <div class="note wn">This controls the spoken campaign notice only; it does not turn off recording. Obtain any consent required for your calls. Existing notice settings are preserved. Notice text written inside the saved opening is not removed.</div>
           ${F('Saved opening and identity (keep it brief)', 'a.greeting', 'ta')}
           ${F('Vary this opening using the imported greeting library', 'a.randomGreetingEnabled', 'chk')}
-          <div class="note" style="margin:5px 0">Each call uses the saved opening, not an additional full greeting. A library entry varies its salutation or general question without inventing an identity; matching consecutive wording is avoided when another unused option is available. The 1,100 original entries remain below. Output is held for at least 0.5 seconds after the provider is ready; the provider is instructed to respond if the caller speaks first.</div>
+          <div class="note" style="margin:5px 0">Each call listens for the caller’s first speech for 1 second before the bot speaks. If the line is silent, the assigned campaign’s brief presence check is spoken once; the configured greeting follows only after a caller response. A library entry varies the saved opening without inventing an identity. The 1,100 original entries remain below.</div>
           <div id="greeting-catalog-panel">${renderGreetingCatalog()}</div>
           ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
           <div class="note wn">Before calling, verify your identity and every factual or benefit claim. Example Medicare / Food &amp; OTC scripts are unverified; review them and any required consent or disclosures for your campaign.</div>
@@ -5253,7 +5403,7 @@
 
         <div class="card sticky">
           <h2>Deepgram Settings Preview</h2>
-          <div class="note">The preview includes the opening. If no caller turn is detected, it is requested separately after the wait rather than as an automatic provider greeting.</div>
+          <div class="note">The preview uses the selected campaign’s rules and disposition enum. On a live call, the bot listens for 1 second, asks the campaign’s presence check after silence, then waits for the caller before starting the greeting.</div>
           <pre id="pv"></pre>
           <h2>Quick Agent Pre-Flight</h2>
           <div id="agent-quick-ck"></div>
@@ -5274,15 +5424,22 @@
         </div>
       `;
     } else if (tab === 'campaigns') {
-      m.innerHTML = `
+      if (!S.campaigns.length) {
+        m.innerHTML = `<div class="card">${renderSelectorBar('c')}
+          <h2>No campaigns configured</h2>
+          <div class="note er">Calls, loopback tests, and deployment stay blocked until you create a campaign, write its rules and presence check, verify a dead-air disposition, and assign a bot agent.</div>
+        </div>
+        <div class="card sticky"><h2>Campaign Readiness</h2><div id="ck">${renderCheckList(validateCampaignLocal(null))}</div><h2>Campaign JSON</h2><pre id="pv"></pre></div>`;
+      } else {
+        m.innerHTML = `
         <div class="card">
           ${renderSelectorBar('c')}
           ${F('Campaign display name', 'c.name')}
           ${F(
-            'Assigned Bot Agent',
+            'Assigned Bot Agent (required before calls or deployment)',
             'c.agentId',
             'sel',
-            S.agents.map((x) => [x.id, x.name])
+            [['', 'Select a bot agent…'], ...S.agents.map((x) => [x.id, x.name])]
           )}
           <div class="row">
             ${F('VICIdial Campaign ID', 'c.viciCampaign')}
@@ -5308,7 +5465,19 @@
           </div>
           ${F('Fallback if no live closer available', 'c.fallback')}
           ${F('Call recording disclosure (auto-prepended to bot greeting when enabled)', 'c.disclosure')}
-          ${F('Allowed VICIdial Disposition Codes (comma-separated — injected into set_disposition enum)', 'c.dispos')}
+          <h2>🛡️ Compliance &amp; Rules</h2>
+          <div class="note wn">These rules are attached to this campaign and injected into its assigned bot’s live prompt. Write campaign-specific, actionable rules and review all claims with your compliance owner. This console is not legal advice or a compliance certification.</div>
+          ${F('Mandatory campaign-specific rules and prohibited claims (20–8,000 characters)', 'c.complianceRules', 'ta', [], 'style="min-height:180px" maxlength="8000"')}
+          <div class="row">
+            ${F('Presence-check line spoken after 1 second of caller silence', 'c.presenceCheckText', 'ta', [], 'style="min-height:62px" maxlength="280"')}
+            ${F('Wait for caller response after the presence check (seconds)', 'c.deadAirTimeoutSec', 'number', [], 'min="3" max="30" step="1"')}
+          </div>
+          <div class="row">
+            ${F('Campaign-specific dead-air disposition code (example: DAIR)', 'c.deadAirDisposition')}
+            ${F('Allowed VICIdial disposition codes for this campaign (comma-separated)', 'c.dispos')}
+          </div>
+          ${F('I verified this dead-air code exists in the matching VICIdial campaign’s status list', 'c.deadAirDispositionVerified', 'chk')}
+          <div class="note wn">The code must also appear in the allowed-disposition list above. The console cannot query VICIdial’s campaign status configuration; verify the exact code under VICIdial Campaigns → Statuses before checking this box. If an update is rejected, the bridge logs the failure and still requests the configured code when hanging up.</div>
           ${F('Scrub leads against DNC list before dialing', 'c.dnc', 'chk')}
         </div>
         <div class="card sticky">
@@ -5318,6 +5487,7 @@
           <pre id="pv"></pre>
         </div>
       `;
+      }
     } else if (tab === 'voice') {
       const settingsSpeak = buildSettings(a).agent.speak;
       const defaultPreview = voiceCatalog.previewText || buildSettings(a).agent.greeting || a.greeting;
@@ -5415,6 +5585,15 @@
       const scenarios = S.tests[a.id] || [];
       const curMode = effectiveSimulatorMode();
       const hasDgKey = Boolean(secretsStatus?.DEEPGRAM_API_KEY?.configured);
+      const simCampaigns = campaignsForAgent(a.id);
+      const simCampaign = simulatorCampaign(a.id);
+      const simCampaignBlockers = simCampaign
+        ? [
+            ...validateCampaignLocal(simCampaign).filter((item) => item[0] === 'er').map((item) => `Campaign: ${item[2]}`),
+            ...validateAgentLocal(a).filter((item) => item[0] === 'er').map((item) => `Agent: ${item[2]}`),
+          ]
+        : [simCampaigns.length ? 'Select the campaign for this call; no campaign will be chosen automatically.' : 'Assign this bot to a campaign before making a call.'];
+      const simCampaignBlockedAttr = simCampaignBlockers.length ? 'disabled' : '';
 
       if (sim.logsLoadedForAgent !== a.id) {
         loadCallLogsForCurrentAgent();
@@ -5433,6 +5612,22 @@
           <div id="sim-selected-greeting" class="note">${sim.selectedGreeting
             ? `Selected greeting #${esc(sim.selectedGreeting.greeting_id)} · ${esc(sim.selectedGreeting.persona)} · ${esc(sim.selectedGreeting.context)} · ${esc(sim.selectedGreeting.tone)} (selection does not confirm playback).`
             : 'The saved opening is used if random greetings are off or unavailable.'}</div>
+          <div class="row" style="margin-top:8px">
+            <div>
+              <label for="sim-campaign">Campaign for this call (required)</label>
+              <select id="sim-campaign" ${sim.active || sim.connecting ? 'disabled' : ''}>
+                ${simCampaigns.length
+                  ? `${!simCampaign ? '<option value="" selected>Choose a campaign for this call…</option>' : ''}${simCampaigns.map((campaign) => `<option value="${esc(campaign.id)}" ${campaign.id === simCampaign?.id ? 'selected' : ''}>${esc(campaign.name)} · ${esc(campaign.viciCampaign || 'no VICIdial ID')}</option>`).join('')}`
+                  : '<option value="">No campaign assigned to this bot</option>'}
+              </select>
+            </div>
+            <div class="note">${simCampaign
+              ? `This call uses “${esc(simCampaign.name)}” and only its saved rules, opener, and disposition codes.`
+              : simCampaigns.length ? 'Select the campaign for this call. No campaign will be chosen automatically.' : 'No campaign is assigned. Create a campaign and explicitly assign this bot before testing or deployment.'}</div>
+          </div>
+          ${simCampaignBlockers.length
+            ? `<div class="note er" style="margin-top:6px">Campaign not ready: ${esc(simCampaignBlockers.join('; '))}</div>`
+            : ''}
 
           ${
             sim.lastError
@@ -5578,8 +5773,8 @@
             ${
               !sim.active && !sim.connecting
                 ? `
-                  <button class="b" id="btn-call-mic" ${sim.recordingSaving ? 'disabled' : ''}>📞 Start Live Mic Call</button>
-                  <button class="g" id="btn-call-nomic" ${sim.recordingSaving ? 'disabled' : ''} title="Connect live Deepgram speaker audio + text utterance injection without requesting microphone">💬 Start Call (Speaker + Text)</button>
+                  <button class="b" id="btn-call-mic" ${sim.recordingSaving ? 'disabled' : simCampaignBlockedAttr}>📞 Start Live Mic Call</button>
+                  <button class="g" id="btn-call-nomic" ${sim.recordingSaving ? 'disabled' : simCampaignBlockedAttr} title="Connect live Deepgram speaker audio + text utterance injection without requesting microphone">💬 Start Call (Speaker + Text)</button>
                   ${hasDgKey ? `<button class="g" id="btn-sim-diag" ${sim.diagRunning ? 'disabled' : ''}>${sim.diagRunning ? '⏳ Testing Deepgram…' : '🔌 Test Deepgram Connection'}</button>` : ''}
                 `
                 : `
@@ -5711,6 +5906,15 @@
         loadViciBridgeStatus();
       }
       const bs = viciMon.status;
+      const deployBlockers = deploymentReadinessBlockersLocal();
+      const loopbackCampaign = S.campaigns.find((campaign) => campaign.id === viciMon.simCampaignId) || null;
+      const loopbackAgent = loopbackCampaign ? S.agents.find((agent) => agent.id === loopbackCampaign.agentId) : null;
+      const loopbackBlockers = !loopbackCampaign
+        ? ['Create and select a campaign before testing a call.']
+        : [
+            ...validateCampaignLocal(loopbackCampaign).filter((item) => item[0] === 'er').map((item) => `Campaign: ${item[2]}`),
+            ...(loopbackAgent ? validateAgentLocal(loopbackAgent).filter((item) => item[0] === 'er').map((item) => `Agent: ${item[2]}`) : ['Assign this campaign to an existing bot agent.']),
+          ];
 
       m.innerHTML = `
         <div class="card">
@@ -5747,7 +5951,7 @@
                 </select>
               </div>
               <div>
-                <label for="vsim-scenario">Caller Scenario &amp; Campaign</label>
+                <label for="vsim-scenario">Caller Scenario</label>
                 <select id="vsim-scenario" ${viciMon.simRunning ? 'disabled' : ''}>
                   <option value="medicare_qualified_xfer" ${viciMon.simScenario === 'medicare_qualified_xfer' ? 'selected' : ''}>[MEDICARE] Part A&amp;B + Age 71 -> MED_CLOSERS Xfer (XFER)</option>
                   <option value="medicare_underage_dq" ${viciMon.simScenario === 'medicare_underage_dq' ? 'selected' : ''}>[MEDICARE] Underage 61 -> Hard Stop Disqualify (DQ)</option>
@@ -5765,8 +5969,27 @@
                 </select>
               </div>
             </div>
+            <div class="row" style="margin-top:8px">
+              <div>
+                <label for="vsim-campaign">Explicit campaign for this loopback call</label>
+                <select id="vsim-campaign" ${viciMon.simRunning ? 'disabled' : ''}>
+                  ${S.campaigns.length
+                    ? `${!loopbackCampaign ? '<option value="" selected>Choose a campaign…</option>' : ''}${S.campaigns.map((campaign) => `<option value="${esc(campaign.id)}" ${campaign.id === loopbackCampaign?.id ? 'selected' : ''}>${esc(campaign.name)} · ${esc(campaign.viciCampaign || 'no VICIdial ID')}</option>`).join('')}`
+                    : '<option value="">No campaigns configured</option>'}
+                </select>
+              </div>
+              <div class="note">${loopbackCampaign
+                ? `Call uses “${esc(loopbackCampaign.name)}” assigned to ${esc(loopbackAgent?.name || 'no agent')}; only this campaign’s prompt rules and disposition codes apply.`
+                : S.campaigns.length ? 'Select one campaign explicitly for this loopback call; the console will not default to another campaign.' : 'Create a campaign and assign a bot agent before testing.'}</div>
+            </div>
+            ${loopbackBlockers.length
+              ? `<div class="note er" style="margin-top:8px">Selected campaign call test blocked: ${esc(loopbackBlockers.join(' • '))}</div>`
+              : '<div class="note ok" style="margin-top:8px">Selected campaign and assigned agent passed call-readiness checks.</div>'}
+            ${deployBlockers.length
+              ? `<div class="note wn" style="margin-top:8px">Release downloads remain blocked until every agent and campaign is ready: ${esc(deployBlockers.join(' • '))}</div>`
+              : ''}
             <div class="bar" style="margin-top:10px;margin-bottom:0">
-              <button class="b" id="btn-vici-sim" ${viciMon.simRunning || serverlessCloudMode ? 'disabled' : ''}>
+              <button class="b" id="btn-vici-sim" ${viciMon.simRunning || serverlessCloudMode || loopbackBlockers.length ? 'disabled' : ''}>
                 ${serverlessCloudMode ? 'Bridge test unavailable on static site' : viciMon.simRunning ? '⏳ Running loopback test…' : '📞 Run isolated bridge loopback test'}
               </button>
               <button class="g" id="btn-vici-verify" ${viciMon.verifyRunning ? 'disabled' : ''}>
@@ -6012,20 +6235,36 @@
   }
 
   function buildExportBundle() {
+    const settingsByCampaignId = Object.fromEntries(
+      S.campaigns.map((campaign) => {
+        const agent = S.agents.find((entry) => entry.id === campaign.agentId);
+        return [campaign.id, {
+          campaignId: campaign.id,
+          campaignName: campaign.name,
+          agentId: campaign.agentId || null,
+          settings: agent ? buildSettings(agent, '', campaign) : null,
+          readinessBlockers: validateCampaignLocal(campaign).filter((item) => item[0] === 'er').map((item) => item[2]),
+        }];
+      })
+    );
     const settingsById = Object.fromEntries(
-      S.agents.map((ag) => [
-        ag.id,
-        {
+      S.agents.map((ag) => {
+        const selectedCampaign = simulatorCampaign(ag.id);
+        return [ag.id, {
           agentId: ag.id,
           agentName: ag.name,
-          settings: buildSettings(ag),
-        },
-      ])
+          campaignIds: campaignsForAgent(ag.id).map((campaign) => campaign.id),
+          selectedCampaignId: selectedCampaign?.id || null,
+          settings: selectedCampaign ? buildSettings(ag, '', selectedCampaign) : null,
+        }];
+      })
     );
     return {
       exportedAt: new Date().toISOString(),
+      readiness: { ready: deploymentReadinessBlockersLocal().length === 0, blockers: deploymentReadinessBlockersLocal() },
       console: S,
       settingsByAgentId: settingsById,
+      settingsByCampaignId,
       viciConfig: buildViciConfigLocal(),
     };
   }
@@ -6163,8 +6402,8 @@
       snap = comparableSnapshot(S);
       revisions = [{ id: 1, saved_at: S.updatedAt || new Date().toISOString(), summary: 'Cloud Direct Browser Session' }];
       secretsStatus = buildCloudSecretsStatus();
-      if (!S.agents.some((x) => x.id === cur.a)) cur.a = S.agents[0].id;
-      if (!S.campaigns.some((x) => x.id === cur.c)) cur.c = S.campaigns[0].id;
+      if (!S.agents.some((x) => x.id === cur.a)) cur.a = S.agents[0]?.id || '';
+      if (!S.campaigns.some((x) => x.id === cur.c)) cur.c = S.campaigns[0]?.id || '';
       render();
       syncDeepgramManagedLlms(true).then((ok) => {
         if (ok) render();
@@ -6177,6 +6416,7 @@
       return;
     }
     const data = await res.json();
+    const serverStateSnapshot = comparableSnapshot(data.state);
     S = data.state;
     if (data.telemetry) {
       cmdDeckState.serverTelemetry = data.telemetry;
@@ -6184,10 +6424,31 @@
     syncPublicDemoButton(data.publicDemoUrl || data.telemetry?.runtime?.publicDemoUrl || null);
     enforceDeepgramOnlyLlms(S);
     upgradeRealtimeAgentFeatures(S);
-    snap = comparableSnapshot(S);
+    snap = serverStateSnapshot;
     revisions = data.revisions || [];
     secretsStatus = data.secrets || {};
     latestRevisionId = revisions[0]?.id || null;
+
+    // Recover an unsaved local browser draft instead of silently replacing it
+    // with the last server snapshot after a tab or network interruption.
+    try {
+      const draft = JSON.parse(window.localStorage?.getItem(STATE_DRAFT_KEY) || 'null');
+      if (draft?.state && typeof draft.baseSnapshot === 'string') {
+        const serverSnapshot = comparableSnapshot(S);
+        const draftSnapshot = comparableSnapshot(draft.state);
+        if (draftSnapshot === serverSnapshot) {
+          clearLocalDraft();
+        } else if (draft.baseSnapshot === serverSnapshot || window.confirm('An unsaved local draft was found. Restore it over the current server state? Choose Cancel to keep the server state and discard the local draft.')) {
+          S = draft.state;
+          enforceDeepgramOnlyLlms(S);
+          upgradeRealtimeAgentFeatures(S);
+          snap = serverSnapshot;
+          queueAutoSave(250);
+        } else {
+          clearLocalDraft();
+        }
+      }
+    } catch {}
 
     // Auto-restore in-tab session keys if sandbox container restarted between chat turns
     const tabSecrets = readTabSessionSecrets();
@@ -6211,12 +6472,56 @@
       } catch {}
     }
 
-    if (!S.agents.some((x) => x.id === cur.a)) cur.a = S.agents[0].id;
-    if (!S.campaigns.some((x) => x.id === cur.c)) cur.c = S.campaigns[0].id;
+    if (!S.agents.some((x) => x.id === cur.a)) cur.a = S.agents[0]?.id || '';
+    if (!S.campaigns.some((x) => x.id === cur.c)) cur.c = S.campaigns[0]?.id || '';
     render();
   }
 
+  async function autoSaveState() {
+    if (!S || serverlessCloudMode || autoSaveInFlight || !isDirty()) return;
+    const submittedSnapshot = comparableSnapshot(S);
+    const submittedState = JSON.parse(JSON.stringify(S));
+    submittedState.updatedAt = new Date().toISOString();
+    autoSaveError = '';
+
+    const pending = (async () => {
+      const res = await fetch('/api/state', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ state: submittedState }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || `Auto-save failed (HTTP ${res.status})`);
+
+      const savedState = data.state || submittedState;
+      snap = comparableSnapshot(savedState);
+      if (comparableSnapshot(S) === submittedSnapshot) S = savedState;
+      revisions = data.revisions || revisions;
+      latestRevisionId = data.revisionId || latestRevisionId;
+      secretsStatus = data.secrets || secretsStatus;
+      if (data.telemetry) cmdDeckState.serverTelemetry = data.telemetry;
+      if (isDirty()) persistDraftLocally();
+      else clearLocalDraft();
+    })();
+    autoSaveInFlight = pending;
+    updateHeaderStatus();
+    try {
+      await pending;
+    } catch (err) {
+      autoSaveError = err?.message || 'Automatic save failed';
+      persistDraftLocally();
+    } finally {
+      autoSaveInFlight = null;
+      updateHeaderStatus();
+    }
+  }
+
   async function commitSave() {
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+    if (autoSaveInFlight) await autoSaveInFlight;
     const btn = document.getElementById('sv');
     btn.disabled = true;
     btn.textContent = 'Saving…';
@@ -6225,6 +6530,8 @@
         S.updatedAt = new Date().toISOString();
         window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
         snap = comparableSnapshot(S);
+        clearLocalDraft();
+        autoSaveError = '';
         const agChecks = S.agents.flatMap((ag) => validateAgentLocal(ag));
         const cpChecks = S.campaigns.flatMap((cp) => validateCampaignLocal(cp));
         const all = [...agChecks, ...cpChecks];
@@ -6258,6 +6565,8 @@
         cmdDeckState.serverTelemetry = data.telemetry;
       }
       snap = comparableSnapshot(S);
+      clearLocalDraft();
+      autoSaveError = '';
       revisions = data.revisions || [];
       secretsStatus = data.secrets || {};
       latestRevisionId = data.revisionId;
@@ -6901,6 +7210,8 @@
     }
 
     if (b.id === 'dc') {
+      clearLocalDraft();
+      if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
       await loadFromServer();
       document.getElementById('vr').innerHTML = '';
       return;
@@ -7637,6 +7948,9 @@
 
     if (b.id === 'rs') {
       if (!confirm('Reset the entire console to factory defaults?')) return;
+      if (autoSaveInFlight) await autoSaveInFlight;
+      clearLocalDraft();
+      if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
       if (serverlessCloudMode) {
         try { window.localStorage?.removeItem(CLOUD_STATE_KEY); } catch {}
         await loadFromServer();
@@ -7649,7 +7963,7 @@
         snap = comparableSnapshot(S);
         revisions = data.revisions || [];
         latestRevisionId = data.revisionId;
-        cur = { a: S.agents[0].id, c: S.campaigns[0].id };
+        cur = { a: S.agents[0]?.id || '', c: S.campaigns[0]?.id || '' };
         render();
       }
       return;
@@ -7660,6 +7974,7 @@
       const [, act, kind] = entityAction;
       const arr = kind === 'a' ? S.agents : S.campaigns;
       const currentObj = kind === 'a' ? A() : C();
+      if ((act === 'del' || act === 'dup') && !currentObj) return;
 
       if (act === 'del') {
         if (arr.length > 1) {
@@ -7667,11 +7982,29 @@
           cur[kind] = arr[0].id;
         }
       } else {
-        const clone = JSON.parse(JSON.stringify(act === 'dup' ? currentObj : arr[0]));
+        const template = act === 'dup' ? currentObj : kind === 'c' ? null : arr[0];
+        const blankCampaign = {
+          id: '', name: '', agentId: '', viciCampaign: '', lists: '', start: '09:00', end: '20:00',
+          tz: 'America/New_York', attempts: 3, retry: 120, maxCalls: 10, xferType: 'ingroup',
+          xferTarget: '', fallback: '', dnc: true, disclosure: '', dispos: '',
+          complianceRules: MISSING_CAMPAIGN_RULES, presenceCheckText: DEFAULT_PRESENCE_CHECK_TEXT,
+          deadAirTimeoutSec: 8, deadAirDisposition: '', deadAirDispositionVerified: false,
+        };
+        const clone = JSON.parse(JSON.stringify(template || (kind === 'c' ? blankCampaign : {})));
         clone.id = uid(kind === 'a' ? 'ag' : 'cp');
         if (kind === 'a' && act === 'new') {
           clone.randomGreetingEnabled = true;
           clone.injectCampaignDisclosure = false;
+        }
+        if (kind === 'c' && (act === 'new' || act === 'dup')) {
+          // A campaign is a safety boundary: never carry another campaign’s
+          // VICIdial ID, agent assignment, disposition confirmation or rules into it.
+          Object.assign(clone, {
+            agentId: '', viciCampaign: '', lists: '', xferTarget: '', fallback: '', dnc: true,
+            disclosure: '', dispos: '', complianceRules: MISSING_CAMPAIGN_RULES,
+            presenceCheckText: DEFAULT_PRESENCE_CHECK_TEXT, deadAirTimeoutSec: 8,
+            deadAirDisposition: '', deadAirDispositionVerified: false,
+          });
         }
         const nextNum = arr.length + 1;
         clone.name = act === 'dup' ? `${currentObj.name} (Copy)` : `Untitled ${kind === 'a' ? 'Agent' : 'Campaign'} ${nextNum}`;
@@ -7722,13 +8055,14 @@
       const nextState = parsed.console || parsed;
       if (serverlessCloudMode) {
         S = nextState;
+        clearLocalDraft();
         enforceDeepgramOnlyLlms(S);
         S.updatedAt = new Date().toISOString();
         try {
           window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
         } catch {}
         snap = comparableSnapshot(S);
-        cur = { a: S.agents[0].id, c: S.campaigns[0].id };
+        cur = { a: S.agents[0]?.id || '', c: S.campaigns[0]?.id || '' };
         render();
         return;
       }
@@ -7740,11 +8074,12 @@
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Import failed');
       S = data.state;
+      clearLocalDraft();
       enforceDeepgramOnlyLlms(S);
       snap = comparableSnapshot(S);
       revisions = data.revisions || [];
       latestRevisionId = data.revisionId;
-      cur = { a: S.agents[0].id, c: S.campaigns[0].id };
+      cur = { a: S.agents[0]?.id || '', c: S.campaigns[0]?.id || '' };
       render();
     } catch (err) {
       alert(`Import error: ${err.message}`);
@@ -7759,6 +8094,9 @@
       stopAllAudio();
       const kind = t.id.slice(4);
       cur[kind] = t.value;
+      if (kind === 'a' && !campaignsForAgent(t.value).some((campaign) => campaign.id === sim.campaignId)) {
+        sim.campaignId = '';
+      }
       if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
       if (kind === 'a') {
         for (const log of sim.callLogs) revokeRecordingUrl(log.id);
@@ -7771,6 +8109,11 @@
       return;
     }
 
+    if (t.id === 'sim-campaign') {
+      sim.campaignId = t.value;
+      render();
+      return;
+    }
     if (t.id === 'sim-allow-webhooks') {
       sim.allowWebhooks = t.checked;
       return;
@@ -7803,6 +8146,11 @@
     }
     if (t.id === 'vsim-scenario') {
       viciMon.simScenario = t.value;
+      return;
+    }
+    if (t.id === 'vsim-campaign') {
+      viciMon.simCampaignId = t.value;
+      render();
       return;
     }
     if (t.id === 'vsim-upstream') {

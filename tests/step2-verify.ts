@@ -18,7 +18,22 @@ function configureTestServices() {
     llm: { providerId: llm.id, model: 'gpt-4o-mini' },
     tts: { providerId: tts.id, model: 'flux-haley-en' },
   };
-  saveConsoleState(state, 'Test setup: select global services');
+  if (!state.agents.length || !state.campaigns.length) throw new Error('Simulator test fixture requires at least one agent and one campaign.');
+  for (const campaign of state.campaigns) {
+    if (!state.agents.some((agent) => agent.id === campaign.agentId)) campaign.agentId = state.agents[0].id;
+    if (String(campaign.complianceRules || '').trim().length < 20 || /^REVIEW REQUIRED\b/i.test(campaign.complianceRules || '')) {
+      campaign.complianceRules = 'Reviewed simulator fixture rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
+    }
+    campaign.presenceCheckText = campaign.presenceCheckText || 'Can you hear me okay?';
+    campaign.deadAirTimeoutSec = 8;
+    campaign.deadAirDisposition = 'DAIR';
+    if (!String(campaign.dispos || '').split(/[ ,]+/).includes('DAIR')) campaign.dispos = `${campaign.dispos},DAIR`;
+    campaign.deadAirDispositionVerified = true;
+  }
+  saveConsoleState(state, 'Test setup: ready campaign and services');
+  const agent = state.agents[0];
+  const campaign = state.campaigns.find((entry) => entry.agentId === agent.id)!;
+  return { agentId: agent.id, campaignId: campaign.id };
 }
 
 function waitForEvent<T = any>(
@@ -50,7 +65,7 @@ function waitForEvent<T = any>(
 }
 
 async function run() {
-  configureTestServices();
+  const fixture = configureTestServices();
   const results: string[] = [];
   const skipped: string[] = [];
   const check = async (name: string, fn: () => Promise<void | 'skip'> | void | 'skip') => {
@@ -242,7 +257,7 @@ async function run() {
         JSON.stringify({
           type: 'start',
           upstreamMode: 'deepgram',
-          agentId: 'a1',
+          agentId: fixture.agentId, campaignId: fixture.campaignId,
           bandwidth: 'telephony',
           lead: {
             lead_id: '99201',
@@ -336,7 +351,7 @@ async function run() {
         else events.push(JSON.parse(data.toString()));
       });
       await new Promise<void>((resolve, reject) => { ws.once('open', () => resolve()); ws.once('error', reject); });
-      ws.send(JSON.stringify({ type: 'start', upstreamMode: mode, agentId: 'a1', bandwidth: 'wideband' }));
+      ws.send(JSON.stringify({ type: 'start', upstreamMode: mode, agentId: fixture.agentId, campaignId: fixture.campaignId, bandwidth: 'wideband' }));
       await new Promise<void>((resolve) => ws.once('close', () => resolve()));
       assert.ok(events.some((e) => e.type === 'error' && e.code === expected), `Expected ${expected}`);
       assert.ok(!events.some((e) => e.type === 'session_started' || e.type === 'transcript'));
@@ -406,7 +421,7 @@ async function run() {
         }
       });
       await new Promise<void>((r) => client.once('open', () => r()));
-      client.send(JSON.stringify({ type: 'start', upstreamMode: 'deepgram', agentId: 'a1', bandwidth: 'wideband' }));
+      client.send(JSON.stringify({ type: 'start', upstreamMode: 'deepgram', agentId: fixture.agentId, campaignId: fixture.campaignId, bandwidth: 'wideband' }));
       await waitForEvent(events, waiters, (m) => m.type === 'session_started', 3000, 'session_started');
 
       // Send ZERO browser mic frames for 450ms -> comfort-silence pump must inject 50ms PCM16 frames (1600 bytes @ 16kHz)
@@ -457,7 +472,7 @@ async function run() {
         }
       });
       await new Promise<void>((r) => client.once('open', () => r()));
-      client.send(JSON.stringify({ type: 'start', upstreamMode: 'deepgram', agentId: 'a1' }));
+      client.send(JSON.stringify({ type: 'start', upstreamMode: 'deepgram', agentId: fixture.agentId, campaignId: fixture.campaignId }));
 
       const errEvt = await waitForEvent(events, waiters, (m) => m.type === 'error', 3000, 'HTTP 401 error event');
       assert.strictEqual(errEvt.code, 'DEEPGRAM_HTTP_401');
@@ -474,7 +489,39 @@ async function run() {
     }
   });
 
-  await check('7. REAL Live Deepgram Cloud E2E (/api/deepgram/verify + wss://agent.deepgram.com/v1/agent/converse)', async () => {
+  await check('7. Browser simulator requires an explicit campaign and rejects missing/stale IDs', async () => {
+    async function startAndCaptureError(campaignId?: string) {
+      const events: any[] = [];
+      const waiters: Array<() => boolean> = [];
+      const client = new WebSocket(LIVE_WS);
+      client.on('message', (data, isBinary) => {
+        if (!isBinary) events.push(JSON.parse(data.toString()));
+        for (let i = waiters.length - 1; i >= 0; i--) {
+          if (waiters[i]()) waiters.splice(i, 1);
+        }
+      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          client.once('open', resolve);
+          client.once('error', reject);
+        });
+        client.send(JSON.stringify({
+          type: 'start', upstreamMode: 'deepgram', agentId: fixture.agentId,
+          ...(campaignId === undefined ? {} : { campaignId }),
+        }));
+        return await waitForEvent(events, waiters, (message) => message.type === 'error', 3000, 'campaign selection error');
+      } finally {
+        try { client.close(); } catch {}
+      }
+    }
+
+    const missing = await startAndCaptureError();
+    assert.strictEqual(missing.code, 'CAMPAIGN_REQUIRED');
+    const stale = await startAndCaptureError('campaign-no-longer-exists');
+    assert.strictEqual(stale.code, 'CAMPAIGN_ASSIGNMENT_MISMATCH');
+  });
+
+  await check('8. REAL Live Deepgram Cloud E2E (/api/deepgram/verify + wss://agent.deepgram.com/v1/agent/converse)', async () => {
     const verifyRes = await fetch(`${LIVE_HTTP}/api/deepgram/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -521,7 +568,7 @@ async function run() {
       JSON.stringify({
         type: 'start',
         upstreamMode: 'deepgram',
-        agentId: 'a1',
+        agentId: fixture.agentId, campaignId: fixture.campaignId,
         bandwidth: 'wideband',
         lead: { lead_id: '104892', first_name: 'Robert', state: 'FL', age: '64' },
       })

@@ -6,8 +6,10 @@
 })(typeof window === 'undefined' ? null : window, function () {
   'use strict';
 
-  const OPENING_DELAY_MS = 500;
+  const OPENING_DELAY_MS = 1000;
   const NO_TRANSCRIPT_FALLBACK_MS = 2500;
+  const PRESENCE_PROMPT_TIMEOUT_MS = 15000;
+  const DEFAULT_PRESENCE_CHECK_TEXT = 'Hello? Are you there? Can you hear me?';
   const MAX_EARLY_AUDIO_BYTES = 256 * 1024;
   const salutations = ['Hi', 'Hello', 'Hi there', 'Hello there', 'Hey there'];
   const questions = [
@@ -110,10 +112,12 @@
     if (!wire.agent || !wire.agent.think) throw new Error('Agent settings are incomplete.');
     delete wire.agent.greeting;
     if (greeting) {
-      const instruction = '\n\n[Opening turn] If the caller speaks before the opening, respond to their actual words. ' +
-        'When appropriate, begin the first response with this one opening only, without a second greeting or repeated introduction: ' +
+      const instruction = '\n\n[Call opening sequence] The bridge listens for the caller’s first speech for one full second before the bot speaks. ' +
+        'If the caller speaks during that listen, respond to their actual words and begin the assigned campaign greeting naturally in the first response when appropriate. ' +
+        'If the caller is silent, the bridge sends one short campaign presence-check line; say that line only, then wait for the caller. ' +
+        'When the caller answers the presence check, begin this one assigned campaign opening without repeating the check or adding a second greeting: ' +
         JSON.stringify(greeting) +
-        '. Honor requests to stop, urgent concerns, and other safety instructions rather than insisting on a scripted greeting. ' +
+        '. Honor requests to stop, urgent concerns, and other safety instructions instead of insisting on a script. ' +
         'Never assume an eligibility question was asked or answered unless it actually appears in the conversation.';
       const prompt = String(wire.agent.think.prompt || '');
       if (prompt.length + instruction.length > 25000) {
@@ -125,32 +129,102 @@
   }
 
   /**
-   * Keep output silent for 500 ms after SettingsApplied while input keeps
-   * flowing. If the caller speaks first, let the provider answer that turn;
-   * do not inject a second greeting on top of its response.
+   * Hold all bot audio for one second while caller audio continues upstream.
+   * If no speech starts, ask one brief campaign presence check. Only a caller
+   * turn (not VAD noise or bot audio) satisfies that check; silence after the
+   * check invokes the dead-air disposition/hangup callback exactly once.
    */
   function createOpeningGate(options) {
     let released = false, started = false, stopped = false;
-    let callerStarted = false, callerTurn = false, agentTurn = false, injected = false;
-    let delayTimer = null, fallbackTimer = null, queuedBytes = 0, overflowReported = false;
+    let callerStarted = false, callerTurn = false, presenceSent = false;
+    let phase = 'initial';
+    let delayTimer = null, fallbackTimer = null, promptTimer = null, responseTimer = null;
+    let queuedBytes = 0, overflowReported = false;
     const queuedAudio = [];
     const releaseCallbacks = [];
+    const presenceText = String(options.presenceCheck || DEFAULT_PRESENCE_CHECK_TEXT).trim();
+    const responseTimeoutMs = Math.max(1, Number(options.responseTimeoutMs) || 8000);
+    const promptTimeoutMs = Math.max(1, Number(options.presencePromptTimeoutMs) || PRESENCE_PROMPT_TIMEOUT_MS);
 
-    function clearFallback() {
-      if (fallbackTimer !== null) clearTimeout(fallbackTimer);
-      fallbackTimer = null;
+    function clearTimer(name) {
+      if (name === 'delay' && delayTimer !== null) clearTimeout(delayTimer);
+      if (name === 'fallback' && fallbackTimer !== null) clearTimeout(fallbackTimer);
+      if (name === 'prompt' && promptTimer !== null) clearTimeout(promptTimer);
+      if (name === 'response' && responseTimer !== null) clearTimeout(responseTimer);
+      if (name === 'delay') delayTimer = null;
+      if (name === 'fallback') fallbackTimer = null;
+      if (name === 'prompt') promptTimer = null;
+      if (name === 'response') responseTimer = null;
     }
-    function injectOnce() {
-      if (stopped || injected || callerTurn || agentTurn || !options.greeting) return;
-      injected = true;
-      options.sendOpening(options.greeting);
+    function clearQueuedAudio() {
+      queuedAudio.length = 0;
+      queuedBytes = 0;
+    }
+    function markDeadAir() {
+      if (stopped || phase === 'dead_air' || phase === 'answered') return;
+      phase = 'dead_air';
+      clearTimer('delay');
+      clearTimer('fallback');
+      clearTimer('prompt');
+      clearTimer('response');
+      clearQueuedAudio();
+      try { if (typeof options.onDeadAir === 'function') options.onDeadAir(); } catch {}
+    }
+    function startResponseTimer() {
+      clearTimer('response');
+      if (stopped || phase !== 'waiting_response') return;
+      responseTimer = setTimeout(() => {
+        responseTimer = null;
+        markDeadAir();
+      }, responseTimeoutMs);
+    }
+    function sendPresenceCheck() {
+      if (stopped || presenceSent || callerTurn || (phase !== 'initial' && phase !== 'awaiting_first_turn')) return;
+      presenceSent = true;
+      phase = 'presence_prompt';
+      callerStarted = false;
+      clearTimer('fallback');
+      clearQueuedAudio();
+      if (!presenceText || typeof options.sendPresenceCheck !== 'function') {
+        markDeadAir();
+        return;
+      }
+      try {
+        options.sendPresenceCheck(presenceText);
+      } catch {
+        markDeadAir();
+        return;
+      }
+      promptTimer = setTimeout(() => {
+        promptTimer = null;
+        markDeadAir();
+      }, promptTimeoutMs);
     }
     function scheduleNoiseFallback() {
-      if (stopped || injected || callerTurn || agentTurn || fallbackTimer !== null || !callerStarted) return;
-      // A VAD onset can be background noise and never become a transcript.
-      // The provider's default injection mode will refuse rather than interrupt
-      // if somebody is still speaking at this point.
-      fallbackTimer = setTimeout(() => { fallbackTimer = null; injectOnce(); }, NO_TRANSCRIPT_FALLBACK_MS);
+      if (stopped || callerTurn || phase !== 'awaiting_first_turn' || fallbackTimer !== null || !callerStarted) return;
+      // Give a short caller utterance time to reach end-of-turn transcription
+      // before deciding a VAD onset was noise.
+      fallbackTimer = setTimeout(() => {
+        fallbackTimer = null;
+        sendPresenceCheck();
+      }, NO_TRANSCRIPT_FALLBACK_MS);
+    }
+    function releaseOutput() {
+      if (released || stopped) return;
+      released = true;
+      if (phase === 'initial') {
+        if (callerStarted) {
+          phase = 'awaiting_first_turn';
+          scheduleNoiseFallback();
+        } else {
+          // Never let unsolicited provider audio race the one-time presence check.
+          clearQueuedAudio();
+          sendPresenceCheck();
+        }
+      }
+      while (queuedAudio.length && !stopped && phase !== 'dead_air') options.playAudio(queuedAudio.shift());
+      queuedBytes = 0;
+      while (releaseCallbacks.length && !stopped) releaseCallbacks.shift()();
     }
     return {
       start() {
@@ -158,34 +232,46 @@
         started = true;
         delayTimer = setTimeout(() => {
           delayTimer = null;
-          if (stopped) return;
-          released = true;
-          if (!callerStarted && !agentTurn) injectOnce();
-          else scheduleNoiseFallback();
-          while (queuedAudio.length && !stopped) options.playAudio(queuedAudio.shift());
-          queuedBytes = 0;
-          while (releaseCallbacks.length && !stopped) releaseCallbacks.shift()();
+          releaseOutput();
         }, OPENING_DELAY_MS);
       },
       userStarted() {
-        if (stopped) return;
+        if (stopped || phase === 'dead_air' || phase === 'answered') return;
         callerStarted = true;
-        // Do not release speech that the caller interrupted during the wait.
-        queuedAudio.length = 0;
-        queuedBytes = 0;
-        if (released) scheduleNoiseFallback();
+        if (!released) {
+          // Discard any generated audio tied to a stale/partial pre-listen turn.
+          clearQueuedAudio();
+        }
+        if (phase === 'awaiting_first_turn') scheduleNoiseFallback();
+        if (phase === 'presence_prompt') {
+          clearTimer('prompt');
+          phase = 'waiting_response';
+          startResponseTimer();
+        } else if (phase === 'waiting_response') {
+          // A response may take several seconds to finish transcribing.
+          startResponseTimer();
+        }
       },
       userTurn() {
+        if (stopped || phase === 'dead_air') return;
         callerStarted = true;
         callerTurn = true;
-        clearFallback();
+        phase = 'answered';
+        clearTimer('fallback');
+        clearTimer('prompt');
+        clearTimer('response');
       },
       agentTurn() {
-        agentTurn = true;
-        clearFallback();
+        // Agent speech is never evidence that the caller answered the check.
+      },
+      agentAudioDone() {
+        if (stopped || phase !== 'presence_prompt') return;
+        clearTimer('prompt');
+        phase = 'waiting_response';
+        startResponseTimer();
       },
       audio(chunk) {
-        if (stopped) return;
+        if (stopped || phase === 'dead_air') return;
         if (released) { options.playAudio(chunk); return; }
         const size = Number(chunk?.byteLength ?? chunk?.length ?? 0);
         if (size >= 0 && queuedBytes + size <= MAX_EARLY_AUDIO_BYTES) {
@@ -204,15 +290,15 @@
       cancel() {
         if (stopped) return;
         stopped = true;
-        if (delayTimer !== null) clearTimeout(delayTimer);
-        delayTimer = null;
-        clearFallback();
-        queuedAudio.length = 0;
+        clearTimer('delay');
+        clearTimer('fallback');
+        clearTimer('prompt');
+        clearTimer('response');
+        clearQueuedAudio();
         releaseCallbacks.length = 0;
-        queuedBytes = 0;
       },
     };
   }
 
-  return { OPENING_DELAY_MS, migrateStockOpening, migrateStockMedicarePrompt, composeOpening, prepareDelayedOpening, createOpeningGate };
+  return { OPENING_DELAY_MS, NO_TRANSCRIPT_FALLBACK_MS, PRESENCE_PROMPT_TIMEOUT_MS, DEFAULT_PRESENCE_CHECK_TEXT, migrateStockOpening, migrateStockMedicarePrompt, composeOpening, prepareDelayedOpening, createOpeningGate };
 });

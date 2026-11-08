@@ -73,6 +73,7 @@ import {
 import {
   buildDeepgramSettings,
   generateViciConfig,
+  getDeploymentReadinessBlockers,
   validateState,
 } from './settings-builder';
 import { VicidialBridgeService, ViciBridgeOptions } from './vici-bridge';
@@ -522,22 +523,37 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       wn: validations.filter((v) => v.level === 'wn').length,
       er: validations.filter((v) => v.level === 'er').length,
     };
+    const settingsByCampaignId = Object.fromEntries(
+      state.campaigns.map((campaign) => {
+        const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+        return [campaign.id, {
+          campaignId: campaign.id,
+          campaignName: campaign.name,
+          agentId: campaign.agentId || null,
+          settings: agent ? buildDeepgramSettings(state, agent, campaign) : null,
+        }];
+      })
+    );
     const settingsByAgentId = Object.fromEntries(
-      state.agents.map((a) => [
-        a.id,
-        {
-          agentId: a.id,
-          agentName: a.name,
-          settings: buildDeepgramSettings(state, a),
-        },
-      ])
+      state.agents.map((agent) => {
+        const campaigns = state.campaigns.filter((campaign) => campaign.agentId === agent.id);
+        const selectedCampaign = campaigns.length === 1 ? campaigns[0] : undefined;
+        return [agent.id, {
+          agentId: agent.id,
+          agentName: agent.name,
+          campaignIds: campaigns.map((campaign) => campaign.id),
+          settings: selectedCampaign ? buildDeepgramSettings(state, agent, selectedCampaign) : null,
+        }];
+      })
     );
     const pubUrl = publicDemoUrlOverride !== undefined ? publicDemoUrlOverride : getCachedTunnelUrlSync();
     return {
       state,
       validations,
       counts,
+      readiness: { ready: getDeploymentReadinessBlockers(state).length === 0, blockers: getDeploymentReadinessBlockers(state) },
       settingsByAgentId,
+      settingsByCampaignId,
       viciConfig: generateViciConfig(state),
       revisions: listRevisions(12),
       secrets: getSecretsStatus(),
@@ -847,6 +863,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         upstream,
         callerCode: req.body?.callerCode,
         phone: req.body?.phone,
+        campaignId: String(req.body?.campaignId || ''),
         exten: req.body?.exten,
       });
       res.json(result);
@@ -859,6 +876,11 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   });
 
   app.get('/api/vici/deploy-script', (_req: Request, res: Response) => {
+    const blockers = getDeploymentReadinessBlockers(getConsoleState());
+    if (blockers.length) {
+      res.status(409).json({ ok: false, error: 'Deployment is blocked until all agents and campaigns are ready.', blockers });
+      return;
+    }
     const scriptPath = path.resolve(__dirname, '..', 'deploy', 'vicibox-install.sh');
     if (fs.existsSync(scriptPath)) {
       res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
@@ -961,6 +983,11 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   });
 
   app.get('/api/vici/release-bundle', (_req: Request, res: Response) => {
+    const blockers = getDeploymentReadinessBlockers(getConsoleState());
+    if (blockers.length) {
+      res.status(409).json({ ok: false, error: 'Release bundle is blocked until all agents and campaigns are ready.', blockers });
+      return;
+    }
     const bundlePath = path.join(DATA_DIR, 'voice-agent-vicibox-release.tar.gz');
     try {
       // Rebuild from a filtered allowlist; a cached archive could otherwise be

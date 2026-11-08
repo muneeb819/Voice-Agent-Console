@@ -299,11 +299,11 @@ async function run() {
       const url = `http://127.0.0.1:${fixturePort}`;
       await waitHealthy(url, child);
       const download = await fetch(`${url}/api/vici/release-bundle`, { headers: { Authorization: 'Bearer fixture-admin' } });
-      assert.strictEqual(download.status, 200);
-      assert((await download.arrayBuffer()).byteLength > 1000);
-      entries = childProcess.execFileSync('tar', ['-tzf', path.join(outDir, 'voice-agent-vicibox-release.tar.gz')], { encoding: 'utf8' });
-      assert(entries.includes('arbitrary-checkout-name/dist/server.js'));
-      assert(!/\.env\.production|\.env\.local|private-key|private-link|simulator-recordings\/|\.webm/.test(entries));
+      assert.strictEqual(download.status, 409, 'An unreviewed default campaign must not produce a deployable archive');
+      const blocked = await download.json() as any;
+      assert.strictEqual(blocked.ok, false);
+      assert.ok(blocked.blockers.some((message: string) => /Operator confirmed this code exists/i.test(message)), 'The readiness response identifies unverified campaign status codes');
+      assert.strictEqual(fs.existsSync(path.join(outDir, 'voice-agent-vicibox-release.tar.gz')), false, 'Readiness failure must not create an archive');
     } finally { child.kill(); await waitExit(child); }
     console.log('✓ 6. Real archive download excludes synthetic secrets and unlisted files');
 

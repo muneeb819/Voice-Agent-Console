@@ -22,11 +22,23 @@ function waitFor(queue: any[], predicate: (entry: any) => boolean, description: 
 async function main() {
   const original = getConsoleState();
   const state = structuredClone(original);
+  const sttProvider = state.providers.find((provider) => provider.kind === 'stt')!;
+  const llmProvider = state.providers.find((provider) => provider.kind === 'llm' && provider.type === 'open_ai')!;
+  const ttsProvider = state.providers.find((provider) => provider.kind === 'tts' && provider.type === 'deepgram')!;
   state.services = {
-    stt: { providerId: 's1', model: 'nova-3' },
-    llm: { providerId: 'l1', model: 'gpt-4o-mini' },
-    tts: { providerId: 't1', model: 'aura-2-thalia-en' },
+    stt: { providerId: sttProvider.id, model: 'nova-3' },
+    llm: { providerId: llmProvider.id, model: 'gpt-4o-mini' },
+    tts: { providerId: ttsProvider.id, model: 'aura-2-thalia-en' },
   };
+  const campaign = state.campaigns.find((entry) => entry.agentId === 'a1') || state.campaigns[0];
+  assert.ok(campaign, 'Live Bot fixture requires an explicit campaign');
+  campaign.agentId = 'a1';
+  campaign.complianceRules = 'Reviewed Live Bot fixture rules: be truthful, do not claim unverified benefits, and honor do-not-call requests immediately.';
+  campaign.presenceCheckText = 'Can you hear me okay?';
+  campaign.deadAirTimeoutSec = 8;
+  campaign.deadAirDisposition = 'DAIR';
+  campaign.deadAirDispositionVerified = true;
+  if (!campaign.dispos.split(/[ ,]+/).includes('DAIR')) campaign.dispos += ',DAIR';
   saveConsoleState(state, 'Local mock Live Bot test');
 
   const webhookRequests: Array<{ path: string; body: any }> = [];
@@ -114,7 +126,7 @@ async function main() {
     const client = new WebSocket(`ws://127.0.0.1:${simPort}/ws/simulator`);
     client.on('message', (raw, binary) => { if (!binary) events.push(JSON.parse(raw.toString())); });
     await new Promise<void>((resolve, reject) => { client.once('open', () => resolve()); client.once('error', reject); });
-    client.send(JSON.stringify({ type: 'start', agentId: 'a1', upstreamMode: 'deepgram', allowWebhooks,
+    client.send(JSON.stringify({ type: 'start', agentId: 'a1', campaignId: campaign.id, upstreamMode: 'deepgram', allowWebhooks,
       lead: { lead_id: 'test-472', first_name: 'Example', phone_number: '+15550000123', state: 'TX', age: '70' },
       draftState: draft }));
     await waitFor(events, (e) => e.type === 'session_started', 'provider-confirmed session');
@@ -228,7 +240,7 @@ async function main() {
     try {
       await assert.rejects(
         runSimulatedViciBridgeCall({ setViciApiBaseOverride: (url: unknown) => bridgeOverrides.push(url) } as any,
-          { transport: 'sip_rtp', scenario: 'qualified_xfer', upstream: 'deepgram' }),
+          { transport: 'sip_rtp', scenario: 'qualified_xfer', upstream: 'deepgram', campaignId: campaign.id }),
         /DEEPGRAM_API_KEY required/
       );
       assert.deepEqual(bridgeOverrides, [], 'Failed caller synthesis must not change shared bridge routing');

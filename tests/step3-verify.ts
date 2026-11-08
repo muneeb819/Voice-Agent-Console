@@ -27,7 +27,21 @@ function configureTestServices() {
     llm: { providerId: llm.id, model: 'gpt-4o-mini' },
     tts: { providerId: tts.id, model: 'flux-haley-en' },
   };
-  saveConsoleState(state, 'Test setup: select global services');
+  if (!state.agents.length || !state.campaigns.length) throw new Error('Bridge test fixture requires at least one agent and campaign.');
+  for (const campaign of state.campaigns) {
+    if (!state.agents.some((agent) => agent.id === campaign.agentId)) campaign.agentId = state.agents[0].id;
+    if (String(campaign.complianceRules || '').trim().length < 20 || /^REVIEW REQUIRED\b/i.test(campaign.complianceRules || '')) {
+      campaign.complianceRules = 'Reviewed bridge test rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
+    }
+    campaign.presenceCheckText = campaign.presenceCheckText || 'Can you hear me okay?';
+    campaign.deadAirTimeoutSec = 8;
+    campaign.deadAirDisposition = 'DAIR';
+    if (!String(campaign.dispos || '').split(/[ ,]+/).includes('DAIR')) campaign.dispos = `${campaign.dispos},DAIR`;
+    campaign.deadAirDispositionVerified = true;
+  }
+  saveConsoleState(state, 'Test setup: ready campaigns and services');
+  const campaign = state.campaigns[0];
+  return { campaignId: campaign.id, exten: `${state.vici.aiExten}${state.campaigns.indexOf(campaign) + 1}` };
 }
 
 async function startMockAmiServer(): Promise<{
@@ -77,7 +91,7 @@ async function startMockAmiServer(): Promise<{
 }
 
 async function run() {
-  configureTestServices();
+  const fixture = configureTestServices();
   console.log('=== Step 3 Automated Verification Suite (Universal VICIdial Bridge) ===');
 
   // 1. Unit-test VICIdial CallerID parser (outbound V..., inbound Y..., manual M..., SIP quoted)
@@ -165,7 +179,7 @@ async function run() {
       uniqueid: '1761580001.77',
       vici_cid: 'V1027153012000104892',
       phone: '3055550192',
-      exten: '8391',
+      exten: fixture.exten,
       channel: 'SIP/carrier-0000004d',
     });
     const regRes = await fetch(`${httpBase}/api/vici/register-call`, {
@@ -198,11 +212,12 @@ async function run() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         transport: 'audiosocket',
+        campaignId: fixture.campaignId,
         scenario: 'dnc_request',
         upstream: 'mock_ai',
         callerCode: 'V1027153012000104892',
         phone: '3055550192',
-        exten: '8391',
+        exten: fixture.exten,
       }),
     });
     const asSim = (await asSimRes.json()) as any;
@@ -231,11 +246,12 @@ async function run() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           transport: 'sip_rtp',
+          campaignId: fixture.campaignId,
           scenario: 'qualified_xfer',
           upstream: 'mock_ai',
           callerCode: 'V1027153012000104892',
           phone: '3055550192',
-          exten: '8391',
+          exten: fixture.exten,
         }),
       });
       const numSim = (await numRes.json()) as any;
@@ -257,11 +273,12 @@ async function run() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           transport: 'sip_rtp',
+          campaignId: fixture.campaignId,
           scenario: 'qualified_xfer',
           upstream: 'mock_ai',
           callerCode: 'Y0316001655000402028',
           phone: '3055550192',
-          exten: '8391',
+          exten: fixture.exten,
         }),
       });
       const extSim = (await extRes.json()) as any;
@@ -288,11 +305,12 @@ async function run() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         transport: 'sip_rtp',
+        campaignId: fixture.campaignId,
         scenario: 'qualified_xfer',
         upstream: upstreamMode,
         callerCode: 'V1027153012000104892',
         phone: '3055550192',
-        exten: '8391',
+        exten: fixture.exten,
       }),
     });
     const liveSip = (await liveSipRes.json()) as any;

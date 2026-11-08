@@ -1,10 +1,24 @@
-# Opening and call-delay test results
+# Campaign readiness, opening, and bridge test results
 
-- **Date:** 2026-11-06
-- **Build:** `elite-2.24`
-- **Scope:** single-opening composition, greeting rotation, optional recording notice, and the 500 ms output gate in browser tests and the bridge. All call/provider fixtures used synthetic data, local sockets and mock services. No live customer, Deepgram, carrier, VICIdial or Asterisk connection was used.
+- **Date:** 2026-11-08
+- **Build:** `elite-2.25`
+- **Scope:** campaign-aware readiness and routing, explicit campaign selection, the one-second listen/presence-check flow, caller-response timeout, configured dead-air disposition, frontend recovery and matte/minimal presentation.
 
-## Results
+## Current results (`elite-2.25`)
+
+| Check | Result | What was exercised |
+| --- | --- | --- |
+| `node --check public/app.js` | Passed | Browser bundle syntax. |
+| `npm run build` | Passed | TypeScript compilation and generated `dist/` output. |
+| `npm test` | Passed; one live Deepgram E2E skipped | Full offline Node suite: readiness, browser simulator, persistence, opening, local bridge, transfer/deployment, security, release bundle and other regression checks. |
+| Bridge opening/disposition integration | 14 local scenarios passed | AudioSocket and SIP/RTP each covered silent, early caller, cancellation, provider refusal, dead air, disallowed disposition, and a DNC-to-transfer attempt. On dead air, mock `update_lead` rejected `DAIR`; the failed update was logged and Remote Agent `HANGUP` still requested `DAIR`. Disallowed codes never reached `update_lead`, and DNC could not initiate transfer. |
+| External services | Not used | Synthetic/local fixtures only; no live caller, Deepgram, carrier, VICIdial or Asterisk connection. |
+| `npm audit --audit-level=low` | Passed; 0 vulnerabilities reported | Dependency audit for the current lockfile. |
+| Browser/Python audits | Not rerun for this build | The results below are historical `elite-2.24` checks and do not certify those audits for `elite-2.25`. |
+
+## Historical opening validation (`elite-2.24`, 2026-11-06)
+
+The following checks were run on the previous build and are retained as historical evidence only.
 
 | Check | Result | What was exercised |
 | --- | --- | --- |

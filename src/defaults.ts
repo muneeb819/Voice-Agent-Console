@@ -6,6 +6,9 @@ import { migrateStockMedicarePrompt, migrateStockOpening } from './opening';
 export const VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'] as const;
 export type VoiceAgentSttModel = (typeof VOICE_AGENT_STT_MODELS)[number];
 
+export const DEFAULT_PRESENCE_CHECK_TEXT = 'Hello? Are you there? Can you hear me?';
+export const MISSING_CAMPAIGN_RULES = 'REVIEW REQUIRED: Add and review campaign-specific compliance and call rules before deployment.';
+
 export const SPEECH_SERVICE_STT_MODELS = ['large-v3-turbo', 'whisper-1'] as const;
 export const SPEECH_SERVICE_DEFAULT_VOICES = [
   'af_heart',
@@ -142,7 +145,7 @@ export function deepgramModelsForProviderType(providerType: string): string[] {
 
 export function createDefaultState(): ConsoleState {
   return {
-    version: 4,
+    version: 5,
     updatedAt: new Date().toISOString(),
     // Intentionally unset: an operator must select and save one global provider/model per service.
     services: {
@@ -457,7 +460,18 @@ export function createDefaultState(): ConsoleState {
         fallback: 'Dispo CALLBK',
         dnc: true,
         disclosure: 'This call may be recorded for quality purposes.',
-        dispos: 'XFER,NI,DNC,NA,CALLBK,DEC',
+        dispos: 'XFER,NI,DNC,NA,CALLBK,DEC,DAIR',
+        complianceRules:
+          'Final Expense outbound campaign rules:\n' +
+          '- Identify yourself and the organization accurately; be truthful that you are an AI assistant if asked. Never claim to be a human, insurer, government office, or licensed agent.\n' +
+          '- Do not claim the caller requested a quote unless they confirm it during this call or it is verified in the lead record. Never guarantee approval, coverage, rates, savings, or policy terms, and do not quote prices.\n' +
+          '- Ask permission to continue. Confirm age, interest, and qualification only from the caller’s current statements. Transfer to a licensed specialist only after the configured criteria are met and the caller agrees.\n' +
+          '- Immediately honor stop, do-not-call, refusal, or hang-up requests without arguing or making another sales attempt. Do not request Social Security, bank, payment, or other sensitive identity details.\n' +
+          '- If unsure, say so plainly and offer a live specialist; never invent a benefit or claim an external action succeeded without confirmation.',
+        presenceCheckText: DEFAULT_PRESENCE_CHECK_TEXT,
+        deadAirTimeoutSec: 8,
+        deadAirDisposition: 'DAIR',
+        deadAirDispositionVerified: false,
       },
       {
         id: 'c_medicare',
@@ -476,7 +490,18 @@ export function createDefaultState(): ConsoleState {
         fallback: 'Dispo CALLBK',
         dnc: true,
         disclosure: 'This call may be recorded for quality and benefit verification.',
-        dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK',
+        dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK,DAIR',
+        complianceRules:
+          'Medicare Food & OTC campaign rules:\n' +
+          '- Identify the organization accurately. Never imply affiliation with Medicare, CMS, Social Security, or a government agency; be truthful that you are an AI assistant if asked.\n' +
+          '- Do not assert that the caller has a food/OTC card, funds, credit, benefit, application, or enrollment. Never say money is on hold, expiring, guaranteed, or will return to a state pool. The sample agent script is not evidence for benefit claims.\n' +
+          '- Make no coverage, eligibility, or savings promises. Use only current, approved campaign sources; otherwise say you cannot verify and offer an authorized specialist or official source.\n' +
+          '- Ask about age and Medicare Part A/B only as needed, based on the caller’s current statements; never infer eligibility from lead data. Do not request a Medicare number, Social Security number, bank, or payment details.\n' +
+          '- Honor stop, do-not-call, language-barrier, refusal, and hang-up requests immediately. Transfer only after approved eligibility criteria are met and the caller agrees.',
+        presenceCheckText: DEFAULT_PRESENCE_CHECK_TEXT,
+        deadAirTimeoutSec: 8,
+        deadAirDisposition: 'DAIR',
+        deadAirDispositionVerified: false,
       },
       {
         id: 'c_nova',
@@ -495,7 +520,18 @@ export function createDefaultState(): ConsoleState {
         fallback: 'Dispo CALLBK',
         dnc: true,
         disclosure: 'This call may be recorded for quality and training purposes.',
-        dispos: 'XFER,NI,DNC,NA,CALLBK,DEC',
+        dispos: 'XFER,NI,DNC,NA,CALLBK,DEC,DAIR',
+        complianceRules:
+          'Nova live concierge campaign rules:\n' +
+          '- Be transparent about being an AI assistant if asked. Do not claim to be human, a licensed professional, or affiliated with a government program.\n' +
+          '- Answer general questions accurately and concisely; state uncertainty instead of inventing facts. Do not make insurance, health, financial, benefit, coverage, or savings claims.\n' +
+          '- Treat lead and caller information as private and use it only for this call. Never request Social Security, account, bank, payment, or other sensitive identity information.\n' +
+          '- Ask the caller’s permission before a transfer. Never say a transfer, disposition, or other action succeeded unless the tool result confirms it.\n' +
+          '- Immediately honor stop, do-not-call, refusal, or hang-up requests without persuasion. Follow the assigned campaign’s configured disclosure and transfer instructions.',
+        presenceCheckText: DEFAULT_PRESENCE_CHECK_TEXT,
+        deadAirTimeoutSec: 8,
+        deadAirDisposition: 'DAIR',
+        deadAirDispositionVerified: false,
       },
     ],
     vici: {
@@ -902,7 +938,7 @@ export function normalizeState(raw: any): ConsoleState {
       })
     : base.agents;
 
-  const campaigns: Campaign[] = Array.isArray(src.campaigns) && src.campaigns.length
+  const campaigns: Campaign[] = Array.isArray(src.campaigns)
     ? src.campaigns.map((c: any, idx: number) => {
         const cName = String(c.name || `Campaign ${idx + 1}`);
         const defaultDisclosure = /medicare/i.test(cName)
@@ -911,8 +947,9 @@ export function normalizeState(raw: any): ConsoleState {
         return {
           id: String(c.id || `c_${idx + 1}`),
           name: cName,
-          agentId: String(c.agentId || agents[0].id),
-          viciCampaign: String(c.viciCampaign ?? '').trim() || 'AUTOCAMP',
+          // Missing assignments stay missing. Never silently attach a campaign to the first bot.
+          agentId: String(c.agentId ?? ''),
+          viciCampaign: String(c.viciCampaign ?? '').trim(),
           lists: String(c.lists ?? ''),
           start: String(c.start || '09:00'),
           end: String(c.end || '20:00'),
@@ -924,49 +961,23 @@ export function normalizeState(raw: any): ConsoleState {
             | 'ingroup'
             | 'extension'
             | 'number',
-          xferTarget: String(c.xferTarget ?? '').trim() || (/medicare/i.test(cName) ? 'MED_CLOSERS' : 'FE_CLOSERS'),
+          // Transfer routing is campaign-specific; never infer a closer from a campaign name.
+          xferTarget: String(c.xferTarget ?? '').trim(),
           fallback: String(c.fallback ?? ''),
           dnc: c.dnc !== undefined ? Boolean(c.dnc) : true,
           disclosure: String(c.disclosure ?? '').trim() || defaultDisclosure,
           dispos: String(c.dispos ?? 'XFER,NI,DNC,NA,CALLBK,DEC'),
+          // Legacy campaigns must be reviewed instead of inheriting a fabricated compliance policy.
+          complianceRules: typeof c.complianceRules === 'string' ? c.complianceRules : MISSING_CAMPAIGN_RULES,
+          presenceCheckText: typeof c.presenceCheckText === 'string' ? c.presenceCheckText : DEFAULT_PRESENCE_CHECK_TEXT,
+          deadAirTimeoutSec: Math.round(num(c.deadAirTimeoutSec, 8)),
+          deadAirDisposition: String(c.deadAirDisposition ?? '').trim().toUpperCase(),
+          deadAirDispositionVerified: c.deadAirDispositionVerified === true,
         };
       })
-    : base.campaigns.map((c) => ({ ...c }));
-
-  // Ensure every active bot agent (e.g. Nova or custom Medicare agents) is assigned to at least one campaign
-  for (const ag of agents) {
-    if (!campaigns.some((c) => c.agentId === ag.id) && !/^Untitled\b/i.test(ag.name)) {
-      const isNova = ag.id === 'a_nova' || /nova/i.test(ag.name);
-      const isMed = /medicare/i.test(ag.name);
-      campaigns.push({
-        id: isNova && !campaigns.some((c) => c.id === 'c_nova') ? 'c_nova' : `c_${ag.id}`,
-        name: isNova ? 'Nova — Live Concierge & General Q&A' : `${ag.name} — Outbound`,
-        agentId: ag.id,
-        viciCampaign: isNova
-          ? 'NOVACONC'
-          : isMed
-          ? 'MEDICARE'
-          : ag.name.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 8) || 'AUTOCAMP',
-        lists: isNova ? '3001' : isMed ? '2001,2002' : '1001',
-        start: '09:00',
-        end: '20:00',
-        tz: 'America/New_York',
-        attempts: 3,
-        retry: 120,
-        maxCalls: 10,
-        xferType: 'ingroup',
-        xferTarget: isNova ? 'CONCIERGE_CLOSERS' : isMed ? 'MED_CLOSERS' : 'FE_CLOSERS',
-        fallback: 'Dispo CALLBK',
-        dnc: true,
-        disclosure: isMed
-          ? 'This call may be recorded for quality and benefit verification.'
-          : isNova
-          ? 'This call may be recorded for quality and training purposes.'
-          : 'This call may be recorded for quality purposes.',
-        dispos: isMed ? 'XFER,DQ,LANG,DNC,NI,NA,CALLBK' : 'XFER,NI,DNC,NA,CALLBK,DEC',
-      });
-    }
-  }
+    : Array.isArray(src.agents)
+      ? []
+      : base.campaigns.map((c) => ({ ...c }));
 
   // Migrate legacy vici.apiUrl if present
   let viciBaseUrl = src.vici?.viciBaseUrl;
@@ -1018,7 +1029,7 @@ export function normalizeState(raw: any): ConsoleState {
   }
 
   return {
-    version: 4,
+    version: 5,
     updatedAt: new Date().toISOString(),
     services,
     providers,

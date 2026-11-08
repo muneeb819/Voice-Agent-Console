@@ -132,12 +132,33 @@ async function main() {
   console.log('✓ Rotation prefers different wording where possible and preserves every ID when repeats are unavoidable');
 
   const state = getConsoleState();
+  const sttProvider = state.providers.find((provider) => provider.kind === 'stt')!;
+  const llmProvider = state.providers.find((provider) => provider.kind === 'llm' && provider.type === 'open_ai')!;
+  const ttsProvider = state.providers.find((provider) => provider.kind === 'tts' && provider.type === 'deepgram')!;
   state.services = {
-    stt: { providerId: 's1', model: 'nova-3' },
-    llm: { providerId: 'l1', model: 'gpt-4o-mini' },
-    tts: { providerId: 't1', model: 'aura-2-thalia-en' },
+    stt: { providerId: sttProvider.id, model: 'nova-3' },
+    llm: { providerId: llmProvider.id, model: 'gpt-4o-mini' },
+    tts: { providerId: ttsProvider.id, model: 'aura-2-thalia-en' },
   };
   const a1 = state.agents.find((a) => a.id === 'a1')!;
+  const liveCampaign = state.campaigns.find((entry) => entry.agentId === a1.id) || state.campaigns[0];
+  assert.ok(liveCampaign, 'Greeting integration fixture requires an explicit campaign');
+  liveCampaign.agentId = a1.id;
+  liveCampaign.complianceRules = 'Reviewed greeting fixture rules: identify accurately, avoid unsupported claims, and honor do-not-call requests immediately.';
+  liveCampaign.presenceCheckText = 'Can you hear me okay?';
+  liveCampaign.deadAirTimeoutSec = 8;
+  liveCampaign.deadAirDisposition = 'DAIR';
+  liveCampaign.deadAirDispositionVerified = true;
+  if (!liveCampaign.dispos.split(/[ ,]+/).includes('DAIR')) liveCampaign.dispos += ',DAIR';
+  for (const fixtureCampaign of state.campaigns) {
+    fixtureCampaign.complianceRules = fixtureCampaign.complianceRules || liveCampaign.complianceRules;
+    if (String(fixtureCampaign.complianceRules).trim().length < 20 || /^REVIEW REQUIRED\b/i.test(fixtureCampaign.complianceRules)) fixtureCampaign.complianceRules = liveCampaign.complianceRules;
+    fixtureCampaign.presenceCheckText = fixtureCampaign.presenceCheckText || liveCampaign.presenceCheckText;
+    fixtureCampaign.deadAirTimeoutSec = 8;
+    fixtureCampaign.deadAirDisposition = 'DAIR';
+    if (!fixtureCampaign.dispos.split(/[ ,]+/).includes('DAIR')) fixtureCampaign.dispos += ',DAIR';
+    fixtureCampaign.deadAirDispositionVerified = true;
+  }
   a1.greeting = 'Hello {{first_name}}, from the example team.';
   a1.randomGreetingEnabled = true;
   a1.injectCampaignDisclosure = true;
@@ -155,13 +176,28 @@ async function main() {
       if (!binary) {
         const message = JSON.parse(data.toString());
         if (message.type === 'Settings') {
-          received = { settings: message, appliedAt: Date.now(), openings: [] };
+          const prompt = String(message.agent?.think?.prompt || '');
+          const marker = 'begin this one assigned campaign opening without repeating the check or adding a second greeting: ';
+          const markerAt = prompt.indexOf(marker);
+          let delayedGreeting = '';
+          if (markerAt >= 0) {
+            const raw = prompt.slice(markerAt + marker.length).split('. Honor requests to stop')[0];
+            try { delayedGreeting = JSON.parse(raw); } catch {}
+          }
+          received = { settings: message, delayedGreeting, appliedAt: Date.now(), openings: [] };
           settingsReceived.push(received);
           ws.send(JSON.stringify({ type: 'SettingsApplied' }));
         } else if (message.type === 'InjectAgentMessage') {
           received.openings.push({ message: message.message, at: Date.now() });
           ws.send(JSON.stringify({ type: 'AgentStartedSpeaking' }));
           ws.send(JSON.stringify({ type: 'ConversationText', role: 'assistant', content: message.message }));
+          ws.send(JSON.stringify({ type: 'AgentAudioDone' }));
+        } else if (message.type === 'InjectUserMessage') {
+          ws.send(JSON.stringify({ type: 'UserStartedSpeaking' }));
+          ws.send(JSON.stringify({ type: 'ConversationText', role: 'user', content: message.content }));
+          ws.send(JSON.stringify({ type: 'AgentThinking' }));
+          ws.send(JSON.stringify({ type: 'AgentStartedSpeaking' }));
+          ws.send(JSON.stringify({ type: 'ConversationText', role: 'assistant', content: received.delayedGreeting || 'Hello, how can I help?' }));
           ws.send(JSON.stringify({ type: 'AgentAudioDone' }));
         }
       }
@@ -180,25 +216,31 @@ async function main() {
   async function session(agentId = 'a1') {
     const events: any[] = [];
     const index = settingsReceived.length;
+    const sessionCampaign = getConsoleState().campaigns.find((entry) => entry.agentId === agentId)!;
+    assert.ok(sessionCampaign, `No explicitly assigned campaign for ${agentId}`);
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/simulator`);
     ws.on('message', (data, binary) => { if (!binary) events.push(JSON.parse(data.toString())); });
     await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-    ws.send(JSON.stringify({ type: 'start', agentId, upstreamMode: 'deepgram',
+    ws.send(JSON.stringify({ type: 'start', agentId, campaignId: sessionCampaign.id, upstreamMode: 'deepgram',
       lead: { first_name: 'Example', state: 'TX', lead_id: '123' } }));
     const started = await waitFor(events, (event) => event.type === 'session_started', 'session start');
     const received = settingsReceived[index];
     const wire = received.settings;
     assert.equal(wire.agent.greeting, undefined, 'Do not allow the provider to speak its automatic greeting');
-    const opening = await waitFor(received.openings, () => true, 'delayed opening');
-    assert.equal(opening.message, started.settings.agent.greeting, 'Display and provider must use the same draw');
-    assert.ok(opening.at - received.appliedAt >= 490, 'Opening must wait at least 0.5 s after readiness');
+    const presence = await waitFor(received.openings, () => true, 'campaign presence check');
+    assert.equal(presence.message, sessionCampaign.presenceCheckText);
+    assert.ok(presence.at - received.appliedAt >= 990, 'Presence check waits a full second after readiness');
     assert.equal(received.openings.length, 1);
+    assert.equal(received.delayedGreeting, started.settings.agent.greeting, 'Provider prompt and display use the same selected campaign opening');
+    ws.send(JSON.stringify({ type: 'inject_user_message', content: 'I can hear you.' }));
+    const reply = await waitFor(events, (event) => event.type === 'transcript' && event.role === 'assistant' &&
+      event.content === started.settings.agent.greeting, 'campaign opening after the caller responds');
     ws.send(JSON.stringify({ type: 'stop' }));
     const ended = await waitFor(events, (event) => event.type === 'call_ended', 'session end');
     assert.equal(ended.logSaved, true);
     const log = getSimulatorCallLog(started.callId)!;
     assert.equal(log.greetingId, started.greeting?.greeting_id || null);
-    return { started, ended, wire, opening: opening.message as string, log, events };
+    return { started, ended, wire, opening: reply.content as string, presence: presence.message as string, log, events };
   }
 
   try {
@@ -238,12 +280,13 @@ async function main() {
 
     forceFixture();
     const bridgeCall = await runSimulatedViciBridgeCall(viciBridge!, {
-      transport: 'audiosocket', scenario: 'dnc_request', upstream: 'mock_ai',
+      transport: 'audiosocket', scenario: 'dnc_request', upstream: 'mock_ai', campaignId: liveCampaign.id,
     });
     assert.equal(bridgeCall.cdr.greetingId, 'fixture-lead');
-    const bridgeGreeting = bridgeCall.cdr.transcript.find((entry) => entry.role === 'assistant')?.content || '';
-    assert.equal(bridgeGreeting, composeOpening(a1.greeting, 'Extra hello {{first_name}} in {{state}}.', true, disclosure)
-      .replace('{{first_name}}', 'Robert'));
+    const bridgePresence = bridgeCall.cdr.transcript.find((entry) => entry.role === 'assistant')?.content || '';
+    assert.equal(bridgePresence, liveCampaign.presenceCheckText, 'Silent bridge calls speak the selected campaign presence check before waiting');
+    assert.ok(bridgeCall.cdr.functionCalls.some((entry: any) => entry.name === 'apply_dead_air_disposition') === false,
+      'The caller speaks during the presence-check window, so this is not a dead-air disposition');
     assert.equal(listBridgeCallLogs(10).find((log) => log.id === bridgeCall.cdr.id)?.greetingId, 'fixture-lead');
     assert.match(exportBridgeLogsCsv(), /greeting_id/);
     assert.match(exportBridgeLogsCsv(), /fixture-lead/);
