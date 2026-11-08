@@ -204,25 +204,25 @@ body {
 }
 
 /* Instant zero-JS CSS Playing Mode before rAF voice synthesizer attaches */
-.brand-plaque:not(.raf-driven) .eq-bar {
+svg.brand-plaque:not(.raf-driven) .eq-bar {
   transform-box: fill-box;
   transform-origin: 50% 50%;
   animation: eqCssPlayA 0.86s ease-in-out infinite;
 }
 
-.brand-plaque:not(.raf-driven) .eq-bar:nth-child(3n + 1) {
+svg.brand-plaque:not(.raf-driven) .eq-bar:nth-child(3n + 1) {
   animation-name: eqCssPlayA;
   animation-duration: 0.78s;
   animation-delay: -0.14s;
 }
 
-.brand-plaque:not(.raf-driven) .eq-bar:nth-child(3n + 2) {
+svg.brand-plaque:not(.raf-driven) .eq-bar:nth-child(3n + 2) {
   animation-name: eqCssPlayB;
   animation-duration: 0.92s;
   animation-delay: -0.37s;
 }
 
-.brand-plaque:not(.raf-driven) .eq-bar:nth-child(3n) {
+svg.brand-plaque:not(.raf-driven) .eq-bar:nth-child(3n) {
   animation-name: eqCssPlayC;
   animation-duration: 0.71s;
   animation-delay: -0.58s;
@@ -249,12 +249,12 @@ body {
   84%      { transform: scaleY(0.54); opacity: 0.86; }
 }
 
-.brand-plaque .m-sonic-ring {
+svg.brand-plaque .m-sonic-ring {
   transform-origin: 320px 110px;
   animation: mSonicPulse 2.3s ease-out infinite;
 }
 
-.brand-plaque .m-emblem-core {
+svg.brand-plaque .m-emblem-core {
   animation: mCoreBreath 2.1s ease-in-out infinite;
 }
 
@@ -655,3 +655,17 @@ body {
 .wave i {
   background: var(--cyan) !important;
 }
+
+/* Theme-bound supplied MMA banner logo */
+.brand-plaque.mma-brand-logo {
+  max-width: 428px;
+  border-radius: 14px;
+  filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.62)) drop-shadow(0 0 22px rgba(0, 242, 254, 0.12));
+}
+.foot-mark.mma-brand-icon,
+.loader-mark.mma-brand-icon {
+  display: inline-block;
+  overflow: hidden;
+  border-radius: 12px;
+}
+.loader-mark.mma-brand-icon { width: 84px; height: 84px; }

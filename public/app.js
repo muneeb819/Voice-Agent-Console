@@ -496,13 +496,35 @@
     </svg>`;
   }
 
+  function brandLogoApi() {
+    return window.VACBrandLogos || null;
+  }
+
+  function brandIconHtml(meta) {
+    const api = brandLogoApi();
+    return api ? api.iconHtml(meta.id) : brandMarkSvg(meta);
+  }
+
+  function brandFullHtml(meta, opts = {}) {
+    const api = brandLogoApi();
+    return api ? api.fullHtml(meta.id, opts) : brandMarkSvg(meta, { thin: true });
+  }
+
   function renderBrandMark() {
     const el = document.getElementById('brand-mark');
     if (!el) return;
     const meta = THEME_BY_ID(appearance.theme);
-    el.innerHTML = brandMarkSvg(meta);
+    el.innerHTML = brandIconHtml(meta);
     el.dataset.pkg = meta.id;
     el.title = `${meta.name} · ${BRAND_PACKAGES[meta.id]?.label || 'Brand'}`;
+  }
+
+  function renderThemeLoaderLogo() {
+    const el = document.getElementById('theme-loader-logo');
+    if (!el) return;
+    const meta = THEME_BY_ID(appearance.theme);
+    el.innerHTML = brandFullHtml(meta);
+    el.dataset.brandTheme = meta.id;
   }
 
   let appearance = (() => {
@@ -536,6 +558,7 @@
     if (dot) dot.style.background = meta.dots[0];
     renderBrandMark();
     updateThemeFavicon(meta);
+    renderThemeLoaderLogo();
     renderThemeStudioControls();
     if (typeof renderExecutiveCommandDeck === 'function' && S) {
       renderExecutiveCommandDeck();
@@ -546,21 +569,20 @@
   // package's silhouette and palette whenever the theme changes.
   function updateThemeFavicon(meta) {
     try {
-      const pkg = BRAND_PACKAGES[meta.id] || BRAND_PACKAGES.cyan_signal;
-      const a = meta.dots[0];
-      const b = meta.dots[1];
-      const c = meta.dots[2] || b;
-      const light = meta.id === 'pearl' || meta.id === 'sakura';
-      const bg = light ? '#ffffff' : '#0b0f14';
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="0.55" stop-color="${b}"/><stop offset="1" stop-color="${c}"/></linearGradient></defs><rect width="64" height="64" rx="14" fill="${bg}"/><g fill="none" stroke="url(#g)" stroke-linecap="round" stroke-linejoin="round">${pkg.frame}<path d="M20 46V20l12 14 12-14v26" stroke-width="5.2"/></g></svg>`;
-      let link = document.querySelector('link[rel="icon"]');
-      if (!link) {
-        link = document.createElement('link');
+      const api = brandLogoApi();
+      const href = api ? api.assetFor(meta.id).icon : './assets/favicon.svg';
+      const type = api ? 'image/jpeg' : 'image/svg+xml';
+      document.querySelectorAll('link[rel="icon"], link[rel="alternate icon"], link[rel="apple-touch-icon"]').forEach((link) => {
+        link.type = type;
+        link.href = href;
+      });
+      if (!document.querySelector('link[rel="icon"]')) {
+        const link = document.createElement('link');
         link.rel = 'icon';
+        link.type = type;
+        link.href = href;
         document.head.appendChild(link);
       }
-      link.type = 'image/svg+xml';
-      link.href = 'data:image/svg+xml,' + encodeURIComponent(svg);
     } catch {}
   }
 
@@ -578,7 +600,7 @@
             <span class="pill">${esc(activeMeta.system || BRAND_PACKAGES[activeMeta.id]?.label || 'VISUAL SYSTEM')}</span>
           </div>
           <h4 class="theme-hero-title">
-            <span style="width:28px;height:28px;display:inline-flex">${brandMarkSvg(activeMeta, { thin: true })}</span>
+            <span class="theme-hero-logo" style="width:28px;height:28px;display:inline-flex">${brandIconHtml(activeMeta)}</span>
             <span>${esc(activeMeta.name)}</span>
           </h4>
           <p class="theme-hero-desc">${esc(activeMeta.desc || activeMeta.sub)}</p>
@@ -605,7 +627,7 @@
               <span>${esc((t.system || '').split('·')[0].trim())}</span>
             </div>
             <div class="theme-preview" style="background:${t.bg}">
-              <span class="theme-preview-mark">${brandMarkSvg(t, { thin: true })}</span>
+              <span class="theme-preview-logo mma-brand-logo">${brandFullHtml(t, { lazy: true })}</span>
               <div class="theme-preview-dots">
                 ${t.dots.map((c) => `<span style="background:${c}"></span>`).join('')}
               </div>
@@ -7230,6 +7252,7 @@
         brand: 'MMA Digital Labs | Voice Agent Console',
         exportedAt: new Date().toISOString(),
         activeIdentity: meta,
+        logo: brandLogoApi() ? brandLogoApi().assetFor(meta.id) : null,
         appearance,
         allThemes: APPEARANCE_THEMES,
       };
