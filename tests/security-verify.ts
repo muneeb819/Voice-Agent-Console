@@ -21,6 +21,7 @@ import { isTunnelProxyReady } from '../src/demo-tunnel';
 const root = path.resolve(__dirname, '..');
 const json = { 'Content-Type': 'application/json' };
 const account = (email: string) => JSON.stringify({ email, fullName: 'Test User', password: 'Test-Password-123!' });
+const sessionCookie = (response: Response) => String(response.headers.get('set-cookie') || '').split(';')[0];
 
 async function listen(server: http.Server): Promise<number> {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -162,11 +163,28 @@ async function run() {
     assert.strictEqual((await fetch(`${base}/api/demo-tunnel/start`, { method: 'POST' })).status, 403);
     const first = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: json, body: account('first@example.test') });
     assert.strictEqual(first.status, 201, 'Direct loopback bootstrap must still work');
-    const firstToken = (await first.json() as any).token;
+    const firstBody = await first.json() as any;
+    const firstCookie = sessionCookie(first);
+    assert(firstCookie.startsWith('vac_session='), 'Signup establishes an HttpOnly session cookie');
+    assert.strictEqual(firstBody.user.role, 'owner', 'The first account becomes the initial owner');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(firstBody, 'token'), false, 'Browser session token is never returned in JSON');
     assert.strictEqual((await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: json, body: account('anonymous@example.test') })).status, 403);
-    const second = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Authorization: `Bearer ${firstToken}` }, body: account('second@example.test') });
-    assert.strictEqual(second.status, 201, 'An authenticated operator can add an account');
-    const signupPage = await fetch(`${base}/signup`, { headers: { Authorization: `Bearer ${firstToken}` }, redirect: 'manual' });
+    const second = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Cookie: firstCookie }, body: account('second@example.test') });
+    assert.strictEqual(second.status, 201, 'Owner can provision an operator account');
+    const secondBody = await second.json() as any;
+    assert.strictEqual(secondBody.user.role, 'operator', 'Additional accounts default to least-privilege operator');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(secondBody, 'token'), false);
+    const operatorCookie = sessionCookie(second);
+    assert.strictEqual((await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Cookie: operatorCookie }, body: account('third@example.test') })).status, 403, 'Operator cannot provision additional accounts');
+    assert.strictEqual((await fetch(`${base}/api/secrets`, { headers: { Cookie: operatorCookie } })).status, 403, 'Operator cannot read secret status');
+    assert.strictEqual((await fetch(`${base}/api/auth/users`, { headers: { Cookie: operatorCookie } })).status, 403, 'Operator cannot enumerate accounts');
+    const users = await fetch(`${base}/api/auth/users`, { headers: { Cookie: firstCookie } });
+    assert.strictEqual(users.status, 200, 'Owner can list accounts');
+    const listedUsers = (await users.json() as any).users;
+    assert.deepStrictEqual(listedUsers.map((u: any) => u.role), ['owner', 'operator']);
+    assert.strictEqual((await fetch(`${base}/api/auth/users/${secondBody.user.id}/role`, { method: 'PUT', headers: { ...json, Cookie: firstCookie }, body: JSON.stringify({ role: 'admin' }) })).status, 200, 'Owner can grant administrator role');
+    assert.strictEqual((await fetch(`${base}/api/secrets`, { headers: { Cookie: operatorCookie } })).status, 403, 'Demoted operator remains restricted');
+    const signupPage = await fetch(`${base}/signup`, { headers: { Cookie: firstCookie }, redirect: 'manual' });
     assert.strictEqual(signupPage.status, 200);
     assert.strictEqual((await fetch(`${base}/api/vici/register-call`)).status, 503, 'Direct local PBX hook reaches handler');
     assert.strictEqual((await fetch(`${base}/api/vici/register-call`, { headers: spoofed })).status, 401, 'Proxied PBX hook must not inherit loopback exemption');
@@ -182,10 +200,13 @@ async function run() {
     assert.strictEqual(firstLogin.status, 200);
     assert.strictEqual(firstLogin.headers.get('referrer-policy'), 'no-referrer', 'URLs containing handoff tokens must not become referrers');
     assert(!/; Secure/i.test(firstLogin.headers.get('set-cookie') || ''), 'Untrusted forwarded proto must not set Secure cookie');
-    const adminToken1 = (await firstLogin.json() as any).token;
-    const adminToken2 = (await (await adminLogin()).json() as any).token;
-    assert.notStrictEqual(adminToken1, adminToken2, 'Concurrent logins need distinct tokens');
-    const cookie = `vac_session=${encodeURIComponent(adminToken2)}`;
+    const adminCookie1 = sessionCookie(firstLogin);
+    const secondAdminLogin = await adminLogin();
+    const adminCookie2 = sessionCookie(secondAdminLogin);
+    assert(adminCookie1.startsWith('vac_session=') && adminCookie2.startsWith('vac_session='));
+    assert.notStrictEqual(adminCookie1, adminCookie2, 'Concurrent logins need distinct session cookies');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(await firstLogin.clone().json() as any, 'token'), false, 'Legacy admin session token is not returned to browser JavaScript');
+    const cookie = adminCookie2;
     const foreignOrigin = { Cookie: cookie, Origin: 'https://attacker.example' };
     assert.strictEqual((await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: foreignOrigin })).status, 403, 'Cross-origin cookie logout must be rejected');
     assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Cookie: cookie } })).status, 200, 'Rejected logout must not revoke the session');
@@ -199,16 +220,11 @@ async function run() {
     const oldPort = process.env.PORT;
     process.env.PORT = String(port);
     try {
-      assert.strictEqual((await fetch(`${base}/api/demo-tunnel/start`, { method: 'POST', headers: { Authorization: `Bearer ${adminToken2}` } })).status, 409, 'Tunnel start explains missing proxy trust');
+      assert.strictEqual((await fetch(`${base}/api/demo-tunnel/start`, { method: 'POST', headers: { Cookie: cookie } })).status, 409, 'Tunnel start explains missing proxy trust');
     } finally { process.env.PORT = oldPort; }
-    await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: { Authorization: `Bearer ${adminToken1}` } });
-    assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Authorization: `Bearer ${adminToken1}` } })).status, 401);
-    assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Authorization: `Bearer ${adminToken2}` } })).status, 200);
-    const freshProcess = childProcess.spawnSync(process.execPath, ['-e', "process.stdout.write(String(require('./dist/auth-guard').verifySessionToken(process.env.TEST_SESSION)))"], {
-      cwd: root, env: { ...process.env, TEST_SESSION: adminToken1 }, encoding: 'utf8', timeout: 10000,
-    });
-    assert.strictEqual(freshProcess.status, 0, freshProcess.stderr);
-    assert.strictEqual(freshProcess.stdout, 'false', 'Revocation must survive a fresh process');
+    await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: { Cookie: adminCookie1 } });
+    assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Cookie: adminCookie1 } })).status, 401, 'Logout revokes the cookie session');
+    assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Cookie: adminCookie2 } })).status, 200, 'A separate login remains active');
     for (let i = 0; i < 5; i++) {
       const failed = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: json, body: JSON.stringify({ password: 'incorrect' }) });
       assert.strictEqual(failed.status, 401);
@@ -224,6 +240,7 @@ async function run() {
       const response = await fetch(`http://127.0.0.1:${trustedPort}/api/auth/login`, { method: 'POST', headers: { ...json, 'X-Forwarded-Proto': 'https' }, body: JSON.stringify({ password: 'dummy-admin-password' }) });
       assert.strictEqual(response.status, 200);
       assert(/; Secure/i.test(response.headers.get('set-cookie') || ''), 'Trusted TLS proxy must set secure cookie');
+      assert(/SameSite=Lax/i.test(response.headers.get('set-cookie') || ''), 'First-party sessions use SameSite=Lax');
       assert.strictEqual(await isTunnelProxyReady(trustedPort), true, 'The local tunnel probe recognizes configured proxy trust');
       const forwarded = { 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': 'console.example', Cookie: cookie };
       assert.strictEqual((await fetch(`http://127.0.0.1:${trustedPort}/api/state`, { headers: { ...forwarded, Origin: 'https://console.example' } })).status, 200, 'Trusted proxy may convey the external origin');
