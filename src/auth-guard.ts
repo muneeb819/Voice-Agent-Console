@@ -294,9 +294,7 @@ function isHttpsRequest(req?: http.IncomingMessage): boolean {
 
 export function setAuthCookie(res: Response, token: string, req?: http.IncomingMessage): void {
   const maxAgeSec = Math.floor(SESSION_TTL_MS / 1000);
-  const cookiePolicy = isHttpsRequest(req)
-    ? 'SameSite=None; Secure; Partitioned'
-    : 'SameSite=Lax';
+  const cookiePolicy = isHttpsRequest(req) ? 'SameSite=Lax; Secure' : 'SameSite=Lax';
   res.setHeader(
     'Set-Cookie',
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; ${cookiePolicy}; Max-Age=${maxAgeSec}`
