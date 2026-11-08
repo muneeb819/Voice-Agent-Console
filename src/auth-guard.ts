@@ -199,7 +199,7 @@ export function getRequestSessionToken(req: http.IncomingMessage): string | null
   if (cookies[SESSION_COOKIE_NAME]) {
     return cookies[SESSION_COOKIE_NAME];
   }
-  return extractQueryToken(req);
+  return null;
 }
 
 /**
@@ -243,11 +243,6 @@ export function hasActiveAuthSession(req: http.IncomingMessage): boolean {
   if (cookies[SESSION_COOKIE_NAME] && verifySessionToken(cookies[SESSION_COOKIE_NAME])) {
     return true;
   }
-  const queryTok = extractQueryToken(req);
-  if (queryTok && (constantTimePasswordMatch(queryTok) || verifySessionToken(queryTok))) {
-    return true;
-  }
-
   // 3. Check email/password user session (cookie, bearer token, or query handoff token)
   if (getAuthenticatedUser(req)) {
     return true;
@@ -276,6 +271,19 @@ function hasLoopbackHost(req: http.IncomingMessage): boolean {
 /**
  * Verifies an HTTP Request or WebSocket Upgrade IncomingMessage.
  */
+export function hasAdminAccess(req: http.IncomingMessage): boolean {
+  const authHdr = String(req.headers.authorization || '').trim();
+  if (/^Bearer\s+/i.test(authHdr)) {
+    const token = authHdr.replace(/^Bearer\s+/i, '').trim();
+    if (constantTimePasswordMatch(token) || verifySessionToken(token)) return true;
+  }
+  const cookies = parseCookies(req.headers.cookie);
+  const cookieToken = cookies[SESSION_COOKIE_NAME];
+  if (cookieToken && verifySessionToken(cookieToken)) return true;
+  const user = getAuthenticatedUser(req);
+  return Boolean(user && (user.role === 'owner' || user.role === 'admin'));
+}
+
 export function isRequestAuthorized(req: http.IncomingMessage): boolean {
   if (!isAuthEnabled()) {
     // Fresh installations may be initialized directly on loopback only.
@@ -295,7 +303,7 @@ function isHttpsRequest(req?: http.IncomingMessage): boolean {
 export function setAuthCookie(res: Response, token: string, req?: http.IncomingMessage): void {
   const maxAgeSec = Math.floor(SESSION_TTL_MS / 1000);
   const cookiePolicy = isHttpsRequest(req)
-    ? 'SameSite=None; Secure; Partitioned'
+    ? 'SameSite=Lax; Secure'
     : 'SameSite=Lax';
   res.setHeader(
     'Set-Cookie',
@@ -341,6 +349,12 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
   }
 
   if (isRequestAuthorized(req)) {
+    const privileged = p.startsWith('/secrets') || p.startsWith('/auth/signup') ||
+      p.startsWith('/users') || p.startsWith('/vici/release-bundle');
+    if (privileged && !hasAdminAccess(req)) {
+      res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Owner or administrator permission required.' });
+      return;
+    }
     next();
     return;
   }
