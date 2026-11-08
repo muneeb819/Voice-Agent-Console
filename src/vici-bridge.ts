@@ -20,6 +20,7 @@ import {
   ulawToLinear16,
 } from './g711';
 import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCallReadinessBlockers } from './settings-builder';
+import { primaryCampaignAgent } from './campaign-assignment';
 import { Agent, Campaign, ConsoleState } from './types';
 import {
   HydratedViciLead,
@@ -142,7 +143,7 @@ export function resolveCampaignAndAgent(
   }
 
   const campaign = state.campaigns[idx];
-  const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+  const agent = primaryCampaignAgent(state, campaign);
   if (!agent) {
     return {
       campaign,

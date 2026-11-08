@@ -77,6 +77,7 @@ import {
   getDeploymentReadinessBlockers,
   validateState,
 } from './settings-builder';
+import { campaignAgentIds, campaignHasAgent, primaryCampaignAgent } from './campaign-assignment';
 import { VicidialBridgeService, ViciBridgeOptions } from './vici-bridge';
 import { parseVicidialCallerCode, VicidialApiClient } from './vici-client';
 import { runSimulatedViciBridgeCall } from './vici-loopback-tester';
@@ -559,18 +560,21 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     };
     const settingsByCampaignId = Object.fromEntries(
       state.campaigns.map((campaign) => {
-        const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+        const agent = primaryCampaignAgent(state, campaign);
+        const agents = campaignAgentIds(campaign).map((id) => state.agents.find((entry) => entry.id === id)).filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
         return [campaign.id, {
           campaignId: campaign.id,
           campaignName: campaign.name,
-          agentId: campaign.agentId || null,
+          agentId: agent?.id || null,
+          agentIds: agents.map((entry) => entry.id),
           settings: agent ? buildDeepgramSettings(state, agent, campaign) : null,
+          settingsByAgentId: Object.fromEntries(agents.map((entry) => [entry.id, buildDeepgramSettings(state, entry, campaign)])),
         }];
       })
     );
     const settingsByAgentId = Object.fromEntries(
       state.agents.map((agent) => {
-        const campaigns = state.campaigns.filter((campaign) => campaign.agentId === agent.id);
+        const campaigns = state.campaigns.filter((campaign) => campaignHasAgent(campaign, agent.id));
         const selectedCampaign = campaigns.length === 1 ? campaigns[0] : undefined;
         return [agent.id, {
           agentId: agent.id,

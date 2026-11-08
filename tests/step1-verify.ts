@@ -365,12 +365,13 @@ async function run() {
     const wrongAssignment = structuredClone(state);
     const wrongCampaign = wrongAssignment.campaigns.find((campaign: any) => campaign.id === second.id)!;
     wrongCampaign.agentId = 'someone-else';
+    wrongCampaign.agentIds = ['someone-else'];
     assert.throws(() => buildDeepgramSettings(wrongAssignment, wrongAssignment.agents[0], wrongCampaign), /not explicitly assigned/i);
     assert.deepStrictEqual(getCampaignCallReadinessBlockers(state, first), [], 'Multiple campaign assignments are allowed');
 
     const noCampaigns = normalizeState({ ...structuredClone(state), campaigns: [] });
     assert.deepStrictEqual(noCampaigns.campaigns, [], 'Missing campaigns are not silently recreated from defaults');
-    const orphan = normalizeState({ ...structuredClone(state), campaigns: [{ ...first, agentId: '', viciCampaign: '', xferTarget: '' }] });
+    const orphan = normalizeState({ ...structuredClone(state), campaigns: [{ ...first, agentId: '', agentIds: [], viciCampaign: '', xferTarget: '' }] });
     assert.equal(orphan.campaigns[0].agentId, '', 'Missing agent assignment is not silently defaulted');
     assert.equal(orphan.campaigns[0].viciCampaign, '', 'Missing VICIdial ID is not replaced with a made-up campaign');
     assert.equal(orphan.campaigns[0].xferTarget, '', 'Missing closer routing is not inferred from the campaign name');
@@ -381,12 +382,37 @@ async function run() {
     assert.ok(getCampaignCallReadinessBlockers(state, noDispositions).some((message) => message.includes('At least one')));
 
     const unassigned = structuredClone(state);
-    unassigned.campaigns = unassigned.campaigns.filter((campaign: any) => campaign.agentId !== agent.id);
+    unassigned.campaigns = unassigned.campaigns.filter((campaign: any) => campaign.agentId !== agent.id).map((campaign: any) => ({ ...campaign, agentIds: (campaign.agentIds || []).filter((id: string) => id !== agent.id) }));
     assert.ok(validateAgent(unassigned, agent).some((item) => item.level === 'er' && item.message.includes('assigned')));
     assert.ok(getDeploymentReadinessBlockers(unassigned).some((message) => message.includes('must be explicitly assigned')));
 
     const unverified = { ...first, deadAirDispositionVerified: false };
     assert.ok(getCampaignCallReadinessBlockers(state, unverified).some((message) => message.includes('confirmed')));
+  });
+
+  await check('14. Multi-bot campaign assignment migrates legacy state, preserves primary routing and rejects unassigned bots', () => {
+    const state = configureTestServices(createDefaultState());
+    state.campaigns.forEach((campaign: any) => { campaign.deadAirDispositionVerified = true; });
+    const campaign = state.campaigns[0];
+    const secondary = state.agents[1];
+    campaign.agentIds = [campaign.agentId, secondary.id, secondary.id];
+    const normalized = normalizeState(state);
+    const saved = normalized.campaigns[0];
+    assert.deepStrictEqual(saved.agentIds, [campaign.agentId, secondary.id]);
+    assert.equal(saved.agentId, campaign.agentId);
+    assert.deepStrictEqual(getCampaignCallReadinessBlockers(normalized, saved, secondary), []);
+    assert(buildDeepgramSettings(normalized, secondary, saved).agent.think.prompt.includes('Medicare'));
+    const outsider = normalized.agents[2];
+    assert.throws(() => buildDeepgramSettings(normalized, outsider, saved), /not explicitly assigned/i);
+    assert(getCampaignCallReadinessBlockers(normalized, saved, outsider).some((message) => message.includes('not assigned')));
+    const legacy = normalizeState({ ...structuredClone(state), campaigns: [{ ...campaign, agentIds: undefined }] });
+    assert.deepStrictEqual(legacy.campaigns[0].agentIds, [campaign.agentId]);
+    const stale = normalizeState({ ...structuredClone(state), campaigns: [{ ...campaign, agentId: 'missing', agentIds: [secondary.id, 'missing'] }] });
+    assert.equal(stale.campaigns[0].agentId, secondary.id);
+    assert.deepStrictEqual(stale.campaigns[0].agentIds, [secondary.id]);
+    const exportPayload = generateViciConfig(normalized);
+    assert(exportPayload.includes('Assigned Bot Pool'));
+    assert(exportPayload.includes(secondary.name));
   });
 
   console.log(`\nALL ${results.length}/${results.length} STEP 1 VERIFICATION CHECKS PASSED!`);

@@ -348,7 +348,15 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality purposes.",
-      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC"
+      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC,DAIR",
+      "agentIds": [
+        "a1"
+      ],
+      "complianceRules": "Final Expense campaign rules: identify accurately, never guarantee coverage or rates, ask permission to continue, transfer only with consent, and honor stop or do-not-call requests immediately.",
+      "presenceCheckText": "Hello? Are you there? Can you hear me?",
+      "deadAirTimeoutSec": 8,
+      "deadAirDisposition": "DAIR",
+      "deadAirDispositionVerified": false
     },
     {
       "id": "c_medicare",
@@ -367,7 +375,15 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality and benefit verification.",
-      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK"
+      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK,DAIR",
+      "agentIds": [
+        "a_medicare"
+      ],
+      "complianceRules": "Medicare campaign rules: never imply government affiliation or guarantee benefits, eligibility, funds or savings; use only approved campaign information and honor refusal or do-not-call requests immediately.",
+      "presenceCheckText": "Hello? Are you there? Can you hear me?",
+      "deadAirTimeoutSec": 8,
+      "deadAirDisposition": "DAIR",
+      "deadAirDispositionVerified": false
     },
     {
       "id": "c_nova",
@@ -386,7 +402,15 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality and training purposes.",
-      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC"
+      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC,DAIR",
+      "agentIds": [
+        "a_nova"
+      ],
+      "complianceRules": "Concierge campaign rules: identify as an AI assistant when asked, never invent account actions or external confirmations, protect sensitive information, and honor stop or do-not-call requests immediately.",
+      "presenceCheckText": "Hello? Are you there? Can you hear me?",
+      "deadAirTimeoutSec": 8,
+      "deadAirDisposition": "DAIR",
+      "deadAirDispositionVerified": false
     },
     {
       "id": "c_med_fronter",
@@ -405,7 +429,15 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality and benefit verification.",
-      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK"
+      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK,DAIR",
+      "agentIds": [
+        "a_jessica"
+      ],
+      "complianceRules": "Medicare fronter campaign rules: identify accurately, never guarantee benefits or eligibility, do not request Medicare or Social Security numbers, and honor refusal or do-not-call requests immediately.",
+      "presenceCheckText": "Hello? Are you there? Can you hear me?",
+      "deadAirTimeoutSec": 8,
+      "deadAirDisposition": "DAIR",
+      "deadAirDispositionVerified": false
     }
   ],
   "vici": {

@@ -29,6 +29,7 @@ const env_store_1 = require("./env-store");
 const live_simulator_1 = require("./live-simulator");
 const simulator_recordings_1 = require("./simulator-recordings");
 const settings_builder_1 = require("./settings-builder");
+const campaign_assignment_1 = require("./campaign-assignment");
 const vici_bridge_1 = require("./vici-bridge");
 const vici_client_1 = require("./vici-client");
 const vici_loopback_tester_1 = require("./vici-loopback-tester");
@@ -448,16 +449,19 @@ function createApp(viciBridge) {
             er: validations.filter((v) => v.level === 'er').length,
         };
         const settingsByCampaignId = Object.fromEntries(state.campaigns.map((campaign) => {
-            const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+            const agent = (0, campaign_assignment_1.primaryCampaignAgent)(state, campaign);
+            const agents = (0, campaign_assignment_1.campaignAgentIds)(campaign).map((id) => state.agents.find((entry) => entry.id === id)).filter((entry) => Boolean(entry));
             return [campaign.id, {
                     campaignId: campaign.id,
                     campaignName: campaign.name,
-                    agentId: campaign.agentId || null,
+                    agentId: agent?.id || null,
+                    agentIds: agents.map((entry) => entry.id),
                     settings: agent ? (0, settings_builder_1.buildDeepgramSettings)(state, agent, campaign) : null,
+                    settingsByAgentId: Object.fromEntries(agents.map((entry) => [entry.id, (0, settings_builder_1.buildDeepgramSettings)(state, entry, campaign)])),
                 }];
         }));
         const settingsByAgentId = Object.fromEntries(state.agents.map((agent) => {
-            const campaigns = state.campaigns.filter((campaign) => campaign.agentId === agent.id);
+            const campaigns = state.campaigns.filter((campaign) => (0, campaign_assignment_1.campaignHasAgent)(campaign, agent.id));
             const selectedCampaign = campaigns.length === 1 ? campaigns[0] : undefined;
             return [agent.id, {
                     agentId: agent.id,

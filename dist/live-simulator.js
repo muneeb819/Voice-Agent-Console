@@ -45,6 +45,7 @@ const opening_1 = require("./opening");
 const defaults_1 = require("./defaults");
 const env_store_1 = require("./env-store");
 const settings_builder_1 = require("./settings-builder");
+const campaign_assignment_1 = require("./campaign-assignment");
 const webhook_executor_1 = require("./webhook-executor");
 function interpolateEnvPlaceholders(obj) {
     if (typeof obj === 'string') {
@@ -577,12 +578,12 @@ function attachLiveSimulator(server, noServer = false) {
                     return;
                 }
                 const requestedCampaign = activeState.campaigns.find((c) => c.id === startMsg.campaignId);
-                if (!requestedCampaign || requestedCampaign.agentId !== requestedAgent.id) {
+                if (!requestedCampaign || !(0, campaign_assignment_1.campaignHasAgent)(requestedCampaign, requestedAgent.id)) {
                     sendFatalError('CAMPAIGN_ASSIGNMENT_MISMATCH', 'The selected campaign is not assigned to this bot. Assign it in Campaigns and retry.');
                     finalizeCall('campaign_assignment_mismatch');
                     return;
                 }
-                const campaignBlockers = (0, settings_builder_1.getCampaignCallReadinessBlockers)(activeState, requestedCampaign);
+                const campaignBlockers = (0, settings_builder_1.getCampaignCallReadinessBlockers)(activeState, requestedCampaign, requestedAgent);
                 if (campaignBlockers.length) {
                     sendFatalError('CAMPAIGN_NOT_READY', `Campaign “${requestedCampaign.name}” is not ready: ${campaignBlockers.join('; ')}.`);
                     finalizeCall('campaign_not_ready');

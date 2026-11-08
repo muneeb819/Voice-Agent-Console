@@ -8,6 +8,7 @@ exports.deepgramModelsForProviderType = deepgramModelsForProviderType;
 exports.createDefaultState = createDefaultState;
 exports.normalizeState = normalizeState;
 const opening_1 = require("./opening");
+const campaign_assignment_1 = require("./campaign-assignment");
 // Deepgram Voice Agent listens with either Nova (general purpose) or Flux v2.
 // The Voice Agent's own verified baseline is Nova-3; Flux models remain available.
 exports.VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'];
@@ -356,6 +357,7 @@ function createDefaultState() {
                 id: 'c1',
                 name: 'FE Fronter – Test',
                 agentId: 'a1',
+                agentIds: ['a1'],
                 viciCampaign: 'FETEST',
                 lists: '1001',
                 start: '09:00',
@@ -385,6 +387,7 @@ function createDefaultState() {
                 id: 'c_medicare',
                 name: 'Medicare — Food & OTC Outbound',
                 agentId: 'a_medicare',
+                agentIds: ['a_medicare'],
                 viciCampaign: 'MEDICARE',
                 lists: '2001,2002',
                 start: '09:00',
@@ -414,6 +417,7 @@ function createDefaultState() {
                 id: 'c_nova',
                 name: 'Nova — Live Concierge & General Q&A',
                 agentId: 'a_nova',
+                agentIds: ['a_nova'],
                 viciCampaign: 'NOVACONC',
                 lists: '3001',
                 start: '09:00',
@@ -833,7 +837,7 @@ function normalizeState(raw) {
                 id: String(c.id || `c_${idx + 1}`),
                 name: cName,
                 // Missing assignments stay missing. Never silently attach a campaign to the first bot.
-                agentId: String(c.agentId ?? ''),
+                ...(0, campaign_assignment_1.normalizeCampaignAgents)(c, new Set((src.agents || []).map((a) => String(a?.id || '')))),
                 viciCampaign: String(c.viciCampaign ?? '').trim(),
                 lists: String(c.lists ?? ''),
                 start: String(c.start || '09:00'),
@@ -921,7 +925,7 @@ function normalizeState(raw) {
     }
     const uniqueAgents = dedupe(agents);
     const agentIds = new Set(uniqueAgents.map((a) => a.id));
-    const uniqueCampaigns = dedupe(campaigns).map((c) => ({ ...c, agentId: agentIds.has(c.agentId) ? c.agentId : '' }));
+    const uniqueCampaigns = dedupe(campaigns).map((c) => ({ ...c, ...(0, campaign_assignment_1.normalizeCampaignAgents)(c, agentIds) }));
     const campaignIds = new Set(uniqueCampaigns.map((c) => c.id));
     const uniqueFunctions = dedupe(functions);
     const functionIds = new Set(uniqueFunctions.map((f) => f.id));

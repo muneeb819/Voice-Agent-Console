@@ -49,6 +49,7 @@
   let autoSaveTimer = null;
   let autoSaveInFlight = null;
   let autoSaveError = '';
+  let manualSaveInFlight = false;
   const STATE_DRAFT_KEY = 'vac_console_unsaved_draft_v1';
 
   let tab = (() => {
@@ -1183,9 +1184,13 @@
           cp.dnc = true;
           mutated = true;
         }
-        if (cp.agentId === undefined || cp.agentId === null) {
-          cp.agentId = '';
-          mutated = true;
+        const assignment = { agentId: cp.agentId, agentIds: cp.agentIds };
+        const valid = new Set((state.agents || []).map((agent) => agent.id));
+        const ids = [...new Set([String(assignment.agentId || ''), ...(Array.isArray(assignment.agentIds) ? assignment.agentIds : [])].filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))].filter((id) => valid.has(id));
+        const primary = ids.includes(String(assignment.agentId || '')) ? String(assignment.agentId || '') : ids[0] || '';
+        const normalizedIds = primary ? [primary, ...ids.filter((id) => id !== primary)] : [];
+        if (cp.agentId !== primary || JSON.stringify(cp.agentIds) !== JSON.stringify(normalizedIds)) {
+          cp.agentId = primary; cp.agentIds = normalizedIds; mutated = true;
         }
         if (typeof cp.complianceRules !== 'string') {
           cp.complianceRules = MISSING_CAMPAIGN_RULES;
@@ -1494,6 +1499,7 @@
     recordingLoadVersions: new Map(),
     callId: '',
     campaignId: '',
+    campaignAgentId: '',
     logSaved: null,
     selectedGreeting: null,
     bandwidth: 'wideband', // 'wideband' (16k/24k) or 'telephony' (8k/8k)
@@ -1926,10 +1932,31 @@
 
   const A = () => S.agents.find((x) => x.id === cur.a) || S.agents[0];
   const C = () => S.campaigns.find((x) => x.id === cur.c);
-  const campaignsForAgent = (agentId) => (S?.campaigns || []).filter((campaign) => campaign.agentId === agentId);
+  const campaignAgentIds = (campaign) => {
+    const legacy = typeof campaign?.agentId === 'string' ? campaign.agentId.trim() : '';
+    const requested = Array.isArray(campaign?.agentIds) ? campaign.agentIds : [];
+    const valid = new Set((S?.agents || []).map((agent) => agent.id));
+    const ids = [...new Set([legacy, ...requested].filter((id) => typeof id === 'string' && id.trim()).map((id) => id.trim()))].filter((id) => valid.has(id));
+    const primary = ids.includes(legacy) ? legacy : ids[0] || '';
+    return primary ? [primary, ...ids.filter((id) => id !== primary)] : ids;
+  };
+  const campaignHasAgent = (campaign, agentId) => campaignAgentIds(campaign).includes(agentId);
+  const primaryCampaignAgent = (campaign) => S.agents.find((agent) => agent.id === campaignAgentIds(campaign)[0]);
+  const assignCampaignAgent = (campaign, agentId, assigned) => {
+    const ids = campaignAgentIds(campaign);
+    const next = assigned ? [...new Set([...ids, agentId])] : ids.filter((id) => id !== agentId);
+    campaign.agentIds = next;
+    campaign.agentId = next.includes(campaign.agentId) ? campaign.agentId : next[0] || '';
+    if (sim.campaignId === campaign.id && !campaignHasAgent(campaign, sim.campaignAgentId || agentId)) { sim.campaignId = ''; sim.campaignAgentId = ''; }
+  };
+  const campaignsForAgent = (agentId) => (S?.campaigns || []).filter((campaign) => campaignHasAgent(campaign, agentId));
   function simulatorCampaign(agentId = A()?.id) {
     if (!sim.campaignId) return null;
     return campaignsForAgent(agentId).find((campaign) => campaign.id === sim.campaignId) || null;
+  }
+  function setSimulatorCampaign(campaignId, agentId = A()?.id) {
+    sim.campaignId = campaignsForAgent(agentId).some((campaign) => campaign.id === campaignId) ? campaignId : '';
+    sim.campaignAgentId = sim.campaignId ? agentId : '';
   }
   const prov = (id) => S.providers.find((x) => x.id === id);
 
@@ -1962,7 +1989,8 @@
     if (!S) return;
     try {
       if (serverlessCloudMode) {
-        window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
+        if (!window.localStorage) throw new Error('Browser storage is unavailable. Enable site storage or export a JSON backup.');
+        window.localStorage.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
       } else {
         window.localStorage?.setItem(STATE_DRAFT_KEY, JSON.stringify({
           baseSnapshot: snap,
@@ -1970,7 +1998,9 @@
           state: S,
         }));
       }
-    } catch {}
+    } catch (err) {
+      if (serverlessCloudMode) autoSaveError = err?.message || 'Browser storage is unavailable';
+    }
   }
 
   function clearLocalDraft() {
@@ -1982,8 +2012,10 @@
     persistDraftLocally();
     if (serverlessCloudMode) {
       try {
+        if (!window.localStorage) throw new Error('Browser storage is unavailable. Enable site storage or export a JSON backup.');
         S.updatedAt = new Date().toISOString();
-        window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
+        window.localStorage.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
+        if (window.localStorage.getItem(CLOUD_STATE_KEY) !== JSON.stringify(S)) throw new Error('Browser storage did not confirm the saved configuration.');
         snap = comparableSnapshot(S);
         autoSaveError = '';
       } catch (err) {
@@ -2014,7 +2046,8 @@
       st.className = '';
       st.title = '';
     }
-    document.getElementById('sv').disabled = !dirty || Boolean(autoSaveInFlight);
+    document.getElementById('sv').disabled = !S || manualSaveInFlight;
+    document.getElementById('sv').title = dirty ? 'Save changes and run verification' : 'Run verification and confirm the saved configuration';
     document.getElementById('dc').disabled = !dirty || Boolean(autoSaveInFlight);
 
     const dgKey = secretsStatus?.DEEPGRAM_API_KEY?.configured;
@@ -2043,8 +2076,8 @@
     const lp = globalServiceProvider('llm') || {};
     const tp = globalServiceProvider('tts') || {};
     const linkedCampaign = campaign
-      ? campaign.agentId === agent.id ? campaign : undefined
-      : agent.id === A()?.id ? simulatorCampaign(agent.id) : S.campaigns.find((c) => c.agentId === agent.id);
+      ? campaignHasAgent(campaign, agent.id) ? campaign : undefined
+      : agent.id === A()?.id ? simulatorCampaign(agent.id) : campaignsForAgent(agent.id)[0];
 
     const isSpeechServiceStt = sp.type === 'speech_service';
     const spModels = String(sp.models || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -2298,7 +2331,7 @@
     push(/(dnc|do not call|take me off|stop)/i.test(agent.prompt), 'System prompt handles Do-Not-Call requests');
     push(fnNames.includes('end_call'), 'end_call function enabled');
     push(Number(agent.audio.inRate) === 8000, '8000 Hz input sample rate matches Asterisk/VICIdial telephony', true);
-    push(S.campaigns.some((c) => c.agentId === agent.id), 'Explicitly assigned to at least one campaign before deployment');
+    push(campaignsForAgent(agent.id).length > 0, 'Explicitly assigned to at least one campaign before deployment');
 
     return items;
   }
@@ -2319,11 +2352,11 @@
     push(Boolean(c.dnc), 'DNC scrub enabled');
     push(Boolean((c.disclosure || '').trim()), 'Recording disclosure line present', true);
     push(c.start < c.end, `Calling window valid (${c.start} – ${c.end})`);
-    const assignedAgent = S.agents.find((agent) => agent.id === c.agentId);
-    push(Boolean(assignedAgent), 'Explicitly assigned to an existing bot agent');
+    const assignedAgents = campaignAgentIds(c).map((id) => S.agents.find((agent) => agent.id === id)).filter(Boolean);
+    push(assignedAgents.length > 0, 'Explicitly assigned to at least one existing bot agent');
     push(allowed.length > 0, 'At least one allowed VICIdial disposition code is configured');
     const transferFunction = S.functions.find((fn) => fn.name === 'transfer_to_live_agent');
-    const transferEnabled = Boolean(assignedAgent && transferFunction && assignedAgent.fnIds.includes(transferFunction.id));
+    const transferEnabled = Boolean(transferFunction && assignedAgents.some((agent) => agent.fnIds.includes(transferFunction.id)));
     push(!transferEnabled || allowed.includes('XFER'), 'XFER is in the allowed disposition list when live-agent transfer is enabled');
     push(rules.length >= 20 && rules.length <= 8000 && !/^REVIEW REQUIRED\b/i.test(rules), 'Campaign-specific compliance & rules are written and reviewed (20–8,000 characters)');
     push(presence.length >= 8 && presence.length <= 280, 'Brief campaign presence-check line configured (8–280 characters)');
@@ -2338,7 +2371,7 @@
   function deploymentReadinessBlockersLocal() {
     const blockers = [];
     for (const agent of S.agents || []) {
-      if (!(S.campaigns || []).some((campaign) => campaign.agentId === agent.id)) {
+      if (!campaignsForAgent(agent.id).length) {
         blockers.push(`Agent “${agent.name}” must be explicitly assigned to at least one campaign.`);
       }
       for (const item of validateAgentLocal(agent)) {
@@ -2363,7 +2396,8 @@
     const agentApiUrl = `${v.viciBaseUrl}${v.agentApiPath}`;
     const campaignBlock = S.campaigns
       .map((c, idx) => {
-        const ag = S.agents.find((a) => a.id === c.agentId);
+        const ag = primaryCampaignAgent(c);
+        const pool = campaignAgentIds(c).map((id) => S.agents.find((a) => a.id === id)?.name || id).join(', ');
         const ext = `${v.aiExten}${idx + 1}`;
         const xfer =
           c.xferType === 'ingroup'
@@ -2372,7 +2406,8 @@
         return [
           `; [Campaign ${idx + 1}: ${c.name}]`,
           `;   VICIdial Campaign ID : ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCalls}`,
-          `;   Bot Persona          : ${ag ? ag.name : '(missing)'} (${ag?.mode || 'outbound'})`,
+          `;   Assigned Bot Pool    : ${pool || '(missing)'}`,
+          `;   Telephone Persona    : ${ag ? ag.name : '(missing)'} (${ag?.mode || 'outbound'}); browser tests may select any assigned bot`,
           `;   Remote Agent Exten   : ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + idx})`,
           `;   Live Closer Transfer : ${xfer}`,
           `;   Allowed Dispositions : ${c.dispos}`,
@@ -3403,6 +3438,7 @@
       sim.lastError = 'Assign this bot to a campaign before starting a browser call.';
       sim.statusText = 'Campaign assignment required';
       render();
+      document.getElementById('sim-call-setup')?.scrollIntoView?.({ block: 'center' });
       return;
     }
     const campaignBlockers = [
@@ -3413,6 +3449,7 @@
       sim.lastError = `Campaign “${callCampaign.name}” is not ready: ${campaignBlockers.join('; ')}.`;
       sim.statusText = 'Campaign setup required';
       render();
+      document.getElementById('sim-call-setup')?.scrollIntoView?.({ block: 'center' });
       return;
     }
     if (sim.recordAudio && !recordingMime()) {
@@ -4818,69 +4855,38 @@
       secretsStatus?.DEEPGRAM_API_KEY?.configured ?? srv?.inventory?.deepgramConfigured ?? false
     );
 
-    const instantCount = agents.filter((ag) => ag.behavior?.bargeIn === 'instant').length;
-    const rate8kCount = agents.filter((ag) => Number(ag.audio?.inRate) === 8000).length;
-    const viciAcceptCount = agents.filter((ag) => ag.acceptViciCalls !== false).length;
-    const discCount = campaigns.filter((cp) => String(cp.disclosure || '').trim().length >= 8).length;
-
-    const avgTtfb = Number(srv?.traffic?.avgTtfbMs || 0);
-    const ratioOk = okCount / totalChecks;
-    const preflightPts = Math.max(0, Math.min(30, Math.round(ratioOk * 30 - erCount * 8 - wnCount * 3)));
-    const aiStackPts = Math.min(
-      20,
-      (sttModel ? 5 : 0) + (llmModel ? 5 : 0) + (ttsModel ? 5 : 0) + (dgConfigured ? 5 : 3)
-    );
-    const instantRatio = agents.length ? instantCount / agents.length : 1;
-    const rate8kRatio = agents.length ? rate8kCount / agents.length : 1;
-    // A bridge loopback may contribute synthetic latency; keep the configuration
-    // score independent of that mixture rather than treating it as a speed test.
-    const realtimePts = Math.min(15, Math.round(instantRatio * 8) + Math.round(rate8kRatio * 7));
-
-    const discRatio = campaigns.length ? discCount / campaigns.length : 1;
-    const acceptRatio = agents.length ? viciAcceptCount / agents.length : 1;
-    const amiOrNonAgent = Boolean(
-      (S?.vici?.amiUser && S?.vici?.amiSecret) || (S?.vici?.apiUser && S?.vici?.apiPass)
-    );
-    const telephonyPts = Math.min(
-      15,
-      Math.round(discRatio * 5) + Math.round(acceptRatio * 5) + (amiOrNonAgent ? 5 : 3)
-    );
-    const qaPts =
-      testsTotal === 0
-        ? 5
-        : Math.max(
-            4,
-            Math.min(10, Math.round((testsPassed / testsTotal) * 7) + (testsFailed === 0 ? 3 : 0))
-          );
-
     const usersCount = Number(srv?.inventory?.registeredUsers ?? 0);
     const authRequired = srv?.inventory?.authEnforced === true;
-    const opsPts = Math.min(10, 4 + (authRequired ? 3 : 0) + (usersCount > 0 ? 3 : 0));
-
-    const score = Math.max(
-      0,
-      Math.min(100, preflightPts + aiStackPts + realtimePts + telephonyPts + qaPts + opsPts)
-    );
-    const grade =
-      score >= 96
-        ? 'S+'
-        : score >= 90
-        ? 'A+'
-        : score >= 82
-        ? 'A'
-        : score >= 72
-        ? 'B+'
-        : score >= 60
-        ? 'B'
-        : 'C';
-
+    const instantCount = agents.filter((ag) => ag.behavior?.bargeIn === 'instant').length;
+    const rate8kCount = agents.filter((ag) => Number(ag.audio?.inRate) === 8000).length;
+    const discCount = campaigns.filter((cp) => String(cp.disclosure || '').trim().length >= 8).length;
+    const avgTtfb = Number(srv?.traffic?.avgTtfbMs || 0);
+    // Readiness is the fraction of actual configuration checks that pass.
+    // Unrun QA, browser audio overrides and unavailable server telemetry are
+    // reported separately rather than inventing points or penalizing twice.
+    const score = allChecks.length ? Math.round((okCount / allChecks.length) * 100) : 0;
+    const grade = score === 100 ? 'S+' : score >= 90 ? 'A+' : score >= 80 ? 'A' : score >= 70 ? 'B' : score >= 60 ? 'C' : 'D';
+    const agentChecks = agents.flatMap((agent) => validateAgentLocal(agent));
+    const campaignChecks = campaigns.flatMap((campaign) => validateCampaignLocal(campaign));
+    const isPipelineCheck = (item) => /global|plug-in json|voice agent|nova|flux stt/i.test(item[2]);
+    const isSafetyCheck = (item) => /disclosure|DNC|compliance|disposition|dead-air|presence-check/i.test(item[2]);
+    const passed = (checks) => checks.filter((item) => (item.level || item[0]) === 'ok').length;
+    const pipelineChecks = agentChecks.filter(isPipelineCheck);
+    const routingChecks = campaignChecks.filter((item) => !isSafetyCheck(item));
+    const safetyChecks = campaignChecks.filter(isSafetyCheck);
+    const coreAgentChecks = agentChecks.filter((item) => !isPipelineCheck(item));
+    // These four scored groups partition every configuration check exactly once.
     const pillars = [
-      { id: 'preflight', label: 'Pre-Flight Verification', score: preflightPts, max: 30, detail: `${okCount}/${totalChecks} checks` },
-      { id: 'ai_stack', label: 'Speech & LLM Pipeline', score: aiStackPts, max: 20, detail: `${sttModel || 'stt'} · ${llmModel || 'llm'}` },
-      { id: 'realtime_ux', label: 'Audio Settings', score: realtimePts, max: 15, detail: `${instantCount}/${agents.length} local VAD configured; latency not guaranteed` },
-      { id: 'telephony', label: 'VICIdial & Compliance', score: telephonyPts, max: 15, detail: `${discCount}/${campaigns.length} disclosure` },
-      { id: 'qa_readiness', label: 'QA Scenario Coverage', score: qaPts, max: 10, detail: `${testsPassed}/${testsTotal} passed` },
-      { id: 'ops_security', label: 'Auth & Storage Configuration', score: opsPts, max: 10, detail: `${authRequired ? 'Auth enforced' : 'Auth not confirmed'} · ${usersCount} user${usersCount === 1 ? '' : 's'}` },
+      { id: 'preflight', label: 'Agent configuration', score: passed(coreAgentChecks), max: coreAgentChecks.length, detail: `${passed(coreAgentChecks)}/${coreAgentChecks.length} checks passed` },
+      { id: 'ai_stack', label: 'Speech & LLM selection', score: passed(pipelineChecks), max: pipelineChecks.length, detail: `${sttModel || 'STT unset'} · ${llmModel || 'LLM unset'} · ${ttsModel || 'TTS unset'}; connection not certified` },
+      { id: 'realtime_ux', label: 'Campaign routing', score: passed(routingChecks), max: routingChecks.length, detail: `${campaigns.length} campaigns; telephone audio remains 8 kHz` },
+      { id: 'telephony', label: 'Campaign safety configuration', score: passed(safetyChecks), max: safetyChecks.length, detail: `${discCount}/${campaigns.length} disclosures; operator verification still required` },
+      { id: 'qa_readiness', label: 'QA evidence (not scored)', score: testsPassed, max: testsTotal, detail: `${testsPassed}/${testsTotal} passed · ${testsPending} pending · ${testsFailed} failed; excluded from readiness score` },
+      { id: 'ops_security', label: 'Storage & access (not scored)', score: serverlessCloudMode ? (autoSaveError ? 0 : 1) : (latestRevisionId ? 1 : 0), max: 1, detail: serverlessCloudMode ? 'Browser-local storage; not server authentication' : `${authRequired ? 'Server auth enabled' : 'Local bootstrap'} · ${usersCount} users; excluded from readiness score` },
+    ];
+    const issues = [
+      ...agents.flatMap((agent) => validateAgentLocal(agent).filter((item) => item[0] !== 'ok').map((item) => ({ level: item[0], scope: agent.name, message: item[2], tab: 'agents' }))),
+      ...campaigns.flatMap((campaign) => validateCampaignLocal(campaign).filter((item) => item[0] !== 'ok').map((item) => ({ level: item[0], scope: campaign.name, message: item[2], tab: 'campaigns' }))),
     ];
 
     const simCalls = Number(srv?.traffic?.totalSimulatorCalls ?? (sim?.callLogs?.length || 0));
@@ -4918,6 +4924,7 @@
       erCount,
       totalChecks,
       pillars,
+      issues,
       agents,
       campaigns,
       providers,
@@ -5079,7 +5086,7 @@
         <div class="cmd-topbar">
           <div class="cmd-brand-cluster">
             <span class="cmd-radar-dot ${healthClass === 'ok' ? '' : healthClass}"></span>
-            <h1 class="cmd-eyebrow">Executive Command <span>&amp; Console Quality</span></h1>
+            <h1 class="cmd-eyebrow">Executive Command <span>&amp; Configuration Readiness</span></h1>
             <span class="cmd-cert-badge ${healthClass === 'ok' ? '' : healthClass}">${esc(certText)}</span>
             <span class="cmd-sys-meta">
               <span>${esc(String(T.boundHost))}:${esc(String(T.boundPort))}</span>
@@ -5103,7 +5110,7 @@
         ${
           cmdDeckState.compact
             ? `<div class="cmd-compact-ribbon">
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="agents">Quality: <b>${T.score}/100 (${esc(T.grade)})</b></button>
+                 <button type="button" class="cmd-compact-pill" data-cmd-tab="agents">Readiness: <b>${T.score}/100 (${esc(T.grade)})</b></button>
                  <button type="button" class="cmd-compact-pill" data-cmd-tab="agents">Bots: <b>${T.agents.length}</b></button>
                  <button type="button" class="cmd-compact-pill" data-cmd-tab="campaigns">Campaigns: <b>${T.campaigns.length} configured</b></button>
                  <button type="button" class="cmd-compact-pill" data-cmd-tab="plugins">Stack: <b>${esc(T.sttModel || 'not selected')} / ${esc(T.llmModel || 'not selected')}</b></button>
@@ -5142,7 +5149,7 @@
                      <div class="cmd-pillars">
                        ${T.pillars
                          .map((p) => {
-                           const pct = Math.max(0, Math.min(100, Math.round((p.score / p.max) * 100)));
+                           const pct = Math.max(0, Math.min(100, Math.round((p.score / Math.max(1, p.max)) * 100)));
                            return `<div class="cmd-pillar-row" title="${esc(p.detail)}">
                              <div class="cmd-pillar-hdr">
                                <span class="cmd-pillar-lbl">${esc(p.label)}</span>
@@ -5155,7 +5162,7 @@
                      </div>
                    </div>
                    <div class="cmd-quality-foot">
-                     <span>Configuration estimate (not a security audit or certification): <b style="color:var(--tx)">${T.score}/100 (${esc(T.grade)})</b></span>
+                     <span>Passed configuration checks (not measured call quality, uptime, security or compliance): <b style="color:var(--tx)">${T.score}/100 (${esc(T.grade)})</b></span>
                      <span>${serverlessCloudMode ? 'Browser-local demo' : `SQLite WAL · Rev #${T.revNum}`} · ${
                        comparableSnapshot(S) === snap ? '✓ Synced' : '● Unsaved Edits'
                      }</span>
@@ -5181,6 +5188,11 @@
                  </div>
                </div>
 
+               ${!cmdDeckState.compact ? `<div class="readiness-issues"><h2>${T.issues.length ? 'What still needs attention' : 'All configuration checks passed'}</h2>
+                 <div class="note">Readiness = passed checks ÷ applicable checks. Pending QA and live provider/telephone health are shown separately; no score is a 99.999% reliability guarantee.</div>
+                 ${T.issues.map((issue) => `<div class="ck"><span class="${issue.level}">${issue.level === 'er' ? '✗' : '!'}</span><span><b>${esc(issue.scope)}:</b> ${esc(issue.message)} <button class="g" type="button" data-cmd-tab="${issue.tab}">Open setup</button></span></div>`).join('')}
+                 <div class="note">QA: ${T.testsPassed}/${T.testsTotal} passed, ${T.testsPending} pending. <button class="g" type="button" data-cmd-tab="test">Open Live Bot</button></div>
+               </div>` : ''}
                <div class="cmd-fleet-strip">
                  <span class="cmd-fleet-lbl">Fleet Matrix:</span>
                  ${T.agentMatrix
@@ -5213,6 +5225,28 @@
     `;
   }
 
+  function renderAgentCampaignAssignment(agent) {
+    const assigned = campaignsForAgent(agent.id);
+    return `<fieldset class="assignment-box"><legend>Assigned campaigns</legend>
+      <details class="assignment-dropdown"><summary>${assigned.length ? `${assigned.length} campaign${assigned.length === 1 ? '' : 's'} selected` : 'Choose campaigns for this bot…'}</summary>
+        <div class="assignment-options">${S.campaigns.length ? S.campaigns.map((campaign) => `<label class="chk-label"><input type="checkbox" data-agent-campaign="${esc(campaign.id)}" ${campaignHasAgent(campaign, agent.id) ? 'checked' : ''}> <span>${esc(campaign.name)} <small>${esc(campaign.viciCampaign || 'No VICIdial ID')}</small></span></label>`).join('') : '<div class="note">Create a campaign first, then assign this bot here or in Campaigns.</div>'}</div>
+      </details><div class="note">Select one or more campaigns. Changes apply to both Agents and Campaigns. The first assigned bot is the telephone route; browser tests can use any assigned bot.</div>
+    </fieldset>`;
+  }
+
+  function renderCampaignAgentAssignment(campaign) {
+    const ids = campaignAgentIds(campaign);
+    const names = ids.map((id) => S.agents.find((agent) => agent.id === id)?.name || id);
+    return `<fieldset class="assignment-box"><legend>Assigned bots — multiple selection</legend>
+      <details class="assignment-dropdown"><summary>${names.length ? esc(names.join(', ')) : 'Select bots for this campaign…'}</summary>
+        <div class="assignment-options">${S.agents.map((agent) => `<label class="chk-label"><input type="checkbox" data-campaign-agent="${esc(agent.id)}" ${ids.includes(agent.id) ? 'checked' : ''}> <span>${esc(agent.name)}</span></label>`).join('') || '<div class="note">Create a bot in Agents first.</div>'}</div>
+      </details>
+      <label for="campaign-primary-agent">Primary bot for telephone calls</label>
+      <select id="campaign-primary-agent" ${!ids.length ? 'disabled' : ''}>${ids.length ? ids.map((id) => `<option value="${esc(id)}" ${campaign.agentId === id ? 'selected' : ''}>${esc(S.agents.find((agent) => agent.id === id)?.name || id)}</option>`).join('') : '<option>No bots assigned</option>'}</select>
+      <div class="note">All selected bots share this campaign’s rules and dispositions and can be chosen in Live Bot. A VICIdial extension has one deterministic route, so its primary bot is selected separately.</div>
+    </fieldset>`;
+  }
+
   // ==================== MAIN VIEW RENDERER ====================
 
   function render() {
@@ -5235,6 +5269,7 @@
         <div class="card">
           ${renderSelectorBar('a')}
           ${F('Agent name', 'a.name')}
+          ${renderAgentCampaignAssignment(a)}
           ${F('Call handling direction', 'a.mode', 'sel', [
             ['outbound', 'Outbound – VICIdial dials lead, bot engages on answer'],
             ['inbound', 'Inbound – VICIdial In-Group routes caller to bot'],
@@ -5387,12 +5422,7 @@
         <div class="card">
           ${renderSelectorBar('c')}
           ${F('Campaign display name', 'c.name')}
-          ${F(
-            'Assigned Bot Agent (required before calls or deployment)',
-            'c.agentId',
-            'sel',
-            [['', 'Select a bot agent…'], ...S.agents.map((x) => [x.id, x.name])]
-          )}
+          ${renderCampaignAgentAssignment(C())}
           <div class="row">
             ${F('VICIdial Campaign ID', 'c.viciCampaign')}
             ${F('VICIdial List IDs', 'c.lists')}
@@ -5577,9 +5607,9 @@
               ? `This call uses “${esc(simCampaign.name)}” and only its saved rules, opener, and disposition codes.`
               : simCampaigns.length ? 'Select the campaign for this call. No campaign will be chosen automatically.' : 'No campaign is assigned. Create a campaign and explicitly assign this bot before testing or deployment.'}</div>
           </div>
-          ${simCampaignBlockers.length
-            ? `<div class="note er" style="margin-top:6px">Campaign not ready: ${esc(simCampaignBlockers.join('; '))}</div>`
-            : ''}
+          <div id="sim-call-setup" class="note ${simCampaignBlockers.length ? 'wn' : 'ok'}" style="margin-top:6px">${simCampaignBlockers.length
+            ? `<b>Before starting:</b> ${esc(simCampaignBlockers.join('; '))} <button class="g" type="button" data-cmd-tab="campaigns">Open Campaign setup</button> <button class="g" type="button" data-cmd-tab="agents">Assign campaigns to this bot</button>`
+            : 'Campaign and bot configuration checks passed. Starting still requires a live provider connection.'}</div>
 
           ${
             sim.lastError
@@ -5725,8 +5755,8 @@
             ${
               !sim.active && !sim.connecting
                 ? `
-                  <button class="b" id="btn-call-mic" ${sim.recordingSaving ? 'disabled' : simCampaignBlockedAttr}>📞 Start Live Mic Call</button>
-                  <button class="g" id="btn-call-nomic" ${sim.recordingSaving ? 'disabled' : simCampaignBlockedAttr} title="Connect live Deepgram speaker audio + text utterance injection without requesting microphone">💬 Start Call (Speaker + Text)</button>
+                  <button class="b" id="btn-call-mic" ${sim.recordingSaving ? 'disabled' : ''} aria-describedby="sim-call-setup">📞 Start Live Mic Call</button>
+                  <button class="g" id="btn-call-nomic" ${sim.recordingSaving ? 'disabled' : ''} aria-describedby="sim-call-setup" title="Connect live Deepgram speaker audio + text utterance injection without requesting microphone">💬 Start Call (Speaker + Text)</button>
                   ${hasDgKey ? `<button class="g" id="btn-sim-diag" ${sim.diagRunning ? 'disabled' : ''}>${sim.diagRunning ? '⏳ Testing Deepgram…' : '🔌 Test Deepgram Connection'}</button>` : ''}
                 `
                 : `
@@ -6189,12 +6219,15 @@
   function buildExportBundle() {
     const settingsByCampaignId = Object.fromEntries(
       S.campaigns.map((campaign) => {
-        const agent = S.agents.find((entry) => entry.id === campaign.agentId);
+        const agent = primaryCampaignAgent(campaign);
+        const agents = campaignAgentIds(campaign).map((id) => S.agents.find((entry) => entry.id === id)).filter(Boolean);
         return [campaign.id, {
           campaignId: campaign.id,
           campaignName: campaign.name,
-          agentId: campaign.agentId || null,
+          agentId: agent?.id || null,
+          agentIds: agents.map((entry) => entry.id),
           settings: agent ? buildSettings(agent, '', campaign) : null,
+          settingsByAgentId: Object.fromEntries(agents.map((entry) => [entry.id, buildSettings(entry, '', campaign)])),
           readinessBlockers: validateCampaignLocal(campaign).filter((item) => item[0] === 'er').map((item) => item[2]),
         }];
       })
@@ -6468,92 +6501,78 @@
     }
   }
 
+  function showSaveReport({ ok, wn, er, items = [], storage, revisionId, changes = [] }) {
+    const nonOk = items.filter((item) => (item.level || item[0]) !== 'ok');
+    const color = er ? 'var(--er)' : wn ? 'var(--wn)' : 'var(--ok)';
+    const report = document.getElementById('vr');
+    report.innerHTML = `<div class="card save-report" role="status" style="border-left-color:${color}">
+      <b>${esc(storage)}${revisionId ? ` (Revision #${esc(revisionId)})` : ''} — Verification Report</b>
+      <div><span class="ok">${ok} passed</span> · <span class="wn">${wn} warnings</span> · <span class="er">${er} errors</span></div>
+      ${changes.length ? `<div class="note">${changes.map(esc).join('<br>')}</div>` : ''}
+      ${nonOk.map((item) => `<div class="ck"><span class="${item.level || item[0]}">${item.icon || item[1]}</span><span><b>${esc(item.scope || 'Configuration')}:</b> ${esc(item.message || item[2])}</span></div>`).join('')}
+      <div class="note">Saving preserves configuration; errors above still block affected calls. Verification is not a compliance or uptime certification.</div>
+      <button class="g" type="button" data-dismiss-save-report>Dismiss</button>
+    </div>`;
+  }
+
   async function commitSave() {
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer);
-      autoSaveTimer = null;
-    }
+    if (!S || manualSaveInFlight) return false;
+    if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
     if (autoSaveInFlight) await autoSaveInFlight;
+    manualSaveInFlight = true;
     const btn = document.getElementById('sv');
     btn.disabled = true;
     btn.textContent = 'Saving…';
-    if (serverlessCloudMode) {
-      try {
-        S.updatedAt = new Date().toISOString();
-        window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
-        snap = comparableSnapshot(S);
-        clearLocalDraft();
-        autoSaveError = '';
-        const agChecks = S.agents.flatMap((ag) => validateAgentLocal(ag));
-        const cpChecks = S.campaigns.flatMap((cp) => validateCampaignLocal(cp));
-        const all = [...agChecks, ...cpChecks];
-        const ok = all.filter((x) => (x.level || x[0]) === 'ok').length;
-        const wn = all.filter((x) => (x.level || x[0]) === 'wn').length;
-        const er = all.filter((x) => (x.level || x[0]) === 'er').length;
-        document.getElementById('vr').innerHTML = `
-          <div class="card" style="border-left-color:${er ? 'var(--er)' : wn ? 'var(--wn)' : 'var(--ok)'}">
-            <b>Saved in Browser Cloud Storage — Verification Report:</b>
-            <span class="ok">${ok} passed</span> · <span class="wn">${wn} warnings</span> · <span class="er">${er} errors</span>
-            <button class="g" style="margin-top:8px;margin-left:10px" onclick="this.parentNode.remove()">Dismiss</button>
-          </div>`;
-        render();
-      } finally {
-        btn.textContent = 'Save & Verify';
-        updateHeaderStatus();
-      }
-      return;
-    }
+    const submittedSnapshot = comparableSnapshot(S);
     try {
-      const res = await fetch('/api/state', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state: S }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || 'Save failed');
-
-      S = data.state;
-      if (data.telemetry) {
-        cmdDeckState.serverTelemetry = data.telemetry;
+      let data;
+      if (serverlessCloudMode) {
+        if (!window.localStorage) throw new Error('Browser storage is unavailable. Enable site storage or export a JSON backup.');
+        S.updatedAt = new Date().toISOString();
+        const serialized = JSON.stringify(S);
+        window.localStorage.setItem(CLOUD_STATE_KEY, serialized);
+        if (window.localStorage.getItem(CLOUD_STATE_KEY) !== serialized) throw new Error('Browser storage did not confirm the save. Export a JSON backup before closing this tab.');
+        const items = [
+          ...S.agents.flatMap((agent) => validateAgentLocal(agent).map(([level, icon, message]) => ({ level, icon, message, scope: `Agent “${agent.name}”` }))),
+          ...S.campaigns.flatMap((campaign) => validateCampaignLocal(campaign).map(([level, icon, message]) => ({ level, icon, message, scope: `Campaign “${campaign.name}”` }))),
+        ];
+        data = { state: S, storage: 'Saved in this browser', items, changes: [] };
+      } else {
+        const submittedState = JSON.parse(JSON.stringify(S));
+        submittedState.updatedAt = new Date().toISOString();
+        const res = await fetch('./api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: submittedState }) });
+        const payload = await res.json();
+        if (!res.ok || !payload.ok) throw new Error(payload.error || `Save failed (HTTP ${res.status})`);
+        data = { ...payload, storage: 'Saved to Server SQLite', items: payload.validations || [] };
+        revisions = payload.revisions || revisions;
+        secretsStatus = payload.secrets || secretsStatus;
+        latestRevisionId = payload.revisionId;
+        if (payload.telemetry) cmdDeckState.serverTelemetry = payload.telemetry;
       }
-      snap = comparableSnapshot(S);
+      const savedState = data.state || S;
+      snap = comparableSnapshot(savedState);
+      if (comparableSnapshot(S) === submittedSnapshot) S = savedState;
       clearLocalDraft();
       autoSaveError = '';
-      revisions = data.revisions || [];
-      secretsStatus = data.secrets || {};
-      latestRevisionId = data.revisionId;
-
-      const { ok, wn, er } = data.counts;
-      const nonOk = (data.validations || []).filter((v) => v.level !== 'ok');
-      const borderCol = er ? 'var(--er)' : wn ? 'var(--wn)' : 'var(--ok)';
-
-      document.getElementById('vr').innerHTML = `
-        <div class="card" style="border-left-color:${borderCol}">
-          <b>Saved to Server SQLite (Revision #${data.revisionId}) — Verification Report:</b>
-          <span class="ok">${ok} passed</span> ·
-          <span class="wn">${wn} warnings</span> ·
-          <span class="er">${er} errors</span>
-          <div class="note">${(data.changes || []).map(esc).join('<br>') || 'Verified with no structural diffs'}</div>
-          ${
-            nonOk.length
-              ? nonOk
-                  .map(
-                    (v) =>
-                      `<div class="ck"><span class="${v.level}">${v.icon}</span><span><b>${esc(v.scope)}:</b> ${esc(
-                        v.message
-                      )}</span></div>`
-                  )
-                  .join('')
-              : ''
-          }
-          <button class="g" style="margin-top:8px" onclick="this.parentNode.remove()">Dismiss</button>
-        </div>
-      `;
-      render();
+      const counts = data.counts || {
+        ok: data.items.filter((item) => (item.level || item[0]) === 'ok').length,
+        wn: data.items.filter((item) => (item.level || item[0]) === 'wn').length,
+        er: data.items.filter((item) => (item.level || item[0]) === 'er').length,
+      };
+      showSaveReport({ ...counts, items: data.items, storage: data.storage, revisionId: data.revisionId, changes: data.changes });
+      if (!isDirty()) render(); else { updateLivePreview(); updateTestSummary(); }
+      return true;
     } catch (err) {
-      alert(`Save error: ${err.message}`);
+      autoSaveError = err?.message || 'Save failed';
+      persistDraftLocally();
+      const report = document.getElementById('vr');
+      report.innerHTML = `<div class="card save-report er" role="alert"><b>Save not confirmed</b><div>${esc(autoSaveError)}</div><div class="note">Your edits remain in this tab. Retry Save & Verify, or download a JSON backup from Export before closing it.</div></div>`;
+      report.scrollIntoView?.({ block: 'nearest' });
+      return false;
     } finally {
-      btn.textContent = 'Save & Verify';
+      manualSaveInFlight = false;
+      const currentBtn = document.getElementById('sv');
+      currentBtn.textContent = 'Save & Verify';
       updateHeaderStatus();
     }
   }
@@ -7156,6 +7175,10 @@
       return;
     }
 
+    if (b.hasAttribute('data-dismiss-save-report')) {
+      document.getElementById('vr').innerHTML = '';
+      return;
+    }
     if (b.id === 'sv') {
       await commitSave();
       return;
@@ -7930,11 +7953,16 @@
         if (arr.length > 1) {
           arr.splice(arr.indexOf(currentObj), 1);
           cur[kind] = arr[0].id;
+          if (kind === 'a') {
+            for (const campaign of S.campaigns) assignCampaignAgent(campaign, currentObj.id, false);
+            delete S.tests[currentObj.id];
+            if (sim.campaignAgentId === currentObj.id) { sim.campaignId = ''; sim.campaignAgentId = ''; }
+          } else if (sim.campaignId === currentObj.id) { sim.campaignId = ''; sim.campaignAgentId = ''; }
         }
       } else {
         const template = act === 'dup' ? currentObj : kind === 'c' ? null : arr[0];
         const blankCampaign = {
-          id: '', name: '', agentId: '', viciCampaign: '', lists: '', start: '09:00', end: '20:00',
+          id: '', name: '', agentId: '', agentIds: [], viciCampaign: '', lists: '', start: '09:00', end: '20:00',
           tz: 'America/New_York', attempts: 3, retry: 120, maxCalls: 10, xferType: 'ingroup',
           xferTarget: '', fallback: '', dnc: true, disclosure: '', dispos: '',
           complianceRules: MISSING_CAMPAIGN_RULES, presenceCheckText: DEFAULT_PRESENCE_CHECK_TEXT,
@@ -7950,7 +7978,7 @@
           // A campaign is a safety boundary: never carry another campaign’s
           // VICIdial ID, agent assignment, disposition confirmation or rules into it.
           Object.assign(clone, {
-            agentId: '', viciCampaign: '', lists: '', xferTarget: '', fallback: '', dnc: true,
+            agentId: '', agentIds: [], viciCampaign: '', lists: '', xferTarget: '', fallback: '', dnc: true,
             disclosure: '', dispos: '', complianceRules: MISSING_CAMPAIGN_RULES,
             presenceCheckText: DEFAULT_PRESENCE_CHECK_TEXT, deadAirTimeoutSec: 8,
             deadAirDisposition: '', deadAirDispositionVerified: false,
@@ -8038,6 +8066,15 @@
     }
   });
 
+  document.addEventListener('input', (e) => {
+    const t = e.target;
+    if (!t.dataset?.p || t.type === 'checkbox' || t.tagName === 'SELECT') return;
+    const value = t.type === 'number' ? (t.value === '' || !Number.isFinite(Number(t.value)) ? 0 : Number(t.value)) : t.value;
+    setPath(t.dataset.p, value);
+    updateLivePreview();
+    updateHeaderStatus();
+  });
+
   document.addEventListener('change', (e) => {
     const t = e.target;
     if (t.id && t.id.startsWith('sel-')) {
@@ -8045,7 +8082,7 @@
       const kind = t.id.slice(4);
       cur[kind] = t.value;
       if (kind === 'a' && !campaignsForAgent(t.value).some((campaign) => campaign.id === sim.campaignId)) {
-        sim.campaignId = '';
+        sim.campaignId = ''; sim.campaignAgentId = '';
       }
       if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
       if (kind === 'a') {
@@ -8059,8 +8096,34 @@
       return;
     }
 
+    if (t.dataset.agentCampaign) {
+      const campaign = S.campaigns.find((entry) => entry.id === t.dataset.agentCampaign);
+      if (campaign) assignCampaignAgent(campaign, A().id, t.checked);
+      const count = campaignsForAgent(A().id).length;
+      const summary = t.closest('details')?.querySelector('summary');
+      if (summary) summary.textContent = count ? `${count} campaign${count === 1 ? '' : 's'} selected` : 'Choose campaigns for this bot…';
+      updateLivePreview(); updateHeaderStatus();
+      return;
+    }
+    if (t.dataset.campaignAgent) {
+      assignCampaignAgent(C(), t.dataset.campaignAgent, t.checked);
+      const ids = campaignAgentIds(C());
+      const details = t.closest('details');
+      if (details) details.querySelector('summary').textContent = ids.map((id) => S.agents.find((agent) => agent.id === id)?.name || id).join(', ') || 'Select bots for this campaign…';
+      const primary = document.getElementById('campaign-primary-agent');
+      primary.disabled = !ids.length;
+      primary.innerHTML = ids.length ? ids.map((id) => `<option value="${esc(id)}" ${C().agentId === id ? 'selected' : ''}>${esc(S.agents.find((agent) => agent.id === id)?.name || id)}</option>`).join('') : '<option>No bots assigned</option>';
+      updateLivePreview(); updateHeaderStatus();
+      return;
+    }
+    if (t.id === 'campaign-primary-agent') {
+      const campaign = C();
+      if (campaignHasAgent(campaign, t.value)) { campaign.agentId = t.value; campaign.agentIds = campaignAgentIds(campaign); }
+      updateLivePreview(); updateHeaderStatus();
+      return;
+    }
     if (t.id === 'sim-campaign') {
-      sim.campaignId = t.value;
+      setSimulatorCampaign(t.value);
       render();
       return;
     }
@@ -8200,7 +8263,7 @@
       return;
     }
 
-    if (t.dataset.p) {
+    if (t.dataset.p && (t.type === 'checkbox' || t.tagName === 'SELECT')) {
       let nextVal;
       if (t.type === 'checkbox') {
         nextVal = t.checked;
