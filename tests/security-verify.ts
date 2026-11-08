@@ -167,7 +167,7 @@ async function run() {
     assert.strictEqual((await first.json() as any).token, undefined, 'Browser login response must not expose session tokens');
     assert.strictEqual((await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: json, body: account('anonymous@example.test') })).status, 403);
     const second = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Cookie: firstCookie }, body: account('second@example.test') });
-    assert.strictEqual(second.status, 201, 'An authenticated operator can add an account');
+    assert.strictEqual(second.status, 201, 'An authenticated owner can provision an operator account');
     const signupPage = await fetch(`${base}/signup`, { headers: { Cookie: firstCookie }, redirect: 'manual' });
     assert.strictEqual(signupPage.status, 200);
     assert.strictEqual((await fetch(`${base}/api/vici/register-call`)).status, 503, 'Direct local PBX hook reaches handler');
@@ -175,7 +175,7 @@ async function run() {
     assert.strictEqual(await requestStatus(`${base}/api/vici/register-call`, 'GET', { Host: 'attacker.example' }), 401, 'Rebound host must not inherit the local PBX exemption');
     assert.strictEqual((await fetch(`${base}/api/vici/register-call`, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status, 403, 'Cross-site image/navigation cannot invoke a pre-call GET');
     await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: { Cookie: firstCookie } });
-    assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Authorization: `Bearer ${firstToken}` } })).status, 401);
+    assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Cookie: firstCookie } })).status, 401);
     console.log('✓ 2. Bootstrap, privileged signup, proxy and local-PBX boundary');
 
     process.env.ADMIN_PASSWORD = 'dummy-admin-password';
@@ -208,7 +208,7 @@ async function run() {
       assert.strictEqual((await fetch(`${base}/api/demo-tunnel/start`, { method: 'POST', headers: { Cookie: adminCookie2 } })).status, 409, 'Tunnel start explains missing proxy trust');
     } finally { process.env.PORT = oldPort; }
     await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: { Cookie: adminCookie1 } });
-    assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Authorization: `Bearer ${adminToken1}` } })).status, 401);
+    assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Cookie: adminCookie1 } })).status, 401);
     assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Cookie: adminCookie2 } })).status, 200);
     const freshProcess = childProcess.spawnSync(process.execPath, ['-e', "process.stdout.write(String(require('./dist/auth-guard').verifySessionToken(process.env.TEST_SESSION)))"], {
       cwd: root, env: { ...process.env, TEST_SESSION: adminToken1 }, encoding: 'utf8', timeout: 10000,
