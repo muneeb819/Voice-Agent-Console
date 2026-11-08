@@ -267,8 +267,12 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     invalidateUserCountCache();
     purgeExpiredSessions();
 
-    const token = createUserSession(result.user.id);
-    setAuthCookie(res, token, req);
+    // Preserve an existing administrator's session when provisioning an account.
+    // Only the first loopback bootstrap account needs an automatically issued session.
+    if (!hasActiveAuthSession(req)) {
+      const token = createUserSession(result.user.id);
+      setAuthCookie(res, token, req);
+    }
     res.status(201).json({
       ok: true,
       authEnabled: true,
