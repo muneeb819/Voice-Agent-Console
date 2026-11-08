@@ -18,7 +18,7 @@ export interface SignupInput {
 }
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const MIN_PASSWORD_LENGTH = 8;
+const MIN_PASSWORD_LENGTH = 15;
 const MAX_PASSWORD_LENGTH = 200;
 const MAX_NAME_LENGTH = 80;
 
@@ -264,6 +264,14 @@ export function destroyUserSession(token?: string | null): void {
   if (!token || token.includes('.')) return;
   ensureSchema();
   getDb().prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
+}
+
+/** Immediately revokes every active browser/API session belonging to one user. */
+export function revokeAllUserSessions(userId: string): number {
+  if (!userId) return 0;
+  ensureSchema();
+  const result = getDb().prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
+  return Number(result.changes || 0);
 }
 
 export function purgeExpiredSessions(): void {
