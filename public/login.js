@@ -3,38 +3,8 @@
 (function () {
   'use strict';
 
-  var AUTH_TOKEN_KEY = 'vac_auth_token';
   var CLOUD_USERS_KEY = 'vac_cloud_users_v1';
   var CLOUD_SESSION_KEY = 'vac_cloud_session_v1';
-
-  var rawPath = String(location.pathname || '/');
-  var isStaticHtmlPath = /\.html$/i.test(rawPath);
-  var staticDemoReady = false;
-  var basePrefix = rawPath.replace(/\/(login(?:\.html)?|signup(?:\.html)?)$/i, '');
-  if (basePrefix === '/') basePrefix = '';
-
-  function apiPath(rel) {
-    return (basePrefix || '') + rel;
-  }
-
-  function saveAuthToken(token) {
-    if (!token) return;
-    try { sessionStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e) {}
-    try { localStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e) {}
-  }
-
-  function readAuthToken() {
-    try {
-      return sessionStorage.getItem(AUTH_TOKEN_KEY) || localStorage.getItem(AUTH_TOKEN_KEY) || '';
-    } catch (e) {
-      return '';
-    }
-  }
-
-  function clearAuthToken() {
-    try { sessionStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
-    try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) {}
-  }
 
   function markStaticDemo() {
     staticDemoReady = true;
@@ -275,10 +245,14 @@
     else input.removeAttribute('aria-invalid');
   }
 
+  /**
+   * Posts JSON with same-origin credentials and returns the response, parsed data,
+   * and static-host detection result. Invalid JSON falls back to an empty object;
+   * serialization and request errors reject. Missing apiPath or staticDemoReady
+   * bindings also reject with a ReferenceError when accessed.
+   */
   async function postJson(relUrl, body) {
     var headers = { 'Content-Type': 'application/json' };
-    var existingTok = readAuthToken();
-    if (existingTok) headers['Authorization'] = 'Bearer ' + existingTok;
     var res = await fetch(apiPath(relUrl), {
       method: 'POST',
       headers: headers,
@@ -298,15 +272,14 @@
     };
   }
 
-  function goHome(handoffToken) {
+  /**
+   * Replaces the current location with a next path starting with / but not //,
+   * or the default home path. Throws a ReferenceError if basePrefix is absent
+   * when the default is needed.
+   */
+  function goHome() {
     var next = new URLSearchParams(location.search).get('next');
-    var defaultHome = (basePrefix || '') + '/';
-    var target = next && next.charAt(0) === '/' && next.charAt(1) !== '/' ? next : defaultHome;
-    if (handoffToken) {
-      saveAuthToken(handoffToken);
-      var sep = target.indexOf('?') === -1 ? '?' : '&';
-      target = target + sep + 'vac_token=' + encodeURIComponent(handoffToken);
-    }
+    var target = next && next.charAt(0) === '/' && next.charAt(1) !== '/' ? next : (basePrefix || '') + '/';
     location.replace(target);
   }
 
@@ -379,10 +352,9 @@
         password.select();
         return;
       }
-      if (out.data.token) saveAuthToken(out.data.token);
       if (progressBar) progressBar.style.width = '100%';
       if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
-      window.setTimeout(function () { goHome(out.data.token || ''); }, 320);
+      window.setTimeout(function () { goHome(); }, 320);
     } catch (err) {
       finishLoader();
       setMsg(msg, 'Network error. Check your connection and try again.');
@@ -425,10 +397,9 @@
           input.select();
           return;
         }
-        if (out.data.token) saveAuthToken(out.data.token);
-        if (progressBar) progressBar.style.width = '100%';
+         if (progressBar) progressBar.style.width = '100%';
         if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
-        window.setTimeout(function () { goHome(out.data.token || ''); }, 320);
+        window.setTimeout(function () { goHome(); }, 320);
       } catch (err) {
         finishLoader();
         setMsg(msg, 'Network error. Check your connection and try again.');
@@ -517,7 +488,7 @@
       if (out.data.token) saveAuthToken(out.data.token);
       if (progressBar) progressBar.style.width = '100%';
       if (loaderText) loaderText.textContent = 'ACCOUNT READY';
-      window.setTimeout(function () { goHome(out.data.token || ''); }, 360);
+      window.setTimeout(function () { goHome(); }, 360);
     } catch (err) {
       finishLoader();
       setMsg(msg, 'Network error. Check your connection and try again.');
@@ -539,8 +510,6 @@
     }
     try {
       var headers = {};
-      var savedTok = readAuthToken();
-      if (savedTok) headers['Authorization'] = 'Bearer ' + savedTok;
       var res = await fetch(apiPath('/api/auth/status'), {
         headers: headers,
         credentials: 'same-origin'
@@ -553,10 +522,9 @@
             setMode('signup');
             return;
           }
-          goHome(savedTok);
+          goHome();
           return;
         }
-        if (savedTok) clearAuthToken();
         if (adminToggle && data.adminPasswordConfigured === false) {
           adminToggle.style.display = 'none';
         }

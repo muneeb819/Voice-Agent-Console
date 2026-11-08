@@ -302,11 +302,15 @@ function isHttpsRequest(req?: http.IncomingMessage): boolean {
   return Boolean(forwardedProto) && forwardedProto === 'https' && Boolean(process.env.TRUST_PROXY);
 }
 
+/**
+ * Sets the HttpOnly session cookie for seven days with SameSite=Lax.
+ * Secure is added when the request is recognized as HTTPS; without a request
+ * it is omitted. Replaces any existing Set-Cookie header on the response.
+ * Throws URIError if the token contains an unpaired surrogate.
+ */
 export function setAuthCookie(res: Response, token: string, req?: http.IncomingMessage): void {
   const maxAgeSec = Math.floor(SESSION_TTL_MS / 1000);
-  const cookiePolicy = isHttpsRequest(req)
-    ? 'SameSite=None; Secure; Partitioned'
-    : 'SameSite=Lax';
+  const cookiePolicy = isHttpsRequest(req) ? 'SameSite=Lax; Secure' : 'SameSite=Lax';
   res.setHeader(
     'Set-Cookie',
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; ${cookiePolicy}; Max-Age=${maxAgeSec}`
@@ -324,9 +328,12 @@ export function clearAuthCookie(res: Response, req?: http.IncomingMessage): void
 }
 
 /**
- * Express middleware protecting /api/* routes when ADMIN_PASSWORD is set,
- * while whitelisting /api/health, /api/auth/*, and trusted/loopback Asterisk
- * pre-call hooks (/api/vici/register-call & /api/vici/precall).
+ * Protects API routes, allowing health, auth, and eligible direct Asterisk
+ * pre-call hooks through before authorization. Other requests require a session
+ * or the direct loopback bootstrap exemption. Selected routes require owner or
+ * admin access; viewers may otherwise use only GET and HEAD. An authorized
+ * request with no resolved account is treated as owner. Responds with 401 for
+ * unauthorized requests and 403 for role restrictions.
  */
 export function apiAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
   const p = req.path;
@@ -351,6 +358,29 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
   }
 
   if (isRequestAuthorized(req)) {
+    const account = getAuthenticatedUser(req);
+    const role = account?.role || 'owner'; // legacy ADMIN_PASSWORD session is owner-equivalent
+    const adminOnly =
+      p === '/secrets' ||
+      p === '/state/reset' ||
+      p === '/demo-tunnel/start' ||
+      p === '/demo-tunnel/stop' ||
+      p === '/vici/deploy-script' ||
+      p === '/vici/release-bundle' ||
+      p === '/functions/test-webhook' ||
+      p === '/speech-service/activate' ||
+      p === '/speech-service/test' ||
+      p === '/vici/verify' ||
+      /^\/vici\/calls\/[^/]+\/(?:hangup|transfer)$/.test(p);
+    const readOnly = req.method === 'GET' || req.method === 'HEAD';
+    if (adminOnly && role !== 'owner' && role !== 'admin') {
+      res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Administrator permission required.' });
+      return;
+    }
+    if (role === 'viewer' && !readOnly) {
+      res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'This account has read-only access.' });
+      return;
+    }
     next();
     return;
   }
