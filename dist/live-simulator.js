@@ -504,12 +504,12 @@ function attachLiveSimulator(server, noServer = false) {
                     return;
                 }
                 const requestedCampaign = activeState.campaigns.find((c) => c.id === startMsg.campaignId);
-                if (!requestedCampaign || requestedCampaign.agentId !== requestedAgent.id) {
-                    sendFatalError('CAMPAIGN_ASSIGNMENT_MISMATCH', 'The selected campaign is not assigned to this bot. Assign it in Campaigns and retry.');
+                if (!requestedCampaign || !(0, settings_builder_1.isCampaignAssignedToAgent)(requestedCampaign, requestedAgent.id)) {
+                    sendFatalError('CAMPAIGN_ASSIGNMENT_MISMATCH', 'The selected campaign is not assigned to this bot. Assign it from the campaign or agent section and retry.');
                     finalizeCall('campaign_assignment_mismatch');
                     return;
                 }
-                const campaignBlockers = (0, settings_builder_1.getCampaignCallReadinessBlockers)(activeState, requestedCampaign);
+                const campaignBlockers = (0, settings_builder_1.getCampaignCallReadinessBlockers)(activeState, requestedCampaign, requestedAgent.id);
                 if (campaignBlockers.length) {
                     sendFatalError('CAMPAIGN_NOT_READY', `Campaign “${requestedCampaign.name}” is not ready: ${campaignBlockers.join('; ')}.`);
                     finalizeCall('campaign_not_ready');

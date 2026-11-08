@@ -74,6 +74,7 @@ import {
   buildDeepgramSettings,
   generateViciConfig,
   getDeploymentReadinessBlockers,
+  isCampaignAssignedToAgent,
   validateState,
 } from './settings-builder';
 import { VicidialBridgeService, ViciBridgeOptions } from './vici-bridge';
@@ -526,17 +527,24 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     const settingsByCampaignId = Object.fromEntries(
       state.campaigns.map((campaign) => {
         const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+        const assignedAgents = state.agents.filter((entry) => isCampaignAssignedToAgent(campaign, entry.id));
         return [campaign.id, {
           campaignId: campaign.id,
           campaignName: campaign.name,
           agentId: campaign.agentId || null,
+          agentIds: campaign.agentIds,
           settings: agent ? buildDeepgramSettings(state, agent, campaign) : null,
+          settingsByAgentId: Object.fromEntries(assignedAgents.map((assignedAgent) => [assignedAgent.id, {
+            agentId: assignedAgent.id,
+            agentName: assignedAgent.name,
+            settings: buildDeepgramSettings(state, assignedAgent, campaign),
+          }])),
         }];
       })
     );
     const settingsByAgentId = Object.fromEntries(
       state.agents.map((agent) => {
-        const campaigns = state.campaigns.filter((campaign) => campaign.agentId === agent.id);
+        const campaigns = state.campaigns.filter((campaign) => isCampaignAssignedToAgent(campaign, agent.id));
         const selectedCampaign = campaigns.length === 1 ? campaigns[0] : undefined;
         return [agent.id, {
           agentId: agent.id,
