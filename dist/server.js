@@ -413,22 +413,15 @@ function createApp(viciBridge) {
         };
         const settingsByCampaignId = Object.fromEntries(state.campaigns.map((campaign) => {
             const agent = state.agents.find((entry) => entry.id === campaign.agentId);
-            const assignedAgents = state.agents.filter((entry) => (0, settings_builder_1.isCampaignAssignedToAgent)(campaign, entry.id));
             return [campaign.id, {
                     campaignId: campaign.id,
                     campaignName: campaign.name,
                     agentId: campaign.agentId || null,
-                    agentIds: campaign.agentIds,
                     settings: agent ? (0, settings_builder_1.buildDeepgramSettings)(state, agent, campaign) : null,
-                    settingsByAgentId: Object.fromEntries(assignedAgents.map((assignedAgent) => [assignedAgent.id, {
-                            agentId: assignedAgent.id,
-                            agentName: assignedAgent.name,
-                            settings: (0, settings_builder_1.buildDeepgramSettings)(state, assignedAgent, campaign),
-                        }])),
                 }];
         }));
         const settingsByAgentId = Object.fromEntries(state.agents.map((agent) => {
-            const campaigns = state.campaigns.filter((campaign) => (0, settings_builder_1.isCampaignAssignedToAgent)(campaign, agent.id));
+            const campaigns = state.campaigns.filter((campaign) => campaign.agentId === agent.id);
             const selectedCampaign = campaigns.length === 1 ? campaigns[0] : undefined;
             return [agent.id, {
                     agentId: agent.id,

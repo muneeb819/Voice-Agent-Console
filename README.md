@@ -1,7 +1,7 @@
 # 🎙️ Voice Agent Console — Deepgram Voice Agent API + Universal VICIdial Bridge
 
 Unified production **Node.js + TypeScript** platform combining:
-1. **Multi-Agent & Multi-Campaign Configuration Console** (multiple bots per campaign, consistent assignment from either section, `SQLite WAL` + JSON mirror + revision history + 18-rule pre-flight schema validator)
+1. **Multi-Agent & Multi-Campaign Configuration Console** (`SQLite WAL` + JSON mirror + revision history + 18-rule pre-flight schema validator)
 2. **Live Deepgram Voice Lab** (139 real `Flux v2` & `Aura-2 / v1` voices, studio `.wav` preview proxy, live TTS greeting synthesizer, and 1-click **"Set as Agent Voice"**)
 3. **Live Bot browser voice test** (`/ws/simulator`, WebAudio `16 kHz`/`24 kHz` wideband or `8 kHz` test audio, using the Deepgram Voice Agent API; not a live telephone call)
 4. **Co-Located Universal VICIdial Bridge** (`SIP + RTP G.711 μ-law` on UDP `:5062` for **all** Asterisk 13/16/18+ ViciBox servers **+** native Asterisk 18+ `AudioSocket` on TCP `:9092`)

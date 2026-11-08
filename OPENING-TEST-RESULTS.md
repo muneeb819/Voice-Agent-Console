@@ -1,22 +1,10 @@
-# Campaign readiness, opening, assignment, and bridge test results
+# Campaign readiness, opening, and bridge test results
 
 - **Date:** 2026-11-08
-- **Build:** `elite-2.26` (campaign assignment and Save & Verify follow-up over `elite-2.25`)
-- **Scope:** multi-bot campaign assignment from both UI sections, browser/server Save & Verify availability, campaign-aware readiness and routing, explicit campaign selection, the one-second listen/presence-check flow, caller-response timeout, configured dead-air disposition, frontend recovery and matte/minimal presentation.
+- **Build:** `elite-2.25`
+- **Scope:** campaign-aware readiness and routing, explicit campaign selection, the one-second listen/presence-check flow, caller-response timeout, configured dead-air disposition, frontend recovery and matte/minimal presentation.
 
-## Current results (`elite-2.26`)
-
-| Check | Result | What was exercised |
-| --- | --- | --- |
-| `node --check public/app.js` and `node --check audit/browser-smoke.cjs` | Passed | Updated browser application and smoke-test syntax. |
-| `npm run build` | Passed | TypeScript compilation and generated `dist/` output. |
-| `npm test` | Passed; one live Deepgram E2E skipped | Full offline Node suite, including secondary-bot campaign settings/readiness, legacy single-bot normalization, simulator selection, bridge safety, persistence and security. |
-| `npm audit --audit-level=low` | Passed; 0 vulnerabilities reported | Dependency audit for the current lockfile. |
-| `public/` and `docs/` runtime asset parity | Passed | `app.js`, `index.html`, `styles.css`, `default-state.json`, login assets, opening script and static catalogs match. |
-| Browser assignment/save smoke | Not run | The smoke script now checks two-way assignment and Save & Verify in server/static modes; `playwright-core` and Chromium are not installed in this sandbox. |
-| External services | Not used | No live provider, physical microphone, carrier, VICIdial/Asterisk connection, or production site was tested. |
-
-## Prior release results (`elite-2.25`)
+## Current results (`elite-2.25`)
 
 | Check | Result | What was exercised |
 | --- | --- | --- |
@@ -26,7 +14,7 @@
 | Bridge opening/disposition integration | 14 local scenarios passed | AudioSocket and SIP/RTP each covered silent, early caller, cancellation, provider refusal, dead air, disallowed disposition, and a DNC-to-transfer attempt. On dead air, mock `update_lead` rejected `DAIR`; the failed update was logged and Remote Agent `HANGUP` still requested `DAIR`. Disallowed codes never reached `update_lead`, and DNC could not initiate transfer. |
 | External services | Not used | Synthetic/local fixtures only; no live caller, Deepgram, carrier, VICIdial or Asterisk connection. |
 | `npm audit --audit-level=low` | Passed; 0 vulnerabilities reported | Dependency audit for the current lockfile. |
-| Browser/Python audits | Not rerun for `elite-2.25` | The results below are historical `elite-2.24` checks and do not certify those audits for the prior opening release. The assignment/save browser smoke was also not run for `elite-2.26`. |
+| Browser/Python audits | Not rerun for this build | The results below are historical `elite-2.24` checks and do not certify those audits for `elite-2.25`. |
 
 ## Historical opening validation (`elite-2.24`, 2026-11-06)
 

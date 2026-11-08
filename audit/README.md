@@ -30,13 +30,6 @@ The iframe handoff token is removed from the address bar after the console loads
 - At the initial audit, `audit/browser-smoke.cjs` passed **26 checks** with no uncaught errors, and all **27** view/viewport combinations had zero horizontal document overflow. The isolated browser fixture blocks external HTTP requests and has no provider credentials. The inventory was refreshed during the greeting follow-up below. Instances repeat shared controls across snapshots; modal snapshots include underlying page controls. Rendered/inventoried does **not** mean every button, option, keyboard path, destructive operation or integration was functionally exercised.
 - At the initial audit, `audit/live-bot-browser.cjs` passed **14 mock-only checks**, including fake-microphone PCM, muted capture, decoding actual mixed microphone/agent recordings, final-audio draining, suspended-audio warnings, authenticated playback and deletion after reload, upload/storage failure downloads, static IndexedDB and retention limits, and existing PBX-action/loopback warnings. The provider and browser WebSocket are synthetic; this is not a test of a real microphone, Deepgram, PBX or webhook service.
 
-### Multi-bot campaign assignments and Save & Verify follow-up (`elite-2.26`, 2026-11-08)
-
-- Campaigns now persist an explicit `agentIds` list while retaining `agentId` as the primary VICIdial bridge bot. Existing single-bot campaigns migrate without inventing assignments; deployment remains blocked if no primary bot is selected. Campaign and Agent pages edit the same relationship, and Live Bot settings/readiness honor secondary assigned bots.
-- Save & Verify remains available after autosave for server and GitHub Pages/static-browser mode. Static mode clearly reports that its saved configuration is local to the browser; the button runs the local pre-flight report rather than attempting an unavailable API call.
-- `npm ci`, `npm run build`, and the full `npm test` suite passed; the live Deepgram E2E was skipped without a key. `npm audit --audit-level=low` reported zero vulnerabilities. `public/` and `docs/` runtime assets were synchronized.
-- `audit/browser-smoke.cjs` was extended to cover assignment edits from both pages and Save & Verify in server/static modes, but was **not run** for this build because `playwright-core` and Chromium are not installed in the sandbox. No live provider, physical microphone, carrier, VICIdial/Asterisk server, or production call was tested. See [OPENING-TEST-RESULTS.md](../OPENING-TEST-RESULTS.md) for the current run and historical browser/Python results.
-
 ### Greeting-library follow-up (2026-11-06; historical prior release)
 
 The concatenation behavior in this earlier follow-up was superseded by the single-opening fix below.
@@ -55,8 +48,8 @@ The concatenation behavior in this earlier follow-up was superseded by the singl
 
 ### Campaign readiness and one-second opening follow-up (`elite-2.25`, 2026-11-08)
 
-- The `elite-2.25` `npm run build && npm test` run passed. One live Deepgram test was skipped without a key. Fourteen local AudioSocket/SIP+RTP bridge scenarios covered the one-second listen, presence check, caller-response timeout, dead-air update failure with Remote Agent hangup status, rejected dispositions, and DNC transfer blocking.
-- `npm audit --audit-level=low` reported zero vulnerabilities. The browser audit was not rerun for `elite-2.25`; its checked-in timing assertions expected at least 990 ms. No live provider, physical microphone, carrier, VICIdial/Asterisk server, or production call was tested. See [OPENING-TEST-RESULTS.md](../OPENING-TEST-RESULTS.md) for that run and the separate historical browser/Python results.
+- The current `npm run build && npm test` run passed. One live Deepgram test was skipped without a key. Fourteen local AudioSocket/SIP+RTP bridge scenarios covered the one-second listen, presence check, caller-response timeout, dead-air update failure with Remote Agent hangup status, rejected dispositions, and DNC transfer blocking.
+- `npm audit --audit-level=low` reported zero vulnerabilities. The browser audit was not rerun for this build; its checked-in timing assertions now expect at least 990 ms. No live provider, physical microphone, carrier, VICIdial/Asterisk server, or production call was tested. See [OPENING-TEST-RESULTS.md](../OPENING-TEST-RESULTS.md) for the current run and the separate historical browser/Python results.
 
 ### Reproducing the browser smoke
 
@@ -73,7 +66,7 @@ NODE_PATH=/tmp/vac-browser/node_modules BROWSER_EXECUTABLE=/path/to/chromium \
   node audit/live-bot-browser.cjs
 ```
 
-The smoke script writes `audit/browser-results.json`, creates a temporary data directory and test-only `.env`, launches a loopback server and uses synthetic passwords. It exercises login, authenticated account creation, logout/sign-in, agent edit/discard/save/reload, bidirectional campaign/bot assignment, Save & Verify after server autosave and in GitHub Pages browser-local mode, theme/exposure and API-key modals, nine navigation views, unavailable audio/simulator messages, retained analytics, responsive navigation and the static-demo warning. The separate Live Bot test drives playback and capture using fake audio and a local mock provider. Neither exercises a real microphone or provider, destructive production actions, all theme/provider options or screen readers. Chromium may require additional system libraries; no browser binary is committed.
+The smoke script writes `audit/browser-results.json`, creates a temporary data directory and test-only `.env`, launches a loopback server and uses synthetic passwords. It exercises login, authenticated account creation, logout/sign-in, agent edit/discard/save/reload, theme/exposure and API-key modals, nine navigation views, unavailable audio/simulator messages, retained analytics, responsive navigation and the static-demo warning. The separate Live Bot test drives playback and capture using fake audio and a local mock provider. Neither exercises a real microphone or provider, destructive production actions, all theme/provider options or screen readers. Chromium may require additional system libraries; no browser binary is committed.
 
 ## Remaining risks and operational follow-up
 
