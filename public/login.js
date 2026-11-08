@@ -477,7 +477,7 @@
       if (out.data.token) saveAuthToken(out.data.token);
       if (progressBar) progressBar.style.width = '100%';
       if (loaderText) loaderText.textContent = 'ACCOUNT READY';
-      window.setTimeout(function () { goHome(out.data.token || ''); }, 360);
+      window.setTimeout(function () { goHome(); }, 360);
     } catch (err) {
       finishLoader();
       setMsg(msg, 'Network error. Check your connection and try again.');
@@ -499,8 +499,6 @@
     }
     try {
       var headers = {};
-      var savedTok = readAuthToken();
-      if (savedTok) headers['Authorization'] = 'Bearer ' + savedTok;
       var res = await fetch(apiPath('/api/auth/status'), {
         headers: headers,
         credentials: 'same-origin'
@@ -513,10 +511,9 @@
             setMode('signup');
             return;
           }
-          goHome(savedTok);
+          goHome();
           return;
         }
-        if (savedTok) clearAuthToken();
         if (adminToggle && data.adminPasswordConfigured === false) {
           adminToggle.style.display = 'none';
         }
