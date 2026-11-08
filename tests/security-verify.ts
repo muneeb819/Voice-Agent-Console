@@ -162,7 +162,9 @@ async function run() {
     assert.strictEqual((await fetch(`${base}/api/demo-tunnel/start`, { method: 'POST' })).status, 403);
     const first = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: json, body: account('first@example.test') });
     assert.strictEqual(first.status, 201, 'Direct loopback bootstrap must still work');
-    const firstToken = (await first.json() as any).token;
+    const firstCookie = String(first.headers.get('set-cookie') || '').split(';')[0];
+    const firstToken = decodeURIComponent(firstCookie.slice('vac_session='.length));
+    assert(!Object.prototype.hasOwnProperty.call(await first.json() as any, 'token'), 'Browser login must not return a JavaScript-readable session token');
     assert.strictEqual((await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: json, body: account('anonymous@example.test') })).status, 403);
     const second = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Authorization: `Bearer ${firstToken}` }, body: account('second@example.test') });
     assert.strictEqual(second.status, 201, 'An authenticated operator can add an account');
@@ -182,9 +184,11 @@ async function run() {
     assert.strictEqual(firstLogin.status, 200);
     assert.strictEqual(firstLogin.headers.get('referrer-policy'), 'no-referrer', 'URLs containing handoff tokens must not become referrers');
     assert(!/; Secure/i.test(firstLogin.headers.get('set-cookie') || ''), 'Untrusted forwarded proto must not set Secure cookie');
-    const adminToken1 = (await firstLogin.json() as any).token;
-    const adminToken2 = (await (await adminLogin()).json() as any).token;
+    const adminToken1 = decodeURIComponent(String(firstLogin.headers.get('set-cookie') || '').split(';')[0].slice('vac_session='.length));
+    const secondAdminLogin = await adminLogin();
+    const adminToken2 = decodeURIComponent(String(secondAdminLogin.headers.get('set-cookie') || '').split(';')[0].slice('vac_session='.length));
     assert.notStrictEqual(adminToken1, adminToken2, 'Concurrent logins need distinct tokens');
+    assert(!Object.prototype.hasOwnProperty.call(await firstLogin.json() as any, 'token'), 'Admin login must not return a JavaScript-readable session token');
     const cookie = `vac_session=${encodeURIComponent(adminToken2)}`;
     const foreignOrigin = { Cookie: cookie, Origin: 'https://attacker.example' };
     assert.strictEqual((await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: foreignOrigin })).status, 403, 'Cross-origin cookie logout must be rejected');
