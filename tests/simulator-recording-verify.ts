@@ -75,11 +75,23 @@ async function main() {
     admin: process.env.ADMIN_PASSWORD,
   };
   const state = getConsoleState();
+  const sttProvider = state.providers.find((provider) => provider.kind === 'stt')!;
+  const llmProvider = state.providers.find((provider) => provider.kind === 'llm' && provider.type === 'open_ai')!;
+  const ttsProvider = state.providers.find((provider) => provider.kind === 'tts' && provider.type === 'deepgram')!;
   state.services = {
-    stt: { providerId: 's1', model: 'nova-3' },
-    llm: { providerId: 'l1', model: 'gpt-4o-mini' },
-    tts: { providerId: 't1', model: 'aura-2-thalia-en' },
+    stt: { providerId: sttProvider.id, model: 'nova-3' },
+    llm: { providerId: llmProvider.id, model: 'gpt-4o-mini' },
+    tts: { providerId: ttsProvider.id, model: 'aura-2-thalia-en' },
   };
+  const campaign = state.campaigns.find((entry) => entry.agentId === 'a1') || state.campaigns[0];
+  assert.ok(campaign, 'Recording fixture requires an explicit campaign');
+  campaign.agentId = 'a1';
+  campaign.complianceRules = 'Reviewed recording fixture rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
+  campaign.presenceCheckText = 'Can you hear me okay?';
+  campaign.deadAirTimeoutSec = 8;
+  campaign.deadAirDisposition = 'DAIR';
+  campaign.deadAirDispositionVerified = true;
+  if (!campaign.dispos.split(/[ ,]+/).includes('DAIR')) campaign.dispos += ',DAIR';
   saveConsoleState(state, 'Recording fixture');
   const mock = http.createServer();
   const wss = new WebSocketServer({ server: mock, path: '/agent' });
@@ -105,10 +117,12 @@ async function main() {
 
   async function session(recordAudio: boolean | undefined, agentId = 'a1'): Promise<string> {
     const events: any[] = [];
+    const sessionCampaign = getConsoleState().campaigns.find((entry) => entry.agentId === agentId)!;
+    assert.ok(sessionCampaign, `No campaign explicitly assigned to ${agentId}`);
     const ws = new WebSocket(base.replace('http:', 'ws:') + '/ws/simulator', { headers: auth });
     ws.on('message', (raw, binary) => { if (!binary) events.push(JSON.parse(raw.toString())); });
     await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
-    ws.send(JSON.stringify({ type: 'start', agentId, upstreamMode: 'deepgram', ...(recordAudio === undefined ? {} : { recordAudio }) }));
+    ws.send(JSON.stringify({ type: 'start', agentId, campaignId: sessionCampaign.id, upstreamMode: 'deepgram', ...(recordAudio === undefined ? {} : { recordAudio }) }));
     const started = await waitFor(events, 'session_started');
     await waitFor(events, 'transcript');
     ws.send(JSON.stringify({ type: 'stop' }));

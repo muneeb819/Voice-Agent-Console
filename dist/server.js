@@ -411,20 +411,33 @@ function createApp(viciBridge) {
             wn: validations.filter((v) => v.level === 'wn').length,
             er: validations.filter((v) => v.level === 'er').length,
         };
-        const settingsByAgentId = Object.fromEntries(state.agents.map((a) => [
-            a.id,
-            {
-                agentId: a.id,
-                agentName: a.name,
-                settings: (0, settings_builder_1.buildDeepgramSettings)(state, a),
-            },
-        ]));
+        const settingsByCampaignId = Object.fromEntries(state.campaigns.map((campaign) => {
+            const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+            return [campaign.id, {
+                    campaignId: campaign.id,
+                    campaignName: campaign.name,
+                    agentId: campaign.agentId || null,
+                    settings: agent ? (0, settings_builder_1.buildDeepgramSettings)(state, agent, campaign) : null,
+                }];
+        }));
+        const settingsByAgentId = Object.fromEntries(state.agents.map((agent) => {
+            const campaigns = state.campaigns.filter((campaign) => campaign.agentId === agent.id);
+            const selectedCampaign = campaigns.length === 1 ? campaigns[0] : undefined;
+            return [agent.id, {
+                    agentId: agent.id,
+                    agentName: agent.name,
+                    campaignIds: campaigns.map((campaign) => campaign.id),
+                    settings: selectedCampaign ? (0, settings_builder_1.buildDeepgramSettings)(state, agent, selectedCampaign) : null,
+                }];
+        }));
         const pubUrl = publicDemoUrlOverride !== undefined ? publicDemoUrlOverride : (0, demo_tunnel_1.getCachedTunnelUrlSync)();
         return {
             state,
             validations,
             counts,
+            readiness: { ready: (0, settings_builder_1.getDeploymentReadinessBlockers)(state).length === 0, blockers: (0, settings_builder_1.getDeploymentReadinessBlockers)(state) },
             settingsByAgentId,
+            settingsByCampaignId,
             viciConfig: (0, settings_builder_1.generateViciConfig)(state),
             revisions: (0, db_1.listRevisions)(12),
             secrets: (0, env_store_1.getSecretsStatus)(),
@@ -727,6 +740,7 @@ function createApp(viciBridge) {
                 upstream,
                 callerCode: req.body?.callerCode,
                 phone: req.body?.phone,
+                campaignId: String(req.body?.campaignId || ''),
                 exten: req.body?.exten,
             });
             res.json(result);
@@ -739,6 +753,11 @@ function createApp(viciBridge) {
         }
     });
     app.get('/api/vici/deploy-script', (_req, res) => {
+        const blockers = (0, settings_builder_1.getDeploymentReadinessBlockers)((0, db_1.getConsoleState)());
+        if (blockers.length) {
+            res.status(409).json({ ok: false, error: 'Deployment is blocked until all agents and campaigns are ready.', blockers });
+            return;
+        }
         const scriptPath = path_1.default.resolve(__dirname, '..', 'deploy', 'vicibox-install.sh');
         if (fs_1.default.existsSync(scriptPath)) {
             res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
@@ -831,6 +850,11 @@ function createApp(viciBridge) {
         }
     });
     app.get('/api/vici/release-bundle', (_req, res) => {
+        const blockers = (0, settings_builder_1.getDeploymentReadinessBlockers)((0, db_1.getConsoleState)());
+        if (blockers.length) {
+            res.status(409).json({ ok: false, error: 'Release bundle is blocked until all agents and campaigns are ready.', blockers });
+            return;
+        }
         const bundlePath = path_1.default.join(data_paths_1.DATA_DIR, 'voice-agent-vicibox-release.tar.gz');
         try {
             // Rebuild from a filtered allowlist; a cached archive could otherwise be

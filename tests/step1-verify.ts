@@ -7,6 +7,8 @@ import { fetchAllowedSampleAudio } from '../src/deepgram-catalog';
 import {
   buildDeepgramSettings,
   generateViciConfig,
+  getCampaignCallReadinessBlockers,
+  getDeploymentReadinessBlockers,
   parseJsonObject,
   parseJsonSchema,
   validateAgent,
@@ -228,7 +230,7 @@ async function run() {
       'The opted-in campaign disclosure should prepend to the opening'
     );
     const dispoFn = settings.agent.think.functions.find((f: any) => f.name === 'set_disposition');
-    assert.deepStrictEqual(dispoFn.parameters.properties.code.enum, ['XFER', 'NI', 'DNC', 'NA', 'CALLBK', 'DEC']);
+    assert.deepStrictEqual(dispoFn.parameters.properties.code.enum, ['XFER', 'NI', 'DNC', 'NA', 'CALLBK', 'DEC', 'DAIR']);
 
     // Add second campaign and verify generateViciConfig includes BOTH campaigns + separated Vici APIs
     st.campaigns.push({ ...st.campaigns[0], id: 'c2', name: 'Medicare Inbound', viciCampaign: 'MEDINB' });
@@ -289,6 +291,7 @@ async function run() {
 
   await check('13. Regression: Aura v1 (aura-stella-en), Jessica - Medicare, Nova Concierge & Medicare — Fronter Outbound pass with 0 errors/warnings', () => {
     const raw: any = configureTestServices(createDefaultState());
+    raw.campaigns.forEach((campaign: any) => { campaign.deadAirDispositionVerified = true; });
     raw.services.tts = { providerId: 't1', model: 'aura-stella-en' };
     raw.agents.push({
       id: 'a_jessica',
@@ -322,7 +325,12 @@ async function run() {
       fallback: 'Dispo CALLBK',
       dnc: true,
       disclosure: '',
-      dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK',
+      dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK,DAIR',
+      complianceRules: 'Medicare campaign rules reviewed: identify accurately, avoid benefit and coverage guarantees, never invent eligibility, and honor refusal or do-not-call requests immediately.',
+      presenceCheckText: 'Can you hear me okay?',
+      deadAirTimeoutSec: 8,
+      deadAirDisposition: 'DAIR',
+      deadAirDispositionVerified: true,
     });
 
     const normalized = normalizeState(raw);
@@ -336,6 +344,49 @@ async function run() {
       version: 'v1',
       model: 'aura-stella-en',
     });
+  });
+
+  await check('14. Explicit campaign rules, multi-campaign routing, and hard readiness blockers', () => {
+    const state = configureTestServices(createDefaultState());
+    const agent = state.agents[0];
+    const first = state.campaigns.find((campaign: any) => campaign.agentId === agent.id)!;
+    first.deadAirDispositionVerified = true;
+    const firstRules = first.complianceRules;
+    const firstSettings = buildDeepgramSettings(state, agent, first);
+    assert.ok(firstSettings.agent.think.prompt.includes(firstRules));
+
+    const second = { ...first, id: 'c_second_same_agent', name: 'Second campaign', viciCampaign: 'SECOND', complianceRules: 'Second campaign rules: use a distinct approved script and never assert unverified benefits.' };
+    state.campaigns.push(second);
+    const secondSettings = buildDeepgramSettings(state, agent, second);
+    assert.ok(secondSettings.agent.think.prompt.includes(second.complianceRules));
+    assert.ok(!secondSettings.agent.think.prompt.includes(firstRules), 'Explicit campaign B must not inherit campaign A rules');
+    assert.ok(!buildDeepgramSettings(state, agent).agent.think.prompt.includes('MANDATORY CAMPAIGN-SPECIFIC'), 'Ambiguous multi-campaign previews do not silently choose the first campaign');
+    assert.throws(() => buildDeepgramSettings(state, agent, { ...second, id: 'missing-campaign' }), /not explicitly assigned/i);
+    const wrongAssignment = structuredClone(state);
+    const wrongCampaign = wrongAssignment.campaigns.find((campaign: any) => campaign.id === second.id)!;
+    wrongCampaign.agentId = 'someone-else';
+    assert.throws(() => buildDeepgramSettings(wrongAssignment, wrongAssignment.agents[0], wrongCampaign), /not explicitly assigned/i);
+    assert.deepStrictEqual(getCampaignCallReadinessBlockers(state, first), [], 'Multiple campaign assignments are allowed');
+
+    const noCampaigns = normalizeState({ ...structuredClone(state), campaigns: [] });
+    assert.deepStrictEqual(noCampaigns.campaigns, [], 'Missing campaigns are not silently recreated from defaults');
+    const orphan = normalizeState({ ...structuredClone(state), campaigns: [{ ...first, agentId: '', viciCampaign: '', xferTarget: '' }] });
+    assert.equal(orphan.campaigns[0].agentId, '', 'Missing agent assignment is not silently defaulted');
+    assert.equal(orphan.campaigns[0].viciCampaign, '', 'Missing VICIdial ID is not replaced with a made-up campaign');
+    assert.equal(orphan.campaigns[0].xferTarget, '', 'Missing closer routing is not inferred from the campaign name');
+    assert.ok(getCampaignCallReadinessBlockers(orphan, orphan.campaigns[0]).length > 0);
+    const noXferDisposition = { ...first, dispos: 'DAIR,NI,DNC' };
+    assert.ok(getCampaignCallReadinessBlockers(state, noXferDisposition).some((message) => message.includes('XFER')));
+    const noDispositions = { ...first, dispos: '' };
+    assert.ok(getCampaignCallReadinessBlockers(state, noDispositions).some((message) => message.includes('At least one')));
+
+    const unassigned = structuredClone(state);
+    unassigned.campaigns = unassigned.campaigns.filter((campaign: any) => campaign.agentId !== agent.id);
+    assert.ok(validateAgent(unassigned, agent).some((item) => item.level === 'er' && item.message.includes('assigned')));
+    assert.ok(getDeploymentReadinessBlockers(unassigned).some((message) => message.includes('must be explicitly assigned')));
+
+    const unverified = { ...first, deadAirDispositionVerified: false };
+    assert.ok(getCampaignCallReadinessBlockers(state, unverified).some((message) => message.includes('confirmed')));
   });
 
   console.log(`\nALL ${results.length}/${results.length} STEP 1 VERIFICATION CHECKS PASSED!`);

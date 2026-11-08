@@ -3718,3 +3718,262 @@ audio {
   color: var(--ac);
 }
 
+
+/* ============================================================================
+   MATTE, CALM CONSOLE OVERRIDES
+   Keep theme accents, but share one solid surface system and one UI typeface.
+   ============================================================================ */
+:root {
+  --ui-font: "Plus Jakarta Sans", Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+:root[data-theme] {
+  --sf: var(--sf-solid);
+  --sf2: var(--sf2-solid);
+  --input-bg: var(--bg);
+  --code-bg: var(--bg);
+  --bd: rgba(148, 163, 184, 0.22);
+  --bd-strong: rgba(148, 163, 184, 0.38);
+  --spec-top: transparent;
+  --ac-grad: var(--ac);
+  --ac-glow: transparent;
+  --shadow-card: 0 6px 22px rgba(0, 0, 0, 0.18);
+  --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.2);
+}
+
+:root[data-glass] {
+  --glass-blur: none;
+  --sf: var(--sf-solid);
+  --sf2: var(--sf2-solid);
+}
+
+:root[data-exposure] {
+  --orb-opacity: 0;
+}
+
+:root[data-theme] * {
+  font-family: var(--ui-font) !important;
+}
+
+body {
+  background: var(--bg) !important;
+  background-image: none !important;
+}
+
+.ambient-canvas {
+  display: none !important;
+}
+
+.card,
+.t,
+.modal,
+.theme-loader-card,
+.hdr-tool-dock,
+.hdr-context-group {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.card,
+.t {
+  box-shadow: var(--shadow-card) !important;
+}
+
+button,
+a.g,
+a.b {
+  box-shadow: none !important;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease !important;
+}
+
+button:hover:not(:disabled),
+a.g:hover,
+a.b:hover {
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* Compact header: navigation, sync status, theme/security, one save action. */
+header,
+header.console-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 58px;
+  padding: 7px 16px;
+  background: var(--sf-solid);
+  border-bottom: 1px solid var(--bd);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+header::after {
+  display: none !important;
+  animation: none !important;
+}
+
+.hdr-zone-left,
+.hdr-zone-center,
+.hdr-zone-right {
+  gap: 8px;
+}
+
+.hdr-zone-left {
+  flex: 1 1 auto;
+}
+
+.hdr-zone-center,
+.hdr-zone-right {
+  flex: 0 0 auto;
+}
+
+.hdr-context-group,
+.brand-sub,
+.hdr-discard-btn,
+#btn-create-account,
+.hdr-zone-right > .hdr-sep {
+  display: none !important;
+}
+
+.brand {
+  padding: 0;
+  background: transparent !important;
+}
+
+.brand-mark {
+  filter: none;
+}
+
+.brand:hover .brand-mark {
+  transform: none;
+  filter: none;
+}
+
+.hdr-tool-dock {
+  height: auto;
+  padding: 0;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.hdr-dock-btn,
+.hdr-save-btn,
+.hdr-newtab-btn,
+.hdr-share-btn {
+  min-height: 34px;
+  border-radius: 8px !important;
+  box-shadow: none !important;
+}
+
+.hdr-dock-btn:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none !important;
+  background: var(--sf2) !important;
+}
+
+.hdr-save-btn:not(:disabled) {
+  animation: none !important;
+}
+
+#st {
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+@media (max-width: 860px) {
+  header,
+  header.console-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 6px 10px;
+    padding: 7px 10px;
+  }
+
+  .hdr-zone-right {
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .hdr-tool-dock {
+    width: auto;
+    flex-wrap: nowrap;
+  }
+}
+
+@media (max-width: 520px) {
+  .hdr-zone-center {
+    order: 3;
+    flex: 1 0 100%;
+    justify-content: flex-start;
+  }
+
+  .hdr-dock-btn .hdr-btn-txt {
+    display: none;
+  }
+
+  .hdr-save-btn {
+    min-width: 70px;
+    max-width: 90px;
+    padding: 0 8px !important;
+  }
+}
+
+/* ============================================================================
+   MATTE FINISH: flatten remaining decorative surfaces in every theme.
+   Accent hues remain theme-specific; surfaces stay solid and low-gloss.
+   ============================================================================ */
+:root[data-theme] .nav-ico,
+:root[data-theme] nav.side-nav button.nav-item.on .nav-ico {
+  background: var(--sf2-solid) !important;
+  border-color: var(--bd) !important;
+  box-shadow: none !important;
+}
+
+:root[data-theme] nav.side-nav button.nav-item.on {
+  background: var(--ac) !important;
+  color: var(--ac-on);
+  box-shadow: none !important;
+}
+
+:root[data-theme] .nav-ico::before,
+:root[data-theme] .b::after {
+  display: none !important;
+  background: none !important;
+  animation: none !important;
+}
+
+:root[data-theme] .theme-studio-hero,
+:root[data-theme] .cmd-deck-shell,
+:root[data-theme] .cmd-kpi-card.is-active-tab {
+  background: var(--sf-solid) !important;
+  box-shadow: var(--shadow-card) !important;
+}
+
+:root[data-theme] .showcase-dots button.on {
+  background: var(--ac) !important;
+  box-shadow: none !important;
+}
+
+:root[data-theme] .hdr-sep {
+  background: var(--bd) !important;
+  opacity: 1;
+}
+
+:root[data-theme] .modal-backdrop,
+:root[data-theme] .sc-card {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+:root[data-theme] .cmd-kpi-card:hover,
+:root[data-theme] .sc-card.on {
+  transform: none !important;
+  box-shadow: var(--shadow-card) !important;
+}

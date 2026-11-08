@@ -71,13 +71,19 @@ async function synthesizeCallerVoice8kPcm(text, isSpanish = false) {
 async function runSimulatedViciBridgeCall(bridge, opts) {
     const callerCode = opts.callerCode || 'V1027153012000104892';
     const phone = opts.phone || '3055550192';
-    const isMedicareScenario = opts.scenario.startsWith('medicare_');
     const stForExten = (0, db_1.getConsoleState)();
-    const medCampIdx = stForExten.campaigns.findIndex((c) => c.id === 'c_medicare' || /medicare/i.test(c.viciCampaign || c.name));
-    const defaultExten = isMedicareScenario && medCampIdx >= 0
-        ? `${stForExten.vici.aiExten}${medCampIdx + 1}`
-        : `${stForExten.vici.aiExten}1`;
-    const exten = opts.exten || defaultExten;
+    if (!opts.campaignId)
+        throw new Error('Select an explicit campaign before running the loopback call.');
+    const selectedCampaignIndex = stForExten.campaigns.findIndex((campaign) => campaign.id === opts.campaignId);
+    if (selectedCampaignIndex < 0)
+        throw new Error('The selected loopback campaign no longer exists. Refresh and choose a campaign.');
+    const selectedCampaign = stForExten.campaigns[selectedCampaignIndex];
+    const mappedExten = `${stForExten.vici.aiExten}${selectedCampaignIndex + 1}`;
+    if (opts.exten && String(opts.exten).trim() !== mappedExten) {
+        throw new Error('The supplied campaign extension does not match the explicitly selected campaign.');
+    }
+    const exten = mappedExten;
+    const isMedicareCampaign = /medicare/i.test(`${selectedCampaign.viciCampaign || ''} ${selectedCampaign.name || ''}`);
     const scenarioUtterances = {
         qualified_xfer: 'Yes, I am 64 in Florida, I need final expense coverage, please connect me to your specialist now.',
         dnc_request: 'Stop calling my phone right now, put me on your do not call list immediately.',
@@ -116,10 +122,10 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
                 return;
             }
             if (fn === 'lead_all_info') {
-                const mockDob = isMedicareScenario ? '1955-04-10' : '1962-04-10';
-                const mockAge = isMedicareScenario ? '71' : '64';
-                const mockList = isMedicareScenario ? '2001' : '1001';
-                const mockComment = isMedicareScenario ? 'Medicare OTC benefit file review' : 'Requested FE info online';
+                const mockDob = isMedicareCampaign ? '1955-04-10' : '1962-04-10';
+                const mockAge = isMedicareCampaign ? '71' : '64';
+                const mockList = isMedicareCampaign ? '2001' : '1001';
+                const mockComment = isMedicareCampaign ? 'Medicare OTC benefit file review' : 'Requested FE info online';
                 res.end([
                     'lead_id|status|user|vendor_lead_code|list_id|phone_number|first_name|last_name|city|state|postal_code|date_of_birth|comments|age',
                     `${q.lead_id || '104892'}|NEW|6666|VLC-991|${mockList}|${phone}|Robert|Carter|Miami|FL|33101|${mockDob}|${mockComment}|${mockAge}`,

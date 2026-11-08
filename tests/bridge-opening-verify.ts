@@ -10,7 +10,7 @@ import { canonicalUuidToBytes, VicidialBridgeService } from '../src/vici-bridge'
 
 // Local protocol fixtures only. They do not connect to a real PBX or provider.
 type Transport = 'audiosocket' | 'sip_rtp';
-type Mode = 'silent' | 'early' | 'cancel' | 'refused';
+type Mode = 'silent' | 'early' | 'cancel' | 'refused' | 'dead_air' | 'bad_disposition' | 'bad_transfer';
 type Scenario = {
   transport: Transport;
   mode: Mode;
@@ -20,6 +20,7 @@ type Scenario = {
   endedAt: number;
   callerBytes: number;
   injected: Array<{ text: string; at: number }>;
+  functionResponses: any[];
   settings: any;
   sendCaller: () => void;
 };
@@ -34,14 +35,45 @@ function socketAddress(socket: dgram.Socket) { return socket.address() as net.Ad
 
 async function main() {
   const state = getConsoleState();
+  const sttProvider = state.providers.find((provider) => provider.kind === 'stt')!;
+  const llmProvider = state.providers.find((provider) => provider.kind === 'llm' && provider.type === 'open_ai')!;
+  const ttsProvider = state.providers.find((provider) => provider.kind === 'tts' && provider.type === 'deepgram')!;
   state.services = {
-    stt: { providerId: 's1', model: 'nova-3' },
-    llm: { providerId: 'l1', model: 'gpt-4o-mini' },
-    tts: { providerId: 't1', model: 'aura-2-thalia-en' },
+    stt: { providerId: sttProvider.id, model: 'nova-3' },
+    llm: { providerId: llmProvider.id, model: 'gpt-4o-mini' },
+    tts: { providerId: ttsProvider.id, model: 'aura-2-thalia-en' },
   };
-  const agent = state.agents.find((entry) => entry.id === state.campaigns[0].agentId)!;
+  const campaign = state.campaigns[0];
+  assert.ok(campaign, 'Bridge fixture requires an explicit campaign');
+  const agent = state.agents.find((entry) => entry.id === campaign.agentId) || state.agents[0];
+  campaign.agentId = agent.id;
+  campaign.complianceRules = 'Reviewed bridge fixture rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
+  campaign.presenceCheckText = 'Can you hear me okay?';
+  campaign.deadAirTimeoutSec = 3;
+  campaign.deadAirDisposition = 'DAIR';
+  campaign.deadAirDispositionVerified = true;
+  if (!campaign.dispos.split(/[ ,]+/).includes('DAIR')) campaign.dispos += ',DAIR';
   agent.greeting = 'Hi, this is Jessi from Example Services. How are you doing?';
   agent.injectCampaignDisclosure = false;
+
+  const viciRequests: Array<{ fn: string; params: URLSearchParams }> = [];
+  const viciApi = http.createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    const fn = url.searchParams.get('function') || '';
+    viciRequests.push({ fn, params: url.searchParams });
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    if (fn === 'lead_all_info') {
+      res.end('lead_id|phone_number|first_name|last_name|state|date_of_birth|age|status|campaign_id\n104892|3055550192|Robert|Fixture|FL|1955-04-10|71|NEW|FETEST');
+    } else if (fn === 'update_lead' && url.searchParams.get('status') === 'DAIR') {
+      res.end('ERROR: synthetic dead-air status rejection');
+    } else if (fn === 'update_lead') {
+      res.end(`SUCCESS: synthetic update accepted for ${url.searchParams.get('status') || 'notes only'}`);
+    } else {
+      res.end('SUCCESS: synthetic local response');
+    }
+  });
+  await new Promise<void>((resolve) => viciApi.listen(0, '127.0.0.1', resolve));
+  state.vici.viciBaseUrl = `http://127.0.0.1:${(viciApi.address() as net.AddressInfo).port}`;
   saveConsoleState(state, 'Isolated bridge opening timing fixture');
 
   let scenario: Scenario | null = null;
@@ -87,12 +119,30 @@ async function main() {
         });
       } else if (msg.type === 'InjectAgentMessage') {
         current.injected.push({ text: msg.message, at: Date.now() });
+        if (current.mode === 'dead_air') {
+          ws.send(JSON.stringify({ type: 'AgentAudioDone' }));
+          return; // The presence check finishes, but the caller stays silent.
+        }
+        if (current.mode === 'bad_disposition') {
+          ws.send(JSON.stringify({ type: 'FunctionCallRequest', functions: [
+            { id: 'bad-disposition', name: 'set_disposition', arguments: JSON.stringify({ code: 'BAD' }), client_side: true },
+          ] }));
+          return;
+        }
+        if (current.mode === 'bad_transfer') {
+          ws.send(JSON.stringify({ type: 'FunctionCallRequest', functions: [
+            { id: 'set-dnc', name: 'set_disposition', arguments: JSON.stringify({ code: 'DNC' }), client_side: true },
+            { id: 'transfer-after-dnc', name: 'transfer_to_live_agent', arguments: JSON.stringify({ reason: 'Must not transfer a do-not-call lead' }), client_side: true },
+          ] }));
+          return;
+        }
         if (current.mode === 'refused') {
           ws.send(JSON.stringify({ type: 'InjectionRefused' }));
           ws.send(JSON.stringify({ type: 'Warning', code: 'INJECT_AGENT_MESSAGE_DURING_USER_SPEECH', description: 'Synthetic refusal warning.' }));
         } else emitAnswer(msg.message);
-      } else if (msg.type === 'FunctionCallResponse' && msg.id === 'end-test') {
-        ws.send(JSON.stringify({ type: 'AgentAudioDone' }));
+      } else if (msg.type === 'FunctionCallResponse') {
+        if (msg.id === 'end-test') ws.send(JSON.stringify({ type: 'AgentAudioDone' }));
+        else current.functionResponses.push(msg);
       }
     });
   });
@@ -110,18 +160,19 @@ async function main() {
     let ready!: () => void;
     const current: Scenario = {
       transport, mode, ready: new Promise<void>((resolve) => { ready = resolve; }),
-      appliedAt: 0, audioTimes: [], endedAt: 0, callerBytes: 0, injected: [], settings: null,
+      appliedAt: 0, audioTimes: [], endedAt: 0, callerBytes: 0, injected: [], functionResponses: [], settings: null,
       sendCaller: () => {},
     };
     scenario = current;
     const previousLogs = new Set(listBridgeCallLogs(200).map((row) => row.id));
+    const previousViciRequestCount = viciRequests.length;
     const status = bridge.getStatus();
     let client: net.Socket | null = null;
     let sip: dgram.Socket | null = null;
     let rtp: dgram.Socket | null = null;
     try {
       if (transport === 'audiosocket') {
-        const registration = bridge.registerPreCall({ vici_cid: 'Fixture Caller', exten: `${state.vici.aiExten}1` });
+        const registration = bridge.registerPreCall({ vici_cid: 'V1027153012000104892', phone: '3055550192', exten: `${state.vici.aiExten}1` });
         client = net.createConnection({ host: '127.0.0.1', port: status.audioSocketPort });
         const tcp = client;
         let rx = Buffer.alloc(0);
@@ -184,7 +235,7 @@ async function main() {
         const invite = [
           `INVITE sip:${ext}@127.0.0.1:${status.sipPort} SIP/2.0`,
           `Via: SIP/2.0/UDP 127.0.0.1:${localSipPort};branch=z9hG4bKfixture;rport`,
-          'From: "Fixture Caller" <sip:fixture@127.0.0.1>;tag=fixture',
+          'From: "V1027153012000104892" <sip:3055550192@127.0.0.1>;tag=fixture',
           `To: <sip:${ext}@127.0.0.1>`, `Contact: <sip:fixture@127.0.0.1:${localSipPort}>`,
           `Call-ID: ${callId}`, 'CSeq: 1 INVITE', `X-Vici-Exten: ${ext}`,
           'Content-Type: application/sdp', `Content-Length: ${Buffer.byteLength(sdp)}`, '', sdp,
@@ -195,12 +246,16 @@ async function main() {
       await until(() => current.appliedAt > 0, `${transport} ${mode} provider readiness`);
       assert.equal(current.settings.agent.greeting, undefined, 'Do not use provider automatic greeting');
       assert.match(current.settings.agent.think.prompt, /Jessi from Example Services/);
-      if (mode === 'cancel' || mode === 'refused') {
+      if (mode === 'cancel' || mode === 'refused' || mode === 'bad_disposition' || mode === 'bad_transfer') {
         if (mode === 'cancel') await wait(90);
-        else {
+        else if (mode === 'refused') {
           await until(() => current.injected.length === 1, `${transport} rejected injection`);
           await wait(550);
           assert.equal(current.injected.length, 1, 'A refused opening must not be repeatedly injected');
+        } else {
+          const expectedResponses = mode === 'bad_transfer' ? 2 : 1;
+          await until(() => current.functionResponses.length === expectedResponses, `${transport} ${mode} function result`);
+          assert.equal(current.injected.length, 1, 'The campaign presence check is sent once before function validation');
         }
         const active = bridge.getStatus().activeCalls[0];
         assert.ok(active && bridge.forceHangupCall(active.callId));
@@ -208,7 +263,7 @@ async function main() {
       await until(() => current.endedAt > 0, `${transport} ${mode} hangup`);
       await until(() => bridge.getStatus().activeCallsCount === 0, `${transport} ${mode} cleanup`);
       if (mode === 'cancel') {
-        await wait(550);
+        await wait(1100);
         assert.equal(current.injected.length, 0, 'Hangup cancels the opening timer');
         assert.equal(current.audioTimes.length, 0, 'Hangup does not leak audio');
       } else if (mode === 'refused') {
@@ -217,17 +272,58 @@ async function main() {
         const systemMessages = cdr?.transcript.filter((entry) => entry.role === 'system').map((entry) => entry.content).join('\n') || '';
         assert.match(systemMessages, /declined an injected message/i);
         assert.match(systemMessages, /INJECT_AGENT_MESSAGE_DURING_USER_SPEECH/);
+      } else if (mode === 'dead_air') {
+        assert.equal(current.injected.length, 1, 'The configured presence check is sent exactly once');
+        assert.equal(current.injected[0].text, campaign.presenceCheckText);
+        assert.equal(current.audioTimes.length, 0, 'No caller-response audio is fabricated');
+        const cdr = listBridgeCallLogs(200).find((row) => !previousLogs.has(row.id));
+        assert.ok(cdr, 'Dead-air call is saved');
+        assert.equal(cdr!.callerCode, 'V1027153012000104892');
+        assert.equal(cdr!.disposition, null, 'A rejected lead update is not reported as applied');
+        const systemMessages = cdr!.transcript.filter((entry) => entry.role === 'system').map((entry) => entry.content).join('\\n');
+        assert.match(systemMessages, /did not confirm dead-air update_lead status DAIR/i);
+        const deadAirCall = cdr!.functionCalls.find((entry) => entry.name === 'apply_dead_air_disposition');
+        assert.equal(deadAirCall?.status, 'failed');
+        const callRequests = viciRequests.slice(previousViciRequestCount);
+        const leadUpdate = callRequests.find((request) => request.fn === 'update_lead');
+        const remoteHangup = callRequests.find((request) => request.fn === 'ra_call_control');
+        assert.equal(leadUpdate?.params.get('status'), 'DAIR', 'Dead-air code is attempted in update_lead');
+        assert.equal(remoteHangup?.params.get('stage'), 'HANGUP');
+        assert.equal(remoteHangup?.params.get('status'), 'DAIR', 'Remote Agent hangup retains the configured dead-air code after update_lead rejection');
+        const audit = cdr!.viciApiAudit;
+        assert.ok(audit.some((entry) => entry.fn === 'update_lead' && !entry.ok));
+        assert.ok(audit.some((entry) => entry.fn === 'ra_call_control' && entry.ok));
+      } else if (mode === 'bad_disposition') {
+        const response = JSON.parse(current.functionResponses[0].content);
+        assert.equal(response.ok, false);
+        assert.match(response.error, /not allowed by selected campaign/i);
+        const callRequests = viciRequests.slice(previousViciRequestCount);
+        assert.ok(!callRequests.some((request) => request.fn === 'update_lead'), 'Disallowed disposition must not change VICIdial status');
+        const hangup = callRequests.find((request) => request.fn === 'ra_call_control');
+        assert.equal(hangup?.params.get('stage'), 'HANGUP');
+        assert.equal(hangup?.params.get('status'), 'NA');
+      } else if (mode === 'bad_transfer') {
+        const setResponse = JSON.parse(current.functionResponses.find((response) => response.id === 'set-dnc').content);
+        const transferResponse = JSON.parse(current.functionResponses.find((response) => response.id === 'transfer-after-dnc').content);
+        assert.equal(setResponse.ok, true, `Selected campaign’s DNC status is allowed (${JSON.stringify(setResponse)})`);
+        assert.equal(transferResponse.ok, false, 'A transfer cannot reuse a non-XFER disposition');
+        assert.match(transferResponse.error, /requires the allowed XFER disposition/i);
+        const callRequests = viciRequests.slice(previousViciRequestCount);
+        assert.ok(!callRequests.some((request) => request.fn === 'ra_call_control' && request.params.get('stage') !== 'HANGUP'),
+          'A DNC disposition cannot start a Remote Agent transfer');
+        const hangup = callRequests.find((request) => request.fn === 'ra_call_control');
+        assert.equal(hangup?.params.get('stage'), 'HANGUP');
+        assert.equal(hangup?.params.get('status'), 'DNC');
       } else {
         assert.equal(current.audioTimes.length, 10, 'All 200 ms of queued output must be paced before hangup');
-        assert.ok(current.audioTimes[0] - current.appliedAt >= 490,
+        assert.ok(current.audioTimes[0] - current.appliedAt >= 990,
           `${transport} ${mode} leaked audio after ${current.audioTimes[0] - current.appliedAt} ms`);
         assert.ok(current.audioTimes.at(-1)! - current.audioTimes[0] >= 150, 'Frames must be paced, not emitted in one burst');
         assert.ok(current.endedAt >= current.audioTimes.at(-1)!, 'Hangup must follow the final audio frame');
         if (mode === 'silent') {
           assert.equal(current.injected.length, 1);
-          assert.ok(current.injected[0].at - current.appliedAt >= 490);
-          assert.match(current.injected[0].text, /Jessi from Example Services/);
-          assert.equal((current.injected[0].text.match(/\?/g) || []).length, 1);
+          assert.ok(current.injected[0].at - current.appliedAt >= 990);
+          assert.equal(current.injected[0].text, campaign.presenceCheckText, 'A silent line receives the selected campaign presence check once');
         } else {
           assert.ok(current.callerBytes > 0, 'Caller PCM must reach the mock provider during the wait');
           assert.equal(current.injected.length, 0, 'Early caller response must not be followed by a second opening');
@@ -236,10 +332,13 @@ async function main() {
         assert.ok(cdr?.greetingId, 'The selected greeting ID is recorded');
         assert.equal(cdr!.transcript.filter((entry) => entry.role === 'assistant').length, 1);
       }
-      const detail = mode === 'refused' ? 'refusal is logged; no invented audio or retry'
+      const detail = mode === 'dead_air' ? 'failed lead update still sends configured status on Remote Agent hangup'
+        : mode === 'bad_disposition' ? 'disallowed status is rejected before update_lead'
+        : mode === 'bad_transfer' ? 'non-XFER disposition cannot initiate a transfer'
+        : mode === 'refused' ? 'refusal is logged; no invented audio or retry'
         : mode === 'cancel' ? 'hangup cancels the opening without audio'
         : mode === 'early' ? 'early caller reply waits and drains without a duplicate'
-        : 'one delayed opening drains before hangup';
+        : 'campaign presence check and response drain before hangup';
       console.log(`✓ ${transport} ${mode}: ${detail} (local mock)`);
     } finally {
       client?.destroy();
@@ -251,13 +350,14 @@ async function main() {
 
   try {
     for (const transport of ['audiosocket', 'sip_rtp'] as const) {
-      for (const mode of ['silent', 'early', 'cancel', 'refused'] as const) await runScenario(transport, mode);
+      for (const mode of ['silent', 'early', 'cancel', 'refused', 'dead_air', 'bad_disposition', 'bad_transfer'] as const) await runScenario(transport, mode);
     }
   } finally {
     await bridge.stop();
     wss.clients.forEach((ws) => ws.terminate());
     wss.close();
     await new Promise<void>((resolve) => provider.close(() => resolve()));
+    await new Promise<void>((resolve) => viciApi.close(() => resolve()));
     if (oldUrl === undefined) delete process.env.DEEPGRAM_AGENT_URL; else process.env.DEEPGRAM_AGENT_URL = oldUrl;
     if (oldKey === undefined) delete process.env.DEEPGRAM_API_KEY; else process.env.DEEPGRAM_API_KEY = oldKey;
     if (oldAllowed === undefined) delete process.env.BRIDGE_ALLOWED_IPS; else process.env.BRIDGE_ALLOWED_IPS = oldAllowed;

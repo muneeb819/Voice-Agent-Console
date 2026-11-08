@@ -109,25 +109,38 @@ function resolveCampaignAndAgent(state, dialedExten) {
     const cleanExten = String(dialedExten || '').trim();
     const prefix = String(state.vici.aiExten || '8800').trim();
     const baseRa = Number(state.vici.remoteAgentUser || 9001);
-    let idx = 0;
-    if (cleanExten && state.campaigns.length > 0) {
-        const exactIdx = state.campaigns.findIndex((_c, i) => cleanExten === `${prefix}${i + 1}`);
-        if (exactIdx >= 0) {
-            idx = exactIdx;
-        }
-        else {
-            const tailMatch = /(\d)$/.exec(cleanExten);
-            if (tailMatch) {
-                const candidate = Number(tailMatch[1]) - 1;
-                if (candidate >= 0 && candidate < state.campaigns.length) {
-                    idx = candidate;
-                }
-            }
-        }
+    const idx = state.campaigns.findIndex((_campaign, i) => cleanExten === `${prefix}${i + 1}`);
+    const safeIndex = idx >= 0 ? idx : 0;
+    const remoteAgentUser = String(Number.isFinite(baseRa) ? baseRa + safeIndex : state.vici.remoteAgentUser || '9001');
+    if (idx < 0) {
+        return {
+            remoteAgentUser,
+            campaignIndex: -1,
+            error: cleanExten
+                ? `Dialed extension “${cleanExten}” does not map to an explicitly configured campaign. Refusing to fall back to another campaign.`
+                : 'No dialed campaign extension was provided. Assign this call to a campaign before connecting.',
+        };
     }
-    const campaign = state.campaigns[idx] || state.campaigns[0];
-    const agent = (campaign ? state.agents.find((a) => a.id === campaign.agentId) : undefined) || state.agents[0];
-    const remoteAgentUser = String(Number.isFinite(baseRa) ? baseRa + idx : state.vici.remoteAgentUser || '9001');
+    const campaign = state.campaigns[idx];
+    const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+    if (!agent) {
+        return {
+            campaign,
+            remoteAgentUser,
+            campaignIndex: idx,
+            error: `Campaign “${campaign.name}” is not assigned to an existing bot agent.`,
+        };
+    }
+    const blockers = (0, settings_builder_1.getCampaignCallReadinessBlockers)(state, campaign);
+    if (blockers.length) {
+        return {
+            campaign,
+            agent,
+            remoteAgentUser,
+            campaignIndex: idx,
+            error: `Campaign “${campaign.name}” is not ready: ${blockers.join('; ')}.`,
+        };
+    }
     return { campaign, agent, remoteAgentUser, campaignIndex: idx };
 }
 function hydrateRealLeadIntoSettings(settings, agent, campaign, lead) {
@@ -281,8 +294,12 @@ class VicidialBridgeService {
         const effectiveVici = this.viciApiBaseOverride
             ? { ...state.vici, viciBaseUrl: this.viciApiBaseOverride }
             : state.vici;
-        const exten = String(input.exten || `${state.vici.aiExten}1`).trim();
-        const { campaign, agent, remoteAgentUser } = resolveCampaignAndAgent(state, exten);
+        const exten = String(input.exten || '').trim();
+        const resolved = resolveCampaignAndAgent(state, exten);
+        if (resolved.error || !resolved.campaign || !resolved.agent) {
+            throw new Error(resolved.error || 'Campaign assignment is required before call registration.');
+        }
+        const { campaign, agent, remoteAgentUser } = resolved;
         const parsedCaller = (0, vici_client_1.parseVicidialCallerCode)(input.vici_cid || input.caller_code, input.phone);
         const raUser = String(input.agent_user || remoteAgentUser);
         const viciClient = new vici_client_1.VicidialApiClient(effectiveVici);
@@ -615,6 +632,11 @@ class VicidialBridgeService {
                 // Campaign maxCalls concurrency guard
                 const curStateForCap = (0, db_1.getConsoleState)();
                 const resolvedForCap = resolveCampaignAndAgent(curStateForCap, exten);
+                if (resolvedForCap.error) {
+                    this.stats.lastError = resolvedForCap.error;
+                    sendSipResponse('503 Service Unavailable', headers, toRaw, ['Warning: 399 ViciBridge "Campaign not ready"'], '', rinfo);
+                    return;
+                }
                 if (this.isCampaignOverCapacity(resolvedForCap.campaign)) {
                     this.stats.rejectedOverCapacityCount += 1;
                     this.stats.lastError = `Campaign "${resolvedForCap.campaign?.name}" at maxCalls capacity (${resolvedForCap.campaign?.maxCalls})`;
@@ -664,21 +686,37 @@ class VicidialBridgeService {
                     'a=sendrecv',
                     '',
                 ].join('\r\n');
+                // Validate and register the exact campaign before accepting the SIP call.
+                const preReg = (() => {
+                    try {
+                        return this.registerPreCall({
+                            uniqueid: xUniqueId || callId,
+                            vici_cid: callerName,
+                            phone: callerNum,
+                            exten,
+                            channel: xChannel,
+                        });
+                    }
+                    catch (err) {
+                        this.stats.lastError = err?.message || 'Campaign pre-call registration failed.';
+                        return null;
+                    }
+                })();
+                if (!preReg) {
+                    try {
+                        rtpSocket.close();
+                    }
+                    catch { }
+                    sendSipResponse('503 Service Unavailable', headers, toRaw, ['Warning: 399 ViciBridge "Campaign registration failed"'], '', rinfo);
+                    return;
+                }
+                const preRecord = this.preCallRegistry.get(preReg.uuid);
+                if (preRecord)
+                    this.preCallRegistry.delete(preReg.uuid);
                 sendSipResponse('200 OK', headers, localToWithTag, [
                     `Contact: <sip:${exten || 'bridge'}@${localIpForSdp}:${this.sipPort}>`,
                     'Allow: INVITE, ACK, CANCEL, OPTIONS, BYE',
                 ], sdpAnswer, rinfo);
-                // Pre-register call metadata & start RTP <-> Deepgram session
-                const preReg = this.registerPreCall({
-                    uniqueid: xUniqueId || callId,
-                    vici_cid: callerName,
-                    phone: callerNum,
-                    exten,
-                    channel: xChannel,
-                });
-                const preRecord = this.preCallRegistry.get(preReg.uuid);
-                if (preRecord)
-                    this.preCallRegistry.delete(preReg.uuid);
                 let rtpClosed = false;
                 let txPcmQueue = Buffer.alloc(0);
                 let rtpSeq = crypto_1.default.randomInt(1, 30000);
@@ -829,10 +867,20 @@ class VicidialBridgeService {
         const effectiveVici = this.viciApiBaseOverride
             ? { ...state.vici, viciBaseUrl: this.viciApiBaseOverride }
             : state.vici;
-        const exten = opts.preCall?.exten || `${state.vici.aiExten}1`;
+        const exten = String(opts.preCall?.exten || '').trim();
         const resolved = resolveCampaignAndAgent(state, exten);
-        const campaign = opts.preCall?.campaign || resolved.campaign;
-        const agent = opts.preCall?.agent || resolved.agent;
+        if (resolved.error || !resolved.campaign || !resolved.agent) {
+            this.stats.lastError = resolved.error || 'Campaign assignment is required before the bridge can start a call.';
+            opts.hooks.hangupTransport();
+            return { onCallerPcm8k: () => { }, onCallerDtmf: () => { }, onTransportClosed: () => { } };
+        }
+        if (opts.preCall && (opts.preCall.campaign.id !== resolved.campaign.id || opts.preCall.agent.id !== resolved.agent.id)) {
+            this.stats.lastError = 'Campaign assignment changed between pre-call registration and media connection; refusing to use stale campaign rules.';
+            opts.hooks.hangupTransport();
+            return { onCallerPcm8k: () => { }, onCallerDtmf: () => { }, onTransportClosed: () => { } };
+        }
+        const campaign = resolved.campaign;
+        const agent = resolved.agent;
         const remoteAgentUser = opts.preCall?.remoteAgentUser || resolved.remoteAgentUser;
         const parsedCaller = opts.preCall?.parsedCaller || (0, vici_client_1.parseVicidialCallerCode)('', '');
         const channel = opts.preCall?.channel || '';
@@ -882,6 +930,7 @@ class VicidialBridgeService {
         let awaitingFirstAudioForTurn = false;
         const ttfbSamples = [];
         let disposition = null;
+        let deadAirStatusForHangup = null;
         let transferredTo = null;
         let dncAdded = false;
         let transferExecuted = false;
@@ -965,16 +1014,21 @@ class VicidialBridgeService {
             }
             else {
                 // Apply campaign fallback (e.g. "Dispo CALLBK") so no qualified lead is dropped silently
-                const fallbackCodeMatch = /dispo\s+([A-Z0-9_]{2,6})/i.exec(campaign?.fallback || '');
+                const fallbackCodeMatch = /dispo\s+([A-Z0-9_]{2,6})/i.exec(campaign.fallback || '');
                 const fbCode = fallbackCodeMatch ? fallbackCodeMatch[1].toUpperCase() : 'CALLBK';
-                disposition = fbCode;
-                await viciClient.updateLeadDisposition({
-                    leadId: summary.leadId,
-                    phone: summary.phone,
-                    status: fbCode,
-                    notes: `Transfer fallback (${detail}) — AI qualified: ${args.reason}`,
-                });
-                addTranscript('system', `Transfer failed (${detail}); applied fallback disposition ${fbCode}`);
+                if (!(0, settings_builder_1.allowedCampaignDispositionCodes)(campaign).includes(fbCode)) {
+                    addTranscript('system', `Transfer failed (${detail}); campaign fallback disposition ${fbCode} is not in the selected campaign’s allowed status list, so no fallback status was applied.`);
+                }
+                else {
+                    disposition = fbCode;
+                    await viciClient.updateLeadDisposition({
+                        leadId: summary.leadId,
+                        phone: summary.phone,
+                        status: fbCode,
+                        notes: `Transfer fallback (${detail}) — AI qualified: ${args.reason}`,
+                    });
+                    addTranscript('system', `Transfer failed (${detail}); applied fallback disposition ${fbCode}`);
+                }
             }
             updateState('transferred');
             finalizeSession('transferred_to_closer');
@@ -1007,13 +1061,48 @@ class VicidialBridgeService {
                 }
                 catch { }
             }
+            // Dead air is a campaign-specific status update, never a generic no-answer alias.
+            // Attempt update_lead first; retain the configured code for the Remote Agent hangup
+            // even if the lead update fails, and record the actual API result in the CDR.
+            if (reason === 'dead_air') {
+                const code = String(campaign.deadAirDisposition || '').trim().toUpperCase();
+                const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(campaign);
+                if (campaign.deadAirDispositionVerified !== true || !allowedCodes.includes(code)) {
+                    this.stats.lastError = `Dead-air disposition ${code || '(unset)'} is not verified and allowed for VICIdial campaign ${campaign.viciCampaign}.`;
+                    addTranscript('system', `Dead-air status was not applied: ${this.stats.lastError}`);
+                }
+                else {
+                    deadAirStatusForHangup = code;
+                    const upd = await viciClient.updateLeadDisposition({
+                        leadId: summary.leadId,
+                        phone: summary.phone,
+                        status: code,
+                        notes: `No caller response after the one-second listen and campaign presence check. Campaign ${campaign.viciCampaign}.`,
+                    });
+                    if (upd.ok) {
+                        disposition = code;
+                        addTranscript('system', `Dead-air disposition ${code} was accepted by VICIdial update_lead.`);
+                    }
+                    else {
+                        addTranscript('system', `VICIdial did not confirm dead-air update_lead status ${code}; the bridge will still request ${code} on Remote Agent hangup. See the Vici API audit.`);
+                    }
+                    functionCalls.push({
+                        ts: new Date().toISOString(),
+                        id: `dead_air_${callId}`,
+                        name: 'apply_dead_air_disposition',
+                        args: { code, campaign: campaign.viciCampaign },
+                        status: upd.ok ? 'completed' : 'failed',
+                        response: { ok: upd.ok, requestedCode: code, responseText: upd.responseText },
+                    });
+                }
+            }
             // Release Remote Agent call slot via ra_call_control HANGUP if call was NOT transferred
             if (!transferredTo && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
                 await viciClient
                     .hangupRemoteAgentCall({
                     callerCode: parsedCaller.callerCode,
                     remoteAgentUser,
-                    status: disposition || 'NA',
+                    status: deadAirStatusForHangup || disposition || 'NA',
                 })
                     .catch(() => { });
             }
@@ -1139,11 +1228,9 @@ class VicidialBridgeService {
             };
             hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
             let wireSettings;
-            let wireGreeting = '';
             try {
                 const prepared = (0, opening_1.prepareDelayedOpening)(interpolateEnvPlaceholders(rawSettings));
                 wireSettings = prepared.settings;
-                wireGreeting = prepared.greeting;
             }
             catch (err) {
                 this.stats.lastError = err.message || 'Could not prepare the opening.';
@@ -1152,8 +1239,9 @@ class VicidialBridgeService {
                 return;
             }
             openingGate = (0, opening_1.createOpeningGate)({
-                greeting: wireGreeting,
-                sendOpening: (message) => {
+                presenceCheck: campaign.presenceCheckText,
+                responseTimeoutMs: Number(campaign.deadAirTimeoutSec) * 1000,
+                sendPresenceCheck: (message) => {
                     if (!closed && dgWs?.readyState === ws_1.default.OPEN) {
                         dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
                     }
@@ -1167,6 +1255,11 @@ class VicidialBridgeService {
                     }
                     recorder.recordBotPcm8k(pcm8k);
                     opts.hooks.enqueueBotPcm8k(pcm8k);
+                },
+                onDeadAir: () => {
+                    if (closed)
+                        return;
+                    void finalizeSession('dead_air');
                 },
                 onOverflow: () => addTranscript('system', 'Early provider audio exceeded the opening buffer and was dropped.'),
             });
@@ -1279,6 +1372,7 @@ class VicidialBridgeService {
                         break;
                     }
                     case 'AgentAudioDone': {
+                        openingGate?.agentAudioDone();
                         openingGate?.afterRelease(() => {
                             if (closed)
                                 return;
@@ -1327,77 +1421,90 @@ class VicidialBridgeService {
                             }
                             let resultPayload = { ok: true };
                             if (fnItem.name === 'set_disposition') {
-                                const code = String(args.code || 'CALLBK').trim().toUpperCase();
-                                disposition = code;
-                                const upd = await viciClient.updateLeadDisposition({
-                                    leadId: summary.leadId,
-                                    phone: summary.phone,
-                                    status: code,
-                                    notes: args.notes || '',
-                                });
-                                let dncInfo = null;
-                                if ((code === 'DNC' || code === 'DNCL') && campaign?.dnc !== false && summary.phone) {
-                                    dncInfo = await viciClient.addDncPhone({
-                                        phone: summary.phone,
-                                        campaignId: campaign?.viciCampaign,
-                                    });
-                                    if (dncInfo.ok) {
-                                        dncAdded = true;
-                                        this.stats.dncCount += 1;
-                                    }
+                                const code = String(args.code || '').trim().toUpperCase();
+                                const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(campaign);
+                                if (!allowedCodes.includes(code)) {
+                                    resultPayload = { ok: false, error: `Disposition ${code || '(empty)'} is not allowed by selected campaign ${campaign.viciCampaign}. No VICIdial status was changed.` };
                                 }
-                                resultPayload = {
-                                    ok: upd.ok,
-                                    disposition_code: code,
-                                    lead_updated: upd.responseText,
-                                    ...(dncInfo ? { dnc_added: dncInfo } : {}),
-                                };
+                                else {
+                                    disposition = code;
+                                    const upd = await viciClient.updateLeadDisposition({
+                                        leadId: summary.leadId,
+                                        phone: summary.phone,
+                                        status: code,
+                                        notes: args.notes || '',
+                                    });
+                                    let dncInfo = null;
+                                    if ((code === 'DNC' || code === 'DNCL') && campaign.dnc !== false && summary.phone) {
+                                        dncInfo = await viciClient.addDncPhone({
+                                            phone: summary.phone,
+                                            campaignId: campaign.viciCampaign,
+                                        });
+                                        if (dncInfo.ok) {
+                                            dncAdded = true;
+                                            this.stats.dncCount += 1;
+                                        }
+                                    }
+                                    resultPayload = {
+                                        ok: upd.ok,
+                                        disposition_code: code,
+                                        lead_updated: upd.responseText,
+                                        ...(dncInfo ? { dnc_added: dncInfo } : {}),
+                                    };
+                                }
                             }
                             else if (fnItem.name === 'transfer_to_live_agent') {
-                                if (!disposition)
-                                    disposition = 'XFER';
-                                const reason = String(args.reason || 'Qualified & interested lead');
-                                const metaParts = [
-                                    args.prospect_name ? `Name:${args.prospect_name}` : hydratedLead.first_name ? `Name:${hydratedLead.first_name}` : '',
-                                    args.confirmed_age ? `Age:${args.confirmed_age}` : '',
-                                    args.medicare_status ? `Medicare:${args.medicare_status}` : '',
-                                    args.hook_type ? `Hook:${args.hook_type}` : '',
-                                ].filter(Boolean);
-                                const noteSummary = `[AI Qualified${metaParts.length ? ' | ' + metaParts.join(' | ') : ''}] ${reason}`;
-                                // Push structured metadata into vicidial_list BEFORE transfer so closer screen-pop shows Name, Age, Medicare Status & Hook Type!
-                                await viciClient.updateLeadDisposition({
-                                    leadId: summary.leadId,
-                                    phone: summary.phone,
-                                    status: disposition,
-                                    notes: noteSummary,
-                                });
-                                pendingTransferArgs = {
-                                    reason,
-                                    prospect_name: args.prospect_name || hydratedLead.first_name || undefined,
-                                    confirmed_age: args.confirmed_age,
-                                    medicare_status: args.medicare_status,
-                                    hook_type: args.hook_type,
-                                };
-                                if (deferredActionTimer)
-                                    clearTimeout(deferredActionTimer);
-                                deferredActionTimer = setTimeout(() => {
-                                    if (pendingTransferArgs) {
-                                        const p = pendingTransferArgs;
-                                        pendingTransferArgs = null;
-                                        executeTransferAction(p).catch(() => { });
-                                    }
-                                }, 9000);
-                                resultPayload = {
-                                    ok: true,
-                                    transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
-                                    closer_screen_pop_notes_saved: true,
-                                    metadata_passed: {
-                                        prospect_name: args.prospect_name || hydratedLead.first_name || null,
-                                        confirmed_age: args.confirmed_age || null,
-                                        medicare_status: args.medicare_status || null,
-                                        hook_type: args.hook_type || null,
-                                    },
-                                };
+                                const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(campaign);
+                                const transferDisposition = disposition || 'XFER';
+                                if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
+                                    resultPayload = { ok: false, error: `Transfer requires the allowed XFER disposition for selected campaign ${campaign.viciCampaign}; current disposition is ${transferDisposition}. No transfer was scheduled.` };
+                                }
+                                else {
+                                    if (!disposition)
+                                        disposition = 'XFER';
+                                    const reason = String(args.reason || 'Qualified & interested lead');
+                                    const metaParts = [
+                                        args.prospect_name ? `Name:${args.prospect_name}` : hydratedLead.first_name ? `Name:${hydratedLead.first_name}` : '',
+                                        args.confirmed_age ? `Age:${args.confirmed_age}` : '',
+                                        args.medicare_status ? `Medicare:${args.medicare_status}` : '',
+                                        args.hook_type ? `Hook:${args.hook_type}` : '',
+                                    ].filter(Boolean);
+                                    const noteSummary = `[AI Qualified${metaParts.length ? ' | ' + metaParts.join(' | ') : ''}] ${reason}`;
+                                    // Push structured metadata into vicidial_list BEFORE transfer so closer screen-pop shows Name, Age, Medicare Status & Hook Type!
+                                    await viciClient.updateLeadDisposition({
+                                        leadId: summary.leadId,
+                                        phone: summary.phone,
+                                        status: disposition,
+                                        notes: noteSummary,
+                                    });
+                                    pendingTransferArgs = {
+                                        reason,
+                                        prospect_name: args.prospect_name || hydratedLead.first_name || undefined,
+                                        confirmed_age: args.confirmed_age,
+                                        medicare_status: args.medicare_status,
+                                        hook_type: args.hook_type,
+                                    };
+                                    if (deferredActionTimer)
+                                        clearTimeout(deferredActionTimer);
+                                    deferredActionTimer = setTimeout(() => {
+                                        if (pendingTransferArgs) {
+                                            const p = pendingTransferArgs;
+                                            pendingTransferArgs = null;
+                                            executeTransferAction(p).catch(() => { });
+                                        }
+                                    }, 9000);
+                                    resultPayload = {
+                                        ok: true,
+                                        transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
+                                        closer_screen_pop_notes_saved: true,
+                                        metadata_passed: {
+                                            prospect_name: args.prospect_name || hydratedLead.first_name || null,
+                                            confirmed_age: args.confirmed_age || null,
+                                            medicare_status: args.medicare_status || null,
+                                            hook_type: args.hook_type || null,
+                                        },
+                                    };
+                                }
                             }
                             else if (fnItem.name === 'end_call') {
                                 awaitingHangupAfterSpeech = true;

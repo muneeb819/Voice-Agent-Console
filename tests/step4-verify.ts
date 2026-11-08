@@ -27,10 +27,29 @@ function configureTestServices() {
     llm: { providerId: llm.id, model: 'gpt-4o-mini' },
     tts: { providerId: tts.id, model: 'flux-haley-en' },
   };
-  saveConsoleState(state, 'Test setup: select global services');
+  if (!state.agents.length || !state.campaigns.length) throw new Error('Step 4 fixture requires at least one agent and campaign.');
+  for (const campaign of state.campaigns) {
+    if (!state.agents.some((agent) => agent.id === campaign.agentId)) campaign.agentId = state.agents[0].id;
+    if (String(campaign.complianceRules || '').trim().length < 20 || /^REVIEW REQUIRED\b/i.test(campaign.complianceRules || '')) {
+      campaign.complianceRules = 'Reviewed step 4 fixture rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
+    }
+    campaign.presenceCheckText = campaign.presenceCheckText || 'Can you hear me okay?';
+    campaign.deadAirTimeoutSec = 8;
+    campaign.deadAirDisposition = 'DAIR';
+    if (!String(campaign.dispos || '').split(/[ ,]+/).includes('DAIR')) campaign.dispos = `${campaign.dispos},DAIR`;
+    campaign.deadAirDispositionVerified = true;
+  }
+  saveConsoleState(state, 'Test setup: ready campaigns and services');
+  const primaryIndex = 0;
+  const medicareIndex = state.campaigns.findIndex((campaign) => campaign.id === 'c_medicare');
+  return {
+    primaryCampaignId: state.campaigns[primaryIndex].id,
+    primaryExten: `${state.vici.aiExten}${primaryIndex + 1}`,
+    medicareCampaignId: medicareIndex >= 0 ? state.campaigns[medicareIndex].id : '',
+  };
 }
 
-async function sendRawSipInvite(sipPort: number): Promise<string> {
+async function sendRawSipInvite(sipPort: number, exten: string): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const u = dgram.createSocket('udp4');
     const timer = setTimeout(() => {
@@ -65,10 +84,10 @@ async function sendRawSipInvite(sipPort: number): Promise<string> {
         '',
       ].join('\r\n');
       const pkt = [
-        `INVITE sip:8391@localhost:${sipPort} SIP/2.0`,
+        `INVITE sip:${exten}@localhost:${sipPort} SIP/2.0`,
         `Via: SIP/2.0/UDP localhost:${lport};branch=z9hG4bKtest`,
         `From: "V1027153012000104892" <sip:3055550192@localhost>;tag=t1`,
-        `To: <sip:8391@localhost:${sipPort}>`,
+        `To: <sip:${exten}@localhost:${sipPort}>`,
         `Call-ID: step4-${Date.now()}@localhost`,
         'CSeq: 1 INVITE',
         'Content-Type: application/sdp',
@@ -82,7 +101,7 @@ async function sendRawSipInvite(sipPort: number): Promise<string> {
 }
 
 async function run() {
-  configureTestServices();
+  const fixture = configureTestServices();
   console.log('=== Step 4 Automated Verification Suite (Production Hardening, Recordings, Analytics & Bundle) ===');
 
   const prevAdminPass = process.env.ADMIN_PASSWORD;
@@ -173,7 +192,7 @@ async function run() {
     const astHookRes = await fetch(`${httpBase}/api/vici/register-call`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'uniqueid=999.1&vici_cid=V1027153012000104892&phone=3055550192&exten=8391',
+      body: new URLSearchParams({ uniqueid: '999.1', vici_cid: 'V1027153012000104892', phone: '3055550192', exten: fixture.primaryExten }).toString(),
     });
     delete process.env.BRIDGE_ALLOWED_IPS;
     const astUuid = (await astHookRes.text()).trim();
@@ -269,7 +288,7 @@ async function run() {
           uniqueid: 'cap.1',
           vici_cid: 'V1027153012000104892',
           phone: '3055550192',
-          exten: '8391',
+          exten: fixture.primaryExten,
         });
         const asSock = net.createConnection({ host: 'localhost', port: bridgeStatus.audioSocketPort });
         await new Promise<void>((r) => asSock.once('connect', () => r()));
@@ -281,7 +300,7 @@ async function run() {
         const activeCallId = stDuring.activeCalls[0].callId;
 
         // Second concurrent call on same campaign must get 486 Busy Here!
-        const busyLine = await sendRawSipInvite(bridgeStatus.sipPort);
+        const busyLine = await sendRawSipInvite(bridgeStatus.sipPort, fixture.primaryExten);
         assert(busyLine.includes('486 Busy Here'), `Expected SIP 486 Busy Here at maxCalls=1, got ${busyLine}`);
         assert(viciBridge.getStatus().rejectedOverCapacityCount >= 1, 'Expected rejectedOverCapacityCount >= 1');
         console.log(`✓ [3/8] Campaign maxCalls concurrency guard verified (${busyLine})`);
@@ -318,11 +337,12 @@ async function run() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         transport: 'sip_rtp',
+        campaignId: fixture.primaryCampaignId,
         scenario: 'qualified_xfer',
         upstream: 'mock_ai',
         callerCode: 'V1027153012000104892',
         phone: '3055550192',
-        exten: '8391',
+        exten: fixture.primaryExten,
       }),
     });
     const simJson = (await simRes.json()) as any;
@@ -467,6 +487,10 @@ async function run() {
     const medAgent = freshDefaults.agents.find((a) => a.id === 'a_medicare');
     const medCamp = freshDefaults.campaigns.find((c) => c.id === 'c_medicare');
     if (!medAgent || !medCamp) throw new Error('Expected a_medicare agent & c_medicare campaign in defaults');
+    medCamp.deadAirDisposition = 'DAIR';
+    medCamp.deadAirDispositionVerified = true;
+    medCamp.deadAirTimeoutSec = 8;
+    if (!medCamp.dispos.split(/[ ,]+/).includes('DAIR')) medCamp.dispos += ',DAIR';
 
     // Sync Medicare agent/campaign/fn_xfer into persisted SQLite state if not yet present
     const curDbState = getConsoleState();
@@ -505,6 +529,7 @@ async function run() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         transport: 'sip_rtp',
+        campaignId: fixture.medicareCampaignId,
         scenario: 'medicare_qualified_xfer',
         upstream: 'mock_ai',
         callerCode: 'V1027153012000104892',
@@ -535,6 +560,7 @@ async function run() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         transport: 'audiosocket',
+        campaignId: fixture.medicareCampaignId,
         scenario: 'medicare_spanish_lang',
         upstream: 'mock_ai',
       }),
@@ -547,6 +573,7 @@ async function run() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         transport: 'sip_rtp',
+        campaignId: fixture.medicareCampaignId,
         scenario: 'medicare_underage_dq',
         upstream: 'mock_ai',
       }),
@@ -851,7 +878,7 @@ async function run() {
           let audioBytes = 0;
           let transcript = false;
           const timer = setTimeout(() => { ws.close(); reject(new Error('Simulator rejection timed out')); }, 5000);
-          ws.on('open', () => ws.send(JSON.stringify({ type: 'start', agentId: 'a_medicare', bandwidth: 'wideband' })));
+          ws.on('open', () => ws.send(JSON.stringify({ type: 'start', agentId: 'a_medicare', campaignId: fixture.medicareCampaignId, bandwidth: 'wideband' })));
           ws.on('message', (data, isBinary) => {
             if (isBinary) { audioBytes += (data as Buffer).length; return; }
             const m = JSON.parse(data.toString());
