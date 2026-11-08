@@ -181,7 +181,7 @@ export function createUser(input: SignupInput): CreateUserResult {
 
   return {
     ok: true,
-    user: { id, email, fullName, createdAt: now, lastLoginAt: null },
+    user: { id, email, fullName, createdAt: now, lastLoginAt: null, role: role as PublicUser['role'] },
   };
 }
 
