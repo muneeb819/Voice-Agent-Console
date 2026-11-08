@@ -167,7 +167,13 @@ async function run() {
     assert(!Object.prototype.hasOwnProperty.call(await first.json() as any, 'token'), 'Browser login must not return a JavaScript-readable session token');
     assert.strictEqual((await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: json, body: account('anonymous@example.test') })).status, 403);
     const second = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Authorization: `Bearer ${firstToken}` }, body: account('second@example.test') });
-    assert.strictEqual(second.status, 201, 'An authenticated operator can add an account');
+    assert.strictEqual(second.status, 201, 'An owner can provision an operator account');
+    const secondData = await second.json() as any;
+    assert.strictEqual(secondData.user.role, 'operator', 'Provisioned accounts default to least-privilege operator');
+    const secondCookie = String(second.headers.get('set-cookie') || '').split(';')[0];
+    const secondToken = decodeURIComponent(secondCookie.slice('vac_session='.length));
+    const deniedSignup = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Cookie: secondCookie }, body: account('third@example.test') });
+    assert.strictEqual(deniedSignup.status, 403, 'An operator cannot provision additional accounts');
     const signupPage = await fetch(`${base}/signup`, { headers: { Authorization: `Bearer ${firstToken}` }, redirect: 'manual' });
     assert.strictEqual(signupPage.status, 200);
     assert.strictEqual((await fetch(`${base}/api/vici/register-call`)).status, 503, 'Direct local PBX hook reaches handler');
