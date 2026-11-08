@@ -171,7 +171,8 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   const isOwnerOrAdmin = (req: Request): boolean => {
     const user = currentUser(req);
     // Legacy ADMIN_PASSWORD sessions remain an explicit administrator path.
-    return user ? user.role === 'owner' || user.role === 'admin' : hasActiveAuthSession(req);
+    return user ? user.role === 'owner' || user.role === 'admin' :
+      (!isAuthEnabled() && isRequestAuthorized(req)) || hasActiveAuthSession(req);
   };
   const canCreateAccount = (req: Request): boolean =>
     (!isAuthEnabled() && isRequestAuthorized(req)) || isOwnerOrAdmin(req);
