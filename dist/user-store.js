@@ -26,33 +26,38 @@ const MIN_PASSWORD_LENGTH = 8;
 const MAX_PASSWORD_LENGTH = 200;
 const MAX_NAME_LENGTH = 80;
 let schemaReady = false;
+/**
+ * Creates the account and session tables and adds missing role and active
+ * columns. When adding roles, the oldest account becomes owner and the others
+ * default to operator. Database errors propagate to the caller.
+ */
 function ensureSchema() {
     if (schemaReady)
         return;
     const db = (0, db_1.getDb)();
     db.exec(`
     CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY,
-      email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-      full_name TEXT NOT NULL,
-      password_hash TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      last_login_at TEXT
+      id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      full_name TEXT NOT NULL, password_hash TEXT NOT NULL,
+      created_at TEXT NOT NULL, last_login_at TEXT
     );
     CREATE TABLE IF NOT EXISTS user_sessions (
-      token TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL
+      token TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_user_sessions_expiry ON user_sessions(expires_at);
-    CREATE TABLE IF NOT EXISTS revoked_admin_sessions (
-      token_hash TEXT PRIMARY KEY,
-      expires_at TEXT NOT NULL
-    );
+    CREATE TABLE IF NOT EXISTS revoked_admin_sessions (token_hash TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_revoked_admin_sessions_expiry ON revoked_admin_sessions(expires_at);
   `);
+    const columns = db.prepare('PRAGMA table_info(users)').all();
+    if (!columns.some((column) => column.name === 'role')) {
+        db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'operator'");
+        const first = db.prepare('SELECT id FROM users ORDER BY created_at ASC, id ASC LIMIT 1').get();
+        if (first?.id)
+            db.prepare("UPDATE users SET role = 'owner' WHERE id = ?").run(first.id);
+    }
+    if (!columns.some((column) => column.name === 'active'))
+        db.exec('ALTER TABLE users ADD COLUMN active INTEGER NOT NULL DEFAULT 1');
     schemaReady = true;
 }
 // ---------------------------------------------------------------- passwords
@@ -117,6 +122,7 @@ function validateFullName(raw) {
     return null;
 }
 // ---------------------------------------------------------------- users
+/** Converts a user row to its public form, defaulting unknown roles to operator and a missing active value to active. */
 function rowToUser(row) {
     return {
         id: String(row.id),
@@ -124,8 +130,15 @@ function rowToUser(row) {
         fullName: String(row.full_name),
         createdAt: String(row.created_at),
         lastLoginAt: row.last_login_at ? String(row.last_login_at) : null,
+        role: (['owner', 'admin', 'operator', 'qa', 'viewer'].includes(String(row.role)) ? String(row.role) : 'operator'),
+        active: Number(row.active ?? 1) === 1,
     };
 }
+/**
+ * Creates an active account, assigning owner when there are no users and
+ * operator otherwise. Returns a field error for invalid input or a duplicate
+ * email; other database or password hashing errors can propagate.
+ */
 function createUser(input) {
     ensureSchema();
     const email = normalizeEmail(input.email);
@@ -147,8 +160,9 @@ function createUser(input) {
     }
     const id = crypto_1.default.randomUUID();
     const now = new Date().toISOString();
+    const role = countUsers() === 0 ? 'owner' : 'operator';
     try {
-        db.prepare('INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, NULL)').run(id, email, fullName, hashPassword(password), now);
+        db.prepare('INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at, role, active) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)').run(id, email, fullName, hashPassword(password), now, role);
     }
     catch (err) {
         if (String(err?.message || '').toLowerCase().includes('unique')) {
@@ -158,7 +172,7 @@ function createUser(input) {
     }
     return {
         ok: true,
-        user: { id, email, fullName, createdAt: now, lastLoginAt: null },
+        user: { id, email, fullName, createdAt: now, lastLoginAt: null, role, active: true },
     };
 }
 function findUserByEmail(rawEmail) {
@@ -169,6 +183,11 @@ function findUserByEmail(rawEmail) {
     const row = (0, db_1.getDb)().prepare('SELECT * FROM users WHERE email = ?').get(email);
     return row ? rowToUser(row) : null;
 }
+/**
+ * Authenticates an active account and updates its last login time. Returns null
+ * for a missing account, inactive account, or invalid credentials. Database
+ * errors propagate.
+ */
 function authenticateUser(rawEmail, password) {
     ensureSchema();
     const email = normalizeEmail(rawEmail);
@@ -177,7 +196,7 @@ function authenticateUser(rawEmail, password) {
     const row = (0, db_1.getDb)().prepare('SELECT * FROM users WHERE email = ?').get(email);
     if (!row)
         return null;
-    if (!verifyPassword(password, String(row.password_hash)))
+    if (Number(row.active ?? 1) !== 1 || !verifyPassword(password, String(row.password_hash)))
         return null;
     const now = new Date().toISOString();
     (0, db_1.getDb)().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(now, row.id);
@@ -205,6 +224,11 @@ function createUserSession(userId) {
         .run(token, userId, new Date(now).toISOString(), new Date(now + SESSION_TTL_MS).toISOString());
     return token;
 }
+/**
+ * Resolves a user session to an active account, or returns null for a rejected,
+ * unknown, or expired token or a missing or inactive account. Deletes an expired
+ * session; database errors propagate.
+ */
 function getUserBySessionToken(token) {
     if (!token || token.length < 32 || token.includes('.'))
         return null;
@@ -217,7 +241,8 @@ function getUserBySessionToken(token) {
         db.prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
         return null;
     }
-    return getUserById(String(row.user_id));
+    const user = getUserById(String(row.user_id));
+    return user?.active ? user : null;
 }
 function destroyUserSession(token) {
     if (!token || token.includes('.'))

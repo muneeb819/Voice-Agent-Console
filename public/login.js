@@ -1,10 +1,19 @@
 /* MMA Digital Labs — Voice Agent Console
-   Sign in / Create account controller (Node Backend + Iframe CHIPS/Bearer Handoff + Static Cloud Mode). */
+   Sign in / Create account controller (cookie-based Node backend + static demo). */
 (function () {
   'use strict';
 
   var CLOUD_USERS_KEY = 'vac_cloud_users_v1';
   var CLOUD_SESSION_KEY = 'vac_cloud_session_v1';
+  var rawPath = String(location.pathname || '/');
+  var isStaticHtmlPath = /\.html$/i.test(rawPath);
+  var staticDemoReady = false;
+  var basePrefix = rawPath.replace(/\/(login(?:\.html)?|signup(?:\.html)?)$/i, '');
+  if (basePrefix === '/') basePrefix = '';
+
+  function apiPath(rel) {
+    return basePrefix + rel;
+  }
 
   function markStaticDemo() {
     staticDemoReady = true;
@@ -245,12 +254,7 @@
     else input.removeAttribute('aria-invalid');
   }
 
-  /**
-   * Posts JSON with same-origin credentials and returns the response, parsed data,
-   * and static-host detection result. Invalid JSON falls back to an empty object;
-   * serialization and request errors reject. Missing apiPath or staticDemoReady
-   * bindings also reject with a ReferenceError when accessed.
-   */
+  /** Posts JSON with first-party cookies and detects a static host's HTML fallback. */
   async function postJson(relUrl, body) {
     var headers = { 'Content-Type': 'application/json' };
     var res = await fetch(apiPath(relUrl), {
@@ -272,11 +276,7 @@
     };
   }
 
-  /**
-   * Replaces the current location with a next path starting with / but not //,
-   * or the default home path. Throws a ReferenceError if basePrefix is absent
-   * when the default is needed.
-   */
+  /** Navigates to a local next path or the home page without a token handoff. */
   function goHome() {
     var next = new URLSearchParams(location.search).get('next');
     var target = next && next.charAt(0) === '/' && next.charAt(1) !== '/' ? next : (basePrefix || '') + '/';
@@ -485,7 +485,6 @@
         if (field === 'password') { markInvalid(password, true); password.focus(); }
         return;
       }
-      if (out.data.token) saveAuthToken(out.data.token);
       if (progressBar) progressBar.style.width = '100%';
       if (loaderText) loaderText.textContent = 'ACCOUNT READY';
       window.setTimeout(function () { goHome(); }, 360);

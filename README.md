@@ -9,6 +9,16 @@ Unified production **Node.js + TypeScript** platform combining:
 
 ---
 
+## Public GitHub Pages demo
+
+**https://muneeb819.github.io/Voice-Agent-Console/**
+
+This is the browser-only static demo, published from `public/` after changes land on `main`. Its accounts and saved settings stay in the current browser; it does **not** deploy the Node API, WebSocket backend, or VICIdial bridge. Do not enter production credentials or rely on browser-local accounts for security. See the deployment section below for the full server requirements.
+
+`public/` is the canonical frontend. After changing it, run `npm run sync:static` to update the legacy `docs/` mirror, then `npm run build` and `npm test`. CI checks that both copies match and exercises static login/signup, cookie-only backend login, and legacy token cleanup.
+
+---
+
 ## 📂 Project Structure
 
 ```text

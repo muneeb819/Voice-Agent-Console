@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "demo": "node tools/start-demo.js",
     "build": "tsc",
+    "sync:static": "node tools/sync-static-site.js",
     "test:step1": "node tools/run-tests.js step1",
     "test:step2": "node tools/run-tests.js step2",
     "test:step3": "node tools/run-tests.js step3",

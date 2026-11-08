@@ -10,7 +10,8 @@ The required verification sequence is:
 
 1. `npm ci` — install the exact dependency graph from `package-lock.json`.
 2. `npm run build` — compile the TypeScript application.
-3. `npm test` — execute the repository's complete test runner.
+3. `npm test` — execute the repository's complete test runner, including
+   static-mirror parity, project-path login/signup, and cookie-session regressions.
 4. `npm audit --audit-level=high` — fail the gate when npm reports high- or
    critical-severity dependency vulnerabilities.
 
@@ -29,6 +30,18 @@ synthetic credentials. A live provider test must never be enabled in CI.
   It does not prove carrier interoperability, real-call audio quality,
   regulatory compliance, load capacity, disaster recovery, or production
   readiness.
+
+## GitHub Pages publication
+
+The Pages workflow publishes only `public/`, never the repository root or a
+Jekyll-rendered source tree. Before uploading it regenerates the legacy `docs/`
+mirror with `node tools/sync-static-site.js` and requires the result to match the
+committed files. `public/` remains the single source of truth for browser code.
+
+Pages hosts a static demo, not the Node/WebSocket server or telephony bridge.
+A successful Pages deployment is not a production-server deployment. Merge the
+change only after Product CI passes, then verify the Pages workflow and deployment
+commit before sharing the public link.
 
 ## Production release gates
 

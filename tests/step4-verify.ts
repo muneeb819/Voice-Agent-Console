@@ -108,7 +108,7 @@ async function run() {
   const prevAllowedIps = process.env.BRIDGE_ALLOWED_IPS;
   const prevWhSecret = process.env.CUSTOM_WEBHOOK_SECRET;
   const prevTrustProxy = process.env.TRUST_PROXY;
-  // The iframe-cookie check below simulates a known local TLS proxy.
+  // The HTTPS cookie check below simulates a known local TLS proxy.
   process.env.TRUST_PROXY = 'loopback';
 
   const { server, viciBridge: maybeBridge } = createServerWithSimulator({
@@ -830,8 +830,8 @@ async function run() {
         '✓ [12/13] One-Click Local Speech Service Integration (/api/speech-service/test, /activate, Clone Sync & /api/tts/preview) verified'
       );
 
-      // 13. Verify iframe auth and that unsupported local speech does not fake an AI session.
-      const iframeLoginRes = await fetch(`${httpBase}/api/auth/login`, {
+      // 13. First-party HTTPS cookie sessions and honest local-speech rejection.
+      const httpsLoginRes = await fetch(`${httpBase}/api/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -842,37 +842,37 @@ async function run() {
           password: 'StrongUserPass#2026',
         }),
       });
-      assert(iframeLoginRes.status === 200, `Expected 200 on HTTPS iframe login, got ${iframeLoginRes.status}`);
-      const iframeSetCookie = iframeLoginRes.headers.get('set-cookie') || '';
+      assert(httpsLoginRes.status === 200, `Expected 200 on HTTPS proxy login, got ${httpsLoginRes.status}`);
+      const httpsSetCookie = httpsLoginRes.headers.get('set-cookie') || '';
       assert(
-        iframeSetCookie.includes('SameSite=None') &&
-          iframeSetCookie.includes('Secure') &&
-          iframeSetCookie.includes('Partitioned'),
-        `Expected SameSite=None; Secure; Partitioned on HTTPS proxy login, got: ${iframeSetCookie}`
+        /;\s*SameSite=Lax/i.test(httpsSetCookie) && /;\s*Secure/i.test(httpsSetCookie) &&
+          !/;\s*Partitioned/i.test(httpsSetCookie),
+        `Expected a first-party SameSite=Lax; Secure cookie, got: ${httpsSetCookie}`
       );
-      const iframeLoginJson = (await iframeLoginRes.json()) as any;
-      assert(
-        typeof iframeLoginJson.token === 'string' && iframeLoginJson.token.length > 16,
-        'Expected session token in /api/auth/login JSON response for cookie-blocked iframes'
-      );
+      const httpsCookie = httpsSetCookie.split(';')[0];
+      const httpsLoginJson = (await httpsLoginRes.json()) as any;
+      assert(httpsLoginJson.token === undefined, 'Login JSON must not expose the browser session secret');
 
-      // Zero-cookie document handoff + Bearer API + authenticated simulator rejection
+      // Cookie-based document/API access; query-string handoffs are not credentials.
+      const cookieRootRes = await fetch(`${httpBase}/`, {
+        headers: { Cookie: httpsCookie },
+        redirect: 'manual',
+      });
+      assert(cookieRootRes.status === 200, `Expected cookie-authenticated GET /, got ${cookieRootRes.status}`);
+      const sessionToken = decodeURIComponent(httpsCookie.slice(httpsCookie.indexOf('=') + 1));
       const tokenOnlyRootRes = await fetch(
-        `${httpBase}/?vac_token=${encodeURIComponent(iframeLoginJson.token)}`,
+        `${httpBase}/?vac_token=${encodeURIComponent(sessionToken)}`,
         { redirect: 'manual' }
       );
-      assert(
-        tokenOnlyRootRes.status === 200,
-        `Expected 200 on cookie-less GET /?vac_token=..., got ${tokenOnlyRootRes.status}`
-      );
-      const bearerStateRes = await fetch(`${httpBase}/api/state`, {
-        headers: { Authorization: `Bearer ${iframeLoginJson.token}` },
+      assert(tokenOnlyRootRes.status === 302, 'A URL token without a cookie must not unlock the console');
+      const cookieStateRes = await fetch(`${httpBase}/api/state`, {
+        headers: { Cookie: httpsCookie },
       });
-      assert(bearerStateRes.status === 200, `Expected 200 on Bearer /api/state, got ${bearerStateRes.status}`);
+      assert(cookieStateRes.status === 200, `Expected 200 on cookie /api/state, got ${cookieStateRes.status}`);
 
       const simStreamCheck = await new Promise<{ errorCode: string; started: boolean; audioBytes: number; transcript: boolean }>(
         (resolve, reject) => {
-          const ws = new WebSocket(`${wsBase}/ws/simulator?token=${encodeURIComponent(iframeLoginJson.token)}`);
+          const ws = new WebSocket(`${wsBase}/ws/simulator`, { headers: { Cookie: httpsCookie } });
           let errorCode = '';
           let started = false;
           let audioBytes = 0;
@@ -893,7 +893,7 @@ async function run() {
       assert(simStreamCheck.errorCode === 'LOCAL_SPEECH_AGENT_UNAVAILABLE', 'Expected local speech rejection');
       assert(!simStreamCheck.started && simStreamCheck.audioBytes === 0 && !simStreamCheck.transcript,
         'Unsupported local speech must not produce a started session, audio or transcript');
-      console.log('✓ [13/13] Cross-site iframe auth & honest local speech simulator rejection verified');
+      console.log('✓ [13/13] First-party HTTPS cookies & honest local speech simulator rejection verified');
     } finally {
       await fetch(`${httpBase}/api/state`, {
         method: 'PUT',
