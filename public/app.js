@@ -1,77 +1,27 @@
 (() => {
   'use strict';
 
-  const VAC_AUTH_TOKEN_KEY = 'vac_auth_token';
-  const VAC_CLOUD_SESSION_KEY = 'vac_cloud_session_v1';
-  const DEFAULT_PRESENCE_CHECK_TEXT = 'Hello? Are you there? Can you hear me?';
-  const MISSING_CAMPAIGN_RULES = 'REVIEW REQUIRED: Add and review campaign-specific compliance and call rules before deployment.';
-
-  function vacReadAuthToken() {
-    try {
-      return (
-        window.sessionStorage?.getItem(VAC_AUTH_TOKEN_KEY) ||
-        window.localStorage?.getItem(VAC_AUTH_TOKEN_KEY) ||
-        ''
-      );
-    } catch {
-      return '';
-    }
-  }
-
-  function vacSaveAuthToken(token) {
-    if (!token) return;
-    try { window.sessionStorage?.setItem(VAC_AUTH_TOKEN_KEY, token); } catch {}
-    try { window.localStorage?.setItem(VAC_AUTH_TOKEN_KEY, token); } catch {}
-  }
-
-  function vacClearAuthToken() {
-    try { window.sessionStorage?.removeItem(VAC_AUTH_TOKEN_KEY); } catch {}
-    try { window.localStorage?.removeItem(VAC_AUTH_TOKEN_KEY); } catch {}
-  }
-
-  // A cookie-less iframe handoff needs a token on the initial navigation.
-  // Remove it from the address bar/history as soon as the console loads.
+  // Browser sessions use the server-issued HttpOnly cookie only.
+  // Remove legacy JavaScript-readable tokens and query-string handoffs.
   try {
+    window.sessionStorage?.removeItem('vac_auth_token');
+    window.localStorage?.removeItem('vac_auth_token');
     const current = new URL(window.location.href);
-    const handoff = current.searchParams.get('vac_token');
-    if (handoff) {
-      vacSaveAuthToken(handoff);
+    if (current.searchParams.has('vac_token') || current.searchParams.has('token')) {
       current.searchParams.delete('vac_token');
+      current.searchParams.delete('token');
       history.replaceState(history.state, '', `${current.pathname}${current.search}${current.hash}`);
     }
   } catch {}
-
-  function vacWithWsAuth(wsUrl) {
-    const tok = vacReadAuthToken();
-    if (!tok) return wsUrl;
-    const sep = wsUrl.includes('?') ? '&' : '?';
-    return `${wsUrl}${sep}token=${encodeURIComponent(tok)}`;
-  }
-
-  // Transparently attach Bearer session token + credentials on same-origin /api/* calls
-  // so cross-site iframes (where browsers block third-party cookies) stay 100% authenticated.
+  function vacWithWsAuth(wsUrl) { return wsUrl; }
   const _nativeFetch = window.fetch.bind(window);
   window.fetch = function (input, init) {
-    try {
-      const urlStr = typeof input === 'string' ? input : input && input.url ? String(input.url) : '';
-      const isLocalApi =
-        urlStr.startsWith('/api/') ||
-        urlStr.startsWith('./api/') ||
-        (urlStr.startsWith(window.location.origin) && urlStr.includes('/api/'));
-      if (isLocalApi) {
-        const nextInit = Object.assign({ credentials: 'same-origin' }, init || {});
-        const tok = vacReadAuthToken();
-        if (tok) {
-          const hdrs = new Headers(nextInit.headers || (typeof input !== 'string' && input?.headers) || undefined);
-          if (!hdrs.has('Authorization')) {
-            hdrs.set('Authorization', `Bearer ${tok}`);
-          }
-          nextInit.headers = hdrs;
-        }
-        return _nativeFetch(input, nextInit);
-      }
-    } catch {}
-    return _nativeFetch(input, init);
+    const urlStr = typeof input === 'string' ? input : input && input.url ? String(input.url) : '';
+    const isLocalApi = urlStr.startsWith('/api/') || urlStr.startsWith('./api/') ||
+      (urlStr.startsWith(window.location.origin) && urlStr.includes('/api/'));
+    return isLocalApi
+      ? _nativeFetch(input, Object.assign({ credentials: 'same-origin' }, init || {}))
+      : _nativeFetch(input, init);
   };
 
   function esc(s) {
@@ -7637,7 +7587,6 @@
         errEl.textContent = data.error || 'Invalid password';
         return;
       }
-      if (data.token) vacSaveAuthToken(data.token);
       if (inp) inp.value = '';
       document.getElementById('auth-modal').hidden = true;
       await loadFromServer();
@@ -7662,7 +7611,6 @@
       if (!serverlessCloudMode) {
         await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
       }
-      vacClearAuthToken();
       try { window.localStorage?.removeItem(VAC_CLOUD_SESSION_KEY); } catch {}
       window.location.replace(serverlessCloudMode ? './login.html' : '/login');
       return;
