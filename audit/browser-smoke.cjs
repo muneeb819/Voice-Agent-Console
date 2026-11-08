@@ -212,6 +212,43 @@ async function run() {
     await page.reload();
     await page.waitForFunction(() => document.querySelector('[data-p="a.name"]')?.value === 'Browser saved agent');
   });
+  await check('Campaigns can be assigned from Agent and Campaign sections; verification stays available after autosave', async () => {
+    const agentId = await page.locator('#sel-a').inputValue();
+    const campaignId = await page.evaluate(async (id) => {
+      const { state } = await (await fetch('/api/state')).json();
+      return state.campaigns.find((campaign) => campaign.agentId !== id)?.id || '';
+    }, agentId);
+    assert(campaignId, 'Fixture needs another campaign for secondary assignment');
+    await page.check(`[data-agent-campaign="${campaignId}"]`);
+    await page.waitForFunction(() => document.querySelector('#st')?.textContent?.includes('verification pending'));
+    assert.equal(await page.locator('#sv').isDisabled(), false, 'Save & Verify must remain enabled after the automatic save completes');
+    await page.click('#sv');
+    await page.waitForFunction(() => document.querySelector('#vr')?.textContent?.includes('Saved to Server'));
+
+    await page.locator('#nav [data-t="campaigns"]').click();
+    await page.selectOption('#sel-c', campaignId);
+    assert.equal(await page.locator(`[data-campaign-bot="${agentId}"]`).isChecked(), true, 'Agent-section assignment must appear in the Campaign section');
+    await page.check(`[data-campaign-primary-bot="${agentId}"]`);
+    await page.waitForFunction(() => document.querySelector('#st')?.textContent?.includes('verification pending'));
+    assert.equal(await page.locator('#sv').isDisabled(), false);
+    await page.click('#sv');
+    await page.waitForFunction(() => document.querySelector('#vr')?.textContent?.includes('Saved to Server'));
+
+    const additionalAgentId = await page.evaluate(async (args) => {
+      const { state } = await (await fetch('/api/state')).json();
+      const campaign = state.campaigns.find((entry) => entry.id === args.campaignId);
+      const assigned = new Set([...(campaign.agentIds || []), campaign.agentId]);
+      return state.agents.find((agent) => agent.id !== args.agentId && !assigned.has(agent.id))?.id || '';
+    }, { agentId, campaignId });
+    assert(additionalAgentId, 'Fixture needs an unassigned bot for Campaign-section assignment');
+    await page.check(`[data-campaign-bot="${additionalAgentId}"]`);
+    await page.waitForFunction(() => document.querySelector('#st')?.textContent?.includes('verification pending'));
+    await page.click('#sv');
+    await page.waitForFunction(() => document.querySelector('#vr')?.textContent?.includes('Saved to Server'));
+    await page.locator('#nav [data-t="agents"]').click();
+    await page.selectOption('#sel-a', additionalAgentId);
+    assert.equal(await page.locator(`[data-agent-campaign="${campaignId}"]`).isChecked(), true, 'Campaign-section assignment must appear in the Agent section');
+  });
   await check('Greeting library is searchable and enabled per bot, with a saved opt-out', async () => {
     await page.waitForFunction(() => /1,100 imported greetings/.test(document.querySelector('#greeting-catalog-panel')?.textContent || ''));
     const agentIds = await page.locator('#sel-a option').evaluateAll((items) => items.map((item) => item.value));
@@ -375,6 +412,23 @@ async function run() {
     await staticPage.goto(`http://127.0.0.1:${staticPort}/login.html`);
     await staticPage.waitForFunction(() => document.querySelector('#auth-security-note')?.textContent?.includes('Static demo only'));
     assert.match(await staticPage.locator('#auth-security-note').innerText(), /do not secure a server/i);
+  });
+  await check('GitHub Pages Save & Verify runs against browser-local storage, including after autosave', async () => {
+    await staticContext.addInitScript(() => {
+      localStorage.setItem('vac_cloud_session_v1', JSON.stringify({ user: { fullName: 'Static Demo Operator', email: 'static@example.test' } }));
+    });
+    const staticConsole = await staticContext.newPage();
+    await staticConsole.goto(`http://127.0.0.1:${staticPort}/index.html?tab=agents`);
+    await staticConsole.waitForSelector('[data-p="a.name"]');
+    await staticConsole.waitForFunction(() => document.querySelector('#sv')?.disabled === false);
+    await staticConsole.click('#sv');
+    await staticConsole.waitForFunction(() => document.querySelector('#vr')?.textContent?.includes('Saved in Browser Cloud Storage'));
+    await staticConsole.locator('[data-p="a.name"]').first().fill('Static saved bot');
+    await staticConsole.waitForFunction(() => document.querySelector('#st')?.textContent?.includes('verification pending'));
+    assert.equal(await staticConsole.locator('#sv').isDisabled(), false, 'Static Save & Verify must remain enabled after browser-local autosave');
+    await staticConsole.click('#sv');
+    await staticConsole.waitForFunction(() => document.querySelector('#vr')?.textContent?.includes('Saved in Browser Cloud Storage'));
+    await staticConsole.close();
   });
   flush();
   console.log(`RESULT ${results.checks.length} checks; ${results.inventories.length} rendered control instances; ${results.mobile.length} mobile layouts`);

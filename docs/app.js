@@ -98,6 +98,7 @@
   let autoSaveTimer = null;
   let autoSaveInFlight = null;
   let autoSaveError = '';
+  let needsVerification = false;
   const STATE_DRAFT_KEY = 'vac_console_unsaved_draft_v1';
 
   let tab = (() => {
@@ -110,6 +111,7 @@
     }
   })();
   let cur = { a: 'a_nova', c: 'c_medicare' };
+  let agentPreviewCampaignId = '';
 
   // Voice catalog state (Step 1)
   let voiceCatalog = {
@@ -1235,6 +1237,19 @@
           cp.agentId = '';
           mutated = true;
         }
+        const normalizedPrimaryBotId = String(cp.agentId || '').trim();
+        if (cp.agentId !== normalizedPrimaryBotId) {
+          cp.agentId = normalizedPrimaryBotId;
+          mutated = true;
+        }
+        const normalizedBotIds = Array.isArray(cp.agentIds)
+          ? [...new Set(cp.agentIds.map((id) => String(id || '').trim()).filter(Boolean))]
+          : cp.agentId ? [cp.agentId] : [];
+        if (cp.agentId && !normalizedBotIds.includes(cp.agentId)) normalizedBotIds.unshift(cp.agentId);
+        if (!Array.isArray(cp.agentIds) || JSON.stringify(cp.agentIds) !== JSON.stringify(normalizedBotIds)) {
+          cp.agentIds = normalizedBotIds;
+          mutated = true;
+        }
         if (typeof cp.complianceRules !== 'string') {
           cp.complianceRules = MISSING_CAMPAIGN_RULES;
           mutated = true;
@@ -1974,7 +1989,30 @@
 
   const A = () => S.agents.find((x) => x.id === cur.a) || S.agents[0];
   const C = () => S.campaigns.find((x) => x.id === cur.c);
-  const campaignsForAgent = (agentId) => (S?.campaigns || []).filter((campaign) => campaign.agentId === agentId);
+  function assignedBotIds(campaign) {
+    if (!campaign) return [];
+    const listed = Array.isArray(campaign.agentIds) ? campaign.agentIds : [];
+    const ids = [...new Set(listed.map((id) => String(id || '').trim()).filter(Boolean))];
+    const primary = String(campaign.agentId || '').trim();
+    if (primary && !ids.includes(primary)) ids.unshift(primary);
+    return ids;
+  }
+  function campaignAssignedToAgent(campaign, agentId) {
+    return assignedBotIds(campaign).includes(agentId);
+  }
+  function setCampaignBotAssignment(campaign, agentId, assigned) {
+    if (!campaign || !agentId) return;
+    const ids = assignedBotIds(campaign);
+    const next = assigned ? [...new Set([...ids, agentId])] : ids.filter((id) => id !== agentId);
+    campaign.agentIds = next;
+    if (assigned && !campaign.agentId) campaign.agentId = agentId;
+    else if (!assigned && campaign.agentId === agentId) campaign.agentId = '';
+  }
+  const campaignsForAgent = (agentId) => (S?.campaigns || []).filter((campaign) => campaignAssignedToAgent(campaign, agentId));
+  function agentPreviewCampaign(agentId = A()?.id) {
+    const assigned = campaignsForAgent(agentId);
+    return assigned.find((campaign) => campaign.id === agentPreviewCampaignId) || (assigned.length === 1 ? assigned[0] : null);
+  }
   function simulatorCampaign(agentId = A()?.id) {
     if (!sim.campaignId) return null;
     return campaignsForAgent(agentId).find((campaign) => campaign.id === sim.campaignId) || null;
@@ -2050,19 +2088,26 @@
 
   function updateHeaderStatus() {
     if (!S) return;
-    if (isDirty()) queueAutoSave();
+    const hadUnsavedChanges = isDirty();
+    if (hadUnsavedChanges) needsVerification = true;
+    if (hadUnsavedChanges) queueAutoSave();
     const dirty = isDirty();
     const st = document.getElementById('st');
     if (dirty) {
       st.textContent = autoSaveError ? '● Save pending — retrying' : autoSaveInFlight ? '◌ Saving…' : '● Saving automatically…';
       st.className = 'd';
-      if (autoSaveError) st.title = `Changes are preserved in this browser draft. Last save failed: ${autoSaveError}`;
+      st.title = autoSaveError ? `Changes are preserved in this browser draft. Last save failed: ${autoSaveError}` : '';
     } else {
-      st.textContent = serverlessCloudMode ? '✓ Saved in this browser' : latestRevisionId ? `✓ Saved (Rev #${latestRevisionId})` : '✓ All changes saved';
-      st.className = '';
-      st.title = '';
+      const verifiedNote = needsVerification ? ' · verification pending' : '';
+      st.textContent = `${serverlessCloudMode ? '✓ Saved in this browser' : latestRevisionId ? `✓ Saved (Rev #${latestRevisionId})` : '✓ All changes saved'}${verifiedNote}`;
+      st.className = needsVerification ? 'd' : '';
+      st.title = needsVerification ? 'Changes are saved, but Save & Verify has not been run yet.' : '';
     }
-    document.getElementById('sv').disabled = !dirty || Boolean(autoSaveInFlight);
+    const saveButton = document.getElementById('sv');
+    saveButton.disabled = Boolean(autoSaveInFlight) || (!serverlessCloudMode && !dirty && !needsVerification);
+    saveButton.title = serverlessCloudMode
+      ? 'Save and verify this browser-local demo configuration'
+      : 'Save changes to the server and run pre-flight verification';
     document.getElementById('dc').disabled = !dirty || Boolean(autoSaveInFlight);
 
     const dgKey = secretsStatus?.DEEPGRAM_API_KEY?.configured;
@@ -2090,9 +2135,10 @@
     const sp = globalServiceProvider('stt') || {};
     const lp = globalServiceProvider('llm') || {};
     const tp = globalServiceProvider('tts') || {};
+    const agentCampaigns = S.campaigns.filter((entry) => campaignAssignedToAgent(entry, agent.id));
     const linkedCampaign = campaign
-      ? campaign.agentId === agent.id ? campaign : undefined
-      : agent.id === A()?.id ? simulatorCampaign(agent.id) : S.campaigns.find((c) => c.agentId === agent.id);
+      ? campaignAssignedToAgent(campaign, agent.id) ? campaign : undefined
+      : agent.id === A()?.id ? simulatorCampaign(agent.id) || agentPreviewCampaign(agent.id) : agentCampaigns.length === 1 ? agentCampaigns[0] : undefined;
 
     const isSpeechServiceStt = sp.type === 'speech_service';
     const spModels = String(sp.models || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -2346,7 +2392,7 @@
     push(/(dnc|do not call|take me off|stop)/i.test(agent.prompt), 'System prompt handles Do-Not-Call requests');
     push(fnNames.includes('end_call'), 'end_call function enabled');
     push(Number(agent.audio.inRate) === 8000, '8000 Hz input sample rate matches Asterisk/VICIdial telephony', true);
-    push(S.campaigns.some((c) => c.agentId === agent.id), 'Explicitly assigned to at least one campaign before deployment');
+    push(S.campaigns.some((campaign) => campaignAssignedToAgent(campaign, agent.id)), 'Explicitly assigned to at least one campaign before deployment');
 
     return items;
   }
@@ -2367,12 +2413,16 @@
     push(Boolean(c.dnc), 'DNC scrub enabled');
     push(Boolean((c.disclosure || '').trim()), 'Recording disclosure line present', true);
     push(c.start < c.end, `Calling window valid (${c.start} – ${c.end})`);
-    const assignedAgent = S.agents.find((agent) => agent.id === c.agentId);
-    push(Boolean(assignedAgent), 'Explicitly assigned to an existing bot agent');
+    const assignedIds = assignedBotIds(c);
+    const assignedAgents = assignedIds.map((id) => S.agents.find((agent) => agent.id === id)).filter(Boolean);
+    const primaryAgent = S.agents.find((agent) => agent.id === c.agentId);
+    push(assignedAgents.length > 0, 'At least one bot agent is assigned to this campaign');
+    push(assignedAgents.length === assignedIds.length, 'All assigned bot IDs exist in this console');
+    push(Boolean(primaryAgent && assignedIds.includes(primaryAgent.id)), 'A primary bot agent is selected for VICIdial bridge calls');
     push(allowed.length > 0, 'At least one allowed VICIdial disposition code is configured');
     const transferFunction = S.functions.find((fn) => fn.name === 'transfer_to_live_agent');
-    const transferEnabled = Boolean(assignedAgent && transferFunction && assignedAgent.fnIds.includes(transferFunction.id));
-    push(!transferEnabled || allowed.includes('XFER'), 'XFER is in the allowed disposition list when live-agent transfer is enabled');
+    const transferEnabled = Boolean(transferFunction && assignedAgents.some((agent) => agent.fnIds.includes(transferFunction.id)));
+    push(!transferEnabled || allowed.includes('XFER'), 'XFER is in the allowed disposition list when any assigned bot has transfer enabled');
     push(rules.length >= 20 && rules.length <= 8000 && !/^REVIEW REQUIRED\b/i.test(rules), 'Campaign-specific compliance & rules are written and reviewed (20–8,000 characters)');
     push(presence.length >= 8 && presence.length <= 280, 'Brief campaign presence-check line configured (8–280 characters)');
     push(Number.isInteger(Number(c.deadAirTimeoutSec)) && Number(c.deadAirTimeoutSec) >= 3 && Number(c.deadAirTimeoutSec) <= 30, 'Dead-air response timeout is 3–30 seconds');
@@ -2386,7 +2436,7 @@
   function deploymentReadinessBlockersLocal() {
     const blockers = [];
     for (const agent of S.agents || []) {
-      if (!(S.campaigns || []).some((campaign) => campaign.agentId === agent.id)) {
+      if (!(S.campaigns || []).some((campaign) => campaignAssignedToAgent(campaign, agent.id))) {
         blockers.push(`Agent “${agent.name}” must be explicitly assigned to at least one campaign.`);
       }
       for (const item of validateAgentLocal(agent)) {
@@ -2412,6 +2462,7 @@
     const campaignBlock = S.campaigns
       .map((c, idx) => {
         const ag = S.agents.find((a) => a.id === c.agentId);
+        const assignedAgents = assignedBotIds(c).map((id) => S.agents.find((agent) => agent.id === id)).filter(Boolean);
         const ext = `${v.aiExten}${idx + 1}`;
         const xfer =
           c.xferType === 'ingroup'
@@ -2420,13 +2471,14 @@
         return [
           `; [Campaign ${idx + 1}: ${c.name}]`,
           `;   VICIdial Campaign ID : ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCalls}`,
-          `;   Bot Persona          : ${ag ? ag.name : '(missing)'} (${ag?.mode || 'outbound'})`,
+          `;   Assigned Bot Agents  : ${assignedAgents.map((agent) => agent.name).join(', ') || '(none)'}`,
+          `;   Primary Bridge Bot   : ${ag ? ag.name : '(missing)'}`,
           `;   Remote Agent Exten   : ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + idx})`,
           `;   Live Closer Transfer : ${xfer}`,
           `;   Allowed Dispositions : ${c.dispos}`,
           `;   Dead-Air Disposition : ${c.deadAirDisposition || '(unset)'} after ${c.deadAirTimeoutSec}s; verified in VICIdial: ${c.deadAirDispositionVerified ? 'YES' : 'NO'}`,
           `;   Presence Check       : ${String(c.presenceCheckText || '').replace(/[\r\n]+/g, ' ')}`,
-          `;   Campaign Rules       : ${String(c.complianceRules || '').trim() ? `${String(c.complianceRules).trim().length} characters; injected into the assigned bot prompt` : 'MISSING — deployment blocked'}`,
+          `;   Campaign Rules       : ${String(c.complianceRules || '').trim() ? `${String(c.complianceRules).trim().length} characters; injected into all assigned bot prompts` : 'MISSING — deployment blocked'}`,
         ].join('\n');
       })
       .join('\n;\n');
@@ -2697,6 +2749,61 @@
       <button class="g danger" id="del-${kind}" ${arr.length <= 1 || locked ? 'disabled title="At least one required"' : ''}>Delete</button>
     </div>`;
   };
+
+  function renderAgentCampaignAssignments(agent) {
+    const campaigns = S.campaigns || [];
+    const assigned = campaignsForAgent(agent.id);
+    const selectedPreview = agentPreviewCampaign(agent.id)?.id || '';
+    return `<section class="bot-assignment-section" aria-labelledby="agent-campaigns-title">
+      <h2 id="agent-campaigns-title">Campaign Assignments</h2>
+      <div class="note">Choose every campaign this bot may use. Assignments are shared with each Campaign page. A campaign’s primary bot handles VICIdial bridge routing; additional assigned bots can use it in Live Bot.</div>
+      ${campaigns.length ? `<div class="bot-assignment-grid">
+        ${campaigns.map((campaign) => {
+          const assignedToThisBot = campaignAssignedToAgent(campaign, agent.id);
+          const primary = campaign.agentId === agent.id;
+          return `<label class="bot-assignment-card">
+            <input type="checkbox" data-agent-campaign="${esc(campaign.id)}" ${assignedToThisBot ? 'checked' : ''}>
+            <span class="bot-assignment-copy">
+              <b>${esc(campaign.name)}</b>
+              <small>VICIdial ID: ${esc(campaign.viciCampaign || 'not set')}</small>
+              <span class="pill ${primary ? 'ok' : assignedToThisBot ? '' : 'wn'}">${primary ? 'Primary bridge bot' : assignedToThisBot ? 'Assigned bot' : 'Not assigned'}</span>
+            </span>
+          </label>`;
+        }).join('')}
+      </div>` : '<div class="note wn">Create a campaign first, then assign this bot from either section.</div>'}
+      <div class="agent-campaign-preview">
+        <label for="agent-preview-campaign">Campaign settings preview for this bot</label>
+        <select id="agent-preview-campaign" ${assigned.length ? '' : 'disabled'}>
+          <option value="">${assigned.length > 1 ? 'Choose a campaign to preview…' : assigned.length === 1 ? 'Use the assigned campaign' : 'No campaigns assigned'}</option>
+          ${assigned.map((campaign) => `<option value="${esc(campaign.id)}" ${campaign.id === selectedPreview ? 'selected' : ''}>${esc(campaign.name)} · ${esc(campaign.viciCampaign || 'no VICIdial ID')}</option>`).join('')}
+        </select>
+      </div>
+    </section>`;
+  }
+
+  function renderCampaignBotAssignments(campaign) {
+    const assignedIds = assignedBotIds(campaign);
+    return `<section class="bot-assignment-section" aria-labelledby="campaign-bots-title">
+      <h2 id="campaign-bots-title">Bots Assigned to This Campaign</h2>
+      <div class="note">Select one or more bots. Choose exactly one primary bot for VICIdial bridge calls; other assigned bots remain available for Live Bot testing.</div>
+      ${S.agents.length ? `<div class="bot-assignment-grid">
+        ${S.agents.map((agent) => {
+          const assigned = assignedIds.includes(agent.id);
+          const primary = campaign.agentId === agent.id;
+          return `<div class="bot-assignment-card bot-assignment-card-stacked">
+            <label class="bot-assignment-main">
+              <input type="checkbox" data-campaign-bot="${esc(agent.id)}" ${assigned ? 'checked' : ''}>
+              <span class="bot-assignment-copy"><b>${esc(agent.name)}</b><small>${esc(agent.mode || 'outbound')} bot</small></span>
+            </label>
+            <label class="bot-assignment-primary">
+              <input type="radio" name="campaign-primary-${esc(campaign.id)}" data-campaign-primary-bot="${esc(agent.id)}" ${primary ? 'checked' : ''} ${assigned ? '' : 'disabled'}>
+              <span>Primary bridge bot</span>
+            </label>
+          </div>`;
+        }).join('')}
+      </div>` : '<div class="note er">Create a bot agent before assigning this campaign.</div>'}
+    </section>`;
+  }
 
   function renderPluginCard(idx) {
     const p = S.providers[idx];
@@ -5288,6 +5395,7 @@
             ['inbound', 'Inbound – VICIdial In-Group routes caller to bot'],
             ['both', 'Both Outbound & Inbound'],
           ])}
+          ${renderAgentCampaignAssignments(a)}
           ${F('Bridge VICIdial call-connect & automatic lead hydration (recommended — replaces hallucinated LLM accept tool)', 'a.acceptViciCalls', 'chk')}
           ${F('Include the linked campaign recording notice (optional)', 'a.injectCampaignDisclosure', 'chk')}
           <div class="note wn">This controls the spoken campaign notice only; it does not turn off recording. Obtain any consent required for your calls. Existing notice settings are preserved. Notice text written inside the saved opening is not removed.</div>
@@ -5435,12 +5543,7 @@
         <div class="card">
           ${renderSelectorBar('c')}
           ${F('Campaign display name', 'c.name')}
-          ${F(
-            'Assigned Bot Agent (required before calls or deployment)',
-            'c.agentId',
-            'sel',
-            [['', 'Select a bot agent…'], ...S.agents.map((x) => [x.id, x.name])]
-          )}
+          ${renderCampaignBotAssignments(C())}
           <div class="row">
             ${F('VICIdial Campaign ID', 'c.viciCampaign')}
             ${F('VICIdial List IDs', 'c.lists')}
@@ -5466,7 +5569,7 @@
           ${F('Fallback if no live closer available', 'c.fallback')}
           ${F('Call recording disclosure (auto-prepended to bot greeting when enabled)', 'c.disclosure')}
           <h2>🛡️ Compliance &amp; Rules</h2>
-          <div class="note wn">These rules are attached to this campaign and injected into its assigned bot’s live prompt. Write campaign-specific, actionable rules and review all claims with your compliance owner. This console is not legal advice or a compliance certification.</div>
+          <div class="note wn">These rules are attached to this campaign and injected into every assigned bot’s live prompt. Write campaign-specific, actionable rules and review all claims with your compliance owner. This console is not legal advice or a compliance certification.</div>
           ${F('Mandatory campaign-specific rules and prohibited claims (20–8,000 characters)', 'c.complianceRules', 'ta', [], 'style="min-height:180px" maxlength="8000"')}
           <div class="row">
             ${F('Presence-check line spoken after 1 second of caller silence', 'c.presenceCheckText', 'ta', [], 'style="min-height:62px" maxlength="280"')}
@@ -6238,22 +6341,30 @@
     const settingsByCampaignId = Object.fromEntries(
       S.campaigns.map((campaign) => {
         const agent = S.agents.find((entry) => entry.id === campaign.agentId);
+        const assignedAgents = S.agents.filter((entry) => campaignAssignedToAgent(campaign, entry.id));
         return [campaign.id, {
           campaignId: campaign.id,
           campaignName: campaign.name,
           agentId: campaign.agentId || null,
+          agentIds: assignedBotIds(campaign),
           settings: agent ? buildSettings(agent, '', campaign) : null,
+          settingsByAgentId: Object.fromEntries(assignedAgents.map((assignedAgent) => [assignedAgent.id, {
+            agentId: assignedAgent.id,
+            agentName: assignedAgent.name,
+            settings: buildSettings(assignedAgent, '', campaign),
+          }])),
           readinessBlockers: validateCampaignLocal(campaign).filter((item) => item[0] === 'er').map((item) => item[2]),
         }];
       })
     );
     const settingsById = Object.fromEntries(
       S.agents.map((ag) => {
-        const selectedCampaign = simulatorCampaign(ag.id);
+        const assignedCampaigns = campaignsForAgent(ag.id);
+        const selectedCampaign = simulatorCampaign(ag.id) || (assignedCampaigns.length === 1 ? assignedCampaigns[0] : null);
         return [ag.id, {
           agentId: ag.id,
           agentName: ag.name,
-          campaignIds: campaignsForAgent(ag.id).map((campaign) => campaign.id),
+          campaignIds: assignedCampaigns.map((campaign) => campaign.id),
           selectedCampaignId: selectedCampaign?.id || null,
           settings: selectedCampaign ? buildSettings(ag, '', selectedCampaign) : null,
         }];
@@ -6386,6 +6497,7 @@
         loadedState = shippedState;
       }
       S = loadedState;
+      needsVerification = false;
       const stockMedicarePrompt = shippedState?.agents?.find((ag) => ag.id === 'a_medicare')?.prompt || '';
       let mig3 = false;
       for (const ag of S.agents || []) {
@@ -6418,6 +6530,7 @@
     const data = await res.json();
     const serverStateSnapshot = comparableSnapshot(data.state);
     S = data.state;
+    needsVerification = false;
     if (data.telemetry) {
       cmdDeckState.serverTelemetry = data.telemetry;
     }
@@ -6532,6 +6645,7 @@
         snap = comparableSnapshot(S);
         clearLocalDraft();
         autoSaveError = '';
+        needsVerification = false;
         const agChecks = S.agents.flatMap((ag) => validateAgentLocal(ag));
         const cpChecks = S.campaigns.flatMap((cp) => validateCampaignLocal(cp));
         const all = [...agChecks, ...cpChecks];
@@ -6545,6 +6659,11 @@
             <button class="g" style="margin-top:8px;margin-left:10px" onclick="this.parentNode.remove()">Dismiss</button>
           </div>`;
         render();
+      } catch (err) {
+        needsVerification = true;
+        autoSaveError = err?.message || 'Browser save failed';
+        persistDraftLocally();
+        alert(`Save error: ${autoSaveError}`);
       } finally {
         btn.textContent = 'Save & Verify';
         updateHeaderStatus();
@@ -6567,6 +6686,7 @@
       snap = comparableSnapshot(S);
       clearLocalDraft();
       autoSaveError = '';
+      needsVerification = false;
       revisions = data.revisions || [];
       secretsStatus = data.secrets || {};
       latestRevisionId = data.revisionId;
@@ -7960,6 +8080,7 @@
       const data = await res.json();
       if (data.ok) {
         S = data.state;
+        needsVerification = false;
         snap = comparableSnapshot(S);
         revisions = data.revisions || [];
         latestRevisionId = data.revisionId;
@@ -7978,13 +8099,21 @@
 
       if (act === 'del') {
         if (arr.length > 1) {
+          if (kind === 'a') {
+            for (const campaign of S.campaigns) setCampaignBotAssignment(campaign, currentObj.id, false);
+            agentPreviewCampaignId = '';
+          }
           arr.splice(arr.indexOf(currentObj), 1);
           cur[kind] = arr[0].id;
+          if (kind === 'c') {
+            if (sim.campaignId === currentObj.id) sim.campaignId = '';
+            if (agentPreviewCampaignId === currentObj.id) agentPreviewCampaignId = '';
+          }
         }
       } else {
         const template = act === 'dup' ? currentObj : kind === 'c' ? null : arr[0];
         const blankCampaign = {
-          id: '', name: '', agentId: '', viciCampaign: '', lists: '', start: '09:00', end: '20:00',
+          id: '', name: '', agentId: '', agentIds: [], viciCampaign: '', lists: '', start: '09:00', end: '20:00',
           tz: 'America/New_York', attempts: 3, retry: 120, maxCalls: 10, xferType: 'ingroup',
           xferTarget: '', fallback: '', dnc: true, disclosure: '', dispos: '',
           complianceRules: MISSING_CAMPAIGN_RULES, presenceCheckText: DEFAULT_PRESENCE_CHECK_TEXT,
@@ -8000,7 +8129,7 @@
           // A campaign is a safety boundary: never carry another campaign’s
           // VICIdial ID, agent assignment, disposition confirmation or rules into it.
           Object.assign(clone, {
-            agentId: '', viciCampaign: '', lists: '', xferTarget: '', fallback: '', dnc: true,
+            agentId: '', agentIds: [], viciCampaign: '', lists: '', xferTarget: '', fallback: '', dnc: true,
             disclosure: '', dispos: '', complianceRules: MISSING_CAMPAIGN_RULES,
             presenceCheckText: DEFAULT_PRESENCE_CHECK_TEXT, deadAirTimeoutSec: 8,
             deadAirDisposition: '', deadAirDispositionVerified: false,
@@ -8057,6 +8186,8 @@
         S = nextState;
         clearLocalDraft();
         enforceDeepgramOnlyLlms(S);
+        upgradeRealtimeAgentFeatures(S);
+        needsVerification = true;
         S.updatedAt = new Date().toISOString();
         try {
           window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
@@ -8076,6 +8207,7 @@
       S = data.state;
       clearLocalDraft();
       enforceDeepgramOnlyLlms(S);
+      needsVerification = false;
       snap = comparableSnapshot(S);
       revisions = data.revisions || [];
       latestRevisionId = data.revisionId;
@@ -8097,6 +8229,9 @@
       if (kind === 'a' && !campaignsForAgent(t.value).some((campaign) => campaign.id === sim.campaignId)) {
         sim.campaignId = '';
       }
+      if (kind === 'a' && !campaignsForAgent(t.value).some((campaign) => campaign.id === agentPreviewCampaignId)) {
+        agentPreviewCampaignId = '';
+      }
       if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
       if (kind === 'a') {
         for (const log of sim.callLogs) revokeRecordingUrl(log.id);
@@ -8109,6 +8244,43 @@
       return;
     }
 
+    if (t.dataset.agentCampaign) {
+      const campaign = S.campaigns.find((entry) => entry.id === t.dataset.agentCampaign);
+      if (!campaign) return;
+      const agentId = A().id;
+      setCampaignBotAssignment(campaign, agentId, t.checked);
+      if (!campaignAssignedToAgent(campaign, agentId) && agentPreviewCampaignId === campaign.id) agentPreviewCampaignId = '';
+      if (t.checked && !agentPreviewCampaignId) agentPreviewCampaignId = campaign.id;
+      updateLivePreview();
+      updateHeaderStatus();
+      render();
+      return;
+    }
+    if (t.dataset.campaignBot) {
+      const campaign = C();
+      if (!campaign) return;
+      setCampaignBotAssignment(campaign, t.dataset.campaignBot, t.checked);
+      updateLivePreview();
+      updateHeaderStatus();
+      render();
+      return;
+    }
+    if (t.dataset.campaignPrimaryBot) {
+      const campaign = C();
+      const agentId = t.dataset.campaignPrimaryBot;
+      if (!campaign || !t.checked || !campaignAssignedToAgent(campaign, agentId)) return;
+      campaign.agentId = agentId;
+      campaign.agentIds = assignedBotIds(campaign);
+      updateLivePreview();
+      updateHeaderStatus();
+      render();
+      return;
+    }
+    if (t.id === 'agent-preview-campaign') {
+      agentPreviewCampaignId = t.value;
+      updateLivePreview();
+      return;
+    }
     if (t.id === 'sim-campaign') {
       sim.campaignId = t.value;
       render();

@@ -6,7 +6,7 @@ import { GreetingRecord } from './greetings';
 import { createOpeningGate, OpeningGate, prepareDelayedOpening } from './opening';
 import { normalizeState } from './defaults';
 import { getSecret, MANAGED_SECRET_KEYS } from './env-store';
-import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCallReadinessBlockers } from './settings-builder';
+import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCallReadinessBlockers, isCampaignAssignedToAgent } from './settings-builder';
 import { Agent, Campaign, ConsoleState } from './types';
 import { executeCustomFunctionWebhook } from './webhook-executor';
 
@@ -515,12 +515,12 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           return;
         }
         const requestedCampaign = activeState.campaigns.find((c) => c.id === startMsg.campaignId);
-        if (!requestedCampaign || requestedCampaign.agentId !== requestedAgent.id) {
-          sendFatalError('CAMPAIGN_ASSIGNMENT_MISMATCH', 'The selected campaign is not assigned to this bot. Assign it in Campaigns and retry.');
+        if (!requestedCampaign || !isCampaignAssignedToAgent(requestedCampaign, requestedAgent.id)) {
+          sendFatalError('CAMPAIGN_ASSIGNMENT_MISMATCH', 'The selected campaign is not assigned to this bot. Assign it from the campaign or agent section and retry.');
           finalizeCall('campaign_assignment_mismatch');
           return;
         }
-        const campaignBlockers = getCampaignCallReadinessBlockers(activeState, requestedCampaign);
+        const campaignBlockers = getCampaignCallReadinessBlockers(activeState, requestedCampaign, requestedAgent.id);
         if (campaignBlockers.length) {
           sendFatalError('CAMPAIGN_NOT_READY', `Campaign “${requestedCampaign.name}” is not ready: ${campaignBlockers.join('; ')}.`);
           finalizeCall('campaign_not_ready');

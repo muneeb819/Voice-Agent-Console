@@ -9,6 +9,7 @@ import {
   generateViciConfig,
   getCampaignCallReadinessBlockers,
   getDeploymentReadinessBlockers,
+  isCampaignAssignedToAgent,
   parseJsonObject,
   parseJsonSchema,
   validateAgent,
@@ -268,6 +269,8 @@ async function run() {
     const dup1 = { ...JSON.parse(JSON.stringify(state.agents[0])), id: 'ag_u1', name: 'Untitled' };
     const dup2 = { ...JSON.parse(JSON.stringify(state.agents[0])), id: 'ag_u2', name: 'Untitled' };
     const testState = { ...state, agents: [state.agents[0], dup1, dup2] };
+    const multiBotCampaign = testState.campaigns.find((campaign: any) => campaign.agentId === state.agents[0].id)!;
+    multiBotCampaign.agentIds = [...new Set([...(multiBotCampaign.agentIds || []), dup1.id])];
 
     const putRes = await fetch(`${BASE}/api/state`, {
       method: 'PUT',
@@ -277,6 +280,8 @@ async function run() {
     assert.strictEqual(putRes.status, 200);
     const putData: any = await putRes.json();
     assert.ok('ag_u1' in putData.settingsByAgentId && 'ag_u2' in putData.settingsByAgentId);
+    assert.ok(putData.settingsByAgentId.ag_u1.campaignIds.includes(multiBotCampaign.id), 'Agent settings payload includes campaigns assigned from either section');
+    assert.ok(putData.settingsByCampaignId[multiBotCampaign.id].settingsByAgentId.ag_u1.settings, 'Campaign settings payload includes every assigned bot');
 
     // Check SQLite & JSON mirror files exist on disk
     const dbFile = path.join(DATA_DIR, 'console.sqlite');
@@ -346,14 +351,25 @@ async function run() {
     });
   });
 
-  await check('14. Explicit campaign rules, multi-campaign routing, and hard readiness blockers', () => {
+  await check('14. Explicit campaign rules, multi-bot assignment, multi-campaign routing, and hard readiness blockers', () => {
     const state = configureTestServices(createDefaultState());
     const agent = state.agents[0];
     const first = state.campaigns.find((campaign: any) => campaign.agentId === agent.id)!;
+    const legacyCampaign = normalizeState({ ...structuredClone(state), campaigns: [{ ...first, agentIds: undefined }] }).campaigns[0];
+    assert.deepStrictEqual(legacyCampaign.agentIds, [first.agentId], 'Legacy single-bot campaigns migrate without losing their assignment');
+    const unassignedLegacy = normalizeState({ ...structuredClone(state), campaigns: [{ ...first, agentId: '', agentIds: undefined }] }).campaigns[0];
+    assert.deepStrictEqual(unassignedLegacy.agentIds, [], 'Legacy unassigned campaigns do not receive a fabricated bot assignment');
     first.deadAirDispositionVerified = true;
     const firstRules = first.complianceRules;
     const firstSettings = buildDeepgramSettings(state, agent, first);
     assert.ok(firstSettings.agent.think.prompt.includes(firstRules));
+
+    const secondaryAgent = state.agents.find((entry: any) => entry.id !== agent.id)!;
+    first.agentIds.push(secondaryAgent.id);
+    assert.ok(isCampaignAssignedToAgent(first, secondaryAgent.id), 'A campaign may be assigned to multiple bots');
+    const secondarySettings = buildDeepgramSettings(state, secondaryAgent, first);
+    assert.ok(secondarySettings.agent.think.prompt.includes(firstRules), 'An explicitly assigned secondary bot receives the campaign rules');
+    assert.deepStrictEqual(getCampaignCallReadinessBlockers(state, first, secondaryAgent.id), [], 'Secondary bot readiness is checked against its assignment');
 
     const second = { ...first, id: 'c_second_same_agent', name: 'Second campaign', viciCampaign: 'SECOND', complianceRules: 'Second campaign rules: use a distinct approved script and never assert unverified benefits.' };
     state.campaigns.push(second);
@@ -365,6 +381,7 @@ async function run() {
     const wrongAssignment = structuredClone(state);
     const wrongCampaign = wrongAssignment.campaigns.find((campaign: any) => campaign.id === second.id)!;
     wrongCampaign.agentId = 'someone-else';
+    wrongCampaign.agentIds = ['someone-else'];
     assert.throws(() => buildDeepgramSettings(wrongAssignment, wrongAssignment.agents[0], wrongCampaign), /not explicitly assigned/i);
     assert.deepStrictEqual(getCampaignCallReadinessBlockers(state, first), [], 'Multiple campaign assignments are allowed');
 
@@ -381,7 +398,7 @@ async function run() {
     assert.ok(getCampaignCallReadinessBlockers(state, noDispositions).some((message) => message.includes('At least one')));
 
     const unassigned = structuredClone(state);
-    unassigned.campaigns = unassigned.campaigns.filter((campaign: any) => campaign.agentId !== agent.id);
+    unassigned.campaigns = unassigned.campaigns.filter((campaign: any) => !isCampaignAssignedToAgent(campaign, agent.id));
     assert.ok(validateAgent(unassigned, agent).some((item) => item.level === 'er' && item.message.includes('assigned')));
     assert.ok(getDeploymentReadinessBlockers(unassigned).some((message) => message.includes('must be explicitly assigned')));
 
