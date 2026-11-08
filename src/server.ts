@@ -19,6 +19,7 @@ import {
   getAuthenticatedUser,
   getRequestSessionToken,
   hasActiveAuthSession,
+  hasAdminAccess,
   hasRegisteredUsers,
   invalidateAdminSession,
   invalidateUserCountCache,
@@ -166,7 +167,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   };
 
   const canCreateAccount = (req: Request): boolean =>
-    hasActiveAuthSession(req) || (!isAuthEnabled() && isRequestAuthorized(req));
+    (!isAuthEnabled() && isRequestAuthorized(req)) || hasAdminAccess(req);
 
   const rateLimited = (
     key: string,
@@ -245,7 +246,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       return;
     }
 
-    const result = createUser(req.body || {});
+    const result = createUser(req.body || {}, countUsers() === 0 ? 'owner' : 'operator');
     if (!result.ok || !result.user) {
       noteFailure(key, signupAttempts);
       res.status(400).json({
@@ -269,7 +270,6 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       authEnabled: true,
       authenticated: true,
       user: result.user,
-      token,
     });
   });
 
@@ -295,7 +295,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       loginAttempts.delete(key);
       const token = createUserSession(user.id);
       setAuthCookie(res, token, req);
-      res.json({ ok: true, authEnabled: true, authenticated: true, user, token });
+      res.json({ ok: true, authEnabled: true, authenticated: true, user });
       return;
     }
 
@@ -316,7 +316,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     loginAttempts.delete(key);
     const token = createSessionToken();
     setAuthCookie(res, token, req);
-    res.json({ ok: true, authEnabled: true, authenticated: true, token });
+    res.json({ ok: true, authEnabled: true, authenticated: true });
   });
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {
