@@ -87,6 +87,8 @@ import {
   createUserSession,
   destroyUserSession,
   purgeExpiredSessions,
+  listPublicUsers,
+  setUserRole,
 } from './user-store';
 import {
   discoverActiveTunnelUrl,
@@ -165,8 +167,14 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     return subKey ? `${baseIp}:${subKey}` : baseIp;
   };
 
+  const currentUser = (req: Request) => getAuthenticatedUser(req);
+  const isOwnerOrAdmin = (req: Request): boolean => {
+    const user = currentUser(req);
+    // Legacy ADMIN_PASSWORD sessions remain an explicit administrator path.
+    return user ? user.role === 'owner' || user.role === 'admin' : hasActiveAuthSession(req);
+  };
   const canCreateAccount = (req: Request): boolean =>
-    hasActiveAuthSession(req) || (!isAuthEnabled() && isRequestAuthorized(req));
+    (!isAuthEnabled() && isRequestAuthorized(req)) || isOwnerOrAdmin(req);
 
   const rateLimited = (
     key: string,
@@ -269,7 +277,6 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       authEnabled: true,
       authenticated: true,
       user: result.user,
-      token,
     });
   });
 
@@ -295,7 +302,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       loginAttempts.delete(key);
       const token = createUserSession(user.id);
       setAuthCookie(res, token, req);
-      res.json({ ok: true, authEnabled: true, authenticated: true, user, token });
+      res.json({ ok: true, authEnabled: true, authenticated: true, user });
       return;
     }
 
@@ -316,7 +323,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     loginAttempts.delete(key);
     const token = createSessionToken();
     setAuthCookie(res, token, req);
-    res.json({ ok: true, authEnabled: true, authenticated: true, token });
+    res.json({ ok: true, authEnabled: true, authenticated: true });
   });
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {
@@ -327,7 +334,36 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     res.json({ ok: true, authEnabled: true, authenticated: false });
   });
 
-  app.use('/api', apiAuthMiddleware);
+  app.use('/api', apiAuthMiddleware, (req: Request, res: Response, next) => {
+    const ownerOnly = req.path === '/secrets' || req.path === '/state/reset' ||
+      req.path === '/demo-tunnel/start' || req.path === '/demo-tunnel/stop' ||
+      req.path === '/vici/release-bundle' || req.path === '/auth/users' ||
+      req.path.startsWith('/auth/users/');
+    if (ownerOnly && !isOwnerOrAdmin(req)) {
+      res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Owner or administrator permission required.' });
+      return;
+    }
+    next();
+  });
+
+  app.get('/api/auth/users', (req: Request, res: Response) => {
+    if (!isOwnerOrAdmin(req)) { res.status(403).json({ ok: false, code: 'FORBIDDEN' }); return; }
+    res.json({ ok: true, users: listPublicUsers() });
+  });
+
+  app.put('/api/auth/users/:id/role', (req: Request, res: Response) => {
+    const actor = currentUser(req);
+    if (actor && actor.role !== 'owner') { res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Only the owner can change account roles.' }); return; }
+    if (!isOwnerOrAdmin(req)) { res.status(403).json({ ok: false, code: 'FORBIDDEN' }); return; }
+    const targetId = String(req.params.id || '');
+    const nextRole = String(req.body?.role || '');
+    if (!['admin', 'operator'].includes(nextRole) || (actor && actor.id === targetId)) {
+      res.status(400).json({ ok: false, code: 'INVALID_ROLE', error: 'Choose admin or operator; the active owner role cannot be changed here.' });
+      return;
+    }
+    if (!setUserRole(targetId, nextRole as 'admin' | 'operator')) { res.status(404).json({ ok: false, code: 'USER_NOT_FOUND' }); return; }
+    res.json({ ok: true });
+  });
 
   const buildTelemetryOverview = (
     state = getConsoleState(),
