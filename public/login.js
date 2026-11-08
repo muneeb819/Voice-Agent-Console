@@ -404,7 +404,7 @@
           input.select();
           return;
         }
-        if (out.data.token) saveAuthToken(out.data.token);
+
         if (progressBar) progressBar.style.width = '100%';
         if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
         window.setTimeout(function () { goHome(); }, 320);
@@ -493,10 +493,10 @@
         if (field === 'password') { markInvalid(password, true); password.focus(); }
         return;
       }
-      if (out.data.token) saveAuthToken(out.data.token);
+
       if (progressBar) progressBar.style.width = '100%';
       if (loaderText) loaderText.textContent = 'ACCOUNT READY';
-      window.setTimeout(function () { goHome(out.data.token || ''); }, 360);
+      window.setTimeout(function () { goHome(); }, 360);
     } catch (err) {
       finishLoader();
       setMsg(msg, 'Network error. Check your connection and try again.');
