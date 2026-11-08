@@ -168,6 +168,13 @@ async function run() {
     assert.strictEqual((await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: json, body: account('anonymous@example.test') })).status, 403);
     const second = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Cookie: firstCookie }, body: account('second@example.test') });
     assert.strictEqual(second.status, 201, 'An authenticated owner can provision an operator account');
+    const createdOperator = await second.json() as any;
+    assert.strictEqual(createdOperator.user.role, 'operator', 'New provisioned accounts receive least-privilege operator role');
+    const operatorLogin = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: json, body: JSON.stringify({ email: 'second@example.test', password: 'Test-Password-123!' }) });
+    assert.strictEqual(operatorLogin.status, 200);
+    const operatorCookie = String(operatorLogin.headers.get('set-cookie') || '').split(';')[0];
+    assert.strictEqual((await fetch(`${base}/api/secrets`, { headers: { Cookie: operatorCookie } })).status, 403, 'Operators cannot read administrator secrets');
+    assert.strictEqual((await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Cookie: operatorCookie }, body: account('third@example.test') })).status, 403, 'Operators cannot provision additional accounts');
     const signupPage = await fetch(`${base}/signup`, { headers: { Cookie: firstCookie }, redirect: 'manual' });
     assert.strictEqual(signupPage.status, 200);
     assert.strictEqual((await fetch(`${base}/api/vici/register-call`)).status, 503, 'Direct local PBX hook reaches handler');
