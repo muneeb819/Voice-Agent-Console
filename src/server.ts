@@ -38,6 +38,7 @@ import {
   exportBridgeLogsCsv,
   getBridgeAnalyticsSummary,
   getConsoleState,
+  closeDb,
   getSimulatorCallLog,
   listBridgeCallLogs,
   listGreetingLibrary,
@@ -104,6 +105,11 @@ import {
 
 loadEnv();
 
+export type AsyncRoute = (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>;
+export function asyncRoute(handler: AsyncRoute): express.RequestHandler {
+  return (req, res, next) => { void Promise.resolve(handler(req, res, next)).catch(next); };
+}
+
 export function createApp(viciBridge?: VicidialBridgeService) {
   const app = express();
   // Proxy headers are untrusted by default. Configure only known proxy IPs or
@@ -111,6 +117,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   const trustedProxies = String(process.env.TRUST_PROXY || '').trim();
   if (trustedProxies) app.set('trust proxy', trustedProxies.split(',').map((x) => x.trim()).filter(Boolean));
   const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+  const loginIpAttempts = new Map<string, { count: number; resetAt: number }>();
   const signupAttempts = new Map<string, { count: number; resetAt: number }>();
   const loginWindowMs = 15 * 60 * 1000;
   const loginAttemptLimit = 5;
@@ -122,7 +129,13 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     // Session cookies are first-party (SameSite=Lax).
     // Do not grant cross-origin API access, and reject browser requests with a
     // mismatched Origin even when they would not need a CORS preflight.
-    if (req.path.startsWith('/api/') && !isSameOriginRequest(req, app.get('trust proxy fn'))) {
+    const requestPath = new URL(req.originalUrl || req.url || '/', 'http://local.invalid').pathname.toLowerCase();
+    const site = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+    if (requestPath.startsWith('/api/') && (site === 'cross-site' || (site === 'same-site' && !['GET','HEAD','OPTIONS'].includes(req.method)))) {
+      res.status(403).json({ ok: false, code: 'CROSS_SITE_REQUEST_BLOCKED', error: 'Cross-site API requests are not allowed.' });
+      return;
+    }
+    if (requestPath.startsWith('/api/') && !isSameOriginRequest(req, app.get('trust proxy fn'))) {
       res.status(403).json({ ok: false, error: 'Cross-origin API requests are not allowed.' });
       return;
     }
@@ -130,7 +143,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     // An image/navigation request may have no Origin, so also reject browser
     // fetches to these endpoints from another site or origin.
     const fetchSite = req.get('sec-fetch-site');
-    if ((req.path === '/api/vici/register-call' || req.path === '/api/vici/precall') &&
+    if ((requestPath === '/api/vici/register-call' || requestPath === '/api/vici/precall') &&
         fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
       res.status(403).json({ ok: false, error: 'Cross-origin pre-call requests are not allowed.' });
       return;
@@ -233,7 +246,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   });
 
   // Create a new account (email + full name + password) and sign in immediately.
-  app.post('/api/auth/signup', (req: Request, res: Response) => {
+  app.post('/api/auth/signup', asyncRoute(async (req: Request, res: Response) => {
     if (!canCreateAccount(req)) {
       res.status(403).json({
         ok: false,
@@ -250,7 +263,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       return;
     }
 
-    const result = createUser(req.body || {});
+    const result = await createUser(req.body || {});
     if (!result.ok || !result.user) {
       noteFailure(key, signupAttempts);
       res.status(400).json({
@@ -279,9 +292,22 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       authenticated: true,
       user: result.user,
     });
-  });
+  }));
 
-  app.post('/api/auth/login', (req: Request, res: Response) => {
+  app.post('/api/auth/login', asyncRoute(async (req: Request, res: Response) => {
+    const ip = req.socket?.remoteAddress || 'unknown';
+    const ipNow = Date.now();
+    let ipBucket = loginIpAttempts.get(ip);
+    if (!ipBucket || ipBucket.resetAt <= ipNow) {
+      if (loginIpAttempts.size >= 1000 && !loginIpAttempts.has(ip)) loginIpAttempts.delete(loginIpAttempts.keys().next().value as string);
+      ipBucket = { count: 0, resetAt: ipNow + 60_000 };
+      loginIpAttempts.set(ip, ipBucket);
+    }
+    if (++ipBucket.count > 30) {
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((ipBucket.resetAt - ipNow) / 1000))));
+      res.status(429).json({ ok: false, code: 'RATE_LIMITED', error: 'Too many sign-in attempts. Please wait a minute.' });
+      return;
+    }
     const email = String(req.body?.email ?? '').trim();
     const candidate = String(req.body?.password ?? '');
     const key = rateKey(req, email ? email.toLowerCase() : 'admin');
@@ -294,7 +320,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
     // --- Email/password account sign-in ---
     if (email) {
-      const user = authenticateUser(email, candidate);
+      const user = await authenticateUser(email, candidate);
       if (!user) {
         noteFailure(key);
         res.status(401).json({ ok: false, code: 'INVALID_CREDENTIALS', error: 'Invalid email or password.' });
@@ -325,7 +351,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     const token = createSessionToken();
     setAuthCookie(res, token, req);
     res.json({ ok: true, authEnabled: true, authenticated: true });
-  });
+  }));
 
   app.post('/api/auth/logout', (req: Request, res: Response) => {
     const token = getRequestSessionToken(req);
@@ -611,12 +637,12 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     });
   });
 
-  app.get('/api/state', async (_req: Request, res: Response) => {
+  app.get('/api/state', asyncRoute(async (_req: Request, res: Response) => {
     const liveTunnel = await discoverActiveTunnelUrl();
     res.json({ ok: true, ...buildPayload(getConsoleState(), liveTunnel) });
-  });
+  }));
 
-  app.get('/api/telemetry/overview', async (_req: Request, res: Response) => {
+  app.get('/api/telemetry/overview', asyncRoute(async (_req: Request, res: Response) => {
     const state = getConsoleState();
     const liveTunnel = await discoverActiveTunnelUrl();
     res.json({
@@ -624,9 +650,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       telemetry: buildTelemetryOverview(state, validateState(state), liveTunnel),
       publicDemoUrl: liveTunnel,
     });
-  });
+  }));
 
-  app.get('/api/demo-tunnel/status', async (_req: Request, res: Response) => {
+  app.get('/api/demo-tunnel/status', asyncRoute(async (_req: Request, res: Response) => {
     const url = await discoverActiveTunnelUrl();
     res.json({
       ok: true,
@@ -636,9 +662,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       signupUrl: url ? `${url}/signup` : null,
       lanIp: getPreferredLanIpv4(),
     });
-  });
+  }));
 
-  app.post('/api/demo-tunnel/start', async (req: Request, res: Response) => {
+  app.post('/api/demo-tunnel/start', asyncRoute(async (req: Request, res: Response) => {
     if (!isAuthEnabled() || !hasActiveAuthSession(req)) {
       res.status(403).json({ ok: false, error: 'Sign in before opening a public tunnel.' });
       return;
@@ -660,7 +686,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       loginUrl: `${out.publicUrl}/login`,
       signupUrl: `${out.publicUrl}/signup`,
     });
-  });
+  }));
 
   app.post('/api/demo-tunnel/stop', (_req: Request, res: Response) => {
     stopPublicDemoTunnel();
@@ -846,7 +872,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     res.json({ ok: true, parsed });
   });
 
-  app.post('/api/vici/verify', async (req: Request, res: Response) => {
+  app.post('/api/vici/verify', asyncRoute(async (req: Request, res: Response) => {
     try {
       const st = getConsoleState();
       const viciCfg = req.body?.vici ? { ...st.vici, ...req.body.vici } : st.vici;
@@ -867,9 +893,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     } catch (err: any) {
       res.status(400).json({ ok: false, error: err?.message || 'VICIdial verification failed' });
     }
-  });
+  }));
 
-  app.post('/api/vici/simulate-call', async (req: Request, res: Response) => {
+  app.post('/api/vici/simulate-call', asyncRoute(async (req: Request, res: Response) => {
     if (!viciBridge) {
       res.status(503).json({ ok: false, error: 'VICIdial Bridge service is not attached' });
       return;
@@ -905,7 +931,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         error: err?.message || 'Simulated VICIdial bridge call failed',
       });
     }
-  });
+  }));
 
   app.get('/api/vici/deploy-script', (_req: Request, res: Response) => {
     const blockers = getDeploymentReadinessBlockers(getConsoleState());
@@ -965,7 +991,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     res.json({ ok: true, callId, action: 'force_hangup' });
   });
 
-  app.post('/api/vici/calls/:callId/transfer', async (req: Request, res: Response) => {
+  app.post('/api/vici/calls/:callId/transfer', asyncRoute(async (req: Request, res: Response) => {
     if (!viciBridge) {
       res.status(503).json({ ok: false, error: 'Bridge service not attached' });
       return;
@@ -980,9 +1006,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       return;
     }
     res.json({ ok: true, callId, action: 'force_transfer' });
-  });
+  }));
 
-  app.post('/api/functions/test-webhook', async (req: Request, res: Response) => {
+  app.post('/api/functions/test-webhook', asyncRoute(async (req: Request, res: Response) => {
     try {
       const state = getConsoleState();
       const fnDef =
@@ -1012,7 +1038,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     } catch (err: any) {
       res.status(400).json({ ok: false, error: err?.message || 'Webhook test failed' });
     }
-  });
+  }));
 
   app.get('/api/vici/release-bundle', (_req: Request, res: Response) => {
     const blockers = getDeploymentReadinessBlockers(getConsoleState());
@@ -1039,7 +1065,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     res.json({ ok: true, secrets: getSecretsStatus() });
   });
 
-  app.post('/api/secrets', async (req: Request, res: Response) => {
+  app.post('/api/secrets', asyncRoute(async (req: Request, res: Response) => {
     try {
       const incoming = req.body || {};
       const updates: Partial<Record<SecretKeyName, string>> = {};
@@ -1082,9 +1108,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         secrets: getSecretsStatus(),
       });
     }
-  });
+  }));
 
-  app.post('/api/deepgram/verify', async (req: Request, res: Response) => {
+  app.post('/api/deepgram/verify', asyncRoute(async (req: Request, res: Response) => {
     try {
       const explicitKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey : undefined;
       const diagnostic = await verifyDeepgramConnection(explicitKey);
@@ -1099,9 +1125,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         error: err?.message || 'Deepgram diagnostic check failed',
       });
     }
-  });
+  }));
 
-  app.get('/api/deepgram/voices', async (req: Request, res: Response) => {
+  app.get('/api/deepgram/voices', asyncRoute(async (req: Request, res: Response) => {
     try {
       const force = req.query.refresh === '1' || req.query.refresh === 'true';
       const catalog = await fetchDeepgramVoiceCatalog(force);
@@ -1158,14 +1184,14 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         error: err?.message || 'Failed to load Deepgram voice catalog',
       });
     }
-  });
+  }));
 
-  app.get('/api/deepgram/llm-models', async (_req: Request, res: Response) => {
+  app.get('/api/deepgram/llm-models', asyncRoute(async (_req: Request, res: Response) => {
     const models = await fetchDeepgramLlmModels();
     res.json({ ok: true, count: models.length, models });
-  });
+  }));
 
-  app.get('/api/deepgram/sample', async (req: Request, res: Response) => {
+  app.get('/api/deepgram/sample', asyncRoute(async (req: Request, res: Response) => {
     try {
       const sampleUrl = String(req.query.url || '');
       const { buffer, contentType } = await fetchAllowedSampleAudio(sampleUrl);
@@ -1175,9 +1201,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     } catch (err: any) {
       res.status(err?.statusCode || 400).json({ ok: false, code: err?.code, error: err?.message || 'Unable to stream sample audio' });
     }
-  });
+  }));
 
-  app.post('/api/tts/preview', async (req: Request, res: Response) => {
+  app.post('/api/tts/preview', asyncRoute(async (req: Request, res: Response) => {
     try {
       const result = await synthesizeTtsPreview(req.body || {});
       res.setHeader('Content-Type', result.contentType);
@@ -1192,11 +1218,11 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         error: err?.message || 'Failed to synthesize TTS preview',
       });
     }
-  });
+  }));
 
   // ==================== LOCAL SPEECH SERVICE (1-CLICK STT + TTS) ====================
 
-  app.get('/api/speech-service/status', async (req: Request, res: Response) => {
+  app.get('/api/speech-service/status', asyncRoute(async (req: Request, res: Response) => {
     try {
       const explicitUrl = typeof req.query.url === 'string' ? req.query.url : undefined;
       const diagnostic = await verifySpeechServiceConnection(explicitUrl);
@@ -1216,9 +1242,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         error: err?.message || 'Failed to query Speech Service status',
       });
     }
-  });
+  }));
 
-  app.post('/api/speech-service/test', async (req: Request, res: Response) => {
+  app.post('/api/speech-service/test', asyncRoute(async (req: Request, res: Response) => {
     try {
       const result = await runSpeechServiceRoundTripSmoke({
         url: typeof req.body?.url === 'string' ? req.body.url : undefined,
@@ -1233,9 +1259,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         error: err?.message || 'Speech Service round-trip test failed',
       });
     }
-  });
+  }));
 
-  app.post('/api/speech-service/activate', async (req: Request, res: Response) => {
+  app.post('/api/speech-service/activate', asyncRoute(async (req: Request, res: Response) => {
     try {
       const secretUpdates: Partial<Record<SecretKeyName, string>> = {};
       if (typeof req.body?.url === 'string' && req.body.url.trim()) {
@@ -1303,17 +1329,24 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         error: err?.message || 'Failed to activate Local Speech Service',
       });
     }
-  });
+  }));
 
   const publicDir = path.resolve(__dirname, '..', 'public');
 
   // Dedicated authentication pages (same shell, tabbed Sign In / Create Account)
+  const safeNextPath = (raw: unknown): string => {
+    const value = typeof raw === 'string' ? raw : '';
+    if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\') || /[\x00-\x1f\x7f]/.test(value)) return '/';
+    try {
+      const parsed = new URL(value, 'http://local.invalid');
+      return parsed.origin === 'http://local.invalid' ? `${parsed.pathname}${parsed.search}` : '/';
+    } catch { return '/'; }
+  };
+
   const serveAuthShell = (req: Request, res: Response) => {
     // A signed-in operator can explicitly open /signup to provision an account.
     if (hasActiveAuthSession(req) && req.path !== '/signup') {
-      const rawNext = typeof req.query.next === 'string' ? req.query.next : '';
-      const target = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/';
-      res.redirect(target);
+      res.redirect(safeNextPath(req.query.next));
       return;
     }
     res.setHeader('Cache-Control', 'no-store');
@@ -1347,6 +1380,14 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   app.get('*', serveConsoleEntry);
 
+  app.use((err: any, req: Request, res: Response, next: express.NextFunction) => {
+    if (res.headersSent) { next(err); return; }
+    const explicit = Number(err?.statusCode || err?.status);
+    const status = err?.type === 'entity.too.large' ? 413 : err?.type === 'entity.parse.failed' ? 400 : explicit >= 400 && explicit < 500 ? explicit : 500;
+    if (status >= 500) console.error('[http] Unhandled request failure:', err instanceof Error ? err.name : 'Error');
+    res.status(status).json({ ok: false, code: status === 413 ? 'BODY_TOO_LARGE' : status === 400 ? 'INVALID_BODY' : 'INTERNAL_ERROR', error: status === 413 ? 'Request body is too large.' : status === 400 ? 'Request body is invalid.' : 'The server could not complete this request.' });
+  });
+
   return app;
 }
 
@@ -1355,11 +1396,17 @@ export function createServerWithSimulator(bridgeOpts?: ViciBridgeOptions & { ena
   const viciBridge = enableBridge ? new VicidialBridgeService(bridgeOpts) : undefined;
   const app = createApp(viciBridge);
   const server = http.createServer(app);
+  server.requestTimeout = 60_000;
+  server.headersTimeout = 15_000;
+  server.keepAliveTimeout = 5_000;
+  server.maxRequestsPerSocket = 1000;
 
   const simWss = attachLiveSimulator(undefined, true);
   const monitorWss = viciBridge ? viciBridge.createMonitorWebSocketServer() : null;
 
   server.on('upgrade', (req, socket, head) => {
+    socket.on('error', () => {});
+    try {
     if (!isSameOriginRequest(req, app.get('trust proxy fn'))) {
       socket.write('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nForbidden');
       socket.destroy();
@@ -1382,9 +1429,12 @@ export function createServerWithSimulator(bridgeOpts?: ViciBridgeOptions & { ena
     } else {
       socket.destroy();
     }
+    } catch {
+      socket.destroy();
+    }
   });
 
-  return { app, server, viciBridge };
+  return { app, server, viciBridge, liveSimulator: simWss };
 }
 
 if (require.main === module) {
@@ -1399,7 +1449,7 @@ if (require.main === module) {
     console.error('[VoiceAgentConsole] Refusing to bind to a non-loopback interface without an admin password or a registered user.');
     process.exit(1);
   }
-  const { server, viciBridge } = createServerWithSimulator({ enableBridge: true });
+  const { server, viciBridge, liveSimulator } = createServerWithSimulator({ enableBridge: true });
 
   (async () => {
     if (initialPort !== requestedPort) {
@@ -1418,15 +1468,6 @@ if (require.main === module) {
             const nextPort = candidatePort + 5000;
             console.warn(
               `[VoiceAgentConsole] Privileged port ${candidatePort} requires CAP_NET_BIND_SERVICE (EACCES) — switching automatically to port ${nextPort}...`
-            );
-            server.removeListener('error', onError);
-            listenWithFallback(nextPort, retriesLeft - 1);
-            return;
-          }
-          if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
-            const nextPort = candidatePort + 1;
-            console.warn(
-              `[VoiceAgentConsole] Port ${candidatePort} is busy (EADDRINUSE) — switching automatically to port ${nextPort}...`
             );
             server.removeListener('error', onError);
             listenWithFallback(nextPort, retriesLeft - 1);
@@ -1459,8 +1500,28 @@ if (require.main === module) {
         server.listen(candidatePort, bindHost);
       };
 
-      listenWithFallback(initialPort, 100);
+      listenWithFallback(initialPort, 0);
     });
+
+    let shuttingDown = false;
+    const shutdown = async (signal: string) => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      console.log(`[VoiceAgentConsole] ${signal} received; shutting down.`);
+      const force = setTimeout(() => process.exit(1), 10000);
+      force.unref();
+      stopPublicDemoTunnel();
+      for (const client of liveSimulator.clients) client.terminate();
+      await new Promise<void>((resolve) => liveSimulator.close(() => resolve()));
+      if (viciBridge) await viciBridge.stop().catch(() => {});
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      server.closeAllConnections?.();
+      closeDb();
+      clearTimeout(force);
+      process.exit(0);
+    };
+    process.once('SIGTERM', () => void shutdown('SIGTERM'));
+    process.once('SIGINT', () => void shutdown('SIGINT'));
 
     if (viciBridge) {
       try {

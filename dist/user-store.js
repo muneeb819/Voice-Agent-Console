@@ -61,22 +61,26 @@ function ensureSchema() {
     schemaReady = true;
 }
 // ---------------------------------------------------------------- passwords
-function hashPassword(password) {
+const SCRYPT_OPTIONS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
+const scryptAsync = (password, salt, keylen) => new Promise((resolve, reject) => {
+    crypto_1.default.scrypt(password, salt, keylen, SCRYPT_OPTIONS, (err, derived) => err ? reject(err) : resolve(derived));
+});
+async function hashPassword(password) {
     const salt = crypto_1.default.randomBytes(16);
-    const hash = crypto_1.default.scryptSync(password, salt, 64);
+    const hash = await scryptAsync(password, salt, 64);
     return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;
 }
-function verifyPassword(password, stored) {
+async function verifyPassword(password, stored) {
     const parts = String(stored || '').split('$');
     if (parts.length !== 3 || parts[0] !== 'scrypt')
         return false;
     const salt = Buffer.from(parts[1], 'hex');
     const expected = Buffer.from(parts[2], 'hex');
-    if (salt.length === 0 || expected.length === 0)
+    if (salt.length < 16 || salt.length > 64 || expected.length !== 64)
         return false;
     let actual;
     try {
-        actual = crypto_1.default.scryptSync(password, salt, expected.length);
+        actual = await scryptAsync(password, salt, 64);
     }
     catch {
         return false;
@@ -139,7 +143,7 @@ function rowToUser(row) {
  * operator otherwise. Returns a field error for invalid input or a duplicate
  * email; other database or password hashing errors can propagate.
  */
-function createUser(input) {
+async function createUser(input) {
     ensureSchema();
     const email = normalizeEmail(input.email);
     const fullName = normalizeFullName(input.fullName);
@@ -154,15 +158,19 @@ function createUser(input) {
     if (pwErr)
         return { ok: false, field: 'password', error: pwErr };
     const db = (0, db_1.getDb)();
-    const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-    if (existing) {
-        return { ok: false, field: 'email', error: 'An account with this email already exists.' };
-    }
     const id = crypto_1.default.randomUUID();
     const now = new Date().toISOString();
-    const role = countUsers() === 0 ? 'owner' : 'operator';
+    // Hash off the event loop, then decide ownership and insert under one write
+    // lock. Two simultaneous first signups must not both become owner.
+    const passwordHash = await hashPassword(password);
     try {
-        db.prepare('INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at, role, active) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)').run(id, email, fullName, hashPassword(password), now, role);
+        const role = db.transactionImmediate(() => {
+            const count = Number(db.prepare('SELECT COUNT(*) AS n FROM users').get()?.n || 0);
+            const assigned = count === 0 ? 'owner' : 'operator';
+            db.prepare('INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at, role, active) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)').run(id, email, fullName, passwordHash, now, assigned);
+            return assigned;
+        })();
+        return { ok: true, user: { id, email, fullName, createdAt: now, lastLoginAt: null, role, active: true } };
     }
     catch (err) {
         if (String(err?.message || '').toLowerCase().includes('unique')) {
@@ -170,10 +178,6 @@ function createUser(input) {
         }
         throw err;
     }
-    return {
-        ok: true,
-        user: { id, email, fullName, createdAt: now, lastLoginAt: null, role, active: true },
-    };
 }
 function findUserByEmail(rawEmail) {
     ensureSchema();
@@ -188,7 +192,7 @@ function findUserByEmail(rawEmail) {
  * for a missing account, inactive account, or invalid credentials. Database
  * errors propagate.
  */
-function authenticateUser(rawEmail, password) {
+async function authenticateUser(rawEmail, password) {
     ensureSchema();
     const email = normalizeEmail(rawEmail);
     if (!email)
@@ -196,7 +200,10 @@ function authenticateUser(rawEmail, password) {
     const row = (0, db_1.getDb)().prepare('SELECT * FROM users WHERE email = ?').get(email);
     if (!row)
         return null;
-    if (Number(row.active ?? 1) !== 1 || !verifyPassword(password, String(row.password_hash)))
+    if (Number(row.active ?? 1) !== 1 || !(await verifyPassword(password, String(row.password_hash))))
+        return null;
+    const active = Number((0, db_1.getDb)().prepare('SELECT active FROM users WHERE id = ?').get(row.id)?.active ?? 0);
+    if (active !== 1)
         return null;
     const now = new Date().toISOString();
     (0, db_1.getDb)().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(now, row.id);
@@ -215,13 +222,16 @@ function getUserById(id) {
     return row ? rowToUser(row) : null;
 }
 // ---------------------------------------------------------------- sessions
+function userSessionHash(token) {
+    return crypto_1.default.createHash('sha256').update(token).digest('hex');
+}
 function createUserSession(userId) {
     ensureSchema();
     const token = crypto_1.default.randomBytes(32).toString('hex');
     const now = Date.now();
     (0, db_1.getDb)()
         .prepare('INSERT INTO user_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
-        .run(token, userId, new Date(now).toISOString(), new Date(now + SESSION_TTL_MS).toISOString());
+        .run(userSessionHash(token), userId, new Date(now).toISOString(), new Date(now + SESSION_TTL_MS).toISOString());
     return token;
 }
 /**
@@ -234,11 +244,17 @@ function getUserBySessionToken(token) {
         return null;
     ensureSchema();
     const db = (0, db_1.getDb)();
-    const row = db.prepare('SELECT * FROM user_sessions WHERE token = ?').get(token);
+    const hashed = userSessionHash(token);
+    let row = db.prepare('SELECT * FROM user_sessions WHERE token = ?').get(hashed);
+    if (!row && /^[a-f0-9]{64}$/.test(token)) {
+        row = db.prepare('SELECT * FROM user_sessions WHERE token = ?').get(token);
+        if (row)
+            db.prepare('UPDATE user_sessions SET token = ? WHERE token = ?').run(hashed, token);
+    }
     if (!row)
         return null;
     if (new Date(String(row.expires_at)).getTime() <= Date.now()) {
-        db.prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
+        db.prepare('DELETE FROM user_sessions WHERE token = ?').run(hashed);
         return null;
     }
     const user = getUserById(String(row.user_id));
@@ -248,7 +264,7 @@ function destroyUserSession(token) {
     if (!token || token.includes('.'))
         return;
     ensureSchema();
-    (0, db_1.getDb)().prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
+    (0, db_1.getDb)().prepare('DELETE FROM user_sessions WHERE token = ? OR token = ?').run(userSessionHash(token), token);
 }
 function purgeExpiredSessions() {
     ensureSchema();

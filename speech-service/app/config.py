@@ -63,6 +63,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check(self) -> "Settings":
+        for name in ("rate_limit_per_min", "max_ws_per_key", "max_upload_mb", "max_audio_seconds", "sync_max_seconds", "max_tts_chars", "stt_concurrency", "tts_concurrency", "job_workers", "job_queue_max", "live_max_utterance_s", "live_idle_timeout_s"):
+            if getattr(self, name) < 1:
+                raise ValueError(f"SPEECH_{name.upper()} must be positive")
+        if self.gate_timeout_seconds <= 0 or self.live_endpoint_ms < 100:
+            raise ValueError("Invalid gate timeout or live endpoint interval")
         if self.backend not in {"real", "fake"}:
             raise ValueError("SPEECH_BACKEND must be real or fake")
         if self.clone_url and not self.clone_token:

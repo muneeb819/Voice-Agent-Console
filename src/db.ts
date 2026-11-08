@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { clearAllRecordings } from './call-recorder';
+import { clearAllRecordings, removeBridgeRecording } from './call-recorder';
 import { removeSimulatorRecording } from './simulator-recordings';
 import { ConsoleState } from './types';
 import { createDefaultState, normalizeState } from './defaults';
@@ -16,6 +16,7 @@ interface SqliteStatementLike {
 }
 
 interface SqliteDbLike {
+  close?: () => void;
   exec: (sql: string) => void;
   prepare: (sql: string) => SqliteStatementLike;
   transaction: <T>(fn: () => T) => () => T;
@@ -35,6 +36,7 @@ function openSqliteEngine(dbPath: string): SqliteDbLike {
     raw.pragma('journal_mode = WAL');
     raw.pragma('busy_timeout = 5000');
     return {
+      close: () => raw.close(),
       exec: (sql: string) => raw.exec(sql),
       prepare: (sql: string) => {
         const stmt = raw.prepare(sql);
@@ -69,6 +71,7 @@ function openSqliteEngine(dbPath: string): SqliteDbLike {
       }
     };
     return {
+      close: () => raw.close(),
       exec: (sql: string) => raw.exec(sql),
       prepare: (sql: string) => {
         const stmt = raw.prepare(sql);
@@ -163,6 +166,14 @@ export interface BridgeCallLogRecord {
 }
 
 let db: SqliteDbLike | null = null;
+
+export function closeDb(): void {
+  if (db) {
+    try { db.close?.(); } catch {}
+    db = null;
+  }
+}
+
 
 export function getDb(): SqliteDbLike {
   if (db) return db;
@@ -294,6 +305,7 @@ export function getDb(): SqliteDbLike {
   return db;
 }
 
+
 export function listGreetingLibrary(): GreetingRecord[] {
   return getDb().prepare(`SELECT greeting_id, persona, context, greeting_text, tone
     FROM greeting_library ORDER BY CAST(greeting_id AS INTEGER), greeting_id`).all() as GreetingRecord[];
@@ -353,8 +365,8 @@ export function trySelectGreeting(agentId: string, enabled: boolean, savedOpenin
 
 function writeJsonMirror(state: ConsoleState): void {
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  const tmpPath = `${JSON_MIRROR_PATH}.tmp`;
-  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf8');
+  const tmpPath = `${JSON_MIRROR_PATH}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmpPath, JSON_MIRROR_PATH);
 }
 
@@ -407,19 +419,19 @@ export function saveConsoleState(
   explicitSummary?: string
 ): { state: ConsoleState; changes: string[]; revisionId: number } {
   const conn = getDb();
-  const prevRow = conn.prepare('SELECT value FROM console_store WHERE key = ?').get('active_state') as
-    | { value: string }
-    | undefined;
-  const prevState = prevRow?.value ? normalizeState(JSON.parse(prevRow.value)) : null;
-
   const nextState = normalizeState(rawState);
   nextState.updatedAt = new Date().toISOString();
-
-  const changes = prevState ? diffStates(prevState, nextState) : ['Initial console configuration created'];
-  const summary = explicitSummary || (changes.length ? changes.join('; ') : 'Saved with verification check');
   const serialized = JSON.stringify(nextState);
+  let changes: string[] = [];
+  let summary = explicitSummary || '';
 
-  const tx = conn.transaction(() => {
+  const tx = conn.transactionImmediate(() => {
+    // Read the previous revision under the same write lock as the update so
+    // concurrent console processes cannot lose a revision or diff stale state.
+    const prevRow = conn.prepare('SELECT value FROM console_store WHERE key = ?').get('active_state') as { value: string } | undefined;
+    const prevState = prevRow?.value ? normalizeState(JSON.parse(prevRow.value)) : null;
+    changes = prevState ? diffStates(prevState, nextState) : ['Initial console configuration created'];
+    summary = explicitSummary || (changes.length ? changes.join('; ') : 'Saved with verification check');
     conn
       .prepare(
         `INSERT INTO console_store (key, value, updated_at)
@@ -441,7 +453,9 @@ export function saveConsoleState(
   });
 
   const revisionId = tx();
-  writeJsonMirror(nextState);
+  try { writeJsonMirror(nextState); } catch (err) {
+    console.error('[state] SQLite save succeeded but JSON mirror write failed:', err instanceof Error ? err.message : err);
+  }
 
   return { state: nextState, changes, revisionId };
 }
@@ -566,6 +580,7 @@ export function clearSimulatorCallLogs(agentId?: string): void {
 
 export function saveBridgeCallLog(record: BridgeCallLogRecord): void {
   const conn = getDb();
+  conn.transactionImmediate(() => {
   conn
     .prepare(
       `INSERT OR REPLACE INTO bridge_calls (
@@ -605,10 +620,13 @@ export function saveBridgeCallLog(record: BridgeCallLogRecord): void {
       JSON.stringify(record.viciApiAudit)
     );
 
+  const stale = conn.prepare('SELECT recording_file FROM bridge_calls WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT 200)').all() as Array<{ recording_file: string | null }>;
+  for (const row of stale) removeBridgeRecording(row.recording_file);
   conn.prepare(`
     DELETE FROM bridge_calls
     WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT 200)
   `).run();
+  })();
 }
 
 export function listBridgeCallLogs(limit = 25): BridgeCallLogRecord[] {
@@ -648,8 +666,10 @@ export function listBridgeCallLogs(limit = 25): BridgeCallLogRecord[] {
 
 export function clearBridgeCallLogs(): void {
   const conn = getDb();
-  conn.prepare('DELETE FROM bridge_calls').run();
-  clearAllRecordings();
+  conn.transactionImmediate(() => {
+    clearAllRecordings();
+    conn.prepare('DELETE FROM bridge_calls').run();
+  })();
 }
 
 export function getBridgeAnalyticsSummary() {
@@ -723,7 +743,8 @@ export function getBridgeAnalyticsSummary() {
 }
 
 function csvCell(val: unknown): string {
-  const s = val === null || val === undefined ? '' : String(val);
+  let s = val === null || val === undefined ? '' : String(val);
+  if (/^[\s]*[=+@-]/.test(s) || /^[\t\r]/.test(s)) s = `'${s}`;
   if (/[",\r\n]/.test(s)) {
     return `"${s.replace(/"/g, '""')}"`;
   }

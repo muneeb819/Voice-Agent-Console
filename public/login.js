@@ -279,7 +279,13 @@
   /** Navigates to a local next path or the home page without a token handoff. */
   function goHome() {
     var next = new URLSearchParams(location.search).get('next');
-    var target = next && next.charAt(0) === '/' && next.charAt(1) !== '/' ? next : (basePrefix || '') + '/';
+    var target = (basePrefix || '') + '/';
+    if (next && next.charAt(0) === '/' && next.charAt(1) !== '/' && next.indexOf('\\') === -1 && !/[\x00-\x1f\x7f]/.test(next)) {
+      try {
+        var parsed = new URL(next, location.origin);
+        if (parsed.origin === location.origin) target = (basePrefix || '') + parsed.pathname + parsed.search;
+      } catch (_) {}
+    }
     location.replace(target);
   }
 

@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import sqlite3
+from contextlib import contextmanager
 import threading
 import time
 import uuid
@@ -29,10 +30,15 @@ class JobStore:
                 updated REAL NOT NULL, filename TEXT, params TEXT NOT NULL, error TEXT)"""
             )
 
-    def _conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _conn(self):
         c = sqlite3.connect(self.path, timeout=30)
         c.row_factory = sqlite3.Row
-        return c
+        try:
+            with c:
+                yield c
+        finally:
+            c.close()
 
     def create(self, owner: str, filename: str, params: dict) -> str:
         jid, now = uuid.uuid4().hex, time.time()
@@ -65,9 +71,10 @@ class JobStore:
                 )
             ]
 
-    def delete(self, jid: str) -> None:
+    def delete(self, jid: str) -> bool:
         with self._lock, self._conn() as c:
-            c.execute("DELETE FROM jobs WHERE id=?", (jid,))
+            cur = c.execute("DELETE FROM jobs WHERE id=? AND status NOT IN ('queued','running')", (jid,))
+            return cur.rowcount > 0
 
 
 class JobManager:
@@ -121,38 +128,44 @@ class JobManager:
         return True
 
     async def _worker(self) -> None:
-        s = self.rt.settings
         while True:
             jid = await self.queue.get()
-            metrics.JOBS_QUEUED.set(self.queue.qsize())
-            job = await asyncio.to_thread(self.store.get, jid)
-            if not job:
-                continue
-            await asyncio.to_thread(self.store.set_status, jid, "running")
-            finished = False
             try:
-                p = json.loads(job["params"])
-                audio = await asyncio.to_thread(decode_file, self.upload_path(jid), s.max_audio_seconds)
-                result = await self.rt.transcribe(audio, mode="job", wait_forever=True, **p)
-                await asyncio.to_thread(self.result_path(jid).write_text, json.dumps(result, ensure_ascii=False))
-                await asyncio.to_thread(self.store.set_status, jid, "completed")
-                finished = True
-                metrics.JOBS_TOTAL.labels("completed").inc()
-            except AudioError as exc:
-                await asyncio.to_thread(self.store.set_status, jid, "failed", str(exc))
-                finished = True
-                metrics.JOBS_TOTAL.labels("failed").inc()
-            except Exception as exc:  # noqa: BLE001
-                log.exception("job failed", extra={"event": "job_failed"})
-                await asyncio.to_thread(self.store.set_status, jid, "failed", "internal error")
-                finished = True
-                metrics.JOBS_TOTAL.labels("failed").inc()
-                _ = exc
+                await self._process(jid)
             finally:
-                # Cancellation at shutdown is not a terminal outcome: retain
-                # the upload so the persisted job can actually be resumed.
-                if finished:
-                    self.upload_path(jid).unlink(missing_ok=True)
+                self.queue.task_done()
+                metrics.JOBS_QUEUED.set(self.queue.qsize())
+
+    async def _process(self, jid: str) -> None:
+        s = self.rt.settings
+        job = await asyncio.to_thread(self.store.get, jid)
+        if not job:
+            return
+        await asyncio.to_thread(self.store.set_status, jid, "running")
+        finished = False
+        try:
+            p = json.loads(job["params"])
+            audio = await asyncio.to_thread(decode_file, self.upload_path(jid), s.max_audio_seconds)
+            result = await self.rt.transcribe(audio, mode="job", wait_forever=True, **p)
+            await asyncio.to_thread(self.result_path(jid).write_text, json.dumps(result, ensure_ascii=False))
+            await asyncio.to_thread(self.store.set_status, jid, "completed")
+            finished = True
+            metrics.JOBS_TOTAL.labels("completed").inc()
+        except AudioError as exc:
+            await asyncio.to_thread(self.store.set_status, jid, "failed", str(exc))
+            finished = True
+            metrics.JOBS_TOTAL.labels("failed").inc()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("job failed", extra={"event": "job_failed"})
+            await asyncio.to_thread(self.store.set_status, jid, "failed", "internal error")
+            finished = True
+            metrics.JOBS_TOTAL.labels("failed").inc()
+            _ = exc
+        finally:
+            # Cancellation at shutdown is not a terminal outcome: retain
+            # the upload so the persisted job can actually be resumed.
+            if finished:
+                self.upload_path(jid).unlink(missing_ok=True)
 
     async def _janitor(self) -> None:
         while True:
@@ -160,7 +173,7 @@ class JobManager:
             try:
                 cutoff = time.time() - self.rt.settings.retention_hours * 3600
                 for jid in await asyncio.to_thread(self.store.expired, cutoff):
-                    self.result_path(jid).unlink(missing_ok=True)
-                    await asyncio.to_thread(self.store.delete, jid)
+                    if await asyncio.to_thread(self.store.delete, jid):
+                        self.result_path(jid).unlink(missing_ok=True)
             except Exception:  # noqa: BLE001
                 log.exception("janitor error")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
 import json
 import logging
 import re
@@ -109,7 +110,7 @@ async def root_status(request: Request):
     if "text/html" in accept:
         voices_pills = "".join(
             f'<span style="display:inline-block;padding:3px 9px;border-radius:999px;background:#132030;border:1px solid #243b55;font-size:12px;margin:3px">{v}</span>'
-            for v in stock[:28]
+            for v in map(html_lib.escape, stock[:28])
         )
         html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -198,11 +199,11 @@ async def transcribe(
     request: Request,
     file: UploadFile = File(...),
     model: str = Form("whisper-1"),
-    language: str | None = Form(None),
+    language: str | None = Form(None, max_length=32),
     response_format: str = Form("json"),
     word_timestamps: bool = Form(False),
     vad_filter: bool = Form(True),
-    prompt: str | None = Form(None),
+    prompt: str | None = Form(None, max_length=2000),
     beam_size: int = Form(5, ge=1, le=10),
     _: Principal = Depends(require_auth),
 ):
@@ -235,10 +236,10 @@ async def transcribe(
 async def create_job(
     request: Request,
     file: UploadFile = File(...),
-    language: str | None = Form(None),
+    language: str | None = Form(None, max_length=32),
     word_timestamps: bool = Form(True),
     vad_filter: bool = Form(True),
-    prompt: str | None = Form(None),
+    prompt: str | None = Form(None, max_length=2000),
     beam_size: int = Form(5, ge=1, le=10),
     p: Principal = Depends(require_auth),
 ):
@@ -295,8 +296,9 @@ async def job_delete(request: Request, jid: str, p: Principal = Depends(require_
     if j["status"] in ("queued", "running"):
         raise HTTPException(409, "Job still active")
     r = rt(request)
+    if not await asyncio.to_thread(r.jobs.store.delete, jid):
+        raise HTTPException(409, "Job still active")
     r.jobs.result_path(jid).unlink(missing_ok=True)
-    await asyncio.to_thread(r.jobs.store.delete, jid)
 
 
 # ------------------------------------------------------------------ TTS

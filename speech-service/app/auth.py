@@ -29,6 +29,8 @@ class Authenticator:
         self._buckets: dict[str, tuple[float, float]] = defaultdict(lambda: (float(self._rate), time.monotonic()))
         self._ws_open: dict[str, int] = defaultdict(int)
         self._ws_max = s.max_ws_per_key
+        self._ws_buckets: dict[str, tuple[float, float]] = {}
+        self._ws_rate = max(600, s.rate_limit_per_min * 20)
 
     def verify(self, token: str | None) -> Principal | None:
         if self.disabled:
@@ -51,6 +53,14 @@ class Authenticator:
             return False
         self._buckets[p.key_id] = (tokens - 1, now)
         return True
+
+    def check_ws_rate(self, p: Principal) -> bool:
+        tokens, last = self._ws_buckets.get(p.key_id, (float(self._ws_rate), time.monotonic()))
+        now = time.monotonic()
+        tokens = min(float(self._ws_rate), tokens + (now - last) * self._ws_rate / 60.0)
+        allowed = tokens >= 1
+        self._ws_buckets[p.key_id] = (tokens - 1 if allowed else tokens, now)
+        return allowed
 
     def ws_acquire(self, p: Principal) -> bool:
         if self._ws_open[p.key_id] >= self._ws_max:

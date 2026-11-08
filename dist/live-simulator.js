@@ -37,6 +37,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.attachLiveSimulator = attachLiveSimulator;
+const auth_guard_1 = require("./auth-guard");
 const crypto_1 = __importDefault(require("crypto"));
 const ws_1 = __importStar(require("ws"));
 const db_1 = require("./db");
@@ -57,7 +58,7 @@ function interpolateEnvPlaceholders(obj) {
                 return (0, env_store_1.getSecret)('GROQ_API_KEY');
             if (varName === 'CARTESIA_KEY')
                 return (0, env_store_1.getSecret)('CARTESIA_API_KEY');
-            return process.env[varName] || '';
+            return ''; // unknown environment variables are not provider secrets
         });
     }
     if (Array.isArray(obj))
@@ -102,9 +103,17 @@ function hydrateLeadIntoPromptAndGreeting(settings, agent, campaign, lead) {
 }
 function attachLiveSimulator(server, noServer = false) {
     const wss = noServer
-        ? new ws_1.WebSocketServer({ noServer: true })
-        : new ws_1.WebSocketServer({ server, path: '/ws/simulator' });
-    wss.on('connection', (clientWs) => {
+        ? new ws_1.WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024, perMessageDeflate: false })
+        : new ws_1.WebSocketServer({ server, path: '/ws/simulator', maxPayload: 4 * 1024 * 1024, perMessageDeflate: false });
+    wss.on('connection', (clientWs, req) => {
+        if ((0, auth_guard_1.getAuthenticatedUser)(req)?.role === 'viewer') {
+            clientWs.close(1008, 'Read-only account');
+            return;
+        }
+        if (wss.clients.size > 64) {
+            clientWs.close(1013, 'Simulator capacity reached');
+            return;
+        }
         const callId = `sim_${Date.now().toString(36)}_${crypto_1.default.randomBytes(3).toString('hex')}`;
         const startedAtIso = new Date().toISOString();
         const startedAtMs = Date.now();
@@ -118,7 +127,32 @@ function attachLiveSimulator(server, noServer = false) {
         let pendingEndTimer = null;
         let connectTimer = null;
         let openingGate = null;
+        let heartbeatTimer = null;
+        let startTimer = null;
+        let alive = true;
+        let messageWindow = Date.now();
+        let messageCount = 0;
+        let preSettingsBytes = 0;
+        clientWs.on('pong', () => { alive = true; });
+        startTimer = setTimeout(() => { if (!started && !closed) {
+            sendFatalError('START_TIMEOUT', 'No call start message was received.');
+            finalizeCall('start_timeout');
+        } }, 15000);
+        heartbeatTimer = setInterval(() => {
+            if (!(0, auth_guard_1.isRequestAuthorized)(req)) {
+                finalizeCall('session_revoked');
+                return;
+            }
+            if (!alive) {
+                clientWs.terminate();
+                return;
+            }
+            alive = false;
+            if (clientWs.readyState === ws_1.default.OPEN)
+                clientWs.ping();
+        }, 30000);
         let activeState = null;
+        let persistedFunctions = [];
         let activeAgent = null;
         let activeCampaign;
         let selectedGreeting = null;
@@ -148,6 +182,10 @@ function attachLiveSimulator(server, noServer = false) {
         const transcript = [];
         const functionCalls = [];
         const sendClientJson = (payload) => {
+            if (clientWs.bufferedAmount > 8 * 1024 * 1024) {
+                clientWs.close(1013, 'Client is not consuming events');
+                return;
+            }
             if (clientWs.readyState === ws_1.default.OPEN) {
                 clientWs.send(JSON.stringify(payload));
             }
@@ -161,6 +199,10 @@ function attachLiveSimulator(server, noServer = false) {
             });
         };
         const sendClientAudio = (pcmChunk) => {
+            if (clientWs.bufferedAmount > 8 * 1024 * 1024) {
+                clientWs.close(1013, 'Client is not consuming audio');
+                return;
+            }
             if (clientWs.readyState === ws_1.default.OPEN) {
                 rxAudioBytes += pcmChunk.length;
                 if (awaitingFirstAudioForTurn && lastUserTurnTs !== null) {
@@ -182,7 +224,9 @@ function attachLiveSimulator(server, noServer = false) {
         };
         const recordTranscript = (role, content, extra = {}) => {
             const ts = new Date().toISOString();
-            transcript.push({ ts, role, content });
+            if (transcript.length >= 2000)
+                transcript.shift();
+            transcript.push({ ts, role, content: content.slice(0, 16000) });
             sendClientJson({
                 type: 'transcript',
                 ts,
@@ -214,7 +258,9 @@ function attachLiveSimulator(server, noServer = false) {
                 sendClientJson({ type: 'function_call', ...entry });
                 return;
             }
-            const fnConfig = activeState?.functions.find((f) => f.name === fnReq.name);
+            // Drafts may change prompts, but executable webhook destinations/headers
+            // must come from persisted configuration reviewed by an administrator.
+            const fnConfig = persistedFunctions.find((f) => f.name === fnReq.name);
             const enabled = Boolean(fnConfig && activeAgent?.fnIds.includes(fnConfig.id));
             let resultPayload;
             if (!enabled) {
@@ -332,6 +378,14 @@ function attachLiveSimulator(server, noServer = false) {
                 clearTimeout(connectTimer);
                 connectTimer = null;
             }
+            if (heartbeatTimer) {
+                clearInterval(heartbeatTimer);
+                heartbeatTimer = null;
+            }
+            if (startTimer) {
+                clearTimeout(startTimer);
+                startTimer = null;
+            }
             openingGate?.cancel();
             openingGate = null;
             for (const controller of activeFunctionAborts.values())
@@ -406,12 +460,23 @@ function attachLiveSimulator(server, noServer = false) {
         clientWs.on('message', (data, isBinary) => {
             if (closed)
                 return;
+            const nowMs = Date.now();
+            if (nowMs - messageWindow >= 1000) {
+                messageWindow = nowMs;
+                messageCount = 0;
+            }
+            if (++messageCount > 200) {
+                sendFatalError('MESSAGE_RATE_LIMIT', 'Too many simulator messages.');
+                finalizeCall('message_rate_limit');
+                return;
+            }
             if (isBinary) {
                 const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
                 txAudioBytes += buf.length;
                 lastBrowserAudioAt = Date.now();
                 if (!settingsApplied) {
-                    if (pendingPreSettingsAudio.length < 25) {
+                    if (pendingPreSettingsAudio.length < 25 && preSettingsBytes + buf.length <= 1024 * 1024) {
+                        preSettingsBytes += buf.length;
                         pendingPreSettingsAudio.push(buf);
                     }
                     return;
@@ -424,6 +489,8 @@ function attachLiveSimulator(server, noServer = false) {
             let msg;
             try {
                 msg = JSON.parse(data.toString());
+                if (!msg || typeof msg !== 'object' || Array.isArray(msg))
+                    throw new Error('Expected object');
             }
             catch {
                 sendFatalError('BAD_CLIENT_JSON', 'Invalid JSON message sent to /ws/simulator');
@@ -443,7 +510,7 @@ function attachLiveSimulator(server, noServer = false) {
                 return;
             }
             if (msg.type === 'inject_agent_message') {
-                const content = String(msg.content || '').trim();
+                const content = String(msg.content || '').trim().slice(0, 8000);
                 if (!content)
                     return;
                 suppressStaleAgentAudio = false;
@@ -454,13 +521,14 @@ function attachLiveSimulator(server, noServer = false) {
                 return;
             }
             if (msg.type === 'inject_user_message') {
-                const content = String(msg.content || '').trim();
+                const content = String(msg.content || '').trim().slice(0, 8000);
                 if (!content)
                     return;
                 suppressStaleAgentAudio = false;
                 const injectPayload = JSON.stringify({ type: 'InjectUserMessage', content });
                 if (!settingsApplied) {
-                    pendingInjectedMessages.push(injectPayload);
+                    if (pendingInjectedMessages.length < 32)
+                        pendingInjectedMessages.push(injectPayload);
                 }
                 else if (dgWs && dgWs.readyState === ws_1.default.OPEN) {
                     openingGate?.userTurn();
@@ -472,10 +540,15 @@ function attachLiveSimulator(server, noServer = false) {
             }
             if (msg.type === 'start' && !started) {
                 started = true;
+                if (startTimer) {
+                    clearTimeout(startTimer);
+                    startTimer = null;
+                }
                 const startMsg = msg;
                 allowWebhooks = startMsg.allowWebhooks === true;
                 recordingRequested = startMsg.recordAudio === true;
                 const persistedState = (0, db_1.getConsoleState)();
+                persistedFunctions = persistedState.functions;
                 activeState = startMsg.draftState ? (0, defaults_1.normalizeState)(startMsg.draftState) : persistedState;
                 // Live calls always use saved global provider/model pairs and provider connection settings,
                 // never unsaved draft overrides. Agent prompt/behavior drafts remain testable in the simulator.
@@ -630,7 +703,7 @@ function attachLiveSimulator(server, noServer = false) {
                     settings: displaySettings,
                 });
                 try {
-                    dgWs = new ws_1.default(targetUrl, { headers: wsHeaders, family: 4 });
+                    dgWs = new ws_1.default(targetUrl, { headers: wsHeaders, family: 4, maxPayload: 4 * 1024 * 1024, handshakeTimeout: 15000 });
                 }
                 catch (err) {
                     sendFatalError('UPSTREAM_WS_ERROR', `Could not open the Deepgram connection: ${err.message}`);
@@ -695,6 +768,14 @@ function attachLiveSimulator(server, noServer = false) {
                                 clearTimeout(connectTimer);
                                 connectTimer = null;
                             }
+                            if (heartbeatTimer) {
+                                clearInterval(heartbeatTimer);
+                                heartbeatTimer = null;
+                            }
+                            if (startTimer) {
+                                clearTimeout(startTimer);
+                                startTimer = null;
+                            }
                             lastBrowserAudioAt = Date.now();
                             sendClientJson({
                                 type: 'session_started',
@@ -713,6 +794,7 @@ function attachLiveSimulator(server, noServer = false) {
                             sendClientJson({ type: 'agent_state', state: 'listening' });
                             while (pendingPreSettingsAudio.length > 0) {
                                 const chunk = pendingPreSettingsAudio.shift();
+                                preSettingsBytes -= chunk.length;
                                 if (dgWs?.readyState === ws_1.default.OPEN)
                                     dgWs.send(chunk, { binary: true });
                             }
@@ -815,8 +897,13 @@ function attachLiveSimulator(server, noServer = false) {
                         }
                         case 'FunctionCallRequest': {
                             const list = Array.isArray(evt.functions) ? evt.functions : [];
-                            for (const fnItem of list) {
-                                executeClientFunction(fnItem);
+                            for (const fnItem of list.slice(0, 32)) {
+                                if (!fnItem || typeof fnItem.id !== 'string' || typeof fnItem.name !== 'string')
+                                    continue;
+                                void executeClientFunction(fnItem).catch(() => { if (!closed) {
+                                    sendFatalError('FUNCTION_ERROR', 'A function could not be executed.');
+                                    finalizeCall('function_error');
+                                } });
                             }
                             break;
                         }

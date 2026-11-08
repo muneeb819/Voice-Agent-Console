@@ -58,21 +58,27 @@ function ensureSchema(): void {
 
 // ---------------------------------------------------------------- passwords
 
-function hashPassword(password: string): string {
+const SCRYPT_OPTIONS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
+const scryptAsync = (password: string, salt: Buffer, keylen: number): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    crypto.scrypt(password, salt, keylen, SCRYPT_OPTIONS, (err, derived) => err ? reject(err) : resolve(derived));
+  });
+
+async function hashPassword(password: string): Promise<string> {
   const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(password, salt, 64);
+  const hash = await scryptAsync(password, salt, 64);
   return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;
 }
 
-function verifyPassword(password: string, stored: string): boolean {
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const parts = String(stored || '').split('$');
   if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
   const salt = Buffer.from(parts[1], 'hex');
   const expected = Buffer.from(parts[2], 'hex');
-  if (salt.length === 0 || expected.length === 0) return false;
+  if (salt.length < 16 || salt.length > 64 || expected.length !== 64) return false;
   let actual: Buffer;
   try {
-    actual = crypto.scryptSync(password, salt, expected.length);
+    actual = await scryptAsync(password, salt, 64);
   } catch {
     return false;
   }
@@ -144,7 +150,7 @@ export interface CreateUserResult {
  * operator otherwise. Returns a field error for invalid input or a duplicate
  * email; other database or password hashing errors can propagate.
  */
-export function createUser(input: SignupInput): CreateUserResult {
+export async function createUser(input: SignupInput): Promise<CreateUserResult> {
   ensureSchema();
 
   const email = normalizeEmail(input.email);
@@ -160,29 +166,27 @@ export function createUser(input: SignupInput): CreateUserResult {
   if (pwErr) return { ok: false, field: 'password', error: pwErr };
 
   const db = getDb();
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-  if (existing) {
-    return { ok: false, field: 'email', error: 'An account with this email already exists.' };
-  }
-
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const role: PublicUser['role'] = countUsers() === 0 ? 'owner' : 'operator';
+  // Hash off the event loop, then decide ownership and insert under one write
+  // lock. Two simultaneous first signups must not both become owner.
+  const passwordHash = await hashPassword(password);
   try {
-    db.prepare(
-      'INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at, role, active) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)'
-    ).run(id, email, fullName, hashPassword(password), now, role);
+    const role = db.transactionImmediate(() => {
+      const count = Number((db.prepare('SELECT COUNT(*) AS n FROM users').get() as any)?.n || 0);
+      const assigned: PublicUser['role'] = count === 0 ? 'owner' : 'operator';
+      db.prepare(
+        'INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at, role, active) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)'
+      ).run(id, email, fullName, passwordHash, now, assigned);
+      return assigned;
+    })();
+    return { ok: true, user: { id, email, fullName, createdAt: now, lastLoginAt: null, role, active: true } };
   } catch (err: any) {
     if (String(err?.message || '').toLowerCase().includes('unique')) {
       return { ok: false, field: 'email', error: 'An account with this email already exists.' };
     }
     throw err;
   }
-
-  return {
-    ok: true,
-    user: { id, email, fullName, createdAt: now, lastLoginAt: null, role, active: true },
-  };
 }
 
 export function findUserByEmail(rawEmail: unknown): PublicUser | null {
@@ -198,13 +202,15 @@ export function findUserByEmail(rawEmail: unknown): PublicUser | null {
  * for a missing account, inactive account, or invalid credentials. Database
  * errors propagate.
  */
-export function authenticateUser(rawEmail: unknown, password: string): PublicUser | null {
+export async function authenticateUser(rawEmail: unknown, password: string): Promise<PublicUser | null> {
   ensureSchema();
   const email = normalizeEmail(rawEmail);
   if (!email) return null;
   const row: any = getDb().prepare('SELECT * FROM users WHERE email = ?').get(email);
   if (!row) return null;
-  if (Number(row.active ?? 1) !== 1 || !verifyPassword(password, String(row.password_hash))) return null;
+  if (Number(row.active ?? 1) !== 1 || !(await verifyPassword(password, String(row.password_hash)))) return null;
+  const active = Number((getDb().prepare('SELECT active FROM users WHERE id = ?').get(row.id) as any)?.active ?? 0);
+  if (active !== 1) return null;
   const now = new Date().toISOString();
   getDb().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(now, row.id);
   const user = rowToUser(row);
@@ -226,6 +232,10 @@ export function getUserById(id: string): PublicUser | null {
 
 // ---------------------------------------------------------------- sessions
 
+function userSessionHash(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
 export function createUserSession(userId: string): string {
   ensureSchema();
   const token = crypto.randomBytes(32).toString('hex');
@@ -233,7 +243,7 @@ export function createUserSession(userId: string): string {
   getDb()
     .prepare('INSERT INTO user_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
     .run(
-      token,
+      userSessionHash(token),
       userId,
       new Date(now).toISOString(),
       new Date(now + SESSION_TTL_MS).toISOString()
@@ -250,10 +260,15 @@ export function getUserBySessionToken(token?: string | null): PublicUser | null 
   if (!token || token.length < 32 || token.includes('.')) return null;
   ensureSchema();
   const db = getDb();
-  const row: any = db.prepare('SELECT * FROM user_sessions WHERE token = ?').get(token);
+  const hashed = userSessionHash(token);
+  let row: any = db.prepare('SELECT * FROM user_sessions WHERE token = ?').get(hashed);
+  if (!row && /^[a-f0-9]{64}$/.test(token)) {
+    row = db.prepare('SELECT * FROM user_sessions WHERE token = ?').get(token);
+    if (row) db.prepare('UPDATE user_sessions SET token = ? WHERE token = ?').run(hashed, token);
+  }
   if (!row) return null;
   if (new Date(String(row.expires_at)).getTime() <= Date.now()) {
-    db.prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
+    db.prepare('DELETE FROM user_sessions WHERE token = ?').run(hashed);
     return null;
   }
   const user = getUserById(String(row.user_id));
@@ -263,7 +278,7 @@ export function getUserBySessionToken(token?: string | null): PublicUser | null 
 export function destroyUserSession(token?: string | null): void {
   if (!token || token.includes('.')) return;
   ensureSchema();
-  getDb().prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
+  getDb().prepare('DELETE FROM user_sessions WHERE token = ? OR token = ?').run(userSessionHash(token), token);
 }
 
 export function purgeExpiredSessions(): void {

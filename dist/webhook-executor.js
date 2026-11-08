@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.executeCustomFunctionWebhook = executeCustomFunctionWebhook;
 const env_store_1 = require("./env-store");
+const http_limits_1 = require("./http-limits");
 const settings_builder_1 = require("./settings-builder");
 function interpolateTemplate(raw, ctx) {
     return String(raw || '').replace(/\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g, (_match, token) => {
@@ -18,10 +19,9 @@ function interpolateTemplate(raw, ctx) {
             const val = ctx.lead?.[key] ?? ctx.lead?.custom?.[key];
             return val !== undefined && val !== null ? String(val) : '';
         }
-        const envVal = process.env[token];
-        if (envVal !== undefined) {
-            return (0, env_store_1.sanitizeSecretValue)(envVal);
-        }
+        // Never expose arbitrary process environment (cloud credentials, PATH, etc.).
+        if (token === 'CUSTOM_WEBHOOK_SECRET')
+            return (0, env_store_1.sanitizeSecretValue)((0, env_store_1.getSecret)('CUSTOM_WEBHOOK_SECRET'));
         return '';
     });
 }
@@ -56,6 +56,9 @@ async function executeCustomFunctionWebhook(fnDef, args, ctx = {}, timeoutMs = 6
             url: resolvedUrlStr,
             error: `Invalid webhook URL: ${resolvedUrlStr}`,
         };
+    }
+    if (targetUrl.username || targetUrl.password) {
+        return { ok: false, executedWebhook: true, latencyMs: Date.now() - started, error: 'Webhook URL must not embed credentials.' };
     }
     if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
         return {
@@ -129,7 +132,7 @@ async function executeCustomFunctionWebhook(fnDef, args, ctx = {}, timeoutMs = 6
             return { ok: false, executedWebhook: true, httpStatus: res.status, latencyMs: Date.now() - started,
                 url: targetUrl.toString(), method, error: `Webhook redirects are not followed (HTTP ${res.status}).` };
         }
-        const rawText = (await res.text()).slice(0, 65536);
+        const rawText = await (0, http_limits_1.readResponseText)(res, 65536);
         let parsedData = rawText;
         try {
             parsedData = JSON.parse(rawText);
