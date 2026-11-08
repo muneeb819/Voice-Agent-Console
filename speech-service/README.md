@@ -11,6 +11,10 @@ docker compose --profile tls --profile clone up -d    # + voice cloning (set SPE
 SPEECH_URL=https://your-domain SPEECH_KEY=... ./scripts/smoke.sh
 ```
 Requires an NVIDIA GPU + NVIDIA Container Toolkit for `SPEECH_BACKEND=real`. First start downloads models into the `model-cache` volume.
+
+## Network security defaults
+
+The API container is published on **127.0.0.1:8000 only** so it is reachable by the local Voice Agent Console host but is not directly exposed on the public network. The optional Caddy profile reaches the API over the private Compose network and publishes HTTPS on ports 80/443. Keep the API port loopback-bound; do not change it to `0.0.0.0` for production. The default `SPEECH_CORS_ORIGINS` is empty (CORS disabled). If a browser must call the speech API directly, set it to an explicit comma-separated allowlist of trusted HTTPS origins—never use `*` in production. Server-to-server Console requests do not require browser CORS. Keep `SPEECH_API_KEYS` configured and unique per deployment.
 Local GPU-less API exploration & integration testing: `make dev` (fake engines, docs at `/docs`). Tests: `make test`.
 
 ## API (Bearer or `X-API-Key`)
