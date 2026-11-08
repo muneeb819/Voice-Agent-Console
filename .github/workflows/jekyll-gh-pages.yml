@@ -54,6 +54,21 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v5
 
+      - name: Publish demo link summary
+        env:
+          SITE_URL: ${{ steps.deployment.outputs.page_url }}
+          ASSET_VERSION: ${{ needs.build.outputs.asset_version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Static demo published"
+            echo
+            echo "- Demo link: ${SITE_URL}"
+            echo "- Asset build: ${ASSET_VERSION}"
+            echo "- Source SHA: ${GITHUB_SHA}"
+            echo "- Scope: browser-only static demo; no Node API, WebSocket backend, or VICIdial bridge."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify published console and login assets
         env:
           SITE_URL: ${{ steps.deployment.outputs.page_url }}
@@ -65,5 +80,6 @@ jobs:
           curl --fail --silent --show-error --location --retry 5 --retry-delay 3 --retry-all-errors "${SITE_URL}login.js?v=${ASSET_VERSION}" -o "$RUNNER_TEMP/login.js"
           node --check "$RUNNER_TEMP/login.js"
           grep -F 'var rawPath' "$RUNNER_TEMP/login.js"
+          grep -F 'parsed.origin === location.origin' "$RUNNER_TEMP/login.js"
           curl --fail --silent --show-error --location "${SITE_URL}login.html?v=${ASSET_VERSION}" | grep -F 'id="signup-form"'
           curl --fail --silent --show-error --location "${SITE_URL}index.html?v=${ASSET_VERSION}" | grep -F "CURRENT_BUILD = '${ASSET_VERSION}'"
