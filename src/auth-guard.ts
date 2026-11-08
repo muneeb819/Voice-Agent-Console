@@ -177,19 +177,6 @@ export function constantTimePasswordMatch(candidate: string): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
-function extractQueryToken(req: http.IncomingMessage): string | null {
-  const rawUrl = String(req.url || '');
-  const qIdx = rawUrl.indexOf('?');
-  if (qIdx < 0) return null;
-  try {
-    const params = new URLSearchParams(rawUrl.slice(qIdx + 1));
-    const tok = (params.get('vac_token') || params.get('token') || '').trim();
-    return tok || null;
-  } catch {
-    return null;
-  }
-}
-
 export function getRequestSessionToken(req: http.IncomingMessage): string | null {
   const authHdr = String(req.headers.authorization || '').trim();
   if (/^Bearer\s+/i.test(authHdr)) {
@@ -243,7 +230,7 @@ export function hasActiveAuthSession(req: http.IncomingMessage): boolean {
   if (cookies[SESSION_COOKIE_NAME] && verifySessionToken(cookies[SESSION_COOKIE_NAME])) {
     return true;
   }
-  // 3. Check email/password user session (cookie, bearer token, or query handoff token)
+  // 3. Check email/password user session (HttpOnly cookie or machine bearer token)
   if (getAuthenticatedUser(req)) {
     return true;
   }
@@ -313,7 +300,7 @@ export function setAuthCookie(res: Response, token: string, req?: http.IncomingM
 
 export function clearAuthCookie(res: Response, req?: http.IncomingMessage): void {
   const cookiePolicy = isHttpsRequest(req)
-    ? 'SameSite=None; Secure; Partitioned'
+    ? 'SameSite=Lax; Secure'
     : 'SameSite=Lax';
   res.setHeader(
     'Set-Cookie',
