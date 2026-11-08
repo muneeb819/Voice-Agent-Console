@@ -90,6 +90,7 @@
   const SESSION_SECRETS_KEY = 'vac_tab_secrets_v1';
   const CLOUD_SECRETS_KEY = 'vac_cloud_secrets_v1';
   const CLOUD_STATE_KEY = 'vac_cloud_state_v1';
+  const VAC_CLOUD_SESSION_KEY = 'vac_cloud_session_v1';
   const APPEARANCE_STORAGE_KEY = 'vac_appearance_v2';
   let serverlessCloudMode = false;
 
@@ -6272,7 +6273,7 @@
   }
 
   async function loadFromServer() {
-    const authRes = await fetch('/api/auth/status', { credentials: 'same-origin' }).catch(() => null);
+    const authRes = await fetch('./api/auth/status', { credentials: 'same-origin' }).catch(() => null);
     if (authRes && authRes.ok && (authRes.headers.get('content-type') || '').includes('application/json')) {
       const authJson = await authRes.json().catch(() => ({}));
       const logoutBtn = document.getElementById('btn-logout');
@@ -6296,7 +6297,7 @@
       }
     }
 
-    const res = await fetch('/api/state').catch(() => null);
+    const res = await fetch('./api/state').catch(() => null);
     const isJsonApi = Boolean(res && (res.headers.get('content-type') || '').includes('application/json'));
     if (!res || res.status === 404 || res.status === 405 || !isJsonApi) {
       // Activate Serverless Cloud Direct Mode (GitHub Pages / Vercel / Static Host)
