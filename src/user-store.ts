@@ -7,6 +7,7 @@ export interface PublicUser {
   fullName: string;
   createdAt: string;
   lastLoginAt: string | null;
+  role: 'owner' | 'admin' | 'operator';
 }
 
 export interface SignupInput {
@@ -32,7 +33,8 @@ function ensureSchema(): void {
       full_name TEXT NOT NULL,
       password_hash TEXT NOT NULL,
       created_at TEXT NOT NULL,
-      last_login_at TEXT
+      last_login_at TEXT,
+      role TEXT NOT NULL DEFAULT 'operator'
     );
     CREATE TABLE IF NOT EXISTS user_sessions (
       token TEXT PRIMARY KEY,
@@ -48,6 +50,16 @@ function ensureSchema(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_revoked_admin_sessions_expiry ON revoked_admin_sessions(expires_at);
   `);
+  const columns = db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>;
+  if (!columns.some((column) => column.name === 'role')) {
+    db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'operator'");
+  }
+  // Preserve access for existing single-tenant installations: the oldest
+  // existing account becomes the initial owner exactly once.
+  const owner = db.prepare("SELECT id FROM users WHERE role = 'owner' LIMIT 1").get();
+  if (!owner) {
+    db.prepare("UPDATE users SET role = 'owner' WHERE id = (SELECT id FROM users ORDER BY created_at ASC, rowid ASC LIMIT 1)").run();
+  }
   schemaReady = true;
 }
 
@@ -121,6 +133,7 @@ function rowToUser(row: any): PublicUser {
     fullName: String(row.full_name),
     createdAt: String(row.created_at),
     lastLoginAt: row.last_login_at ? String(row.last_login_at) : null,
+    role: (['owner', 'admin', 'operator'].includes(String(row.role)) ? String(row.role) : 'operator') as PublicUser['role'],
   };
 }
 
@@ -154,10 +167,11 @@ export function createUser(input: SignupInput): CreateUserResult {
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
+  const role = Number((db.prepare('SELECT COUNT(*) AS n FROM users').get() as any)?.n || 0) === 0 ? 'owner' : 'operator';
   try {
     db.prepare(
-      'INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at) VALUES (?, ?, ?, ?, ?, NULL)'
-    ).run(id, email, fullName, hashPassword(password), now);
+      'INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at, role) VALUES (?, ?, ?, ?, ?, NULL, ?)'
+    ).run(id, email, fullName, hashPassword(password), now, role);
   } catch (err: any) {
     if (String(err?.message || '').toLowerCase().includes('unique')) {
       return { ok: false, field: 'email', error: 'An account with this email already exists.' };
@@ -262,4 +276,17 @@ export function revokeAdminSession(token: string, expiresAt: number): void {
   getDb()
     .prepare('INSERT OR REPLACE INTO revoked_admin_sessions (token_hash, expires_at) VALUES (?, ?)')
     .run(sessionTokenHash(token), new Date(expiresAt).toISOString());
+}
+
+/** Change a user's role. The caller must enforce owner-only authorization. */
+export function setUserRole(userId: string, role: PublicUser['role']): boolean {
+  ensureSchema();
+  if (!['owner', 'admin', 'operator'].includes(role)) return false;
+  const result = getDb().prepare('UPDATE users SET role = ? WHERE id = ?').run(role, userId);
+  return Number(result.changes || 0) === 1;
+}
+
+export function listPublicUsers(): PublicUser[] {
+  ensureSchema();
+  return (getDb().prepare('SELECT * FROM users ORDER BY created_at ASC').all() as any[]).map(rowToUser);
 }
