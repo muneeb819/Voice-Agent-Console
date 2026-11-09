@@ -74,8 +74,8 @@ The script is safe to re-run. It:
 7. Installs and starts `voice-agent-console.service`, writes the nginx TLS
    server block, reloads nginx, and verifies `/api/health` on both hops.
 
-Options: `--tls-port`, `--app-port`, `--public-port`, `--install-dir`, `--cert`,
-`--key`, `--help`. Ports are validated as integers in 1–65535, and `--ip` accepts
+Options: `--tls-port`, `--app-port`, `--public-port`, `--real-ip-from`,
+`--install-dir`, `--cert`, `--key`, `--help`. Ports are validated as integers in 1–65535, and `--ip` accepts
 a hostname as well as an IPv4/IPv6 address (the certificate gets a `DNS:` or
 `IP:` SAN accordingly).
 
@@ -117,7 +117,10 @@ handling call data.
 ### Alternatives
 
 - **DNS + Application Load Balancer** with an ACM certificate (free,
-  auto-renewed), targeting the instance on 533.
+  auto-renewed), targeting the instance on 533. The target group **must use
+  HTTPS**, and so must its health check: nginx's `:533` listener is TLS-only,
+  while AWS defaults both target traffic and health checks to HTTP. Leave the
+  defaults and the target fails its health check and never serves.
 - **DNS + CloudFront** in front of the instance.
 
 ### ⚠️ If you put an ALB on 443 in front of nginx on 533
@@ -134,6 +137,27 @@ sudo bash deploy/aws-deploy.sh --ip console.example.com \
 
 `--public-port 443` makes nginx send `X-Forwarded-Host: $host` with no port,
 matching the browser. Remember the ALB security-group rule from section 2.
+
+**Also restore the real client IP.** Behind an ALB, nginx sees the balancer's
+address, so Node rate-limits every operator against that one shared IP. The
+sign-in limits are 5 failed attempts per IP+account per 15 minutes, and 30
+sign-in requests per IP per minute — so a few operators sharing the balancer
+address can exhaust both and lock each other out. Tell nginx which networks may
+supply the client IP:
+
+```bash
+sudo bash deploy/aws-deploy.sh --ip console.example.com \
+  --tls-port 533 --public-port 443 \
+  --real-ip-from 10.0.0.0/16 --real-ip-from 172.31.0.0/20 \
+  --cert /path/fullchain.pem --key /path/privkey.pem
+```
+
+Use the VPC/subnet CIDRs your ALB runs in (ALB addresses are dynamic, so a single
+IP will not stay valid). This writes `set_real_ip_from` / `real_ip_header
+X-Forwarded-For` / `real_ip_recursive on`, so the client IP is accepted **only**
+from those CIDRs — never from arbitrary peers. The setting is preserved on
+re-runs that omit the flag. `TRUST_PROXY` stays `127.0.0.1`: nginx has already
+resolved the real client, so Node must trust only nginx.
 
 ## 5. Verify
 
