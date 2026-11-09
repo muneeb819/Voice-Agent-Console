@@ -350,6 +350,7 @@ if [ "${#REAL_IP_FROM[@]}" -gt 0 ]; then
     cp -p "$REALIP_CONF" "$REALIP_BACKUP"
   fi
   mv -f "$REALIP_TMP" "$REALIP_CONF"
+  REALIP_WRITTEN=1
   echo "Trusting client IPs from: ${REAL_IP_FROM[*]}"
 elif [ -f "$REALIP_CONF" ]; then
   echo "Preserving existing real-IP trust configuration in ${REALIP_CONF}"
@@ -371,9 +372,12 @@ if ! nginx -t; then
   if [ -n "${REALIP_BACKUP:-}" ] && [ -f "${REALIP_BACKUP:-}" ]; then
     mv -f "$REALIP_BACKUP" "$REALIP_CONF"
     echo "nginx config test failed; restored the previous real-IP configuration." >&2
-  elif [ -f "$REALIP_CONF" ]; then
+  elif [ "${REALIP_WRITTEN:-0}" = "1" ] && [ -f "$REALIP_CONF" ]; then
+    # Only remove a file THIS run created. On a rerun without --real-ip-from the
+    # existing config is merely preserved, so an unrelated nginx -t failure
+    # (a bad certificate, say) must not delete it.
     rm -f "$REALIP_CONF"
-    echo "nginx config test failed; removed the new real-IP configuration." >&2
+    echo "nginx config test failed; removed the real-IP configuration this run created." >&2
   fi
   echo "ERROR: nginx -t failed; no changes were left active." >&2
   exit 1
