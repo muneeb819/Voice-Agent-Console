@@ -27,7 +27,7 @@ Two settings make this work, and both are easy to get wrong:
 | Setting | Why it matters |
 |---|---|
 | `TRUST_PROXY=127.0.0.1` | The app derives `Secure` session cookies and the client IP from `X-Forwarded-*`, but only from a proxy it is told to trust. Without it, cookies are issued without `Secure` and every client looks like the proxy. Set it to the proxy address only — never `true` or `0.0.0.0/0`. |
-| `X-Forwarded-Host $host:$server_port` | The same-origin check compares the browser `Origin` against the forwarded host. On a non-default port such as 533 the port **must** be included, or every login is rejected as cross-origin. |
+| `X-Forwarded-Host $host:<public-port>` | The same-origin check compares the browser `Origin` against the forwarded host. On a non-default port such as 533 the port **must** be included, or every login is rejected as cross-origin. It must be the port the **browser** uses — see the ALB warning in section 4. |
 
 This header set was verified end-to-end against a local TLS proxy: login
 returned `200`, the session cookie carried `Secure`, an authenticated request
@@ -41,7 +41,11 @@ returned `200`, and a login with a foreign `Origin` was still rejected `403`.
 - `nginx` and `openssl` (the script installs them if missing).
 - In the instance's **security group**, an inbound rule for TCP `533`. Restrict
   the source to the operator networks that need access; do not use
-  `0.0.0.0/0` for an admin console.
+  `0.0.0.0/0` for an admin console. If you later put a load balancer in front
+  (section 4), add a second inbound rule for TCP `533` whose source is the
+  **load balancer's security group** — ALB target connections come from the
+  ALB, not from the operator, so an operator-only rule leaves the target
+  unhealthy.
 - Root or `sudo` on the instance.
 
 The deploy script does **not** modify AWS networking. Security-group and NACL
@@ -70,26 +74,66 @@ The script is safe to re-run. It:
 7. Installs and starts `voice-agent-console.service`, writes the nginx TLS
    server block, reloads nginx, and verifies `/api/health` on both hops.
 
-Options: `--tls-port`, `--app-port`, `--install-dir`, `--cert`, `--key`, `--help`.
+Options: `--tls-port`, `--app-port`, `--public-port`, `--install-dir`, `--cert`,
+`--key`, `--help`. Ports are validated as integers in 1–65535, and `--ip` accepts
+a hostname as well as an IPv4/IPv6 address (the certificate gets a `DNS:` or
+`IP:` SAN accordingly).
 
-## 4. The certificate problem (read this)
+## 4. Certificates and load balancers
 
-`https://3.107.192.118:533/` is a **bare IP address**. Let's Encrypt does not
-issue certificates for IP addresses, so a self-signed certificate is the only
-option that works on that exact URL — and **every browser will show a security
-warning**. That is expected, not a deployment failure.
+### A trusted certificate for a bare IP **is** possible
 
-To get a trusted certificate, pick one:
+Let's Encrypt has issued publicly trusted **IP-address certificates** (IPv4 and
+IPv6) since [15 January 2026](https://letsencrypt.org/2026-01-15/6day-and-ip-general-availability).
+So `https://3.107.192.118:533/` does not have to stay self-signed.
 
-- **DNS + Application Load Balancer** — point a hostname at an ALB with an ACM
-  certificate, target the instance on 533. ACM certificates are free and
-  auto-renewed.
-- **DNS + CloudFront** in front of the instance, same idea.
-- **DNS + Let's Encrypt** on the instance itself, then re-run with
-  `--cert /path/fullchain.pem --key /path/privkey.pem`.
+The constraints that matter here:
 
-Until then, operators must click through the warning, which is not appropriate
-for a production console handling call data.
+- IP certificates **must** use the `shortlived` ACME profile. They are valid for
+  **160 hours (~6 days)**, so renewal has to be fully automated — a manual
+  renewal cycle will break the site every week.
+- Validation must use **HTTP-01 (port 80)** or **TLS-ALPN-01 (port 443)**. Both
+  support IP addresses; DNS-01 does **not**. Neither challenge can run on port
+  533, so you must open 80 or 443 for validation even though the console is
+  served on 533.
+- Your ACME client must support profile selection. Certbot has
+  [supported this since March 2026](https://letsencrypt.org/2026-03-11/shorter-certs-certbot).
+
+Once issued, install it with:
+
+```bash
+sudo bash deploy/aws-deploy.sh --ip 3.107.192.118 \
+  --cert /etc/letsencrypt/live/<name>/fullchain.pem \
+  --key  /etc/letsencrypt/live/<name>/privkey.pem
+```
+
+Re-run that after each renewal (or wire it into a certbot deploy hook) so nginx
+picks up the new certificate.
+
+Until you do, the script's default self-signed certificate works but **every
+browser shows a warning**, which is not appropriate for a production console
+handling call data.
+
+### Alternatives
+
+- **DNS + Application Load Balancer** with an ACM certificate (free,
+  auto-renewed), targeting the instance on 533.
+- **DNS + CloudFront** in front of the instance.
+
+### ⚠️ If you put an ALB on 443 in front of nginx on 533
+
+The browser origin becomes `https://hostname` (no port), but nginx would
+advertise `hostname:533` if it forwarded its own `$server_port`. The same-origin
+check then rejects **every login**. Tell the script the browser-facing port:
+
+```bash
+sudo bash deploy/aws-deploy.sh --ip console.example.com \
+  --tls-port 533 --public-port 443 \
+  --cert /path/fullchain.pem --key /path/privkey.pem
+```
+
+`--public-port 443` makes nginx send `X-Forwarded-Host: $host` with no port,
+matching the browser. Remember the ALB security-group rule from section 2.
 
 ## 5. Verify
 
@@ -131,7 +175,9 @@ deployment.
 - VICIdial/Asterisk integration is still paused pending the servers; see
   `VICIBOX-PRODUCTION-RUNBOOK.md`, whose example IPs and dialplan are historical,
   not defaults.
-- Replace the self-signed certificate (section 4).
+- Replace the self-signed certificate (section 4); IP certificates are
+  available but expire in ~6 days, so verify the renewal automation actually
+  runs before relying on it.
 - Known gaps carried in the backend audit remain open: process-local rate
   limiting, no CSRF token (same-origin checks only), no MFA, no breach
   screening, and no per-user data isolation. Review
