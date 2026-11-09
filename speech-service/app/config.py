@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     auth_disabled: bool = False
     rate_limit_per_min: int = 240
     max_ws_per_key: int = 16
+    ws_handshake_per_min: int = 60  # connection churn cap, independent of message rate
     max_upload_mb: int = 300
     max_audio_seconds: int = 7200
     sync_max_seconds: int = 600  # longer files must use /v1/jobs
@@ -63,7 +64,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check(self) -> "Settings":
-        for name in ("rate_limit_per_min", "max_ws_per_key", "max_upload_mb", "max_audio_seconds", "sync_max_seconds", "max_tts_chars", "stt_concurrency", "tts_concurrency", "job_workers", "job_queue_max", "live_max_utterance_s", "live_idle_timeout_s"):
+        for name in ("rate_limit_per_min", "max_ws_per_key", "ws_handshake_per_min", "max_upload_mb", "max_audio_seconds", "sync_max_seconds", "max_tts_chars", "stt_concurrency", "tts_concurrency", "job_workers", "job_queue_max", "live_max_utterance_s", "live_idle_timeout_s"):
             if getattr(self, name) < 1:
                 raise ValueError(f"SPEECH_{name.upper()} must be positive")
         if self.gate_timeout_seconds <= 0 or self.live_endpoint_ms < 100:

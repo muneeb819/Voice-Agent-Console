@@ -357,6 +357,8 @@ function apiAuthMiddleware(req, res, next) {
         const account = getAuthenticatedUser(req);
         const role = account?.role || 'owner'; // legacy ADMIN_PASSWORD session is owner-equivalent
         const adminOnly = p === '/secrets' ||
+            p === '/users' ||
+            /^\/users\/[^/]+\/(?:status|role|revoke-sessions)$/.test(p) ||
             p === '/state/reset' ||
             p === '/demo-tunnel/start' ||
             p === '/demo-tunnel/stop' ||

@@ -1,5 +1,7 @@
 # Backend Audit & Rectification — 2026-11-08
 
+> Historical record. See [`BACKEND-AUDIT-2026-11-09.md`](./BACKEND-AUDIT-2026-11-09.md) for the follow-up pass that closed findings A-04, A-05 and A-08.
+
 **Scope:** Node/Express console backend (`src/`), companion Python speech service (`speech-service/`), persistence, telephony bridge, simulator, webhooks, and CI regression coverage.  
 **Method:** full source review, local exploit probes, mocked end-to-end tests, and isolated test data. No production credentials, live carrier calls, or paid provider calls were used.  
 **Result:** the verified defects below are fixed on this branch and covered by regression tests. This is not a production certification; staging deployment, TLS/proxy configuration, PBX interoperability, backup/restore, and operational monitoring still require operator verification.

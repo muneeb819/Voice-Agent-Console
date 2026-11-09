@@ -11,8 +11,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./login.css?v=elite-2.34" />
-  <link rel="stylesheet" href="./brand-logos.css?v=elite-2.34" />
+  <link rel="stylesheet" href="./login.css?v=elite-2.35" />
+  <link rel="stylesheet" href="./brand-logos.css?v=elite-2.35" />
 </head>
 <body>
   <div class="aurora" aria-hidden="true"></div>
@@ -86,11 +86,11 @@
           <label for="signup-password">Password</label>
           <div class="input-wrap">
             <input id="signup-password" name="password" type="password"
-                   autocomplete="new-password" placeholder="At least 8 characters" required />
+                   autocomplete="new-password" placeholder="At least 15 characters" minlength="15" required />
             <button type="button" class="reveal" data-target="signup-password" aria-label="Show password">Show</button>
           </div>
           <div class="meter" aria-hidden="true"><span id="pw-meter"></span></div>
-          <p class="hint" id="pw-hint">Use 8+ characters. A longer passphrase is stronger.</p>
+          <p class="hint" id="pw-hint">Use 15+ characters. A multi-word passphrase is strongest.</p>
         </div>
         <p class="msg" id="signup-msg" role="alert" aria-live="polite"></p>
         <button type="submit" class="btn-primary" id="signup-submit">Create Account</button>
@@ -120,7 +120,7 @@
     </div>
   </div>
 
-  <script src="./brand-logos.js?v=elite-2.34"></script>
-  <script src="./login.js?v=elite-2.34"></script>
+  <script src="./brand-logos.js?v=elite-2.35"></script>
+  <script src="./login.js?v=elite-2.35"></script>
 </body>
 </html>

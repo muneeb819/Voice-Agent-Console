@@ -8,7 +8,7 @@ const publicDir = path.join(root, 'public');
 const read = (file: string) => fs.readFileSync(path.join(publicDir, file), 'utf8');
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 30));
 
-async function fixture(options: { state?: any; storageFails?: boolean; tab?: string; query?: string; draft?: any; historyState?: any } = {}) {
+async function fixture(options: { state?: any; storageFails?: boolean; tab?: string; query?: string; draft?: any; historyState?: any; api?: Record<string, (body: any) => any> } = {}) {
   const html = read('index.html').replace(/<script[\s\S]*?<\/script>/g, '');
   const errors: string[] = [];
   const vc = new VirtualConsole();
@@ -30,9 +30,21 @@ async function fixture(options: { state?: any; storageFails?: boolean; tab?: str
     storageProto.setItem = function (key: string, value: string) { if (key === 'vac_cloud_state_v1') throw new w.DOMException('Quota exceeded', 'QuotaExceededError'); return original.call(this, key, value); };
   }
   const requests: string[] = [];
-  w.fetch = (async (input: any) => {
+  const apiCalls: Array<{ url: string; body: any }> = [];
+  w.fetch = (async (input: any, init?: any) => {
     const url = String(input); requests.push(url);
-    if (url.includes('/api/')) return new Response('<html>Not found</html>', { status: 404, headers: { 'content-type': 'text/html' } });
+    if (url.includes('/api/')) {
+      const route = Object.keys(options.api || {}).find((key) => url.includes(key));
+      if (!route) return new Response('<html>Not found</html>', { status: 404, headers: { 'content-type': 'text/html' } });
+      let body: any = null;
+      try { body = init?.body ? JSON.parse(String(init.body)) : null; } catch {}
+      apiCalls.push({ url: route, body });
+      const out = options.api![route](body);
+      return new Response(JSON.stringify(out?.body ?? out), {
+        status: out?.status || 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     const name = new URL(url, 'https://console.example/Voice-Agent-Console/').pathname.split('/').pop()!;
     if (['default-state.json', 'greetings.json', 'version.json'].includes(name)) return new Response(read(name), { headers: { 'content-type': 'application/json' } });
     return new Response('{}', { headers: { 'content-type': 'application/json' } });
@@ -50,7 +62,7 @@ async function fixture(options: { state?: any; storageFails?: boolean; tab?: str
   const change = (el: Element, event = 'change') => el.dispatchEvent(new w.Event(event, { bubbles: true }));
   const click = (el: Element, init: MouseEventInit = {}) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true, button: 0, ...init }));
   const state = () => JSON.parse(w.localStorage.getItem('vac_cloud_state_v1') || 'null');
-  return { w, d: w.document, requests, errors, change, click, state };
+  return { w, d: w.document, requests, apiCalls, errors, change, click, state };
 }
 
 async function run() {
@@ -65,6 +77,9 @@ async function run() {
   click(d.getElementById('btn-account-menu')!);
   assert.equal(d.getElementById('account-popover')!.hidden, false, 'Account links open from the rail footer');
   assert.notEqual((d.getElementById('btn-logout') as HTMLElement).style.display, 'none');
+  assert.equal((d.getElementById('btn-account-security') as HTMLElement).style.display, 'none',
+    'Password/session controls stay hidden in the browser-only demo: there is no server account to manage');
+  assert.equal(d.getElementById('account-security-modal')!.hidden, true);
   click(d.getElementById('btn-account-menu')!);
   assert.equal(d.getElementById('account-popover')!.hidden, true);
   const savedBeforeEdit = JSON.stringify(f.state());
@@ -254,6 +269,45 @@ async function run() {
   assert.doesNotMatch(retired.d.getElementById('m')!.textContent || '', /dead-air|presence-check/i);
   assert.deepEqual(retired.errors, []);
   retired.w.close();
+
+  // ---- server-mode account security UI (password change / revoke sessions)
+  const serverApi: Record<string, (body: any) => any> = {
+    '/api/auth/status': () => ({ ok: true, authenticated: true, authEnabled: true, hasUsers: true, signupOpen: false,
+      user: { id: 'u1', email: 'operator@example.test', fullName: 'Test Operator', role: 'operator', active: true } }),
+    '/api/state': () => ({ state: JSON.parse(read('default-state.json')), revisions: [], secrets: {} }),
+    '/api/auth/change-password': (body: any) => body?.newPassword === 'Rotated-Passphrase-2026!'
+      ? { ok: true, revokedSessions: 2 }
+      : { status: 400, body: { ok: false, field: 'currentPassword', error: 'Current password is incorrect.' } },
+    '/api/auth/revoke-sessions': () => ({ ok: true, revokedSessions: 3 }),
+  };
+  const secured = await fixture({ api: serverApi });
+  const sd = secured.d;
+  assert.notEqual((sd.getElementById('btn-account-security') as HTMLElement).style.display, 'none',
+    'A signed-in server account exposes password and session controls');
+  secured.click(sd.getElementById('btn-account-security')!);
+  assert.equal(sd.getElementById('account-security-modal')!.hidden, false, 'Account security dialog opens');
+  assert.match(sd.getElementById('account-security-who')!.textContent || '', /operator@example\.test/);
+  (sd.getElementById('account-current-password') as HTMLInputElement).value = 'Old-Passphrase-2026!';
+  (sd.getElementById('account-new-password') as HTMLInputElement).value = 'too-short';
+  secured.click(sd.getElementById('btn-change-password')!);
+  await tick();
+  assert.match(sd.getElementById('account-security-msg')!.textContent || '', /at least 15 characters/);
+  assert.equal(secured.apiCalls.filter((c) => c.url === '/api/auth/change-password').length, 0,
+    'Client-side length policy blocks the request before it is sent');
+  (sd.getElementById('account-new-password') as HTMLInputElement).value = 'Rotated-Passphrase-2026!';
+  secured.click(sd.getElementById('btn-change-password')!);
+  await tick(); await tick();
+  const changeCall = secured.apiCalls.find((c) => c.url === '/api/auth/change-password');
+  assert.equal(changeCall?.body?.currentPassword, 'Old-Passphrase-2026!');
+  assert.match(sd.getElementById('account-security-msg')!.textContent || '', /2 other sessions signed out/);
+  assert.equal((sd.getElementById('account-new-password') as HTMLInputElement).value, '', 'Password fields are cleared after a change');
+  secured.click(sd.getElementById('btn-revoke-sessions')!);
+  await tick(); await tick();
+  assert.match(sd.getElementById('account-security-msg')!.textContent || '', /3 other sessions signed out/);
+  secured.w.document.dispatchEvent(new secured.w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.equal(sd.getElementById('account-security-modal')!.hidden, true, 'Escape closes the dialog');
+  assert.deepEqual(secured.errors, []);
+  secured.w.close();
 
   console.log('✓ Static console: full landscape header logo, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
 }
