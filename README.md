@@ -168,6 +168,18 @@ The release bundle contains only files listed in `tools/release-manifest.json`; 
 
 ---
 
+## ☁️ Publishing on AWS EC2 (HTTPS)
+
+To serve the console over HTTPS on your own instance (for example
+`https://<instance-ip>:533/`), run `sudo bash deploy/aws-deploy.sh --ip <instance-ip>`
+on that instance. It installs the app on loopback, puts nginx in front for TLS,
+and verifies both hops. See **[`docs/AWS-DEPLOYMENT.md`](./docs/AWS-DEPLOYMENT.md)**
+for prerequisites, the security-group rule you must add, and how to get a
+publicly trusted certificate for a bare IP (Let's Encrypt issues them, but they
+expire in ~6 days and need automated renewal).
+
+---
+
 ## ☎️ Co-Located ViciBox Production Deployment (5 Minutes)
 
 See **[`VICIBOX-PRODUCTION-RUNBOOK.md`](./VICIBOX-PRODUCTION-RUNBOOK.md)** for full VICIdial Admin screenshots/settings (`User 6666`, `FE_CLOSERS` In-Group, `AIBRIDGE` Carrier on `115.186.137.240:5062`, and `Remote Agent 9001`).

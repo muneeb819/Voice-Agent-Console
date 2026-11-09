@@ -823,6 +823,18 @@
     if (chevron) {
       chevron.setAttribute('points', isExpanded ? '16 9 13 12 16 15' : '14 9 17 12 14 15');
     }
+    // The phone opener lives outside the off-canvas rail so the drawer can
+    // always be reopened; it mirrors the same expanded state.
+    const mobileBtn = document.getElementById('btn-sidebar-toggle-mobile');
+    const mobileChevron = document.getElementById('sidebar-toggle-chevron-mobile');
+    if (mobileBtn) {
+      mobileBtn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+      mobileBtn.title = isExpanded ? 'Close Side Menu' : 'Open Side Menu';
+      mobileBtn.setAttribute('aria-label', isExpanded ? 'Close Side Control Panel' : 'Open Side Control Panel');
+    }
+    if (mobileChevron) {
+      mobileChevron.setAttribute('points', isExpanded ? '16 9 13 12 16 15' : '14 9 17 12 14 15');
+    }
     hideRailTooltip();
     if (save) {
       try {
@@ -889,6 +901,18 @@
   };
   syncHeaderHeight();
   window.addEventListener('resize', syncHeaderHeight);
+  // Crossing the off-canvas breakpoint changes what "expanded" means, so
+  // re-sync the footer toggle and the phone opener on every transition.
+  if (window.matchMedia) {
+    const railMq = window.matchMedia('(max-width: 860px)');
+    const onRailBreakpoint = () => {
+      mobileRailOpen = false;
+      applySidebarState(false);
+      syncHeaderHeight();
+    };
+    if (typeof railMq.addEventListener === 'function') railMq.addEventListener('change', onRailBreakpoint);
+    else if (typeof railMq.addListener === 'function') railMq.addListener(onRailBreakpoint);
+  }
   if (consoleHeader && typeof ResizeObserver === 'function') new ResizeObserver(syncHeaderHeight).observe(consoleHeader);
 
   const railBackdropEl = document.getElementById('rail-backdrop');
@@ -7187,7 +7211,7 @@
       return;
     }
 
-    if (b.id === 'btn-sidebar-toggle') {
+    if (b.id === 'btn-sidebar-toggle' || b.id === 'btn-sidebar-toggle-mobile') {
       toggleSidebar();
       return;
     }
