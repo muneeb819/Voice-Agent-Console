@@ -1,7 +1,11 @@
 /* MMA Digital Labs — theme-bound transparent logo assets.
    The eight operator-supplied banners are the source of truth. Each theme maps
    to one banner; the two light themes reuse the closest supplied banner until
-   additional artwork is provided. The full banner is a transparent WebP cut; no decorative wave/sheen overlays are rendered. */
+   additional artwork is provided. The full banner is a transparent WebP cut.
+   The waveform baked into the artwork is masked out and replaced with live
+   CSS-animated bars in the same windows, so the logo moves without a canvas,
+   requestAnimationFrame loop, or audio analyser. The motion is a decorative
+   CSS loop, not a measurement of microphone or provider audio. */
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -70,12 +74,43 @@
     return ASSETS[key] || ASSETS['mma-cyan-signal'];
   }
 
+  // Bar count matches the density of the waveform in the supplied artwork.
+  const WAVE_BARS = 24;
+
+  /**
+   * Builds one flank of live bars. Heights follow a sine envelope so the group
+   * tapers at both ends like the original art. Durations and delays are derived
+   * deterministically from the index, so the two flanks stay in sync across
+   * renders and the motion never looks like a single uniform sweep.
+   */
+  function waveBars() {
+    let html = '';
+    for (let i = 0; i < WAVE_BARS; i += 1) {
+      const t = (i + 0.5) / WAVE_BARS;
+      const envelope = Math.pow(Math.sin(Math.PI * t), 0.5);
+      const height = 20 + 80 * envelope * (0.35 + 0.65 * Math.abs(Math.sin(i * 1.9 + 0.4)));
+      const duration = (1.05 + ((i * 37) % 11) / 10).toFixed(2);
+      const delay = (-((i * 53) % 17) / 10).toFixed(2);
+      html += '<i style="height:' + height.toFixed(1) + '%;animation-duration:' + duration + 's;animation-delay:' + delay + 's"></i>';
+    }
+    return html;
+  }
+
+  function waveHtml() {
+    const bars = waveBars();
+    return (
+      '<span class="mma-wave mma-wave-l" aria-hidden="true">' + bars + '</span>' +
+      '<span class="mma-wave mma-wave-r" aria-hidden="true">' + bars + '</span>'
+    );
+  }
+
   function fullHtml(themeId, opts) {
     const options = opts || {};
     const asset = assetFor(themeId);
     const alt = options.alt || 'MMA Digital Labs — Voice Agent Bots Console';
     const lazy = options.lazy ? ' loading="lazy"' : '';
-    return '<img class="mma-logo-art" src="' + asset.full + '" alt="' + alt + '" draggable="false"' + lazy + ' />';
+    const waves = options.waves === false ? '' : waveHtml();
+    return '<img class="mma-logo-art" src="' + asset.full + '" alt="' + alt + '" draggable="false"' + lazy + ' />' + waves;
   }
 
   function iconHtml(themeId, opts) {
@@ -95,5 +130,15 @@
     el.innerHTML = variant === 'icon' ? iconHtml(themeId) : fullHtml(themeId);
   }
 
-  return { ASSETS, THEME_LOGO_MAP, assetFor, fullHtml, iconHtml, applyTo };
+  /**
+   * Sets decorative wave energy from real call state. This only changes CSS
+   * custom properties; it never starts a timer or animation loop.
+   */
+  function setEnergy(el, level) {
+    if (!el) return;
+    if (level) el.dataset.energy = level;
+    else delete el.dataset.energy;
+  }
+
+  return { ASSETS, THEME_LOGO_MAP, assetFor, fullHtml, iconHtml, applyTo, setEnergy, WAVE_BARS };
 });

@@ -270,6 +270,34 @@ async function run() {
   assert.deepEqual(retired.errors, []);
   retired.w.close();
 
+  // ---- live animated logo waves (fresh fixture: the first one is closed above)
+  const waved = await fixture();
+  const d2 = waved.d;
+  const brandMark = d2.getElementById('brand-mark')!;
+  const left = brandMark.querySelector('.mma-wave-l');
+  const right = brandMark.querySelector('.mma-wave-r');
+  assert(left && right, 'Header banner renders both live wave flanks');
+  assert.equal(left!.querySelectorAll('i').length, 24, 'Left flank has the pinned bar count');
+  assert.equal(right!.querySelectorAll('i').length, 24, 'Right flank has the pinned bar count');
+  assert.equal(brandMark.querySelectorAll('.mma-wave i[style*="animation-duration"]').length, 48,
+    'Every bar carries its own duration so the motion is not a uniform sweep');
+  assert.equal(brandMark.querySelectorAll('.mma-wave[aria-hidden="true"]').length, 2,
+    'Decorative waves are hidden from assistive tech');
+  const heights = Array.from(left!.querySelectorAll('i')).map((b) => parseFloat((b as HTMLElement).style.height));
+  assert(heights[0] < heights[11] && heights[23] < heights[12], 'Wave envelope tapers at both ends like the supplied art');
+  // Theme changes must keep the live bars rather than falling back to a static image.
+  const brandApi = (waved.w as any).VACBrandLogos;
+  brandApi.applyTo(brandMark, 'ember_pulse', 'full');
+  assert.equal(brandMark.querySelectorAll('.mma-wave i').length, 48, 'Switching theme keeps the live waves');
+  brandApi.setEnergy(brandMark, 'speaking');
+  assert.equal(brandMark.dataset.energy, 'speaking', 'Speaking state is exposed to CSS');
+  brandApi.setEnergy(brandMark, '');
+  assert.equal(brandMark.dataset.energy, undefined, 'Idle clears the energy attribute');
+  assert.equal(brandApi.fullHtml('cyan_signal', { waves: false }).includes('mma-wave'), false,
+    'Callers can still request the plain static banner');
+  assert.deepEqual(waved.errors, [], 'Live waves must not throw during console boot');
+  waved.w.close();
+
   // ---- server-mode account security UI (password change / revoke sessions)
   const serverApi: Record<string, (body: any) => any> = {
     '/api/auth/status': () => ({ ok: true, authenticated: true, authEnabled: true, hasUsers: true, signupOpen: false,

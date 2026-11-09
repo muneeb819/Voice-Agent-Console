@@ -559,6 +559,19 @@
     return api ? api.fullHtml(meta.id, opts) : brandMarkSvg(meta, { thin: true });
   }
 
+  /**
+   * Mirrors call state onto the header banner's decorative waves. This sets a
+   * data attribute consumed by CSS; it never starts a timer or animation loop.
+   * The waves are decoration, not a meter of provider or microphone audio.
+   */
+  function syncBrandEnergy(level) {
+    const api = brandLogoApi();
+    const el = document.getElementById('brand-mark');
+    if (!api || !el) return;
+    if (el.dataset.energy === (level || '')) return;
+    api.setEnergy(el, level);
+  }
+
   function renderBrandMark() {
     const el = document.getElementById('brand-mark');
     if (!el) return;
@@ -2790,6 +2803,8 @@
     const isSpeaking = sim.agentState === 'speaking' || sim.scheduledSources.length > 0;
     const isListeningUser = sim.agentState === 'user_speaking';
     stage.className = `persona-stage${isSpeaking ? ' speaking' : ''}${isListeningUser ? ' listening-user' : ''}`;
+    // The header banner mirrors real call state through a CSS variable only.
+    syncBrandEnergy(isSpeaking ? 'speaking' : isListeningUser ? 'listening' : '');
     const statePill = document.getElementById('persona-state-pill');
     if (statePill) {
       const labels = {

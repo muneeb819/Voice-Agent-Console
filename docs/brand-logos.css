@@ -1,14 +1,70 @@
 /* Transparent operator-supplied MMA banners.
    Shared by the console, login/signup shell, Theme Studio and loader previews. */
 
-/* The full banner art now ships with a real alpha channel, so it sits directly
-   on the themed surface: no dark plate, no rounded crop, no drop shadow. */
+/* The full banner art ships with a real alpha channel, so it sits directly on
+   the themed surface: no dark plate, no rounded crop, no drop shadow.
+
+   The artwork has a waveform baked into both flanks. Those two windows are
+   masked out of the image and replaced with live CSS-animated bars positioned
+   in the same place, so the logo reads as "live" without redrawing the banner.
+   Window coordinates are percentages of the banner box, measured from the
+   supplied masters; they hold for all eight themes. */
 .mma-brand-logo {
   position: relative;
   display: block;
   width: 100%;
   aspect-ratio: 2688 / 864;
   background: none;
+  --mma-wave-top: 25%;
+  --mma-wave-height: 34%;
+  --mma-wave-tail: 41%;
+  --mma-wave-left-x: 4.5%;
+  --mma-wave-right-x: 74.5%;
+  --mma-wave-width: 21%;
+  --mma-wave-color: var(--ac, #46f6ff);
+  --mma-wave-peak: 1;
+  --mma-wave-floor: 0.28;
+  --mma-wave-speed: 1;
+  /* Most flanks are transparent in the supplied art, so the masked window just
+     shows the themed surface. One banner has an opaque dark panel behind its
+     right waveform; that flank repaints the panel so the hole is not visible
+     on light themes. Measured from the master, not guessed. */
+  --mma-wave-panel-l: transparent;
+  --mma-wave-panel-r: transparent;
+}
+
+/* Cut the baked-in waveform out of the banner. Two transparent stops in a
+   horizontal gradient would also erase the frame above and below, so the mask
+   is built from three stacked bands: the middle band alone carries the holes. */
+.mma-brand-logo .mma-logo-art {
+  -webkit-mask-image:
+    linear-gradient(#000 0 0),
+    linear-gradient(90deg,
+      #000 0 var(--mma-wave-left-x),
+      transparent var(--mma-wave-left-x) calc(var(--mma-wave-left-x) + var(--mma-wave-width)),
+      #000 calc(var(--mma-wave-left-x) + var(--mma-wave-width)) var(--mma-wave-right-x),
+      transparent var(--mma-wave-right-x) calc(var(--mma-wave-right-x) + var(--mma-wave-width)),
+      #000 calc(var(--mma-wave-right-x) + var(--mma-wave-width)) 100%),
+    linear-gradient(#000 0 0);
+  -webkit-mask-size: 100% var(--mma-wave-top), 100% var(--mma-wave-height), 100% var(--mma-wave-tail);
+  -webkit-mask-position: 0 0, 0 var(--mma-wave-top), 0 100%;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-composite: source-over, source-over, source-over;
+  mask-image:
+    linear-gradient(#000 0 0),
+    linear-gradient(90deg,
+      #000 0 var(--mma-wave-left-x),
+      transparent var(--mma-wave-left-x) calc(var(--mma-wave-left-x) + var(--mma-wave-width)),
+      #000 calc(var(--mma-wave-left-x) + var(--mma-wave-width)) var(--mma-wave-right-x),
+      transparent var(--mma-wave-right-x) calc(var(--mma-wave-right-x) + var(--mma-wave-width)),
+      #000 calc(var(--mma-wave-right-x) + var(--mma-wave-width)) 100%),
+    linear-gradient(#000 0 0);
+  mask-size: 100% var(--mma-wave-top), 100% var(--mma-wave-height), 100% var(--mma-wave-tail);
+  mask-position: 0 0, 0 var(--mma-wave-top), 0 100%;
+  mask-repeat: no-repeat;
+  /* Top and bottom bands are painted first; the middle band is the only one
+     allowed to remove pixels, so the frame stays intact. */
+  mask-composite: add;
 }
 
 .mma-brand-icon {
@@ -31,9 +87,102 @@
   user-select: none;
 }
 
+/* ---------------------------------------------------------------- live waves */
+
+.mma-wave {
+  position: absolute;
+  top: var(--mma-wave-top);
+  height: var(--mma-wave-height);
+  width: var(--mma-wave-width);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1px;
+  pointer-events: none;
+  /* Keeps the glow inside the banner box on very small renders. */
+  contain: layout style;
+}
+
+.mma-wave-l { left: var(--mma-wave-left-x); background: var(--mma-wave-panel-l); }
+.mma-wave-r { left: var(--mma-wave-right-x); background: var(--mma-wave-panel-r); }
+
+/* mma-gold-crimson (themes crimson and sakura) ships an opaque right panel. */
+:root[data-theme="crimson"] .mma-brand-logo,
+:root[data-theme="sakura"] .mma-brand-logo {
+  --mma-wave-panel-r: rgb(13, 7, 1);
+}
+
+.mma-wave i {
+  display: block;
+  flex: 1 1 0;
+  min-width: 1px;
+  max-width: 4px;
+  border-radius: 999px;
+  background: var(--mma-wave-color);
+  box-shadow: 0 0 4px var(--mma-wave-color);
+  opacity: 0.9;
+  transform-origin: center;
+  animation-name: mmaLiveWave;
+  animation-timing-function: ease-in-out;
+  animation-iteration-count: infinite;
+  animation-direction: alternate;
+  will-change: transform;
+}
+
+/* Animating transform (not height) keeps this on the compositor: no layout
+   or repaint per frame, which matters because the banner is always on screen. */
+@keyframes mmaLiveWave {
+  from { transform: scaleY(var(--mma-wave-floor)); opacity: 0.62; }
+  to   { transform: scaleY(var(--mma-wave-peak));  opacity: 1; }
+}
+
+/* Real call state drives amplitude only. Idle is a calm loop; an active agent
+   is taller and brighter. No JS animation loop is involved. */
+.mma-brand-logo[data-energy="speaking"] {
+  --mma-wave-floor: 0.45;
+  --mma-wave-peak: 1;
+}
+
+.mma-brand-logo[data-energy="speaking"] .mma-wave i {
+  animation-duration: 0.62s !important;
+  box-shadow: 0 0 7px var(--mma-wave-color);
+}
+
+.mma-brand-logo[data-energy="listening"] {
+  --mma-wave-floor: 0.2;
+  --mma-wave-peak: 0.62;
+}
+
+.mma-brand-logo[data-energy="listening"] .mma-wave i {
+  opacity: 0.72;
+}
+
+/* Light themes need a darker bar to stay visible on a pale surface. */
+:root[data-theme="pearl"] .mma-brand-logo,
+:root[data-theme="sakura"] .mma-brand-logo {
+  --mma-wave-color: var(--ac-2, #7b2cbf);
+}
+
+.mma-brand-logo[data-motion="off"] .mma-wave {
+  display: none;
+}
+
+/* Restores the original baked-in artwork when the live bars are disabled. */
+.mma-brand-logo[data-motion="off"] .mma-logo-art {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .mma-brand-logo,
   .mma-brand-icon {
     transition: none !important;
+  }
+
+  /* Show the supplied static artwork rather than a frozen row of bars. */
+  .mma-wave { display: none; }
+  .mma-brand-logo .mma-logo-art {
+    -webkit-mask-image: none;
+    mask-image: none;
   }
 }
