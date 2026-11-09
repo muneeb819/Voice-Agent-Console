@@ -87,11 +87,6 @@ async function main() {
   assert.ok(campaign, 'Recording fixture requires an explicit campaign');
   campaign.agentId = 'a1';
   campaign.complianceRules = 'Reviewed recording fixture rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
-  campaign.presenceCheckText = 'Can you hear me okay?';
-  campaign.deadAirTimeoutSec = 8;
-  campaign.deadAirDisposition = 'DAIR';
-  campaign.deadAirDispositionVerified = true;
-  if (!campaign.dispos.split(/[ ,]+/).includes('DAIR')) campaign.dispos += ',DAIR';
   saveConsoleState(state, 'Recording fixture');
   const mock = http.createServer();
   const wss = new WebSocketServer({ server: mock, path: '/agent' });

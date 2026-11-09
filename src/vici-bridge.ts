@@ -1107,7 +1107,6 @@ export class VicidialBridgeService {
     const ttfbSamples: number[] = [];
 
     let disposition: string | null = null;
-    let deadAirStatusForHangup: string | null = null;
     let transferredTo: string | null = null;
     let dncAdded = false;
     let transferExecuted = false;
@@ -1273,47 +1272,13 @@ export class VicidialBridgeService {
       }
       opts.hooks.hangupTransport();
 
-      // Dead air is a campaign-specific status update, never a generic no-answer alias.
-      // Attempt update_lead first; retain the configured code for the Remote Agent hangup
-      // even if the lead update fails, and record the actual API result in the CDR.
-      if (reason === 'dead_air') {
-        const code = String(campaign.deadAirDisposition || '').trim().toUpperCase();
-        const allowedCodes = allowedCampaignDispositionCodes(campaign);
-        if (campaign.deadAirDispositionVerified !== true || !allowedCodes.includes(code)) {
-          this.stats.lastError = `Dead-air disposition ${code || '(unset)'} is not verified and allowed for VICIdial campaign ${campaign.viciCampaign}.`;
-          addTranscript('system', `Dead-air status was not applied: ${this.stats.lastError}`);
-        } else {
-          deadAirStatusForHangup = code;
-          const upd = await viciClient.updateLeadDisposition({
-            leadId: summary.leadId,
-            phone: summary.phone,
-            status: code,
-            notes: `No caller response after the one-second listen and campaign presence check. Campaign ${campaign.viciCampaign}.`,
-          });
-          if (upd.ok) {
-            disposition = code;
-            addTranscript('system', `Dead-air disposition ${code} was accepted by VICIdial update_lead.`);
-          } else {
-            addTranscript('system', `VICIdial did not confirm dead-air update_lead status ${code}; the bridge will still request ${code} on Remote Agent hangup. See the Vici API audit.`);
-          }
-          functionCalls.push({
-            ts: new Date().toISOString(),
-            id: `dead_air_${callId}`,
-            name: 'apply_dead_air_disposition',
-            args: { code, campaign: campaign.viciCampaign },
-            status: upd.ok ? 'completed' : 'failed',
-            response: { ok: upd.ok, requestedCode: code, responseText: upd.responseText },
-          });
-        }
-      }
-
       // Release Remote Agent call slot via ra_call_control HANGUP if call was NOT transferred
       if (!transferredTo && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
         await viciClient
           .hangupRemoteAgentCall({
             callerCode: parsedCaller.callerCode,
             remoteAgentUser,
-            status: deadAirStatusForHangup || disposition || 'NA',
+            status: disposition || 'NA',
           })
           .catch(() => {});
       }
@@ -1453,8 +1418,10 @@ export class VicidialBridgeService {
       };
       hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
       let wireSettings: any;
+      let openingText = '';
       try {
         const prepared = prepareDelayedOpening(interpolateEnvPlaceholders(rawSettings));
+        openingText = prepared.greeting;
         wireSettings = prepared.settings;
       } catch (err: any) {
         this.stats.lastError = err.message || 'Could not prepare the opening.';
@@ -1463,9 +1430,8 @@ export class VicidialBridgeService {
         return;
       }
       openingGate = createOpeningGate({
-        presenceCheck: campaign.presenceCheckText,
-        responseTimeoutMs: Number(campaign.deadAirTimeoutSec) * 1000,
-        sendPresenceCheck: (message) => {
+        greeting: openingText,
+        sendOpening: (message) => {
           if (!closed && dgWs?.readyState === WebSocket.OPEN) {
             dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
           }
@@ -1479,9 +1445,8 @@ export class VicidialBridgeService {
           recorder.recordBotPcm8k(pcm8k);
           opts.hooks.enqueueBotPcm8k(pcm8k);
         },
-        onDeadAir: () => {
-          if (closed) return;
-          void finalizeSession('dead_air');
+        onSendError: () => {
+          if (!closed) addTranscript('system', 'The configured opening could not be sent to Deepgram. Check the provider connection.');
         },
         onOverflow: () => addTranscript('system', 'Early provider audio exceeded the opening buffer and was dropped.'),
       });
@@ -1586,8 +1551,6 @@ export class VicidialBridgeService {
               turns += 1;
               lastUserTurnTs = Date.now();
               awaitingFirstAudioForTurn = true;
-            } else {
-              openingGate?.agentTurn();
             }
             suppressStaleBotAudio = false;
             addTranscript(role, String(evt.content || ''));
@@ -1595,21 +1558,18 @@ export class VicidialBridgeService {
           }
 
           case 'AgentThinking': {
-            openingGate?.agentTurn();
             suppressStaleBotAudio = false;
             updateState('thinking');
             break;
           }
 
           case 'AgentStartedSpeaking': {
-            openingGate?.agentTurn();
             suppressStaleBotAudio = false;
             updateState('bot_speaking');
             break;
           }
 
           case 'AgentAudioDone': {
-            openingGate?.agentAudioDone();
             openingGate?.afterRelease(() => {
               if (closed) return;
               updateState('listening');

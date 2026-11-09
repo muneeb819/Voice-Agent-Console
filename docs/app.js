@@ -1218,28 +1218,10 @@
           cp.complianceRules = MISSING_CAMPAIGN_RULES;
           mutated = true;
         }
-        if (typeof cp.presenceCheckText !== 'string') {
-          cp.presenceCheckText = DEFAULT_PRESENCE_CHECK_TEXT;
-          mutated = true;
-        }
-        if (!Number.isFinite(Number(cp.deadAirTimeoutSec))) {
-          cp.deadAirTimeoutSec = 8;
-          mutated = true;
-        } else {
-          cp.deadAirTimeoutSec = Math.round(Number(cp.deadAirTimeoutSec));
-        }
-        if (typeof cp.deadAirDisposition !== 'string') {
-          cp.deadAirDisposition = '';
-          mutated = true;
-        }
-        const normalizedDeadAirCode = String(cp.deadAirDisposition || '').trim().toUpperCase();
-        if (cp.deadAirDisposition !== normalizedDeadAirCode) {
-          cp.deadAirDisposition = normalizedDeadAirCode;
-          mutated = true;
-        }
-        if (typeof cp.deadAirDispositionVerified !== 'boolean') {
-          cp.deadAirDispositionVerified = false;
-          mutated = true;
+        // Remove retired automatic-silence settings from saved browser state.
+        // The operator's general disposition list and all other fields stay intact.
+        for (const key of ['presenceCheckText', 'deadAirTimeoutSec', 'deadAirDisposition', 'deadAirDispositionVerified']) {
+          if (Object.prototype.hasOwnProperty.call(cp, key)) { delete cp[key]; mutated = true; }
         }
       }
       // Missing campaign assignments stay visible and block calls; never generate a
@@ -1332,8 +1314,7 @@
         `- The only campaign assigned to this call is ${JSON.stringify(campaign.name)} (VICIdial campaign ${JSON.stringify(campaign.viciCampaign)}). Do not use another campaign’s rules.`,
         '- The rules below are mandatory and override any conflicting persona, sales script, saved agent prompt, or general-answer instruction. Follow them throughout the call.',
         `- Campaign rules:\n${String(campaign.complianceRules || '').trim() || '[NO CAMPAIGN RULES CONFIGURED — do not start a live call.]'}`,
-        `- If the caller is silent for one second, the bridge sends this one presence-check line: ${JSON.stringify(campaign.presenceCheckText || '')}. Say it briefly, then wait for a caller turn; do not continue the sales script until they respond.`,
-        `- After the presence check, the bridge waits ${Number(campaign.deadAirTimeoutSec) || 8} seconds for a caller response. The bridge, not the model, applies dead-air status ${JSON.stringify(campaign.deadAirDisposition || '')} and hangs up; do not claim a status update succeeded.`
+        '- After the one-second listen, a silent caller receives the configured opening once. Silence alone never ends the call or applies a disposition; continue listening for the caller.'
       );
       if (campaign.disclosure && campaign.disclosure.trim()) {
         lines.push(
@@ -2366,8 +2347,6 @@
       return items;
     }
     const rules = String(c.complianceRules || '').trim();
-    const presence = String(c.presenceCheckText || '').trim();
-    const deadAir = String(c.deadAirDisposition || '').trim().toUpperCase();
     const allowed = String(c.dispos || '').split(/[ ,\t\r\n]+/).map((code) => code.trim().toUpperCase()).filter(Boolean);
     push(Boolean((c.viciCampaign || '').trim()), 'VICIdial campaign ID set');
     push(Boolean((c.xferTarget || '').trim()), 'Live-agent transfer target set');
@@ -2381,12 +2360,6 @@
     const transferEnabled = Boolean(transferFunction && assignedAgents.some((agent) => agent.fnIds.includes(transferFunction.id)));
     push(!transferEnabled || allowed.includes('XFER'), 'XFER is in the allowed disposition list when live-agent transfer is enabled');
     push(rules.length >= 20 && rules.length <= 8000 && !/^REVIEW REQUIRED\b/i.test(rules), 'Campaign-specific compliance & rules are written and reviewed (20–8,000 characters)');
-    push(presence.length >= 8 && presence.length <= 280, 'Brief campaign presence-check line configured (8–280 characters)');
-    push(Number.isInteger(Number(c.deadAirTimeoutSec)) && Number(c.deadAirTimeoutSec) >= 3 && Number(c.deadAirTimeoutSec) <= 30, 'Dead-air response timeout is 3–30 seconds');
-    const validCode = /^[A-Z0-9_-]{2,6}$/.test(deadAir);
-    push(validCode, 'Campaign-specific dead-air disposition code configured');
-    push(validCode && allowed.includes(deadAir), `Dead-air code ${deadAir || '(unset)'} is in this campaign’s allowed disposition list`);
-    push(c.deadAirDispositionVerified === true, 'Operator confirmed this code exists in this VICIdial campaign status list');
     return items;
   }
 
@@ -2433,8 +2406,6 @@
           `;   Remote Agent Exten   : ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + idx})`,
           `;   Live Closer Transfer : ${xfer}`,
           `;   Allowed Dispositions : ${c.dispos}`,
-          `;   Dead-Air Disposition : ${c.deadAirDisposition || '(unset)'} after ${c.deadAirTimeoutSec}s; verified in VICIdial: ${c.deadAirDispositionVerified ? 'YES' : 'NO'}`,
-          `;   Presence Check       : ${String(c.presenceCheckText || '').replace(/[\r\n]+/g, ' ')}`,
           `;   Campaign Rules       : ${String(c.complianceRules || '').trim() ? `${String(c.complianceRules).trim().length} characters; injected into the assigned bot prompt` : 'MISSING — deployment blocked'}`,
         ].join('\n');
       })
@@ -2891,7 +2862,7 @@
     updatePersonaStageDom();
   }
 
-  function classifyBotUtterancePresence(text) {
+  function classifyBotUtteranceExpression(text) {
     const t = String(text || '');
     if (/\b(i'm |i am |my name is|hey there|hi there|welcome|nice to meet|introduce)\b/i.test(t)) {
       applyPersonaExpressionAndGesture('smile', '😊 Warm Self-Intro Smile', 'wave', '👋', 'Friendly Greeting Wave');
@@ -3740,7 +3711,7 @@
         if (msg.role === 'user') {
           sim.turns += 1;
         } else if (msg.role === 'assistant') {
-          classifyBotUtterancePresence(msg.content);
+          classifyBotUtteranceExpression(msg.content);
         }
         sim.events.push({
           kind: 'msg',
@@ -3823,7 +3794,7 @@
       if (attemptId !== sim.sessionAttemptId || !sim.connecting) return;
       sim.selectedGreeting = selected.row || null;
       if (!sim.selectedGreeting) {
-        sim.events.push({ kind: 'msg', role: 'system', content: 'Greeting library unavailable; the configured campaign opening will be used after the caller responds.' });
+        sim.events.push({ kind: 'msg', role: 'system', content: 'Greeting library unavailable; the configured campaign opening will be used after the one-second listen.' });
       } else if (selected.storageWarning) {
         sim.events.push({ kind: 'msg', role: 'system', content: 'Greeting rotation storage is unavailable; the no-repeat cycle lasts only in this tab.' });
       }
@@ -3899,6 +3870,10 @@
         if (attemptId === sim.sessionAttemptId && dgWs.readyState === WebSocket.OPEN) {
           dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
         }
+      },
+      onSendError() {
+        sim.events.push({ kind: 'msg', role: 'system', content: 'The configured opening could not be sent to Deepgram. Check the provider connection.' });
+        renderSimFeedDom();
       },
       playAudio(chunk) {
         if (awaitingFirstAudio && lastUserTurnAt > 0) {
@@ -4023,14 +3998,12 @@
           }
         }
       } else if (msg.type === 'AgentThinking') {
-        openingGate.agentTurn();
         sim.bargeInSuppressAudio = false;
         sim.agentState = 'thinking';
         sim.statusText = 'LLM Thinking…';
         applyPersonaExpressionAndGesture('think', '🧠 Agent processing', 'think', '💭', 'Decorative animation');
         updateSimStatusDom();
       } else if (msg.type === 'AgentStartedSpeaking') {
-        openingGate.agentTurn();
         sim.bargeInSuppressAudio = false;
         sim.agentState = 'speaking';
         sim.statusText = 'Bot Speaking…';
@@ -4053,8 +4026,7 @@
           lastUserTurnAt = Date.now();
           awaitingFirstAudio = true;
         } else if (msg.role === 'assistant') {
-          openingGate.agentTurn();
-          classifyBotUtterancePresence(msg.content);
+          classifyBotUtteranceExpression(msg.content);
         }
         sim.events.push({ kind: 'msg', role: msg.role, content: msg.content });
         renderSimFeedDom();
@@ -4480,7 +4452,7 @@
     if (!S) return;
     const aid = A().id;
     const requestId = ++sim.logsRequestId;
-    const stillCurrent = () => A().id === aid && sim.logsRequestId === requestId;
+    const stillCurrent = () => Boolean(S) && A()?.id === aid && sim.logsRequestId === requestId;
     sim.logsError = null;
     try {
       if (serverlessCloudMode) {
@@ -4507,6 +4479,7 @@
       sim.logsLoadedForAgent = aid;
       sim.logsError = `Could not load test history: ${err.message || 'storage or network error'}`;
     }
+    if (!stillCurrent()) return;
     const box = document.getElementById('sim-logs-box');
     if (box) box.innerHTML = renderCallLogsList();
   }
@@ -4891,7 +4864,7 @@
     const agentChecks = agents.flatMap((agent) => validateAgentLocal(agent));
     const campaignChecks = campaigns.flatMap((campaign) => validateCampaignLocal(campaign));
     const isPipelineCheck = (item) => /global|plug-in json|voice agent|nova|flux stt/i.test(item[2]);
-    const isSafetyCheck = (item) => /disclosure|DNC|compliance|disposition|dead-air|presence-check/i.test(item[2]);
+    const isSafetyCheck = (item) => /disclosure|DNC|compliance|disposition/i.test(item[2]);
     const passed = (checks) => checks.filter((item) => (item.level || item[0]) === 'ok').length;
     const pipelineChecks = agentChecks.filter(isPipelineCheck);
     const routingChecks = campaignChecks.filter((item) => !isSafetyCheck(item));
@@ -5302,7 +5275,7 @@
           <div class="note wn">This controls the spoken campaign notice only; it does not turn off recording. Obtain any consent required for your calls. Existing notice settings are preserved. Notice text written inside the saved opening is not removed.</div>
           ${F('Saved opening and identity (keep it brief)', 'a.greeting', 'ta')}
           ${F('Vary this opening using the imported greeting library', 'a.randomGreetingEnabled', 'chk')}
-          <div class="note" style="margin:5px 0">Each call listens for the caller’s first speech for 1 second before the bot speaks. If the line is silent, the assigned campaign’s brief presence check is spoken once; the configured greeting follows only after a caller response. A library entry varies the saved opening without inventing an identity. The 1,100 original entries remain below.</div>
+          <div class="note" style="margin:5px 0">Each call listens for caller speech for 1 second. A silent line then receives the configured opening once; an early caller turn takes priority. Silence alone never hangs up or applies a disposition. A library entry varies the saved opening without inventing an identity. The 1,100 original entries remain below.</div>
           <div id="greeting-catalog-panel">${renderGreetingCatalog()}</div>
           ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
           <div class="note wn">Before calling, verify your identity and every factual or benefit claim. Example Medicare / Food &amp; OTC scripts are unverified; review them and any required consent or disclosures for your campaign.</div>
@@ -5412,7 +5385,7 @@
 
         <div class="card sticky">
           <h2>Deepgram Settings Preview</h2>
-          <div class="note">The preview uses the selected campaign’s rules and disposition enum. On a live call, the bot listens for 1 second, asks the campaign’s presence check after silence, then waits for the caller before starting the greeting.</div>
+          <div class="note">The preview uses the selected campaign’s rules and disposition enum. On a live call, the bot listens for 1 second, then speaks the configured opening if the caller is silent. An early caller turn takes priority; silence alone never ends the call.</div>
           <pre id="pv"></pre>
           <h2>Quick Agent Pre-Flight</h2>
           <div id="agent-quick-ck"></div>
@@ -5436,7 +5409,7 @@
       if (!S.campaigns.length) {
         m.innerHTML = `<div class="card">${renderSelectorBar('c')}
           <h2>No campaigns configured</h2>
-          <div class="note er">Calls, loopback tests, and deployment stay blocked until you create a campaign, write its rules and presence check, verify a dead-air disposition, and assign a bot agent.</div>
+          <div class="note er">Calls, loopback tests, and deployment stay blocked until you create a campaign, write its rules, configure allowed dispositions, and assign a bot agent.</div>
         </div>
         <div class="card sticky"><h2>Campaign Readiness</h2><div id="ck">${renderCheckList(validateCampaignLocal(null))}</div><h2>Campaign JSON</h2><pre id="pv"></pre></div>`;
       } else {
@@ -5472,16 +5445,8 @@
           <h2>🛡️ Compliance &amp; Rules</h2>
           <div class="note wn">These rules are attached to this campaign and injected into its assigned bot’s live prompt. Write campaign-specific, actionable rules and review all claims with your compliance owner. This console is not legal advice or a compliance certification.</div>
           ${F('Mandatory campaign-specific rules and prohibited claims (20–8,000 characters)', 'c.complianceRules', 'ta', [], 'style="min-height:180px" maxlength="8000"')}
-          <div class="row">
-            ${F('Presence-check line spoken after 1 second of caller silence', 'c.presenceCheckText', 'ta', [], 'style="min-height:62px" maxlength="280"')}
-            ${F('Wait for caller response after the presence check (seconds)', 'c.deadAirTimeoutSec', 'number', [], 'min="3" max="30" step="1"')}
-          </div>
-          <div class="row">
-            ${F('Campaign-specific dead-air disposition code (example: DAIR)', 'c.deadAirDisposition')}
-            ${F('Allowed VICIdial disposition codes for this campaign (comma-separated)', 'c.dispos')}
-          </div>
-          ${F('I verified this dead-air code exists in the matching VICIdial campaign’s status list', 'c.deadAirDispositionVerified', 'chk')}
-          <div class="note wn">The code must also appear in the allowed-disposition list above. The console cannot query VICIdial’s campaign status configuration; verify the exact code under VICIdial Campaigns → Statuses before checking this box. If an update is rejected, the bridge logs the failure and still requests the configured code when hanging up.</div>
+          ${F('Allowed VICIdial disposition codes for this campaign (comma-separated)', 'c.dispos')}
+          <div class="note">These codes control explicit agent disposition requests. Caller silence does not select a code or end the call.</div>
           ${F('Scrub leads against DNC list before dialing', 'c.dnc', 'chk')}
         </div>
         <div class="card sticky">
@@ -7988,8 +7953,7 @@
           id: '', name: '', agentId: '', agentIds: [], viciCampaign: '', lists: '', start: '09:00', end: '20:00',
           tz: 'America/New_York', attempts: 3, retry: 120, maxCalls: 10, xferType: 'ingroup',
           xferTarget: '', fallback: '', dnc: true, disclosure: '', dispos: '',
-          complianceRules: MISSING_CAMPAIGN_RULES, presenceCheckText: DEFAULT_PRESENCE_CHECK_TEXT,
-          deadAirTimeoutSec: 8, deadAirDisposition: '', deadAirDispositionVerified: false,
+          complianceRules: MISSING_CAMPAIGN_RULES,
         };
         const clone = JSON.parse(JSON.stringify(template || (kind === 'c' ? blankCampaign : {})));
         clone.id = uid(kind === 'a' ? 'ag' : 'cp');
@@ -8003,8 +7967,6 @@
           Object.assign(clone, {
             agentId: '', agentIds: [], viciCampaign: '', lists: '', xferTarget: '', fallback: '', dnc: true,
             disclosure: '', dispos: '', complianceRules: MISSING_CAMPAIGN_RULES,
-            presenceCheckText: DEFAULT_PRESENCE_CHECK_TEXT, deadAirTimeoutSec: 8,
-            deadAirDisposition: '', deadAirDispositionVerified: false,
           });
         }
         const nextNum = arr.length + 1;

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.SPEECH_SERVICE_DEFAULT_VOICES = exports.SPEECH_SERVICE_STT_MODELS = exports.MISSING_CAMPAIGN_RULES = exports.DEFAULT_PRESENCE_CHECK_TEXT = exports.VOICE_AGENT_STT_MODELS = void 0;
+exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.SPEECH_SERVICE_DEFAULT_VOICES = exports.SPEECH_SERVICE_STT_MODELS = exports.MISSING_CAMPAIGN_RULES = exports.VOICE_AGENT_STT_MODELS = void 0;
 exports.defaultVoiceAgentSttModel = defaultVoiceAgentSttModel;
 exports.normalizeVoiceAgentSttModel = normalizeVoiceAgentSttModel;
 exports.defaultSelfIntroForAgent = defaultSelfIntroForAgent;
@@ -12,7 +12,6 @@ const campaign_assignment_1 = require("./campaign-assignment");
 // Deepgram Voice Agent listens with either Nova (general purpose) or Flux v2.
 // The Voice Agent's own verified baseline is Nova-3; Flux models remain available.
 exports.VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'];
-exports.DEFAULT_PRESENCE_CHECK_TEXT = 'Hello? Are you there? Can you hear me?';
 exports.MISSING_CAMPAIGN_RULES = 'REVIEW REQUIRED: Add and review campaign-specific compliance and call rules before deployment.';
 exports.SPEECH_SERVICE_STT_MODELS = ['large-v3-turbo', 'whisper-1'];
 exports.SPEECH_SERVICE_DEFAULT_VOICES = [
@@ -371,17 +370,13 @@ function createDefaultState() {
                 fallback: 'Dispo CALLBK',
                 dnc: true,
                 disclosure: 'This call may be recorded for quality purposes.',
-                dispos: 'XFER,NI,DNC,NA,CALLBK,DEC,DAIR',
+                dispos: 'XFER,NI,DNC,NA,CALLBK,DEC',
                 complianceRules: 'Final Expense outbound campaign rules:\n' +
                     '- Identify yourself and the organization accurately; be truthful that you are an AI assistant if asked. Never claim to be a human, insurer, government office, or licensed agent.\n' +
                     '- Do not claim the caller requested a quote unless they confirm it during this call or it is verified in the lead record. Never guarantee approval, coverage, rates, savings, or policy terms, and do not quote prices.\n' +
                     '- Ask permission to continue. Confirm age, interest, and qualification only from the caller’s current statements. Transfer to a licensed specialist only after the configured criteria are met and the caller agrees.\n' +
                     '- Immediately honor stop, do-not-call, refusal, or hang-up requests without arguing or making another sales attempt. Do not request Social Security, bank, payment, or other sensitive identity details.\n' +
                     '- If unsure, say so plainly and offer a live specialist; never invent a benefit or claim an external action succeeded without confirmation.',
-                presenceCheckText: exports.DEFAULT_PRESENCE_CHECK_TEXT,
-                deadAirTimeoutSec: 8,
-                deadAirDisposition: 'DAIR',
-                deadAirDispositionVerified: false,
             },
             {
                 id: 'c_medicare',
@@ -401,17 +396,13 @@ function createDefaultState() {
                 fallback: 'Dispo CALLBK',
                 dnc: true,
                 disclosure: 'This call may be recorded for quality and benefit verification.',
-                dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK,DAIR',
+                dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK',
                 complianceRules: 'Medicare Food & OTC campaign rules:\n' +
                     '- Identify the organization accurately. Never imply affiliation with Medicare, CMS, Social Security, or a government agency; be truthful that you are an AI assistant if asked.\n' +
                     '- Do not assert that the caller has a food/OTC card, funds, credit, benefit, application, or enrollment. Never say money is on hold, expiring, guaranteed, or will return to a state pool. The sample agent script is not evidence for benefit claims.\n' +
                     '- Make no coverage, eligibility, or savings promises. Use only current, approved campaign sources; otherwise say you cannot verify and offer an authorized specialist or official source.\n' +
                     '- Ask about age and Medicare Part A/B only as needed, based on the caller’s current statements; never infer eligibility from lead data. Do not request a Medicare number, Social Security number, bank, or payment details.\n' +
                     '- Honor stop, do-not-call, language-barrier, refusal, and hang-up requests immediately. Transfer only after approved eligibility criteria are met and the caller agrees.',
-                presenceCheckText: exports.DEFAULT_PRESENCE_CHECK_TEXT,
-                deadAirTimeoutSec: 8,
-                deadAirDisposition: 'DAIR',
-                deadAirDispositionVerified: false,
             },
             {
                 id: 'c_nova',
@@ -431,17 +422,13 @@ function createDefaultState() {
                 fallback: 'Dispo CALLBK',
                 dnc: true,
                 disclosure: 'This call may be recorded for quality and training purposes.',
-                dispos: 'XFER,NI,DNC,NA,CALLBK,DEC,DAIR',
+                dispos: 'XFER,NI,DNC,NA,CALLBK,DEC',
                 complianceRules: 'Nova live concierge campaign rules:\n' +
                     '- Be transparent about being an AI assistant if asked. Do not claim to be human, a licensed professional, or affiliated with a government program.\n' +
                     '- Answer general questions accurately and concisely; state uncertainty instead of inventing facts. Do not make insurance, health, financial, benefit, coverage, or savings claims.\n' +
                     '- Treat lead and caller information as private and use it only for this call. Never request Social Security, account, bank, payment, or other sensitive identity information.\n' +
                     '- Ask the caller’s permission before a transfer. Never say a transfer, disposition, or other action succeeded unless the tool result confirms it.\n' +
                     '- Immediately honor stop, do-not-call, refusal, or hang-up requests without persuasion. Follow the assigned campaign’s configured disclosure and transfer instructions.',
-                presenceCheckText: exports.DEFAULT_PRESENCE_CHECK_TEXT,
-                deadAirTimeoutSec: 8,
-                deadAirDisposition: 'DAIR',
-                deadAirDispositionVerified: false,
             },
         ],
         vici: {
@@ -517,7 +504,7 @@ function createDefaultState() {
                 {
                     id: 't_4',
                     s: 'Lead stays silent for 8 seconds',
-                    e: 'Bot checks in politely once, then dispositions NA/CALLBK and ends call cleanly',
+                    e: 'Bot speaks the configured opening once, keeps listening, and does not disposition or hang up from silence alone',
                     r: 'p',
                     n: '',
                 },
@@ -855,10 +842,6 @@ function normalizeState(raw) {
                 dispos: String(c.dispos ?? 'XFER,NI,DNC,NA,CALLBK,DEC'),
                 // Legacy campaigns must be reviewed instead of inheriting a fabricated compliance policy.
                 complianceRules: typeof c.complianceRules === 'string' ? c.complianceRules : exports.MISSING_CAMPAIGN_RULES,
-                presenceCheckText: typeof c.presenceCheckText === 'string' ? c.presenceCheckText : exports.DEFAULT_PRESENCE_CHECK_TEXT,
-                deadAirTimeoutSec: Math.round(num(c.deadAirTimeoutSec, 8, 1, 120)),
-                deadAirDisposition: String(c.deadAirDisposition ?? '').trim().toUpperCase(),
-                deadAirDispositionVerified: c.deadAirDispositionVerified === true,
             };
         })
         : Array.isArray(src.agents)

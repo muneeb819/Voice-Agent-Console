@@ -127,8 +127,7 @@ export function composeBehavioralPrompt(agent: Agent, campaign?: Campaign): stri
       `- The only campaign assigned to this call is ${JSON.stringify(campaign.name)} (VICIdial campaign ${JSON.stringify(campaign.viciCampaign)}). Do not use another campaign’s rules.`,
       '- The rules below are mandatory and override any conflicting persona, sales script, saved agent prompt, or general-answer instruction. Follow them throughout the call.',
       `- Campaign rules:\n${rules || '[NO CAMPAIGN RULES CONFIGURED — do not start a live call.]'}`,
-      `- If the caller is silent for one second, the bridge sends this one presence-check line: ${JSON.stringify(String(campaign.presenceCheckText || '').slice(0, 500))}. Say it briefly, then wait for a caller turn; do not continue the sales script until they respond.`,
-      `- After the presence check, the bridge waits ${Number(campaign.deadAirTimeoutSec) || 8} seconds for a caller response. The bridge, not the model, applies dead-air status ${JSON.stringify(campaign.deadAirDisposition || '')} and hangs up; do not claim a status update succeeded.`
+      '- After the one-second listen, a silent caller receives the configured opening once. Silence alone never ends the call or applies a disposition; continue listening for the caller.'
     );
     if (campaign.disclosure && campaign.disclosure.trim()) {
       lines.push(
@@ -553,8 +552,6 @@ export function validateCampaign(state: ConsoleState, campaign: Campaign): Valid
   const viciCampaign = String(campaign.viciCampaign || '').trim();
   const xferTarget = String(campaign.xferTarget || '').trim();
   const complianceRules = String(campaign.complianceRules || '').trim();
-  const presenceCheckText = String(campaign.presenceCheckText || '').trim();
-  const deadAirDisposition = String(campaign.deadAirDisposition || '').trim().toUpperCase();
   const allowedDispositions = allowedCampaignDispositionCodes(campaign);
   const assignedAgents = campaignAgentIds(campaign).map((id) => state.agents.find((a) => a.id === id)).filter((a): a is Agent => Boolean(a));
 
@@ -572,22 +569,6 @@ export function validateCampaign(state: ConsoleState, campaign: Campaign): Valid
     complianceRules.length >= 20 && complianceRules.length <= 8000 && !/^REVIEW REQUIRED\b/i.test(complianceRules),
     'Campaign-specific compliance & rules are written and reviewed (20–8,000 characters)'
   );
-  push(presenceCheckText.length >= 8 && presenceCheckText.length <= 280, 'One brief campaign presence-check line is configured (8–280 characters)');
-  push(
-    Number.isInteger(Number(campaign.deadAirTimeoutSec)) && Number(campaign.deadAirTimeoutSec) >= 3 && Number(campaign.deadAirTimeoutSec) <= 30,
-    'Dead-air response timeout is an integer from 3 to 30 seconds'
-  );
-  const validDeadAirCode = /^[A-Z0-9_-]{2,6}$/.test(deadAirDisposition);
-  push(validDeadAirCode, 'A campaign-specific dead-air disposition code is configured');
-  push(
-    validDeadAirCode && allowedDispositions.includes(deadAirDisposition),
-    `Dead-air code ${deadAirDisposition || '(unset)'} is included in this campaign’s allowed disposition list`
-  );
-  push(
-    campaign.deadAirDispositionVerified === true,
-    'Operator confirmed this code exists in the matching VICIdial campaign status list'
-  );
-
   return items;
 }
 
@@ -701,8 +682,6 @@ export function generateViciConfig(state: ConsoleState): string {
         `;   Remote Agent Exten   : ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + idx})`,
         `;   Live Closer Transfer : ${xferNote}`,
         `;   Allowed Dispositions : ${c.dispos}`,
-        `;   Dead-Air Disposition : ${c.deadAirDisposition || '(unset)'} after ${c.deadAirTimeoutSec}s; verified in VICIdial: ${c.deadAirDispositionVerified ? 'YES' : 'NO'}`,
-        `;   Presence Check       : ${String(c.presenceCheckText || '').replace(/[\r\n]+/g, ' ')}`,
         `;   Campaign Rules       : ${String(c.complianceRules || '').trim() ? `${String(c.complianceRules).trim().length} characters; injected into the assigned bot prompt` : 'MISSING — deployment blocked'}`,
       ].join('\n');
     })

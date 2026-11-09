@@ -348,15 +348,11 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality purposes.",
-      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC,DAIR",
+      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC",
       "agentIds": [
         "a1"
       ],
-      "complianceRules": "Final Expense campaign rules: identify accurately, never guarantee coverage or rates, ask permission to continue, transfer only with consent, and honor stop or do-not-call requests immediately.",
-      "presenceCheckText": "Hello? Are you there? Can you hear me?",
-      "deadAirTimeoutSec": 8,
-      "deadAirDisposition": "DAIR",
-      "deadAirDispositionVerified": false
+      "complianceRules": "Final Expense campaign rules: identify accurately, never guarantee coverage or rates, ask permission to continue, transfer only with consent, and honor stop or do-not-call requests immediately."
     },
     {
       "id": "c_medicare",
@@ -375,15 +371,11 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality and benefit verification.",
-      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK,DAIR",
+      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK",
       "agentIds": [
         "a_medicare"
       ],
-      "complianceRules": "Medicare campaign rules: never imply government affiliation or guarantee benefits, eligibility, funds or savings; use only approved campaign information and honor refusal or do-not-call requests immediately.",
-      "presenceCheckText": "Hello? Are you there? Can you hear me?",
-      "deadAirTimeoutSec": 8,
-      "deadAirDisposition": "DAIR",
-      "deadAirDispositionVerified": false
+      "complianceRules": "Medicare campaign rules: never imply government affiliation or guarantee benefits, eligibility, funds or savings; use only approved campaign information and honor refusal or do-not-call requests immediately."
     },
     {
       "id": "c_nova",
@@ -402,15 +394,11 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality and training purposes.",
-      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC,DAIR",
+      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC",
       "agentIds": [
         "a_nova"
       ],
-      "complianceRules": "Concierge campaign rules: identify as an AI assistant when asked, never invent account actions or external confirmations, protect sensitive information, and honor stop or do-not-call requests immediately.",
-      "presenceCheckText": "Hello? Are you there? Can you hear me?",
-      "deadAirTimeoutSec": 8,
-      "deadAirDisposition": "DAIR",
-      "deadAirDispositionVerified": false
+      "complianceRules": "Concierge campaign rules: identify as an AI assistant when asked, never invent account actions or external confirmations, protect sensitive information, and honor stop or do-not-call requests immediately."
     },
     {
       "id": "c_med_fronter",
@@ -429,15 +417,11 @@
       "fallback": "Dispo CALLBK",
       "dnc": true,
       "disclosure": "This call may be recorded for quality and benefit verification.",
-      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK,DAIR",
+      "dispos": "XFER,DQ,LANG,DNC,NI,NA,CALLBK",
       "agentIds": [
         "a_jessica"
       ],
-      "complianceRules": "Medicare fronter campaign rules: identify accurately, never guarantee benefits or eligibility, do not request Medicare or Social Security numbers, and honor refusal or do-not-call requests immediately.",
-      "presenceCheckText": "Hello? Are you there? Can you hear me?",
-      "deadAirTimeoutSec": 8,
-      "deadAirDisposition": "DAIR",
-      "deadAirDispositionVerified": false
+      "complianceRules": "Medicare fronter campaign rules: identify accurately, never guarantee benefits or eligibility, do not request Medicare or Social Security numbers, and honor refusal or do-not-call requests immediately."
     }
   ],
   "vici": {
@@ -513,7 +497,7 @@
       {
         "id": "t_4",
         "s": "Lead stays silent for 8 seconds",
-        "e": "Bot checks in politely once, then dispositions NA/CALLBK and ends call cleanly",
+        "e": "Bot speaks the configured opening once, keeps listening, and does not disposition or hang up from silence alone",
         "r": "p",
         "n": ""
       }

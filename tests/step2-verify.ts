@@ -24,11 +24,6 @@ function configureTestServices() {
     if (String(campaign.complianceRules || '').trim().length < 20 || /^REVIEW REQUIRED\b/i.test(campaign.complianceRules || '')) {
       campaign.complianceRules = 'Reviewed simulator fixture rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
     }
-    campaign.presenceCheckText = campaign.presenceCheckText || 'Can you hear me okay?';
-    campaign.deadAirTimeoutSec = 8;
-    campaign.deadAirDisposition = 'DAIR';
-    if (!String(campaign.dispos || '').split(/[ ,]+/).includes('DAIR')) campaign.dispos = `${campaign.dispos},DAIR`;
-    campaign.deadAirDispositionVerified = true;
   }
   saveConsoleState(state, 'Test setup: ready campaign and services');
   const agent = state.agents[0];

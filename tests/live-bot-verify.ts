@@ -34,11 +34,6 @@ async function main() {
   assert.ok(campaign, 'Live Bot fixture requires an explicit campaign');
   campaign.agentId = 'a1';
   campaign.complianceRules = 'Reviewed Live Bot fixture rules: be truthful, do not claim unverified benefits, and honor do-not-call requests immediately.';
-  campaign.presenceCheckText = 'Can you hear me okay?';
-  campaign.deadAirTimeoutSec = 8;
-  campaign.deadAirDisposition = 'DAIR';
-  campaign.deadAirDispositionVerified = true;
-  if (!campaign.dispos.split(/[ ,]+/).includes('DAIR')) campaign.dispos += ',DAIR';
   state.functions.push({ id: 'fn_custom_test', name: 'test_webhook', description: 'Local test webhook',
     params: '{"type":"object","properties":{}}', defer: false,
     url: '', method: 'post', headers: '{}' });

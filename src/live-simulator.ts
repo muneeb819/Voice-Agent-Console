@@ -494,7 +494,6 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         if (!content) return;
         suppressStaleAgentAudio = false;
         if (dgWs && dgWs.readyState === WebSocket.OPEN && settingsApplied) {
-          openingGate?.agentTurn();
           dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message: content }));
         }
         return;
@@ -663,8 +662,10 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         // opts in, the authenticated backend executes it only after turn confirmation.
         for (const fn of rawSettings.agent.think.functions || []) fn.defer_until_eot = true;
         let wireSettings: any;
+        let openingText = '';
         try {
           const prepared = prepareDelayedOpening(interpolateEnvPlaceholders(rawSettings));
+          openingText = prepared.greeting;
           wireSettings = prepared.settings;
         } catch (err: any) {
           sendFatalError('PROMPT_TOO_LONG', err.message || 'Could not prepare the opening.');
@@ -672,19 +673,15 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           return;
         }
         openingGate = createOpeningGate({
-          presenceCheck: activeCampaign?.presenceCheckText || 'Hello? Are you there? Can you hear me?',
-          responseTimeoutMs: Math.max(1, Number(activeCampaign?.deadAirTimeoutSec || 8)) * 1000,
-          sendPresenceCheck: (message) => {
+          greeting: openingText,
+          sendOpening: (message) => {
             if (!closed && dgWs?.readyState === WebSocket.OPEN) {
               dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
             }
           },
           playAudio: sendClientAudio,
-          onDeadAir: () => {
-            if (closed) return;
-            detectedDisposition = activeCampaign?.deadAirDisposition || null;
-            recordTranscript('system', `No caller response to campaign presence check. Simulated dead-air status ${detectedDisposition || '(unset)'}; no VICIdial update was made.`);
-            finalizeCall('dead_air');
+          onSendError: () => {
+            if (!closed) sendClientJson({ type: 'warning', message: 'The configured opening could not be sent to Deepgram. Check the provider connection.' });
           },
           onOverflow: () => sendClientJson({ type: 'warning', message: 'Early provider audio exceeded the opening buffer and was dropped.' }),
         });
@@ -846,7 +843,6 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
                 awaitingFirstAudioForTurn = true;
                 suppressStaleAgentAudio = false;
               } else {
-                openingGate?.agentTurn();
                 suppressStaleAgentAudio = false;
               }
               recordTranscript(role, String(evt.content || ''), {
@@ -856,7 +852,6 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             }
 
             case 'AgentThinking': {
-              openingGate?.agentTurn();
               lastThinkingTs = Date.now();
               suppressStaleAgentAudio = false;
               sendClientJson({ type: 'agent_state', state: 'thinking' });
@@ -864,14 +859,12 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             }
 
             case 'AgentStartedSpeaking': {
-              openingGate?.agentTurn();
               suppressStaleAgentAudio = false;
               sendClientJson({ type: 'agent_state', state: 'speaking' });
               break;
             }
 
             case 'AgentAudioDone': {
-              openingGate?.agentAudioDone();
               openingGate?.afterRelease(() => {
                 if (closed) return;
                 sendClientJson({ type: 'agent_state', state: 'listening' });

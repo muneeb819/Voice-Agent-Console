@@ -1,20 +1,47 @@
-# Campaign readiness, opening, and bridge test results
+# Campaign readiness, opening, and mock audio test results
 
 - **Date:** 2026-11-08
-- **Build:** `elite-2.25`
-- **Scope:** campaign-aware readiness and routing, explicit campaign selection, the one-second listen/presence-check flow, caller-response timeout, configured dead-air disposition, frontend recovery and matte/minimal presentation.
+- **Build:** `elite-2.31`
+- **Scope:** removal of the automatic presence-check/dead-air timeout/disposition/hangup path; mock-call audio streaming and agent-speaking verification; one-second configured opening, comfort-silence keep-alive, campaign readiness and bridge regression checks.
 
-## Current results (`elite-2.25`)
+## Current results (`elite-2.31`)
+
+| Check | Result | What was exercised |
+| --- | --- | --- |
+| `npm run build` | Passed | TypeScript compilation and generated `dist/` output. |
+| `CI=true npm test` | Passed; one live Deepgram E2E skipped | Full offline Node suite, including the new `mock-audio` suite. No live provider, carrier, VICIdial or Asterisk connection was used. |
+| Mock Live Bot WebSocket | Passed | Exact caller PCM forwarded before/after settings; exact provider PCM returned; comfort-silence keep-alive; configured opening after the one-second listen; `listening → speaking → listening`; continued silence without hangup; explicit hangup and saved transcript with no disposition. |
+| Static browser mock playback | Passed in JSDOM | PCM16 conversion and WebAudio scheduling, speaking/listening UI, manual barge-in stopping queued playback, stale-audio suppression, new-turn playback and audio cleanup. This is not a physical microphone/speaker test. |
+| Bridge opening and call-control integration | 14 local scenarios passed | AudioSocket and SIP/RTP each covered silent opening, early caller, cancellation, provider refusal, silent wait without automatic hangup/disposition, disallowed disposition, and DNC-to-transfer blocking. The silent-wait case stayed connected beyond the retired minimum timeout and ended only on explicit operator hangup. |
+| Dead-air removal | Passed | Runtime gate, simulator, bridge, campaign UI/validation/export, prompts and shipped defaults no longer contain the automatic silence path. Legacy saved fields are ignored/stripped without blocking readiness. |
+| `npm audit --audit-level=low` | Passed; 0 vulnerabilities reported | Current Node lockfile. |
+| Chromium browser audit | Not rerun | Chromium/system libraries are unavailable in this workspace. The checked-in Playwright audit expectations were updated; JSDOM mock playback above was executed. |
+
+### Behavior now
+
+1. Provider settings are acknowledged, then caller audio continues upstream during a one-second listen.
+2. If the caller completes a turn first, the agent answers that turn and no extra opening is injected.
+3. If the line is silent, the configured opening is injected once. An unfinished VAD onset gets a bounded transcription grace period before the same opening is released.
+4. After the opening, silence does not retry the prompt, apply a disposition, or hang up. Comfort-silence PCM and provider keep-alives continue until the caller responds, the agent explicitly ends the call, or the operator/transport hangs up.
+5. Explicit disposition, transfer, DNC and `end_call` behavior remains subject to the existing campaign and browser-test safety checks.
+
+### Limits
+
+These are synthetic/local mock tests. They verify transport bytes, protocol events, timing gates and browser scheduling, not intelligible speech from a real TTS provider or what a person heard through a physical speaker. A live Deepgram key, real browser audio permission and an authorized telephone/PBX test are still required for live validation. GitHub Pages hosts the static interface only; it does not run the Node bridge.
+
+## Historical results (`elite-2.25`, superseded)
+
+The previous build used a presence-check/dead-air flow. That flow has been removed and the results below are retained only as history.
 
 | Check | Result | What was exercised |
 | --- | --- | --- |
 | `node --check public/app.js` | Passed | Browser bundle syntax. |
 | `npm run build` | Passed | TypeScript compilation and generated `dist/` output. |
-| `npm test` | Passed; one live Deepgram E2E skipped | Full offline Node suite: readiness, browser simulator, persistence, opening, local bridge, transfer/deployment, security, release bundle and other regression checks. |
-| Bridge opening/disposition integration | 14 local scenarios passed | AudioSocket and SIP/RTP each covered silent, early caller, cancellation, provider refusal, dead air, disallowed disposition, and a DNC-to-transfer attempt. On dead air, mock `update_lead` rejected `DAIR`; the failed update was logged and Remote Agent `HANGUP` still requested `DAIR`. Disallowed codes never reached `update_lead`, and DNC could not initiate transfer. |
-| External services | Not used | Synthetic/local fixtures only; no live caller, Deepgram, carrier, VICIdial or Asterisk connection. |
-| `npm audit --audit-level=low` | Passed; 0 vulnerabilities reported | Dependency audit for the current lockfile. |
-| Browser/Python audits | Not rerun for this build | The results below are historical `elite-2.24` checks and do not certify those audits for `elite-2.25`. |
+| `npm test` | Passed; one live Deepgram E2E skipped | Full offline Node suite at that time. |
+| Bridge opening/disposition integration | 14 local scenarios passed | Included the now-retired dead-air update failure and Remote Agent hangup status behavior. |
+| External services | Not used | Synthetic/local fixtures only. |
+| `npm audit --audit-level=low` | Passed; 0 vulnerabilities reported | Dependency audit for the lockfile at that time. |
+| Browser/Python audits | Not rerun for that build | Older `elite-2.24` checks remain historical below. |
 
 ## Historical opening validation (`elite-2.24`, 2026-11-06)
 
@@ -60,7 +87,7 @@ python3 -m venv .venv
 .venv/bin/pip check
 ```
 
-The Node suite uses `better-sqlite3` when its optional native addon is available and otherwise falls back to `node:sqlite` (Node 22.5+). This run tested both: the native addon was installed/built, and then temporarily moved out of `node_modules` for the second full run and restored afterwards. Some platforms need local compiler tools and Node headers to build the addon.
+The Node suite uses `better-sqlite3` when its optional native addon is available and otherwise falls back to `node:sqlite` (Node 22.5+). The historical `elite-2.24` run tested both paths by temporarily hiding the native addon and restoring it afterwards. Some platforms need local compiler tools and Node headers to build the addon.
 
 The browser audits require a separately installed `playwright-core`, a compatible Chromium and its system libraries. Set `NODE_PATH` and `BROWSER_EXECUTABLE` as shown in [audit/README.md](audit/README.md#reproducing-the-browser-smoke), then run `node audit/browser-smoke.cjs` and `node audit/live-bot-browser.cjs`. The smoke command rewrites the checked-in inventory using disposable fixture data.
 
