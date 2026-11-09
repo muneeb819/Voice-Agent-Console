@@ -92,6 +92,6 @@ jobs:
           node --check "$RUNNER_TEMP/brand-logos.js"
           grep -F 'THEME_LOGO_MAP' "$RUNNER_TEMP/brand-logos.js"
           curl --fail --silent --show-error --location --retry 5 --retry-delay 3 --retry-all-errors "${SITE_URL}assets/brand/mma-gold-ember-icon.jpg" -o /dev/null
-          curl --fail --silent --show-error --location --retry 5 --retry-delay 3 --retry-all-errors "${SITE_URL}assets/brand/mma-gold-ember.jpg" -o /dev/null
+          curl --fail --silent --show-error --location --retry 5 --retry-delay 3 --retry-all-errors "${SITE_URL}assets/brand/mma-gold-ember.webp" -o /dev/null
           curl --fail --silent --show-error --location "${SITE_URL}login.html?v=${ASSET_VERSION}" | grep -F 'id="signup-form"'
           curl --fail --silent --show-error --location "${SITE_URL}index.html?v=${ASSET_VERSION}" | grep -F "CURRENT_BUILD = '${ASSET_VERSION}'"

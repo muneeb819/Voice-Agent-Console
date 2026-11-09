@@ -286,7 +286,7 @@ async function run() {
     await page.selectOption('#sel-a', editedAgentId);
     assert.equal(await page.locator('#sim-disclosure').isChecked(), false, 'Opt-out survives reload');
   });
-  await check('Theme, exposure and API-key modals', async () => {
+  await check('Theme and API-key modals', async () => {
     await page.click('#btn-theme');
     await page.waitForSelector('#theme-modal:not([hidden])');
     await inventory(page, 'theme-modal');
@@ -294,8 +294,6 @@ async function run() {
     const theme = await secondTheme.getAttribute('data-pick-theme');
     await secondTheme.click();
     assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
-    await page.click('#exposure-seg [data-exp="minimal"]');
-    assert.equal(await page.locator('html').getAttribute('data-exposure'), 'minimal');
     await page.click('#theme-close');
     await page.click('#btn-keys');
     await page.waitForSelector('#keys-modal:not([hidden])');

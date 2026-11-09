@@ -793,6 +793,8 @@ function createApp(viciBridge) {
                 'dnc_request',
                 'not_interested',
                 'medicare_qualified_xfer',
+                'medicare_qualified_no_age_xfer',
+                'medicare_fabricated_age_xfer',
                 'medicare_underage_dq',
                 'medicare_spanish_lang',
             ];

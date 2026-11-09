@@ -203,72 +203,6 @@ body {
   filter: drop-shadow(0 22px 50px rgba(0, 0, 0, 0.68)) drop-shadow(0 0 30px rgba(0, 242, 254, 0.24));
 }
 
-/* Instant zero-JS CSS Playing Mode before rAF voice synthesizer attaches */
-svg.brand-plaque:not(.raf-driven) .eq-bar {
-  transform-box: fill-box;
-  transform-origin: 50% 50%;
-  animation: eqCssPlayA 0.86s ease-in-out infinite;
-}
-
-svg.brand-plaque:not(.raf-driven) .eq-bar:nth-child(3n + 1) {
-  animation-name: eqCssPlayA;
-  animation-duration: 0.78s;
-  animation-delay: -0.14s;
-}
-
-svg.brand-plaque:not(.raf-driven) .eq-bar:nth-child(3n + 2) {
-  animation-name: eqCssPlayB;
-  animation-duration: 0.92s;
-  animation-delay: -0.37s;
-}
-
-svg.brand-plaque:not(.raf-driven) .eq-bar:nth-child(3n) {
-  animation-name: eqCssPlayC;
-  animation-duration: 0.71s;
-  animation-delay: -0.58s;
-}
-
-@keyframes eqCssPlayA {
-  0%, 100% { transform: scaleY(0.28); opacity: 0.76; }
-  25%      { transform: scaleY(1.05); opacity: 1; }
-  52%      { transform: scaleY(0.45); opacity: 0.85; }
-  78%      { transform: scaleY(0.95); opacity: 0.98; }
-}
-
-@keyframes eqCssPlayB {
-  0%, 100% { transform: scaleY(0.48); opacity: 0.84; }
-  22%      { transform: scaleY(0.96); opacity: 1; }
-  48%      { transform: scaleY(0.24); opacity: 0.72; }
-  74%      { transform: scaleY(1.08); opacity: 1; }
-}
-
-@keyframes eqCssPlayC {
-  0%, 100% { transform: scaleY(0.72); opacity: 0.92; }
-  30%      { transform: scaleY(0.26); opacity: 0.74; }
-  62%      { transform: scaleY(1.06); opacity: 1; }
-  84%      { transform: scaleY(0.54); opacity: 0.86; }
-}
-
-svg.brand-plaque .m-sonic-ring {
-  transform-origin: 320px 110px;
-  animation: mSonicPulse 2.3s ease-out infinite;
-}
-
-svg.brand-plaque .m-emblem-core {
-  animation: mCoreBreath 2.1s ease-in-out infinite;
-}
-
-@keyframes mSonicPulse {
-  0%   { transform: scale(0.76); opacity: 0.32; }
-  70%  { transform: scale(1.22); opacity: 0.04; }
-  100% { transform: scale(1.28); opacity: 0; }
-}
-
-@keyframes mCoreBreath {
-  0%, 100% { opacity: 0.90; }
-  50%      { opacity: 1; }
-}
-
 /* Card -------------------------------------------------------------------- */
 .card {
   position: relative;
@@ -659,8 +593,9 @@ body {
 /* Theme-bound supplied MMA banner logo */
 .brand-plaque.mma-brand-logo {
   max-width: 428px;
-  border-radius: 14px;
-  filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.62)) drop-shadow(0 0 22px rgba(0, 242, 254, 0.12));
+  border-radius: 0;
+  background: none;
+  filter: none;
 }
 .foot-mark.mma-brand-icon,
 .loader-mark.mma-brand-icon {

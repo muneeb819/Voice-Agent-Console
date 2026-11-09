@@ -1,20 +1,25 @@
-/* Smooth looping soundwave treatment for the operator-supplied MMA banners.
+/* Transparent operator-supplied MMA banners.
    Shared by the console, login/signup shell, Theme Studio and loader previews. */
 
-.mma-brand-logo,
+/* The full banner art now ships with a real alpha channel, so it sits directly
+   on the themed surface: no dark plate, no rounded crop, no drop shadow. */
+.mma-brand-logo {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 2688 / 864;
+  background: none;
+}
+
 .mma-brand-icon {
   position: relative;
   display: block;
+  width: 36px;
+  height: 36px;
   overflow: hidden;
   isolation: isolate;
   background: #05070c;
   border-radius: 12px;
-}
-
-.mma-brand-logo {
-  width: 100%;
-  aspect-ratio: 2688 / 864;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 
 .mma-logo-art,
@@ -26,105 +31,9 @@
   user-select: none;
 }
 
-.mma-logo-waves {
-  position: absolute;
-  top: 31%;
-  height: 38%;
-  width: 19%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 2px;
-  pointer-events: none;
-  mix-blend-mode: screen;
-  opacity: 0.9;
-  z-index: 2;
-}
-
-.mma-logo-waves-left { left: 5.5%; }
-.mma-logo-waves-right { right: 5.5%; }
-
-.mma-logo-waves .eq-bar,
-.mma-icon-waves .eq-bar {
-  flex: 1 1 0;
-  min-width: 2px;
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(180deg, transparent 0%, var(--ac, var(--cyan, #00f2fe)) 30%, var(--ac, var(--cyan, #00f2fe)) 70%, transparent 100%);
-  box-shadow: 0 0 8px var(--ac, var(--cyan, #00f2fe));
-  transform-origin: center;
-  animation: mma-wave-loop 2.6s ease-in-out infinite;
-  animation-delay: calc(var(--i, 0) * -0.19s);
-  opacity: 0.75;
-}
-
-.mma-logo-sheen {
-  position: absolute;
-  inset: 0;
-  z-index: 3;
-  pointer-events: none;
-  background: linear-gradient(110deg, transparent 32%, rgba(255, 255, 255, 0.16) 46%, transparent 60%);
-  transform: translateX(-120%);
-  animation: mma-logo-sheen-loop 5.6s linear infinite;
-}
-
-.mma-brand-icon {
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
-}
-
-.mma-icon-waves {
-  position: absolute;
-  left: 14%;
-  right: 14%;
-  bottom: 9%;
-  height: 26%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1.5px;
-  pointer-events: none;
-  mix-blend-mode: screen;
-  z-index: 2;
-}
-
-.mma-icon-waves .eq-bar {
-  min-width: 1.5px;
-  box-shadow: 0 0 5px var(--ac, var(--cyan, #00f2fe));
-  animation-duration: 2.2s;
-}
-
-@keyframes mma-wave-loop {
-  0%, 100% {
-    transform: scaleY(calc(0.22 + var(--amp, 0.7) * 0.18));
-    opacity: 0.45;
-  }
-  50% {
-    transform: scaleY(calc(0.55 + var(--amp, 0.7) * 0.45));
-    opacity: 1;
-  }
-}
-
-@keyframes mma-logo-sheen-loop {
-  0% { transform: translateX(-120%); }
-  60%, 100% { transform: translateX(120%); }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .mma-brand-logo .eq-bar,
-  .mma-brand-icon .eq-bar,
-  .mma-brand-logo .mma-logo-sheen,
-  .mma-brand-icon .mma-logo-sheen {
-    animation: none !important;
-  }
-  .mma-brand-logo .eq-bar,
-  .mma-brand-icon .eq-bar {
-    transform: scaleY(0.6);
-    opacity: 0.8;
-  }
-  .mma-brand-logo .mma-logo-sheen,
-  .mma-brand-icon .mma-logo-sheen {
-    display: none;
+  .mma-brand-logo,
+  .mma-brand-icon {
+    transition: none !important;
   }
 }

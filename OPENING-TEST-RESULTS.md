@@ -1,10 +1,43 @@
 # Campaign readiness, opening, and mock audio test results
 
 - **Date:** 2026-11-08
-- **Build:** `elite-2.31`
-- **Scope:** removal of the automatic presence-check/dead-air timeout/disposition/hangup path; mock-call audio streaming and agent-speaking verification; one-second configured opening, comfort-silence keep-alive, campaign readiness and bridge regression checks.
+- **Build:** `elite-2.34`
+- **Scope:** shared persona composer and caller-fact transfer guards; Medicare no-age/fabricated-age regressions; reduced browser animation/DOM work; transparent theme-bound MMA banners; explicit-save/navigation regression checks.
 
-## Current results (`elite-2.31`)
+## Current results (`elite-2.34`)
+
+| Check | Result | What was exercised |
+| --- | --- | --- |
+| `npm run build` | Passed | TypeScript compilation and generated `dist/` output. |
+| `CI=true npm test` | Passed; one live Deepgram E2E skipped | Full offline Node suite, including the new `persona` suite. No live provider, carrier, VICIdial or Asterisk connection was used. |
+| `persona` | Passed | Server/browser composer parity, integrity rules appended last, campaign-rule clamp, explicit `allowGeneralQa:false` / `vocalGestures:false` instructions, exact legacy prompt/rule/self-intro migration with custom preservation, caller-fact memory, transfer metadata strip/correction and default-state parity. |
+| Medicare bridge loopback | Passed | Explicit stated age 71 still transfers; Medicare Part A/B with no stated age transfers without inventing an age; a model-invented age is stripped and over-specific Medicare status is corrected to the caller-confirmed part; Spanish `LANG` and underage `DQ` exits remain covered. |
+| Mock Live Bot WebSocket | Passed | Exact bidirectional PCM, comfort silence, opening/speaking/listening events, continued silence and explicit hangup. |
+| Static browser mock playback | Passed in JSDOM | PCM16→WebAudio scheduling, speaking/listening stage, barge-in flush, new-turn audio and cleanup. This is not a physical microphone/speaker test. |
+| Static console/site | Passed | Transparent WebP banners, explicit brand-icon dimensions, no decorative logo overlays, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure and honest static readiness. |
+| `python3 tools/build-brand-assets.py --check` | Passed | Eight committed transparent banners match fresh border-connected cuts from `brand-source/` by decoded RGBA pixels and alpha cut, not fragile encoder bytes. |
+| `npm audit --audit-level=high` | Passed; 0 vulnerabilities reported | Current Node lockfile. |
+| Chromium browser audit | Not rerun | Chromium/system libraries are unavailable in this workspace. JSDOM mock/static checks above were executed. |
+| Speech-service Python tests | Not rerun locally | Product CI runs them separately; this local pass focused on the Node/console/brand changes. |
+
+### Behavior now
+
+1. The server bridge and static browser compose persona/behavior prompts through one shared module. Disabled general-QA and vocal-gesture options receive explicit negative instructions; conversation-integrity rules are appended after campaign rules.
+2. The sample Medicare policy treats caller-confirmed Part A/B as satisfying the campaign qualification step. It does not ask or infer age/DOB. Only a volunteered out-of-band age disqualifies. The handoff is offered once and transfer requires caller consent in the prompt.
+3. Per-call memory records only caller-stated facts (including a bare yes/no answering a pending Medicare question). Transfer metadata omits invented ages, corrects Medicare status to the caller-confirmed evidence, and reports omitted/corrected fields. The reviewed stock Medicare campaign blocks an unqualified XFER before a lead write or transfer.
+4. Exact retired stock Medicare prompts, campaign rules and self-introductions migrate to the current policy; Jessica keeps Jessica's identity. Customized operator text is preserved.
+5. The decorative avatar/gesture/logo overlay work was removed. The Live Bot stage shows provider-reported state, the transcript feed appends new events instead of rebuilding the whole feed, and mic/duration telemetry updates at 1 Hz.
+6. Full-banner JPEG masters live in `brand-source/` and are not shipped as browser assets. The console/login/theme/loader render transparent WebP banners; square favicon icons remain JPEG.
+
+### Limits
+
+These are synthetic/local mock tests. They verify transport bytes, protocol events, timing gates, metadata guards and browser scheduling, not intelligible speech from a real TTS provider or what a person heard through a physical speaker. The backend guard cannot prove caller consent, real Medicare eligibility or substantive LLM wording; review scripts and campaign policy before calls. A live Deepgram key, real browser audio permission and an authorized telephone/PBX test are still required for live validation. GitHub Pages hosts the static interface only; it does not run the Node bridge.
+
+## Historical results (`elite-2.31`, superseded)
+
+The previous release removed the automatic presence-check/dead-air path. Its results are retained as history.
+
+### Historical check table
 
 | Check | Result | What was exercised |
 | --- | --- | --- |
@@ -17,7 +50,7 @@
 | `npm audit --audit-level=low` | Passed; 0 vulnerabilities reported | Current Node lockfile. |
 | Chromium browser audit | Not rerun | Chromium/system libraries are unavailable in this workspace. The checked-in Playwright audit expectations were updated; JSDOM mock playback above was executed. |
 
-### Behavior now
+### Historical behavior
 
 1. Provider settings are acknowledged, then caller audio continues upstream during a one-second listen.
 2. If the caller completes a turn first, the agent answers that turn and no extra opening is injected.
@@ -25,9 +58,10 @@
 4. After the opening, silence does not retry the prompt, apply a disposition, or hang up. Comfort-silence PCM and provider keep-alives continue until the caller responds, the agent explicitly ends the call, or the operator/transport hangs up.
 5. Explicit disposition, transfer, DNC and `end_call` behavior remains subject to the existing campaign and browser-test safety checks.
 
-### Limits
+### Historical limits
 
 These are synthetic/local mock tests. They verify transport bytes, protocol events, timing gates and browser scheduling, not intelligible speech from a real TTS provider or what a person heard through a physical speaker. A live Deepgram key, real browser audio permission and an authorized telephone/PBX test are still required for live validation. GitHub Pages hosts the static interface only; it does not run the Node bridge.
+
 
 ## Historical results (`elite-2.25`, superseded)
 
@@ -80,6 +114,8 @@ npm ci --include=dev
 npm run build
 npm test                              # offline by default
 python3 tools/build-greetings.py --check
+python3 -m pip install -r tools/requirements-brand.txt
+python3 tools/build-brand-assets.py --check
 npm audit --audit-level=low
 python3 -m venv .venv
 .venv/bin/pip install -r speech-service/requirements-test.txt
