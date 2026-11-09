@@ -283,12 +283,14 @@ export function destroyUserSession(token?: string | null): void {
   getDb().prepare('DELETE FROM user_sessions WHERE token = ? OR token = ?').run(userSessionHash(token), token);
 }
 
-/** Immediately revokes every active browser/API session belonging to one user. */
+/**
+ * Revokes every session for one user. Retained as the name used by
+ * POST /api/auth/logout-all; it delegates to destroyUserSessions so session
+ * revocation has a single implementation rather than two that can drift.
+ */
 export function revokeAllUserSessions(userId: string): number {
   if (!userId) return 0;
-  ensureSchema();
-  const result = getDb().prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
-  return Number(result.changes || 0);
+  return destroyUserSessions(userId);
 }
 
 export function purgeExpiredSessions(): void {

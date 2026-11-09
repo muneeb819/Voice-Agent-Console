@@ -264,6 +264,16 @@ function createApp(viciBridge) {
         (0, auth_guard_1.setAuthCookie)(res, token, req);
         res.json({ ok: true, authEnabled: true, authenticated: true });
     }));
+    app.post('/api/auth/logout-all', (req, res) => {
+        const user = (0, auth_guard_1.getAuthenticatedUser)(req);
+        if (!user) {
+            res.status(401).json({ ok: false, code: 'AUTH_REQUIRED', error: 'A signed-in user account is required.' });
+            return;
+        }
+        const revoked = (0, user_store_1.revokeAllUserSessions)(user.id);
+        (0, auth_guard_1.clearAuthCookie)(res, req);
+        res.json({ ok: true, authenticated: false, revokedSessions: revoked });
+    });
     app.post('/api/auth/logout', (req, res) => {
         const token = (0, auth_guard_1.getRequestSessionToken)(req);
         (0, auth_guard_1.invalidateAdminSession)(token);
