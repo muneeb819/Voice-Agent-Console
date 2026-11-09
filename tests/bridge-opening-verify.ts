@@ -5,18 +5,21 @@ import http from 'node:http';
 import net from 'node:net';
 import WebSocket, { WebSocketServer } from 'ws';
 import { getConsoleState, listBridgeCallLogs, saveConsoleState } from '../src/db';
-import { buildRtpPacket, linear16ToUlaw, parseRtpPacket } from '../src/g711';
+import { buildRtpPacket, linear16ToUlaw, parseRtpPacket, ulawToLinear16 } from '../src/g711';
 import { canonicalUuidToBytes, VicidialBridgeService } from '../src/vici-bridge';
 
 // Local protocol fixtures only. They do not connect to a real PBX or provider.
 type Transport = 'audiosocket' | 'sip_rtp';
-type Mode = 'silent' | 'early' | 'cancel' | 'refused' | 'dead_air' | 'bad_disposition' | 'bad_transfer';
+type Mode = 'silent' | 'early' | 'cancel' | 'refused' | 'silent_wait' | 'bad_disposition' | 'bad_transfer';
 type Scenario = {
   transport: Transport;
   mode: Mode;
   ready: Promise<void>;
   appliedAt: number;
   audioTimes: number[];
+  audioPcm: Buffer[];
+  comfortSilenceBytes: number;
+  providerStates: string[];
   endedAt: number;
   callerBytes: number;
   injected: Array<{ text: string; at: number }>;
@@ -48,11 +51,6 @@ async function main() {
   const agent = state.agents.find((entry) => entry.id === campaign.agentId) || state.agents[0];
   campaign.agentId = agent.id;
   campaign.complianceRules = 'Reviewed bridge fixture rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
-  campaign.presenceCheckText = 'Can you hear me okay?';
-  campaign.deadAirTimeoutSec = 3;
-  campaign.deadAirDisposition = 'DAIR';
-  campaign.deadAirDispositionVerified = true;
-  if (!campaign.dispos.split(/[ ,]+/).includes('DAIR')) campaign.dispos += ',DAIR';
   agent.greeting = 'Hi, this is Jessi from Example Services. How are you doing?';
   agent.injectCampaignDisclosure = false;
 
@@ -64,8 +62,6 @@ async function main() {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     if (fn === 'lead_all_info') {
       res.end('lead_id|phone_number|first_name|last_name|state|date_of_birth|age|status|campaign_id\n104892|3055550192|Robert|Fixture|FL|1955-04-10|71|NEW|FETEST');
-    } else if (fn === 'update_lead' && url.searchParams.get('status') === 'DAIR') {
-      res.end('ERROR: synthetic dead-air status rejection');
     } else if (fn === 'update_lead') {
       res.end(`SUCCESS: synthetic update accepted for ${url.searchParams.get('status') || 'notes only'}`);
     } else {
@@ -88,15 +84,21 @@ async function main() {
       answered = true;
       ws.send(JSON.stringify({ type: 'AgentStartedSpeaking' }));
       ws.send(JSON.stringify({ type: 'ConversationText', role: 'assistant', content: text }));
-      // 200 ms of PCM, delivered at once to test paced queue draining.
-      ws.send(Buffer.alloc(320 * 10, 0x18), { binary: true });
-      ws.send(JSON.stringify({ type: 'FunctionCallRequest', functions: [
-        { id: 'end-test', name: 'end_call', arguments: '{}', client_side: true },
-      ] }));
+      // 200 ms of signed PCM, delivered at once to test paced queue draining.
+      const pcm = Buffer.alloc(320 * 10); pcm.writeInt16LE(6000, 0);
+      ws.send(pcm, { binary: true });
+      if (current.mode !== 'silent_wait') {
+        ws.send(JSON.stringify({ type: 'FunctionCallRequest', functions: [
+          { id: 'end-test', name: 'end_call', arguments: '{}', client_side: true },
+        ] }));
+      } else {
+        ws.send(JSON.stringify({ type: 'AgentAudioDone' }));
+      }
     };
     ws.on('message', (raw, binary) => {
       if (binary) {
         const pcm = Buffer.from(raw as Buffer);
+        if (pcm.every((byte) => byte === 0)) current.comfortSilenceBytes += pcm.length;
         if (pcm.some((byte) => byte !== 0)) {
           current.callerBytes += pcm.length;
           if (current.mode === 'early' && !answered) {
@@ -119,10 +121,6 @@ async function main() {
         });
       } else if (msg.type === 'InjectAgentMessage') {
         current.injected.push({ text: msg.message, at: Date.now() });
-        if (current.mode === 'dead_air') {
-          ws.send(JSON.stringify({ type: 'AgentAudioDone' }));
-          return; // The presence check finishes, but the caller stays silent.
-        }
         if (current.mode === 'bad_disposition') {
           ws.send(JSON.stringify({ type: 'FunctionCallRequest', functions: [
             { id: 'bad-disposition', name: 'set_disposition', arguments: JSON.stringify({ code: 'BAD' }), client_side: true },
@@ -160,7 +158,7 @@ async function main() {
     let ready!: () => void;
     const current: Scenario = {
       transport, mode, ready: new Promise<void>((resolve) => { ready = resolve; }),
-      appliedAt: 0, audioTimes: [], endedAt: 0, callerBytes: 0, injected: [], functionResponses: [], settings: null,
+      appliedAt: 0, audioTimes: [], audioPcm: [], comfortSilenceBytes: 0, providerStates: [], endedAt: 0, callerBytes: 0, injected: [], functionResponses: [], settings: null,
       sendCaller: () => {},
     };
     scenario = current;
@@ -185,7 +183,7 @@ async function main() {
           while (rx.length >= 3) {
             const kind = rx[0], len = rx.readUInt16BE(1);
             if (rx.length < len + 3) break;
-            if (kind === 0x10) current.audioTimes.push(Date.now());
+            if (kind === 0x10) { current.audioTimes.push(Date.now()); current.audioPcm.push(Buffer.from(rx.subarray(3, len + 3))); }
             if (kind === 0x00) current.endedAt = Date.now();
             rx = rx.subarray(len + 3);
           }
@@ -208,7 +206,7 @@ async function main() {
         let remoteRtpPort = 0;
         rtpClient.on('message', (packet) => {
           const parsed = parseRtpPacket(packet);
-          if (parsed?.payloadType === 0) current.audioTimes.push(Date.now());
+          if (parsed?.payloadType === 0) { current.audioTimes.push(Date.now()); current.audioPcm.push(ulawToLinear16(parsed.payload)); }
         });
         sipClient.on('message', (data) => {
           const message = data.toString();
@@ -255,13 +253,16 @@ async function main() {
         } else {
           const expectedResponses = mode === 'bad_transfer' ? 2 : 1;
           await until(() => current.functionResponses.length === expectedResponses, `${transport} ${mode} function result`);
-          assert.equal(current.injected.length, 1, 'The campaign presence check is sent once before function validation');
+          assert.equal(current.injected.length, 1, 'The configured opening is sent once before function validation');
         }
         const active = bridge.getStatus().activeCalls[0];
+        assert.equal(active?.agentId, agent.id, 'Active call summaries identify the assigned bot for per-bot analytics');
         assert.ok(active && bridge.forceHangupCall(active.callId));
       }
-      await until(() => current.endedAt > 0, `${transport} ${mode} hangup`);
-      await until(() => bridge.getStatus().activeCallsCount === 0, `${transport} ${mode} cleanup`);
+      if (mode !== 'silent_wait') {
+        await until(() => current.endedAt > 0, `${transport} ${mode} hangup`);
+        await until(() => bridge.getStatus().activeCallsCount === 0, `${transport} ${mode} cleanup`);
+      }
       if (mode === 'cancel') {
         await wait(1100);
         assert.equal(current.injected.length, 0, 'Hangup cancels the opening timer');
@@ -272,27 +273,35 @@ async function main() {
         const systemMessages = cdr?.transcript.filter((entry) => entry.role === 'system').map((entry) => entry.content).join('\n') || '';
         assert.match(systemMessages, /declined an injected message/i);
         assert.match(systemMessages, /INJECT_AGENT_MESSAGE_DURING_USER_SPEECH/);
-      } else if (mode === 'dead_air') {
-        assert.equal(current.injected.length, 1, 'The configured presence check is sent exactly once');
-        assert.equal(current.injected[0].text, campaign.presenceCheckText);
-        assert.equal(current.audioTimes.length, 0, 'No caller-response audio is fabricated');
+      } else if (mode === 'silent_wait') {
+        await until(() => current.injected.length === 1 && current.audioTimes.length === 10, `${transport} silent opening and PCM drain`);
+        assert.equal(current.injected.length, 1, 'A silent line receives the configured opening exactly once');
+        assert.match(current.injected[0].text, /Jessi from Example Services/);
+        assert.ok(current.settings.agent.think.prompt.includes(JSON.stringify(current.injected[0].text)), 'The injected opening is the selected campaign opening');
+        assert.ok(current.injected[0].at - current.appliedAt >= 990);
+        assert.equal(current.audioTimes.length, 10, 'The mock opening PCM is paced to the transport');
+        assert.equal(Buffer.concat(current.audioPcm).length, 3200, 'All 200 ms of signed agent PCM reaches the transport');
+        assert.ok(current.comfortSilenceBytes >= 800, 'Comfort-silence PCM keeps the upstream session alive');
+        // Longer than the retired minimum response timeout. Silence alone must
+        // not hang up, invent a disposition, or call either VICIdial update API.
+        await wait(3300);
+        assert.equal(current.endedAt, 0, 'Silence alone must not end the mock call');
+        assert.equal(bridge.getStatus().activeCallsCount, 1);
+        assert.equal(current.injected.length, 1, 'No repeated prompt while waiting');
+        const waitingRequests = viciRequests.slice(previousViciRequestCount);
+        assert.ok(!waitingRequests.some((request) => request.fn === 'update_lead' || request.fn === 'ra_call_control'),
+          'Waiting in silence must not update a lead or release the Remote Agent slot');
+        const active = bridge.getStatus().activeCalls[0];
+        assert.ok(active && bridge.forceHangupCall(active.callId));
+        await until(() => current.endedAt > 0, 'explicit operator hangup after silence');
+        await until(() => bridge.getStatus().activeCallsCount === 0, 'silent-wait cleanup');
         const cdr = listBridgeCallLogs(200).find((row) => !previousLogs.has(row.id));
-        assert.ok(cdr, 'Dead-air call is saved');
-        assert.equal(cdr!.callerCode, 'V1027153012000104892');
-        assert.equal(cdr!.disposition, null, 'A rejected lead update is not reported as applied');
-        const systemMessages = cdr!.transcript.filter((entry) => entry.role === 'system').map((entry) => entry.content).join('\\n');
-        assert.match(systemMessages, /did not confirm dead-air update_lead status DAIR/i);
-        const deadAirCall = cdr!.functionCalls.find((entry) => entry.name === 'apply_dead_air_disposition');
-        assert.equal(deadAirCall?.status, 'failed');
-        const callRequests = viciRequests.slice(previousViciRequestCount);
-        const leadUpdate = callRequests.find((request) => request.fn === 'update_lead');
-        const remoteHangup = callRequests.find((request) => request.fn === 'ra_call_control');
-        assert.equal(leadUpdate?.params.get('status'), 'DAIR', 'Dead-air code is attempted in update_lead');
-        assert.equal(remoteHangup?.params.get('stage'), 'HANGUP');
-        assert.equal(remoteHangup?.params.get('status'), 'DAIR', 'Remote Agent hangup retains the configured dead-air code after update_lead rejection');
-        const audit = cdr!.viciApiAudit;
-        assert.ok(audit.some((entry) => entry.fn === 'update_lead' && !entry.ok));
-        assert.ok(audit.some((entry) => entry.fn === 'ra_call_control' && entry.ok));
+        assert.ok(cdr, 'The explicitly ended silent call is saved');
+        assert.equal(cdr!.disposition, null, 'Silence does not fabricate a disposition');
+        assert.ok(!cdr!.functionCalls.some((entry) => /dead.?air/i.test(entry.name)), 'No retired automatic-silence function is logged');
+        const hangup = viciRequests.slice(previousViciRequestCount).find((request) => request.fn === 'ra_call_control');
+        assert.equal(hangup?.params.get('stage'), 'HANGUP');
+        assert.equal(hangup?.params.get('status'), 'NA', 'Only the explicit hangup uses the neutral fallback status');
       } else if (mode === 'bad_disposition') {
         const response = JSON.parse(current.functionResponses[0].content);
         assert.equal(response.ok, false);
@@ -323,7 +332,8 @@ async function main() {
         if (mode === 'silent') {
           assert.equal(current.injected.length, 1);
           assert.ok(current.injected[0].at - current.appliedAt >= 990);
-          assert.equal(current.injected[0].text, campaign.presenceCheckText, 'A silent line receives the selected campaign presence check once');
+          assert.match(current.injected[0].text, /Jessi from Example Services/, 'A silent line receives the selected configured opening once');
+          assert.ok(current.settings.agent.think.prompt.includes(JSON.stringify(current.injected[0].text)));
         } else {
           assert.ok(current.callerBytes > 0, 'Caller PCM must reach the mock provider during the wait');
           assert.equal(current.injected.length, 0, 'Early caller response must not be followed by a second opening');
@@ -332,13 +342,13 @@ async function main() {
         assert.ok(cdr?.greetingId, 'The selected greeting ID is recorded');
         assert.equal(cdr!.transcript.filter((entry) => entry.role === 'assistant').length, 1);
       }
-      const detail = mode === 'dead_air' ? 'failed lead update still sends configured status on Remote Agent hangup'
+      const detail = mode === 'silent_wait' ? 'configured opening streams; silence stays connected until explicit hangup'
         : mode === 'bad_disposition' ? 'disallowed status is rejected before update_lead'
         : mode === 'bad_transfer' ? 'non-XFER disposition cannot initiate a transfer'
         : mode === 'refused' ? 'refusal is logged; no invented audio or retry'
         : mode === 'cancel' ? 'hangup cancels the opening without audio'
         : mode === 'early' ? 'early caller reply waits and drains without a duplicate'
-        : 'campaign presence check and response drain before hangup';
+        : 'configured opening and response drain before hangup';
       console.log(`✓ ${transport} ${mode}: ${detail} (local mock)`);
     } finally {
       client?.destroy();
@@ -350,7 +360,7 @@ async function main() {
 
   try {
     for (const transport of ['audiosocket', 'sip_rtp'] as const) {
-      for (const mode of ['silent', 'early', 'cancel', 'refused', 'dead_air', 'bad_disposition', 'bad_transfer'] as const) await runScenario(transport, mode);
+      for (const mode of ['silent', 'early', 'cancel', 'refused', 'silent_wait', 'bad_disposition', 'bad_transfer'] as const) await runScenario(transport, mode);
     }
   } finally {
     await bridge.stop();

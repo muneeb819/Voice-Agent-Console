@@ -79,7 +79,13 @@ class VoiceStore:
     def list(self, owner: str) -> list[dict]:
         out = []
         for p in sorted(self.root.glob("*/meta.json")):
-            m = json.loads(p.read_text())
+            try:
+                m = json.loads(p.read_text())
+            except (OSError, ValueError):
+                log.warning("skipping unreadable voice metadata", extra={"path": str(p)})
+                continue
+            if not isinstance(m, dict) or "owner" not in m:
+                continue
             if m["owner"] == owner:
                 out.append({k: m[k] for k in ("id", "name", "speaker_name", "created", "duration")})
         return out

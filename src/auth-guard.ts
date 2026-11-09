@@ -177,29 +177,16 @@ export function constantTimePasswordMatch(candidate: string): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
-function extractQueryToken(req: http.IncomingMessage): string | null {
-  const rawUrl = String(req.url || '');
-  const qIdx = rawUrl.indexOf('?');
-  if (qIdx < 0) return null;
-  try {
-    const params = new URLSearchParams(rawUrl.slice(qIdx + 1));
-    const tok = (params.get('vac_token') || params.get('token') || '').trim();
-    return tok || null;
-  } catch {
-    return null;
-  }
-}
-
+/** Resolves an explicit machine-client bearer credential or first-party cookie.
+ * Query-string credentials are deliberately ignored to keep secrets out of URLs.
+ */
 export function getRequestSessionToken(req: http.IncomingMessage): string | null {
   const authHdr = String(req.headers.authorization || '').trim();
   if (/^Bearer\s+/i.test(authHdr)) {
     return authHdr.replace(/^Bearer\s+/i, '').trim() || null;
   }
   const cookies = parseCookies(req.headers.cookie);
-  if (cookies[SESSION_COOKIE_NAME]) {
-    return cookies[SESSION_COOKIE_NAME];
-  }
-  return extractQueryToken(req);
+  return cookies[SESSION_COOKIE_NAME] || null;
 }
 
 /**
@@ -238,17 +225,13 @@ export function hasActiveAuthSession(req: http.IncomingMessage): boolean {
     }
   }
 
-  // 2. Check signed HttpOnly session cookie or query handoff token (admin password session)
+  // 2. Check the signed HttpOnly admin-password session cookie.
   const cookies = parseCookies(req.headers.cookie);
   if (cookies[SESSION_COOKIE_NAME] && verifySessionToken(cookies[SESSION_COOKIE_NAME])) {
     return true;
   }
-  const queryTok = extractQueryToken(req);
-  if (queryTok && (constantTimePasswordMatch(queryTok) || verifySessionToken(queryTok))) {
-    return true;
-  }
 
-  // 3. Check email/password user session (cookie, bearer token, or query handoff token)
+  // 3. Check an email/password user session from a cookie or explicit bearer header.
   if (getAuthenticatedUser(req)) {
     return true;
   }
@@ -329,10 +312,9 @@ export function setAuthCookie(res: Response, token: string, req?: http.IncomingM
   );
 }
 
+/** Expires the first-party session cookie using the same security policy as login. */
 export function clearAuthCookie(res: Response, req?: http.IncomingMessage): void {
-  const cookiePolicy = isHttpsRequest(req)
-    ? 'SameSite=None; Secure; Partitioned'
-    : 'SameSite=Lax';
+  const cookiePolicy = isHttpsRequest(req) ? 'SameSite=Lax; Secure' : 'SameSite=Lax';
   res.setHeader(
     'Set-Cookie',
     `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; ${cookiePolicy}; Max-Age=0`
@@ -348,7 +330,9 @@ export function clearAuthCookie(res: Response, req?: http.IncomingMessage): void
  * unauthorized requests and 403 for role restrictions.
  */
 export function apiAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const p = req.path;
+  // Express route matching is case-insensitive and tolerates a trailing slash.
+  // Authorization must use the same canonical shape, or /SECRETS/ bypasses it.
+  const p = req.path.toLowerCase().replace(/\/+$/, '') || '/';
   if (
     p === '/health' ||
     p.startsWith('/auth/')
@@ -374,6 +358,8 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
     const role = account?.role || 'owner'; // legacy ADMIN_PASSWORD session is owner-equivalent
     const adminOnly =
       p === '/secrets' ||
+      p === '/users' ||
+      /^\/users\/[^/]+\/(?:status|role|revoke-sessions)$/.test(p) ||
       p === '/state/reset' ||
       p === '/demo-tunnel/start' ||
       p === '/demo-tunnel/stop' ||
@@ -383,6 +369,8 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
       p === '/speech-service/activate' ||
       p === '/speech-service/test' ||
       p === '/vici/verify' ||
+      p === '/deepgram/verify' ||
+      (p === '/speech-service/status' && (req.query.url !== undefined || req.query.apiKey !== undefined)) ||
       /^\/vici\/calls\/[^/]+\/(?:hangup|transfer)$/.test(p);
     const readOnly = req.method === 'GET' || req.method === 'HEAD';
     if (adminOnly && role !== 'owner' && role !== 'admin') {

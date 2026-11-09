@@ -54,6 +54,8 @@ const env_store_1 = require("./env-store");
 const webhook_executor_1 = require("./webhook-executor");
 const g711_1 = require("./g711");
 const settings_builder_1 = require("./settings-builder");
+const persona_1 = require("./persona");
+const campaign_assignment_1 = require("./campaign-assignment");
 const vici_client_1 = require("./vici-client");
 function resolveSdpAdvertisedHost(peerAddress, configuredHost, bindHost) {
     if ((0, auth_guard_1.isLoopbackIp)(peerAddress))
@@ -75,7 +77,7 @@ function interpolateEnvPlaceholders(obj) {
                 return (0, env_store_1.getSecret)('GROQ_API_KEY');
             if (varName === 'CARTESIA_KEY')
                 return (0, env_store_1.getSecret)('CARTESIA_API_KEY');
-            return process.env[varName] || '';
+            return ''; // unknown environment variables are not provider secrets
         });
     }
     if (Array.isArray(obj))
@@ -122,7 +124,7 @@ function resolveCampaignAndAgent(state, dialedExten) {
         };
     }
     const campaign = state.campaigns[idx];
-    const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+    const agent = (0, campaign_assignment_1.primaryCampaignAgent)(state, campaign);
     if (!agent) {
         return {
             campaign,
@@ -191,6 +193,7 @@ class VicidialBridgeService {
     sipSocket = null;
     monitorWss = null;
     preCallRegistry = new Map();
+    preCallSweepTimer = null;
     activeCalls = new Map();
     activeSessionClosers = new Map();
     activeSessionTransferrers = new Map();
@@ -221,7 +224,7 @@ class VicidialBridgeService {
         this.viciApiBaseOverride = opts.viciApiBaseOverride;
     }
     createMonitorWebSocketServer() {
-        this.monitorWss = new ws_1.WebSocketServer({ noServer: true });
+        this.monitorWss = new ws_1.WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
         this.monitorWss.on('connection', (ws) => {
             ws.send(JSON.stringify({
                 type: 'bridge_snapshot',
@@ -270,7 +273,7 @@ class VicidialBridgeService {
         }
         let activeOnCampaign = 0;
         for (const c of this.activeCalls.values()) {
-            if (c.viciCampaign === campaign.viciCampaign && c.campaignName === campaign.name) {
+            if (c.campaignId === campaign.id) {
                 activeOnCampaign += 1;
             }
         }
@@ -308,6 +311,8 @@ class VicidialBridgeService {
             phone: parsedCaller.phone,
             campaignId: campaign?.viciCampaign,
         });
+        if (this.preCallRegistry.size >= 512)
+            throw new Error('Too many unclaimed pre-call registrations.');
         const uuid = crypto_1.default.randomUUID();
         this.preCallRegistry.set(uuid, {
             uuid,
@@ -332,16 +337,41 @@ class VicidialBridgeService {
         };
     }
     async start() {
+        this.preCallSweepTimer = setInterval(() => {
+            const cutoff = Date.now() - 45000;
+            for (const [key, rec] of this.preCallRegistry)
+                if (rec.createdAt <= cutoff)
+                    this.preCallRegistry.delete(key);
+        }, 15000);
+        this.preCallSweepTimer.unref();
         await this.startAudioSocketServer();
-        await this.startSipRtpServer();
+        try {
+            await this.startSipRtpServer();
+        }
+        catch (err) {
+            await this.stop();
+            throw err;
+        }
     }
     async stop() {
-        for (const closer of this.activeSessionClosers.values()) {
+        if (this.preCallSweepTimer) {
+            clearInterval(this.preCallSweepTimer);
+            this.preCallSweepTimer = null;
+        }
+        this.preCallRegistry.clear();
+        if (this.monitorWss) {
+            for (const client of this.monitorWss.clients)
+                client.terminate();
+            this.monitorWss.close();
+            this.monitorWss = null;
+        }
+        const closing = Array.from(this.activeSessionClosers.values()).map(async (closer) => {
             try {
-                closer('bridge_shutdown');
+                await closer('bridge_shutdown');
             }
             catch { }
-        }
+        });
+        await Promise.allSettled(closing);
         this.activeSessionClosers.clear();
         this.activeCalls.clear();
         if (this.tcpServer) {
@@ -512,12 +542,6 @@ class VicidialBridgeService {
             const tryListen = (candidatePort, candidateHost, retriesLeft) => {
                 const onErr = (err) => {
                     this.tcpServer.removeListener('error', onErr);
-                    if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
-                        const nextPort = candidatePort + 1;
-                        console.warn(`[ViciBridge] AudioSocket TCP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);
-                        tryListen(nextPort, candidateHost, retriesLeft - 1);
-                        return;
-                    }
                     reject(err);
                 };
                 this.tcpServer.once('error', onErr);
@@ -531,7 +555,7 @@ class VicidialBridgeService {
                     resolve();
                 });
             };
-            tryListen(this.audioSocketPort, this.host, 100);
+            tryListen(this.audioSocketPort, this.host, 0);
         });
     }
     // ==================== TRANSPORT 2: ASTERISK 13/16/18+ SIP + RTP (G.711 ULAW) ====================
@@ -583,268 +607,297 @@ class VicidialBridgeService {
             sock.send(msgBuf, rinfo.port, rinfo.address);
         };
         sock.on('message', async (msgBuf, rinfo) => {
-            const raw = msgBuf.toString('utf8');
-            const { startLine, headers, body } = parseSipMessage(raw);
-            if (!startLine || startLine.startsWith('SIP/2.0'))
-                return;
-            const [methodRaw, requestUri] = startLine.split(/\s+/);
-            const method = (methodRaw || '').toUpperCase();
-            const callId = firstHeader(headers, 'call-id', 'i');
-            const toRaw = firstHeader(headers, 'to', 't');
-            const fromRaw = firstHeader(headers, 'from', 'f');
-            if (!(0, auth_guard_1.isBridgePeerIpAllowed)(rinfo.address)) {
-                this.stats.rejectedUntrustedIpCount += 1;
-                this.stats.lastError = `Rejected untrusted SIP peer IP: ${rinfo.address}`;
-                if (method === 'INVITE' || method === 'OPTIONS') {
-                    sendSipResponse('403 Forbidden', headers, toRaw, [], '', rinfo);
+            try {
+                const raw = msgBuf.toString('utf8');
+                const { startLine, headers, body } = parseSipMessage(raw);
+                if (!startLine || startLine.startsWith('SIP/2.0'))
+                    return;
+                const [methodRaw, requestUri] = startLine.split(/\s+/);
+                const method = (methodRaw || '').toUpperCase();
+                const callId = firstHeader(headers, 'call-id', 'i').slice(0, 256);
+                if (!callId || /[\r\n\x00]/.test(callId))
+                    return;
+                const toRaw = firstHeader(headers, 'to', 't');
+                const fromRaw = firstHeader(headers, 'from', 'f');
+                if (!(0, auth_guard_1.isBridgePeerIpAllowed)(rinfo.address)) {
+                    this.stats.rejectedUntrustedIpCount += 1;
+                    this.stats.lastError = `Rejected untrusted SIP peer IP: ${rinfo.address}`;
+                    if (method === 'INVITE' || method === 'OPTIONS') {
+                        sendSipResponse('403 Forbidden', headers, toRaw, [], '', rinfo);
+                    }
+                    return;
                 }
-                return;
-            }
-            if (method === 'OPTIONS') {
-                const tag = crypto_1.default.randomBytes(4).toString('hex');
-                const toWithTag = /;tag=/i.test(toRaw) ? toRaw : `${toRaw};tag=${tag}`;
-                sendSipResponse('200 OK', headers, toWithTag, ['Allow: INVITE, ACK, CANCEL, OPTIONS, BYE'], '', rinfo);
-                return;
-            }
-            if (method === 'ACK') {
-                return;
-            }
-            if (method === 'BYE' || method === 'CANCEL') {
-                const dlg = dialogs.get(callId);
-                const toWithTag = dlg?.localToHeaderWithTag || toRaw;
-                sendSipResponse('200 OK', headers, toWithTag, [], '', rinfo);
-                if (dlg) {
-                    dialogs.delete(callId);
-                    dlg.onSipClosed(method === 'BYE' ? 'asterisk_sip_bye' : 'asterisk_sip_cancel');
+                if (method === 'OPTIONS') {
+                    const tag = crypto_1.default.randomBytes(4).toString('hex');
+                    const toWithTag = /;tag=/i.test(toRaw) ? toRaw : `${toRaw};tag=${tag}`;
+                    sendSipResponse('200 OK', headers, toWithTag, ['Allow: INVITE, ACK, CANCEL, OPTIONS, BYE'], '', rinfo);
+                    return;
                 }
-                return;
-            }
-            if (method === 'INVITE') {
-                // Re-INVITE or retransmission check
-                if (dialogs.has(callId)) {
+                if (method === 'ACK') {
+                    return;
+                }
+                if (method === 'BYE' || method === 'CANCEL') {
+                    const dlg = dialogs.get(callId);
+                    const toWithTag = dlg?.localToHeaderWithTag || toRaw;
+                    sendSipResponse('200 OK', headers, toWithTag, [], '', rinfo);
+                    if (dlg) {
+                        dialogs.delete(callId);
+                        dlg.onSipClosed(method === 'BYE' ? 'asterisk_sip_bye' : 'asterisk_sip_cancel');
+                    }
+                    return;
+                }
+                if (method === 'INVITE') {
+                    // Re-INVITE or retransmission check
+                    if (dialogs.has(callId)) {
+                        sendSipResponse('100 Trying', headers, toRaw, [], '', rinfo);
+                        return;
+                    }
                     sendSipResponse('100 Trying', headers, toRaw, [], '', rinfo);
-                    return;
-                }
-                sendSipResponse('100 Trying', headers, toRaw, [], '', rinfo);
-                // Parse dialed extension from Request-URI: sip:88001@115.186.137.240:5062
-                const uriMatch = /sip:([^@;>\s]+)/i.exec(requestUri || '');
-                const exten = firstHeader(headers, 'x-vici-exten') || (uriMatch ? uriMatch[1] : '');
-                // Campaign maxCalls concurrency guard
-                const curStateForCap = (0, db_1.getConsoleState)();
-                const resolvedForCap = resolveCampaignAndAgent(curStateForCap, exten);
-                if (resolvedForCap.error) {
-                    this.stats.lastError = resolvedForCap.error;
-                    sendSipResponse('503 Service Unavailable', headers, toRaw, ['Warning: 399 ViciBridge "Campaign not ready"'], '', rinfo);
-                    return;
-                }
-                if (this.isCampaignOverCapacity(resolvedForCap.campaign)) {
-                    this.stats.rejectedOverCapacityCount += 1;
-                    this.stats.lastError = `Campaign "${resolvedForCap.campaign?.name}" at maxCalls capacity (${resolvedForCap.campaign?.maxCalls})`;
-                    sendSipResponse('486 Busy Here', headers, toRaw, [], '', rinfo);
-                    return;
-                }
-                // Parse From header: "V1027153012000104892" <sip:3055550192@115.186.137.240>;tag=as123
-                const dispMatch = /^\s*"?([^"<]+?)"?\s*<sip:([^@;>]+)/i.exec(fromRaw);
-                const sipUriPhoneMatch = /<sip:([^@;>]+)/i.exec(fromRaw);
-                const viciCidHeader = firstHeader(headers, 'x-vici-callname');
-                const callerName = viciCidHeader || (dispMatch ? dispMatch[1].trim() : '');
-                const callerNum = dispMatch ? dispMatch[2].trim() : sipUriPhoneMatch ? sipUriPhoneMatch[1].trim() : '';
-                const xChannel = firstHeader(headers, 'x-vici-channel');
-                const xUniqueId = firstHeader(headers, 'x-vici-uniqueid');
-                // Parse remote RTP endpoint from SDP
-                const cMatch = /^c=IN IP4\s+([^\r\n\s]+)/m.exec(body);
-                const mMatch = /^m=audio\s+(\d+)\s+RTP\/AVP/m.exec(body);
-                const remoteRtpIp = cMatch ? cMatch[1].trim() : rinfo.address;
-                const remoteRtpPort = mMatch ? Number(mMatch[1]) : 0;
-                if (!remoteRtpPort) {
-                    sendSipResponse('488 Not Acceptable Here', headers, toRaw, [], '', rinfo);
-                    return;
-                }
-                // Bind dedicated UDP RTP socket for this call
-                const rtpSocket = dgram_1.default.createSocket('udp4');
-                await new Promise((r) => rtpSocket.bind(0, this.host, () => r()));
-                const localRtpPort = rtpSocket.address().port;
-                const localIpForSdp = resolveSdpAdvertisedHost(rinfo.address, (0, db_1.getConsoleState)().vici.bridgeHost || '', this.host);
-                const localTag = `vab${crypto_1.default.randomBytes(4).toString('hex')}`;
-                const localToWithTag = /;tag=/i.test(toRaw) ? toRaw : `${toRaw};tag=${localTag}`;
-                const contactHeaderRaw = firstHeader(headers, 'contact', 'm');
-                const contactUriMatch = /<(sip:[^>]+)>/i.exec(contactHeaderRaw);
-                const remoteContactUri = contactUriMatch
-                    ? contactUriMatch[1]
-                    : `sip:${callerNum || 'asterisk'}@${rinfo.address}:${rinfo.port}`;
-                const sdpAnswer = [
-                    'v=0',
-                    `o=VoiceAgentBridge ${Date.now() & 0x7fffffff} 1 IN IP4 ${localIpForSdp}`,
-                    's=DeepgramViciBridge',
-                    `c=IN IP4 ${localIpForSdp}`,
-                    't=0 0',
-                    `m=audio ${localRtpPort} RTP/AVP 0 101`,
-                    'a=rtpmap:0 PCMU/8000',
-                    'a=rtpmap:101 telephone-event/8000',
-                    'a=fmtp:101 0-15',
-                    'a=ptime:20',
-                    'a=sendrecv',
-                    '',
-                ].join('\r\n');
-                // Validate and register the exact campaign before accepting the SIP call.
-                const preReg = (() => {
+                    // Parse dialed extension from Request-URI: sip:88001@115.186.137.240:5062
+                    const uriMatch = /sip:([^@;>\s]+)/i.exec(requestUri || '');
+                    const exten = firstHeader(headers, 'x-vici-exten') || (uriMatch ? uriMatch[1] : '');
+                    // Campaign maxCalls concurrency guard
+                    const curStateForCap = (0, db_1.getConsoleState)();
+                    const resolvedForCap = resolveCampaignAndAgent(curStateForCap, exten);
+                    if (resolvedForCap.error) {
+                        this.stats.lastError = resolvedForCap.error;
+                        sendSipResponse('503 Service Unavailable', headers, toRaw, ['Warning: 399 ViciBridge "Campaign not ready"'], '', rinfo);
+                        return;
+                    }
+                    if (this.isCampaignOverCapacity(resolvedForCap.campaign)) {
+                        this.stats.rejectedOverCapacityCount += 1;
+                        this.stats.lastError = `Campaign "${resolvedForCap.campaign?.name}" at maxCalls capacity (${resolvedForCap.campaign?.maxCalls})`;
+                        sendSipResponse('486 Busy Here', headers, toRaw, [], '', rinfo);
+                        return;
+                    }
+                    // Parse From header: "V1027153012000104892" <sip:3055550192@115.186.137.240>;tag=as123
+                    const dispMatch = /^\s*"?([^"<]+?)"?\s*<sip:([^@;>]+)/i.exec(fromRaw);
+                    const sipUriPhoneMatch = /<sip:([^@;>]+)/i.exec(fromRaw);
+                    const viciCidHeader = firstHeader(headers, 'x-vici-callname');
+                    const callerName = viciCidHeader || (dispMatch ? dispMatch[1].trim() : '');
+                    const callerNum = dispMatch ? dispMatch[2].trim() : sipUriPhoneMatch ? sipUriPhoneMatch[1].trim() : '';
+                    const xChannel = firstHeader(headers, 'x-vici-channel');
+                    const xUniqueId = firstHeader(headers, 'x-vici-uniqueid');
+                    // Parse remote RTP endpoint from SDP
+                    const cMatch = /^c=IN IP4\s+([^\r\n\s]+)/m.exec(body);
+                    const mMatch = /^m=audio\s+(\d+)\s+RTP\/AVP/m.exec(body);
+                    const rawRemoteRtpIp = cMatch ? cMatch[1].trim() : rinfo.address;
+                    const remoteRtpIp = rawRemoteRtpIp.toLowerCase() === 'localhost' ? '127.0.0.1' : rawRemoteRtpIp;
+                    if (net_1.default.isIP(remoteRtpIp) === 0) {
+                        sendSipResponse('488 Not Acceptable Here', headers, toRaw, [], '', rinfo);
+                        return;
+                    }
+                    const remoteRtpPort = mMatch ? Number(mMatch[1]) : 0;
+                    if (!Number.isInteger(remoteRtpPort) || remoteRtpPort < 1024 || remoteRtpPort > 65535 || !(0, auth_guard_1.isBridgePeerIpAllowed)(remoteRtpIp)) {
+                        this.stats.lastError = 'SIP SDP media endpoint is missing or outside the trusted PBX allowlist.';
+                        sendSipResponse('488 Not Acceptable Here', headers, toRaw, [], '', rinfo);
+                        return;
+                    }
+                    // Bind dedicated UDP RTP socket for this call
+                    const rtpSocket = dgram_1.default.createSocket('udp4');
+                    rtpSocket.on('error', () => { try {
+                        rtpSocket.close();
+                    }
+                    catch { } });
                     try {
-                        return this.registerPreCall({
-                            uniqueid: xUniqueId || callId,
-                            vici_cid: callerName,
-                            phone: callerNum,
-                            exten,
-                            channel: xChannel,
+                        await new Promise((resolve, reject) => {
+                            const onError = (err) => reject(err);
+                            rtpSocket.once('error', onError);
+                            rtpSocket.bind(0, this.host, () => { rtpSocket.removeListener('error', onError); resolve(); });
                         });
                     }
-                    catch (err) {
-                        this.stats.lastError = err?.message || 'Campaign pre-call registration failed.';
-                        return null;
-                    }
-                })();
-                if (!preReg) {
-                    try {
-                        rtpSocket.close();
-                    }
-                    catch { }
-                    sendSipResponse('503 Service Unavailable', headers, toRaw, ['Warning: 399 ViciBridge "Campaign registration failed"'], '', rinfo);
-                    return;
-                }
-                const preRecord = this.preCallRegistry.get(preReg.uuid);
-                if (preRecord)
-                    this.preCallRegistry.delete(preReg.uuid);
-                sendSipResponse('200 OK', headers, localToWithTag, [
-                    `Contact: <sip:${exten || 'bridge'}@${localIpForSdp}:${this.sipPort}>`,
-                    'Allow: INVITE, ACK, CANCEL, OPTIONS, BYE',
-                ], sdpAnswer, rinfo);
-                let rtpClosed = false;
-                let txPcmQueue = Buffer.alloc(0);
-                let rtpSeq = crypto_1.default.randomInt(1, 30000);
-                let rtpTimestamp = crypto_1.default.randomInt(1000, 100000);
-                const rtpSsrc = crypto_1.default.randomBytes(4).readUInt32BE(0);
-                let nextTalkspurtMarker = true;
-                const rtpPacer = setInterval(() => {
-                    if (rtpClosed)
-                        return;
-                    if (txPcmQueue.length === 0) {
-                        nextTalkspurtMarker = true;
+                    catch {
+                        sendSipResponse('503 Service Unavailable', headers, toRaw, [], '', rinfo);
                         return;
                     }
-                    let pcmFrame;
-                    if (txPcmQueue.length >= 320) {
-                        pcmFrame = txPcmQueue.subarray(0, 320);
-                        txPcmQueue = txPcmQueue.subarray(320);
-                    }
-                    else {
-                        pcmFrame = Buffer.alloc(320, 0);
-                        txPcmQueue.copy(pcmFrame, 0);
-                        txPcmQueue = Buffer.alloc(0);
-                    }
-                    const ulawPayload = (0, g711_1.linear16ToUlaw)(pcmFrame); // 160 bytes PCMU
-                    const rtpPkt = (0, g711_1.buildRtpPacket)({
-                        payloadType: 0,
-                        sequenceNumber: rtpSeq++,
-                        timestamp: rtpTimestamp,
-                        ssrc: rtpSsrc,
-                        marker: nextTalkspurtMarker,
-                        payload: ulawPayload,
-                    });
-                    rtpTimestamp = (rtpTimestamp + 160) >>> 0;
-                    nextTalkspurtMarker = false;
-                    rtpSocket.send(rtpPkt, remoteRtpPort, remoteRtpIp);
-                }, 20);
-                const cleanupRtpAndBye = (sendByeToAsterisk) => {
-                    if (rtpClosed)
-                        return;
-                    rtpClosed = true;
-                    clearInterval(rtpPacer);
-                    dialogs.delete(callId);
-                    try {
-                        rtpSocket.close();
-                    }
-                    catch { }
-                    if (sendByeToAsterisk && this.sipSocket) {
-                        const branch = `z9hG4bK${crypto_1.default.randomBytes(5).toString('hex')}`;
-                        const byeMsg = [
-                            `BYE ${remoteContactUri} SIP/2.0`,
-                            `Via: SIP/2.0/UDP ${localIpForSdp}:${this.sipPort};branch=${branch};rport`,
-                            `From: ${localToWithTag}`,
-                            `To: ${fromRaw}`,
-                            `Call-ID: ${callId}`,
-                            'CSeq: 1 BYE',
-                            'Content-Length: 0',
-                            '',
-                            '',
-                        ].join('\r\n');
+                    // An earlier concurrent INVITE may have won while this socket was binding.
+                    if (dialogs.has(callId)) {
                         try {
-                            this.sipSocket.send(Buffer.from(byeMsg, 'utf8'), rinfo.port, rinfo.address);
+                            rtpSocket.close();
                         }
                         catch { }
-                    }
-                };
-                const hooks = {
-                    enqueueBotPcm8k: (pcm8kLe) => {
-                        if (rtpClosed || pcm8kLe.length === 0)
-                            return;
-                        txPcmQueue = txPcmQueue.length > 0 ? Buffer.concat([txPcmQueue, pcm8kLe]) : Buffer.from(pcm8kLe);
-                    },
-                    pendingPlaybackMs: () => Math.ceil(txPcmQueue.length / 320) * 20,
-                    bargeInFlush: () => {
-                        txPcmQueue = Buffer.alloc(0);
-                        nextTalkspurtMarker = true;
-                    },
-                    hangupTransport: () => {
-                        cleanupRtpAndBye(true);
-                    },
-                };
-                const sessionCallbacks = this.launchCallSession({
-                    transport: 'sip_rtp',
-                    sessionUuid: preReg.uuid,
-                    preCall: preRecord,
-                    hooks,
-                });
-                rtpSocket.on('message', (pktBuf) => {
-                    if (rtpClosed)
                         return;
-                    const parsed = (0, g711_1.parseRtpPacket)(pktBuf);
-                    if (!parsed)
-                        return;
-                    if (parsed.payloadType === 0 && parsed.payload.length > 0) {
-                        sessionCallbacks.onCallerPcm8k((0, g711_1.ulawToLinear16)(parsed.payload));
                     }
-                    else if (parsed.payloadType === 101) {
-                        const dtmf = (0, g711_1.parseRfc4733Dtmf)(parsed.payload);
-                        if (dtmf && dtmf.endOfEvent) {
-                            sessionCallbacks.onCallerDtmf(dtmf.digit);
+                    const localRtpPort = rtpSocket.address().port;
+                    const localIpForSdp = resolveSdpAdvertisedHost(rinfo.address, (0, db_1.getConsoleState)().vici.bridgeHost || '', this.host);
+                    const localTag = `vab${crypto_1.default.randomBytes(4).toString('hex')}`;
+                    const localToWithTag = /;tag=/i.test(toRaw) ? toRaw : `${toRaw};tag=${localTag}`;
+                    const contactHeaderRaw = firstHeader(headers, 'contact', 'm');
+                    const contactUriMatch = /<(sip:[^>]+)>/i.exec(contactHeaderRaw);
+                    const remoteContactUri = contactUriMatch
+                        ? contactUriMatch[1]
+                        : `sip:${callerNum || 'asterisk'}@${rinfo.address}:${rinfo.port}`;
+                    const sdpAnswer = [
+                        'v=0',
+                        `o=VoiceAgentBridge ${Date.now() & 0x7fffffff} 1 IN IP4 ${localIpForSdp}`,
+                        's=DeepgramViciBridge',
+                        `c=IN IP4 ${localIpForSdp}`,
+                        't=0 0',
+                        `m=audio ${localRtpPort} RTP/AVP 0 101`,
+                        'a=rtpmap:0 PCMU/8000',
+                        'a=rtpmap:101 telephone-event/8000',
+                        'a=fmtp:101 0-15',
+                        'a=ptime:20',
+                        'a=sendrecv',
+                        '',
+                    ].join('\r\n');
+                    // Validate and register the exact campaign before accepting the SIP call.
+                    const preReg = (() => {
+                        try {
+                            return this.registerPreCall({
+                                uniqueid: xUniqueId || callId,
+                                vici_cid: callerName,
+                                phone: callerNum,
+                                exten,
+                                channel: xChannel,
+                            });
                         }
+                        catch (err) {
+                            this.stats.lastError = err?.message || 'Campaign pre-call registration failed.';
+                            return null;
+                        }
+                    })();
+                    if (!preReg) {
+                        try {
+                            rtpSocket.close();
+                        }
+                        catch { }
+                        sendSipResponse('503 Service Unavailable', headers, toRaw, ['Warning: 399 ViciBridge "Campaign registration failed"'], '', rinfo);
+                        return;
                     }
-                });
-                dialogs.set(callId, {
-                    callId,
-                    localTag,
-                    remoteFromHeader: fromRaw,
-                    localToHeaderWithTag: localToWithTag,
-                    remoteContactUri,
-                    remoteSignalingIp: rinfo.address,
-                    remoteSignalingPort: rinfo.port,
-                    rtpSocket,
-                    onSipClosed: (reason) => {
-                        cleanupRtpAndBye(false);
-                        sessionCallbacks.onTransportClosed(reason);
-                    },
-                });
+                    const preRecord = this.preCallRegistry.get(preReg.uuid);
+                    if (preRecord)
+                        this.preCallRegistry.delete(preReg.uuid);
+                    sendSipResponse('200 OK', headers, localToWithTag, [
+                        `Contact: <sip:${exten || 'bridge'}@${localIpForSdp}:${this.sipPort}>`,
+                        'Allow: INVITE, ACK, CANCEL, OPTIONS, BYE',
+                    ], sdpAnswer, rinfo);
+                    let rtpClosed = false;
+                    let txPcmQueue = Buffer.alloc(0);
+                    let rtpSeq = crypto_1.default.randomInt(1, 30000);
+                    let rtpTimestamp = crypto_1.default.randomInt(1000, 100000);
+                    const rtpSsrc = crypto_1.default.randomBytes(4).readUInt32BE(0);
+                    let nextTalkspurtMarker = true;
+                    const rtpPacer = setInterval(() => {
+                        if (rtpClosed)
+                            return;
+                        if (txPcmQueue.length === 0) {
+                            nextTalkspurtMarker = true;
+                            return;
+                        }
+                        let pcmFrame;
+                        if (txPcmQueue.length >= 320) {
+                            pcmFrame = txPcmQueue.subarray(0, 320);
+                            txPcmQueue = txPcmQueue.subarray(320);
+                        }
+                        else {
+                            pcmFrame = Buffer.alloc(320, 0);
+                            txPcmQueue.copy(pcmFrame, 0);
+                            txPcmQueue = Buffer.alloc(0);
+                        }
+                        const ulawPayload = (0, g711_1.linear16ToUlaw)(pcmFrame); // 160 bytes PCMU
+                        const rtpPkt = (0, g711_1.buildRtpPacket)({
+                            payloadType: 0,
+                            sequenceNumber: rtpSeq++,
+                            timestamp: rtpTimestamp,
+                            ssrc: rtpSsrc,
+                            marker: nextTalkspurtMarker,
+                            payload: ulawPayload,
+                        });
+                        rtpTimestamp = (rtpTimestamp + 160) >>> 0;
+                        nextTalkspurtMarker = false;
+                        rtpSocket.send(rtpPkt, remoteRtpPort, remoteRtpIp);
+                    }, 20);
+                    const cleanupRtpAndBye = (sendByeToAsterisk) => {
+                        if (rtpClosed)
+                            return;
+                        rtpClosed = true;
+                        clearInterval(rtpPacer);
+                        dialogs.delete(callId);
+                        try {
+                            rtpSocket.close();
+                        }
+                        catch { }
+                        if (sendByeToAsterisk && this.sipSocket) {
+                            const branch = `z9hG4bK${crypto_1.default.randomBytes(5).toString('hex')}`;
+                            const byeMsg = [
+                                `BYE ${remoteContactUri} SIP/2.0`,
+                                `Via: SIP/2.0/UDP ${localIpForSdp}:${this.sipPort};branch=${branch};rport`,
+                                `From: ${localToWithTag}`,
+                                `To: ${fromRaw}`,
+                                `Call-ID: ${callId}`,
+                                'CSeq: 1 BYE',
+                                'Content-Length: 0',
+                                '',
+                                '',
+                            ].join('\r\n');
+                            try {
+                                this.sipSocket.send(Buffer.from(byeMsg, 'utf8'), rinfo.port, rinfo.address);
+                            }
+                            catch { }
+                        }
+                    };
+                    const hooks = {
+                        enqueueBotPcm8k: (pcm8kLe) => {
+                            if (rtpClosed || pcm8kLe.length === 0)
+                                return;
+                            txPcmQueue = txPcmQueue.length > 0 ? Buffer.concat([txPcmQueue, pcm8kLe]) : Buffer.from(pcm8kLe);
+                        },
+                        pendingPlaybackMs: () => Math.ceil(txPcmQueue.length / 320) * 20,
+                        bargeInFlush: () => {
+                            txPcmQueue = Buffer.alloc(0);
+                            nextTalkspurtMarker = true;
+                        },
+                        hangupTransport: () => {
+                            cleanupRtpAndBye(true);
+                        },
+                    };
+                    const sessionCallbacks = this.launchCallSession({
+                        transport: 'sip_rtp',
+                        sessionUuid: preReg.uuid,
+                        preCall: preRecord,
+                        hooks,
+                    });
+                    rtpSocket.on('message', (pktBuf, peer) => {
+                        if (rtpClosed || peer.address !== remoteRtpIp || peer.port !== remoteRtpPort)
+                            return;
+                        const parsed = (0, g711_1.parseRtpPacket)(pktBuf);
+                        if (!parsed)
+                            return;
+                        if (parsed.payloadType === 0 && parsed.payload.length > 0) {
+                            sessionCallbacks.onCallerPcm8k((0, g711_1.ulawToLinear16)(parsed.payload));
+                        }
+                        else if (parsed.payloadType === 101) {
+                            const dtmf = (0, g711_1.parseRfc4733Dtmf)(parsed.payload);
+                            if (dtmf && dtmf.endOfEvent) {
+                                sessionCallbacks.onCallerDtmf(dtmf.digit);
+                            }
+                        }
+                    });
+                    dialogs.set(callId, {
+                        callId,
+                        localTag,
+                        remoteFromHeader: fromRaw,
+                        localToHeaderWithTag: localToWithTag,
+                        remoteContactUri,
+                        remoteSignalingIp: rinfo.address,
+                        remoteSignalingPort: rinfo.port,
+                        rtpSocket,
+                        onSipClosed: (reason) => {
+                            cleanupRtpAndBye(false);
+                            sessionCallbacks.onTransportClosed(reason);
+                        },
+                    });
+                }
+            }
+            catch (err) {
+                this.stats.lastError = `SIP request failed: ${err?.message || 'unknown error'}`;
             }
         });
         await new Promise((resolve, reject) => {
             const tryBind = (candidatePort, candidateHost, retriesLeft) => {
                 const onErr = (err) => {
                     sock.removeListener('error', onErr);
-                    if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
-                        const nextPort = candidatePort + 1;
-                        console.warn(`[ViciBridge] SIP UDP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);
-                        tryBind(nextPort, candidateHost, retriesLeft - 1);
-                        return;
-                    }
                     reject(err);
                 };
                 sock.once('error', onErr);
@@ -858,7 +911,7 @@ class VicidialBridgeService {
                     resolve();
                 });
             };
-            tryBind(this.sipPort, this.host, 100);
+            tryBind(this.sipPort, this.host, 0);
         });
     }
     // ==================== UNIFIED CALL LIFECYCLE ORCHESTRATOR ====================
@@ -930,18 +983,21 @@ class VicidialBridgeService {
         let awaitingFirstAudioForTurn = false;
         const ttfbSamples = [];
         let disposition = null;
-        let deadAirStatusForHangup = null;
         let transferredTo = null;
         let dncAdded = false;
         let transferExecuted = false;
+        let transferCompletion = null;
+        let resolveTransferCompletion = null;
         let pendingTransferArgs = null;
         let awaitingHangupAfterSpeech = false;
+        const conversationMemory = (0, persona_1.createConversationMemory)();
         const cancelledFnIds = new Set();
         const preSettingsAudioQueue = [];
         const transcript = [];
         const functionCalls = [];
         const summary = {
             callId,
+            campaignId: campaign.id,
             transport: opts.transport,
             exten,
             callerCode: parsedCaller.callerCode,
@@ -949,6 +1005,7 @@ class VicidialBridgeService {
             phone: parsedCaller.phone,
             campaignName: campaign?.name || 'Default',
             viciCampaign: campaign?.viciCampaign || '',
+            agentId: agent.id,
             agentName: agent.name,
             remoteAgentUser,
             state: 'hydrating_lead',
@@ -975,6 +1032,7 @@ class VicidialBridgeService {
             if (transferExecuted || closed)
                 return;
             transferExecuted = true;
+            transferCompletion = new Promise((resolve) => { resolveTransferCompletion = resolve; });
             const xferType = campaign?.xferType || 'ingroup';
             const xferTarget = campaign?.xferTarget || 'DEFAULTINGROUP';
             let xferOk = false;
@@ -1021,16 +1079,20 @@ class VicidialBridgeService {
                 }
                 else {
                     disposition = fbCode;
-                    await viciClient.updateLeadDisposition({
+                    const fallbackUpdate = await viciClient.updateLeadDisposition({
                         leadId: summary.leadId,
                         phone: summary.phone,
                         status: fbCode,
                         notes: `Transfer fallback (${detail}) — AI qualified: ${args.reason}`,
                     });
-                    addTranscript('system', `Transfer failed (${detail}); applied fallback disposition ${fbCode}`);
+                    if (fallbackUpdate.ok)
+                        disposition = fbCode;
+                    addTranscript('system', `Transfer failed (${detail}); fallback disposition ${fbCode} ${fallbackUpdate.ok ? 'was accepted' : 'was NOT accepted'} by VICIdial.`);
                 }
             }
             updateState('transferred');
+            resolveTransferCompletion?.();
+            resolveTransferCompletion = null;
             finalizeSession('transferred_to_closer');
         };
         const finalizeSession = async (reason) => {
@@ -1061,56 +1123,29 @@ class VicidialBridgeService {
                 }
                 catch { }
             }
-            // Dead air is a campaign-specific status update, never a generic no-answer alias.
-            // Attempt update_lead first; retain the configured code for the Remote Agent hangup
-            // even if the lead update fails, and record the actual API result in the CDR.
-            if (reason === 'dead_air') {
-                const code = String(campaign.deadAirDisposition || '').trim().toUpperCase();
-                const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(campaign);
-                if (campaign.deadAirDispositionVerified !== true || !allowedCodes.includes(code)) {
-                    this.stats.lastError = `Dead-air disposition ${code || '(unset)'} is not verified and allowed for VICIdial campaign ${campaign.viciCampaign}.`;
-                    addTranscript('system', `Dead-air status was not applied: ${this.stats.lastError}`);
-                }
-                else {
-                    deadAirStatusForHangup = code;
-                    const upd = await viciClient.updateLeadDisposition({
-                        leadId: summary.leadId,
-                        phone: summary.phone,
-                        status: code,
-                        notes: `No caller response after the one-second listen and campaign presence check. Campaign ${campaign.viciCampaign}.`,
-                    });
-                    if (upd.ok) {
-                        disposition = code;
-                        addTranscript('system', `Dead-air disposition ${code} was accepted by VICIdial update_lead.`);
-                    }
-                    else {
-                        addTranscript('system', `VICIdial did not confirm dead-air update_lead status ${code}; the bridge will still request ${code} on Remote Agent hangup. See the Vici API audit.`);
-                    }
-                    functionCalls.push({
-                        ts: new Date().toISOString(),
-                        id: `dead_air_${callId}`,
-                        name: 'apply_dead_air_disposition',
-                        args: { code, campaign: campaign.viciCampaign },
-                        status: upd.ok ? 'completed' : 'failed',
-                        response: { ok: upd.ok, requestedCode: code, responseText: upd.responseText },
-                    });
-                }
+            // Do not race a HANGUP ahead of an in-flight EXTENSIONTRANSFER when the
+            // mock/transport closes immediately after requesting the transfer.
+            if (transferCompletion && reason !== 'transferred_to_closer') {
+                await Promise.race([transferCompletion, new Promise((resolve) => setTimeout(resolve, 12000))]);
             }
+            opts.hooks.hangupTransport();
             // Release Remote Agent call slot via ra_call_control HANGUP if call was NOT transferred
             if (!transferredTo && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
                 await viciClient
                     .hangupRemoteAgentCall({
                     callerCode: parsedCaller.callerCode,
                     remoteAgentUser,
-                    status: deadAirStatusForHangup || disposition || 'NA',
+                    status: disposition || 'NA',
                 })
                     .catch(() => { });
             }
-            opts.hooks.hangupTransport();
-            this.activeCalls.delete(callId);
-            this.activeSessionClosers.delete(callId);
-            this.activeSessionTransferrers.delete(callId);
-            const savedRec = recorder.finalizeAndSave(callId);
+            let savedRec = null;
+            try {
+                savedRec = recorder.finalizeAndSave(callId);
+            }
+            catch (err) {
+                this.stats.lastError = `Call recording could not be saved: ${err?.message || 'storage error'}`;
+            }
             const endedAtIso = new Date().toISOString();
             const durationMs = Math.max(1, Date.now() - startedAtMs);
             const avgTtfbMs = ttfbSamples.length
@@ -1146,7 +1181,12 @@ class VicidialBridgeService {
             try {
                 (0, db_1.saveBridgeCallLog)(cdr);
             }
-            catch { }
+            catch (err) {
+                this.stats.lastError = `Call history could not be saved: ${err?.message || 'database error'}`;
+            }
+            this.activeCalls.delete(callId);
+            this.activeSessionClosers.delete(callId);
+            this.activeSessionTransferrers.delete(callId);
             this.broadcastMonitor({
                 type: 'call_ended',
                 callId,
@@ -1228,8 +1268,10 @@ class VicidialBridgeService {
             };
             hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
             let wireSettings;
+            let openingText = '';
             try {
                 const prepared = (0, opening_1.prepareDelayedOpening)(interpolateEnvPlaceholders(rawSettings));
+                openingText = prepared.greeting;
                 wireSettings = prepared.settings;
             }
             catch (err) {
@@ -1239,9 +1281,8 @@ class VicidialBridgeService {
                 return;
             }
             openingGate = (0, opening_1.createOpeningGate)({
-                presenceCheck: campaign.presenceCheckText,
-                responseTimeoutMs: Number(campaign.deadAirTimeoutSec) * 1000,
-                sendPresenceCheck: (message) => {
+                greeting: openingText,
+                sendOpening: (message) => {
                     if (!closed && dgWs?.readyState === ws_1.default.OPEN) {
                         dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
                     }
@@ -1256,15 +1297,16 @@ class VicidialBridgeService {
                     recorder.recordBotPcm8k(pcm8k);
                     opts.hooks.enqueueBotPcm8k(pcm8k);
                 },
-                onDeadAir: () => {
-                    if (closed)
-                        return;
-                    void finalizeSession('dead_air');
+                onSendError: () => {
+                    if (!closed)
+                        addTranscript('system', 'The configured opening could not be sent to Deepgram. Check the provider connection.');
                 },
                 onOverflow: () => addTranscript('system', 'Early provider audio exceeded the opening buffer and was dropped.'),
             });
             updateState('connecting_deepgram');
             dgWs = new ws_1.default(targetUrl, {
+                maxPayload: 4 * 1024 * 1024,
+                handshakeTimeout: 15000,
                 headers: dgKey ? { Authorization: `Token ${dgKey}` } : {},
                 family: 4,
             });
@@ -1352,27 +1394,26 @@ class VicidialBridgeService {
                             lastUserTurnTs = Date.now();
                             awaitingFirstAudioForTurn = true;
                         }
-                        else {
-                            openingGate?.agentTurn();
-                        }
                         suppressStaleBotAudio = false;
-                        addTranscript(role, String(evt.content || ''));
+                        const content = String(evt.content || '');
+                        if (role === 'user')
+                            conversationMemory.addUserText(content);
+                        else
+                            conversationMemory.addAssistantText(content);
+                        addTranscript(role, content);
                         break;
                     }
                     case 'AgentThinking': {
-                        openingGate?.agentTurn();
                         suppressStaleBotAudio = false;
                         updateState('thinking');
                         break;
                     }
                     case 'AgentStartedSpeaking': {
-                        openingGate?.agentTurn();
                         suppressStaleBotAudio = false;
                         updateState('bot_speaking');
                         break;
                     }
                     case 'AgentAudioDone': {
-                        openingGate?.agentAudioDone();
                         openingGate?.afterRelease(() => {
                             if (closed)
                                 return;
@@ -1419,12 +1460,18 @@ class VicidialBridgeService {
                             catch {
                                 args = { _raw: fnItem.arguments || '' };
                             }
+                            if (closed || cancelledFnIds.has(fnItem.id))
+                                continue;
                             let resultPayload = { ok: true };
                             if (fnItem.name === 'set_disposition') {
                                 const code = String(args.code || '').trim().toUpperCase();
                                 const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(campaign);
+                                const qualificationBlockers = code === 'XFER' ? conversationMemory.qualificationBlockers(campaign) : [];
                                 if (!allowedCodes.includes(code)) {
                                     resultPayload = { ok: false, error: `Disposition ${code || '(empty)'} is not allowed by selected campaign ${campaign.viciCampaign}. No VICIdial status was changed.` };
+                                }
+                                else if (qualificationBlockers.length) {
+                                    resultPayload = { ok: false, error: `XFER blocked: ${qualificationBlockers.join(' ')} No VICIdial status was changed.` };
                                 }
                                 else {
                                     disposition = code;
@@ -1456,12 +1503,18 @@ class VicidialBridgeService {
                             else if (fnItem.name === 'transfer_to_live_agent') {
                                 const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(campaign);
                                 const transferDisposition = disposition || 'XFER';
-                                if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
+                                const sanitized = conversationMemory.sanitizeTransferArgs(args);
+                                const qualificationBlockers = conversationMemory.qualificationBlockers(campaign);
+                                if (qualificationBlockers.length) {
+                                    resultPayload = { ok: false, error: `Transfer blocked: ${qualificationBlockers.join(' ')} No transfer was scheduled.`, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}) };
+                                }
+                                else if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
                                     resultPayload = { ok: false, error: `Transfer requires the allowed XFER disposition for selected campaign ${campaign.viciCampaign}; current disposition is ${transferDisposition}. No transfer was scheduled.` };
                                 }
                                 else {
                                     if (!disposition)
                                         disposition = 'XFER';
+                                    args = sanitized.args;
                                     const reason = String(args.reason || 'Qualified & interested lead');
                                     const metaParts = [
                                         args.prospect_name ? `Name:${args.prospect_name}` : hydratedLead.first_name ? `Name:${hydratedLead.first_name}` : '',
@@ -1471,7 +1524,7 @@ class VicidialBridgeService {
                                     ].filter(Boolean);
                                     const noteSummary = `[AI Qualified${metaParts.length ? ' | ' + metaParts.join(' | ') : ''}] ${reason}`;
                                     // Push structured metadata into vicidial_list BEFORE transfer so closer screen-pop shows Name, Age, Medicare Status & Hook Type!
-                                    await viciClient.updateLeadDisposition({
+                                    const notesUpdate = await viciClient.updateLeadDisposition({
                                         leadId: summary.leadId,
                                         phone: summary.phone,
                                         status: disposition,
@@ -1495,8 +1548,10 @@ class VicidialBridgeService {
                                     }, 9000);
                                     resultPayload = {
                                         ok: true,
+                                        ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
+                                        ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
                                         transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
-                                        closer_screen_pop_notes_saved: true,
+                                        closer_screen_pop_notes_saved: notesUpdate.ok,
                                         metadata_passed: {
                                             prospect_name: args.prospect_name || hydratedLead.first_name || null,
                                             confirmed_age: args.confirmed_age || null,
@@ -1516,7 +1571,7 @@ class VicidialBridgeService {
                                 resultPayload = { ok: true, action: 'hangup_after_speech' };
                             }
                             else {
-                                const fnConfig = state.functions.find((f) => f.name === fnItem.name);
+                                const fnConfig = state.functions.find((f) => f.name === fnItem.name && agent.fnIds.includes(f.id));
                                 const whRes = await (0, webhook_executor_1.executeCustomFunctionWebhook)(fnConfig, args, {
                                     callId,
                                     callerCode: parsedCaller.callerCode,
@@ -1536,12 +1591,14 @@ class VicidialBridgeService {
                                     }
                                     : whRes.data;
                             }
+                            if (closed || cancelledFnIds.has(fnItem.id))
+                                continue;
                             functionCalls.push({
                                 ts: new Date().toISOString(),
                                 id: fnItem.id,
                                 name: fnItem.name,
                                 args,
-                                status: 'completed',
+                                status: resultPayload.ok === false ? 'failed' : 'completed',
                                 response: resultPayload,
                             });
                             this.broadcastMonitor({
@@ -1593,7 +1650,10 @@ class VicidialBridgeService {
                 if (!closed)
                     finalizeSession('deepgram_ws_error').catch(() => { });
             });
-        })();
+        })().catch((err) => {
+            this.stats.lastError = `Bridge session failed: ${err?.message || 'unknown error'}`;
+            void finalizeSession('bridge_session_error').catch(() => { });
+        });
         return {
             onCallerPcm8k: (pcm8k) => {
                 if (closed || pcm8k.length === 0)

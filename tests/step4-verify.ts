@@ -33,11 +33,6 @@ function configureTestServices() {
     if (String(campaign.complianceRules || '').trim().length < 20 || /^REVIEW REQUIRED\b/i.test(campaign.complianceRules || '')) {
       campaign.complianceRules = 'Reviewed step 4 fixture rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
     }
-    campaign.presenceCheckText = campaign.presenceCheckText || 'Can you hear me okay?';
-    campaign.deadAirTimeoutSec = 8;
-    campaign.deadAirDisposition = 'DAIR';
-    if (!String(campaign.dispos || '').split(/[ ,]+/).includes('DAIR')) campaign.dispos = `${campaign.dispos},DAIR`;
-    campaign.deadAirDispositionVerified = true;
   }
   saveConsoleState(state, 'Test setup: ready campaigns and services');
   const primaryIndex = 0;
@@ -108,7 +103,7 @@ async function run() {
   const prevAllowedIps = process.env.BRIDGE_ALLOWED_IPS;
   const prevWhSecret = process.env.CUSTOM_WEBHOOK_SECRET;
   const prevTrustProxy = process.env.TRUST_PROXY;
-  // The iframe-cookie check below simulates a known local TLS proxy.
+  // The HTTPS cookie check below simulates a known local TLS proxy.
   process.env.TRUST_PROXY = 'loopback';
 
   const { server, viciBridge: maybeBridge } = createServerWithSimulator({
@@ -487,10 +482,6 @@ async function run() {
     const medAgent = freshDefaults.agents.find((a) => a.id === 'a_medicare');
     const medCamp = freshDefaults.campaigns.find((c) => c.id === 'c_medicare');
     if (!medAgent || !medCamp) throw new Error('Expected a_medicare agent & c_medicare campaign in defaults');
-    medCamp.deadAirDisposition = 'DAIR';
-    medCamp.deadAirDispositionVerified = true;
-    medCamp.deadAirTimeoutSec = 8;
-    if (!medCamp.dispos.split(/[ ,]+/).includes('DAIR')) medCamp.dispos += ',DAIR';
 
     // Sync Medicare agent/campaign/fn_xfer into persisted SQLite state if not yet present
     const curDbState = getConsoleState();
@@ -554,6 +545,31 @@ async function run() {
       `Expected structured metadata (Name, Age, Medicare Status, Hook Type) in VICIdial update_lead comments, got: ${medUpdateLeadReq?.query.comments}`
     );
 
+    // Regression: Medicare confirmation alone qualifies; no age is asked or invented.
+    const medNoAgeRes = await fetch(`${httpBase}/api/vici/simulate-call`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transport: 'sip_rtp', campaignId: fixture.medicareCampaignId, scenario: 'medicare_qualified_no_age_xfer', upstream: 'mock_ai' }),
+    });
+    const medNoAge = (await medNoAgeRes.json()) as any;
+    assert(medNoAge.ok && medNoAge.cdr?.transferredTo === 'ingroup:MED_CLOSERS', `Expected no-age Medicare transfer, got ${JSON.stringify(medNoAge.cdr)}`);
+    const noAgeComments = ((medNoAge.viciRequestsReceived as any[]).filter((r) => r.query.function === 'update_lead').pop()?.query?.comments) || '';
+    assert(noAgeComments.includes('Medicare:Part A') && !noAgeComments.includes('Age:'), `No-age transfer must not invent an age: ${noAgeComments}`);
+    const noAgeXferFn = medNoAge.cdr?.functionCalls?.find((f: any) => f.name === 'transfer_to_live_agent');
+    assert(noAgeXferFn?.args?.confirmed_age === undefined, 'No-age transfer args must omit confirmed_age');
+
+    // Regression: a model-invented age and over-specific Medicare part are guarded.
+    const medGuardRes = await fetch(`${httpBase}/api/vici/simulate-call`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transport: 'audiosocket', campaignId: fixture.medicareCampaignId, scenario: 'medicare_fabricated_age_xfer', upstream: 'mock_ai' }),
+    });
+    const medGuard = (await medGuardRes.json()) as any;
+    assert(medGuard.ok && medGuard.cdr?.transferredTo === 'ingroup:MED_CLOSERS', `Expected guarded Medicare transfer, got ${JSON.stringify(medGuard.cdr)}`);
+    const guardComments = ((medGuard.viciRequestsReceived as any[]).filter((r) => r.query.function === 'update_lead').pop()?.query?.comments) || '';
+    assert(guardComments.includes('Medicare:Part A') && !guardComments.includes('Part A B') && !guardComments.includes('Part A & B') && !guardComments.includes('Age:'), `Fabricated metadata must be stripped/downgraded: ${guardComments}`);
+    const guardXferFn = medGuard.cdr?.functionCalls?.find((f: any) => f.name === 'transfer_to_live_agent');
+    assert(guardXferFn?.args?.confirmed_age === undefined && guardXferFn?.args?.medicare_status === 'Part A', `Unexpected guarded args: ${JSON.stringify(guardXferFn?.args)}`);
+    assert(guardXferFn?.response?.omitted_unverified_fields?.includes('confirmed_age') && guardXferFn?.response?.corrected_fields?.includes('medicare_status'), `Expected guard reporting: ${JSON.stringify(guardXferFn?.response)}`);
+
     // Test Medicare Spanish Language Barrier (LANG) & Underage 61 Hard Stop (DQ)
     const medLangRes = await fetch(`${httpBase}/api/vici/simulate-call`, {
       method: 'POST',
@@ -582,7 +598,7 @@ async function run() {
     assert(medDq.ok && medDq.cdr?.disposition === 'DQ', `Expected DQ disposition for age 61, got ${medDq.cdr?.disposition}`);
 
     console.log(
-      '✓ [9/10] Medicare Agent (a_medicare) & MEDICARE Campaign (88002 / RA 9002 -> MED_CLOSERS, LANG Spanish barrier, DQ <65 hard-stop & metadata handoff) verified'
+      '✓ [9/10] Medicare Agent & MEDICARE Campaign (explicit-age, no-age, fabricated-age guard, LANG and DQ) verified'
     );
 
     // 10. Verify Users SignUp / SignIn Entry Gate (/ -> /signup when 0 users, SignUp -> /, SignOut -> /login, SignIn -> /)
@@ -646,16 +662,18 @@ async function run() {
       '✓ [10/11] Users SignUp / SignIn First-Page Entry Gate (/ -> /signup, Create Account, Console unlock, Sign Out -> /login & Sign In) verified'
     );
 
-    // 11. Verify Executive Command & Console Quality Dashboard, 3-Zone Header, Login Playing Waves & Demo Tunnel API
+    // 11. Verify Executive Command & Console Quality Dashboard, logo-only header, rail utilities, save dock, transparent login logo & demo tunnel API
     assert(
-      signupHtml.includes('id="login-brand-plaque"') && signupHtml.includes('class="eq-bar"'),
-      'Expected login/signup page to include active playing soundwave logo plaque (#login-brand-plaque + .eq-bar)'
+      signupHtml.includes('id="login-brand-plaque"') && signupHtml.includes('mma-cyan-signal.webp'),
+      'Expected login/signup page to include the transparent MMA logo plaque (#login-brand-plaque + WebP)'
     );
     assert(
       authedRootHtml.includes('<main id="m"') &&
+        authedRootHtml.includes('side-rail-footer') &&
         authedRootHtml.includes('hdr-tool-dock') &&
-        authedRootHtml.includes('hdr-commit-group'),
-      'Expected authenticated index.html to include the main workspace and 3-zone strategic header'
+        authedRootHtml.includes('id="save-dock"') &&
+        !authedRootHtml.includes('id="st"'),
+      'Expected authenticated index.html to include the main workspace, logo-only header, rail utility footer and hidden explicit save dock'
     );
     const telemRes = await fetch(`${httpBase}/api/telemetry/overview`, {
       headers: { Cookie: signedInCookie },
@@ -830,8 +848,8 @@ async function run() {
         '✓ [12/13] One-Click Local Speech Service Integration (/api/speech-service/test, /activate, Clone Sync & /api/tts/preview) verified'
       );
 
-      // 13. Verify iframe auth and that unsupported local speech does not fake an AI session.
-      const iframeLoginRes = await fetch(`${httpBase}/api/auth/login`, {
+      // 13. First-party HTTPS cookie sessions and honest local-speech rejection.
+      const httpsLoginRes = await fetch(`${httpBase}/api/auth/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -842,37 +860,37 @@ async function run() {
           password: 'StrongUserPass#2026',
         }),
       });
-      assert(iframeLoginRes.status === 200, `Expected 200 on HTTPS iframe login, got ${iframeLoginRes.status}`);
-      const iframeSetCookie = iframeLoginRes.headers.get('set-cookie') || '';
+      assert(httpsLoginRes.status === 200, `Expected 200 on HTTPS proxy login, got ${httpsLoginRes.status}`);
+      const httpsSetCookie = httpsLoginRes.headers.get('set-cookie') || '';
       assert(
-        iframeSetCookie.includes('SameSite=None') &&
-          iframeSetCookie.includes('Secure') &&
-          iframeSetCookie.includes('Partitioned'),
-        `Expected SameSite=None; Secure; Partitioned on HTTPS proxy login, got: ${iframeSetCookie}`
+        /;\s*SameSite=Lax/i.test(httpsSetCookie) && /;\s*Secure/i.test(httpsSetCookie) &&
+          !/;\s*Partitioned/i.test(httpsSetCookie),
+        `Expected a first-party SameSite=Lax; Secure cookie, got: ${httpsSetCookie}`
       );
-      const iframeLoginJson = (await iframeLoginRes.json()) as any;
-      assert(
-        typeof iframeLoginJson.token === 'string' && iframeLoginJson.token.length > 16,
-        'Expected session token in /api/auth/login JSON response for cookie-blocked iframes'
-      );
+      const httpsCookie = httpsSetCookie.split(';')[0];
+      const httpsLoginJson = (await httpsLoginRes.json()) as any;
+      assert(httpsLoginJson.token === undefined, 'Login JSON must not expose the browser session secret');
 
-      // Zero-cookie document handoff + Bearer API + authenticated simulator rejection
+      // Cookie-based document/API access; query-string handoffs are not credentials.
+      const cookieRootRes = await fetch(`${httpBase}/`, {
+        headers: { Cookie: httpsCookie },
+        redirect: 'manual',
+      });
+      assert(cookieRootRes.status === 200, `Expected cookie-authenticated GET /, got ${cookieRootRes.status}`);
+      const sessionToken = decodeURIComponent(httpsCookie.slice(httpsCookie.indexOf('=') + 1));
       const tokenOnlyRootRes = await fetch(
-        `${httpBase}/?vac_token=${encodeURIComponent(iframeLoginJson.token)}`,
+        `${httpBase}/?vac_token=${encodeURIComponent(sessionToken)}`,
         { redirect: 'manual' }
       );
-      assert(
-        tokenOnlyRootRes.status === 200,
-        `Expected 200 on cookie-less GET /?vac_token=..., got ${tokenOnlyRootRes.status}`
-      );
-      const bearerStateRes = await fetch(`${httpBase}/api/state`, {
-        headers: { Authorization: `Bearer ${iframeLoginJson.token}` },
+      assert(tokenOnlyRootRes.status === 302, 'A URL token without a cookie must not unlock the console');
+      const cookieStateRes = await fetch(`${httpBase}/api/state`, {
+        headers: { Cookie: httpsCookie },
       });
-      assert(bearerStateRes.status === 200, `Expected 200 on Bearer /api/state, got ${bearerStateRes.status}`);
+      assert(cookieStateRes.status === 200, `Expected 200 on cookie /api/state, got ${cookieStateRes.status}`);
 
       const simStreamCheck = await new Promise<{ errorCode: string; started: boolean; audioBytes: number; transcript: boolean }>(
         (resolve, reject) => {
-          const ws = new WebSocket(`${wsBase}/ws/simulator?token=${encodeURIComponent(iframeLoginJson.token)}`);
+          const ws = new WebSocket(`${wsBase}/ws/simulator`, { headers: { Cookie: httpsCookie } });
           let errorCode = '';
           let started = false;
           let audioBytes = 0;
@@ -893,7 +911,7 @@ async function run() {
       assert(simStreamCheck.errorCode === 'LOCAL_SPEECH_AGENT_UNAVAILABLE', 'Expected local speech rejection');
       assert(!simStreamCheck.started && simStreamCheck.audioBytes === 0 && !simStreamCheck.transcript,
         'Unsupported local speech must not produce a started session, audio or transcript');
-      console.log('✓ [13/13] Cross-site iframe auth & honest local speech simulator rejection verified');
+      console.log('✓ [13/13] First-party HTTPS cookies & honest local speech simulator rejection verified');
     } finally {
       await fetch(`${httpBase}/api/state`, {
         method: 'PUT',

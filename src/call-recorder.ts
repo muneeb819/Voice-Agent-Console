@@ -104,7 +104,10 @@ export class StereoCallRecorder8k {
       return null;
     }
 
-    fs.mkdirSync(RECORDINGS_DIR, { recursive: true });
+    fs.mkdirSync(RECORDINGS_DIR, { recursive: true, mode: 0o700 });
+    const dirStat = fs.lstatSync(RECORDINGS_DIR);
+    if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) throw new Error('Recording directory is not a private directory');
+    fs.chmodSync(RECORDINGS_DIR, 0o700);
     const safeId = callId.replace(/[^a-zA-Z0-9._-]/g, '_');
     const fileName = `${safeId}.wav`;
     const filePath = path.join(RECORDINGS_DIR, fileName);
@@ -159,7 +162,10 @@ export class StereoCallRecorder8k {
       outOffset += 4;
     }
 
-    fs.writeFileSync(filePath, wavBuf);
+    const fd = fs.openSync(filePath, 'wx', 0o600);
+    try { fs.writeFileSync(fd, wavBuf); } finally { fs.closeSync(fd); }
+    this.callerChunks = [];
+    this.botChunks = [];
     pruneOldRecordings();
 
     return {
@@ -178,7 +184,18 @@ export function resolveRecordingPath(fileOrCallId: string): string | null {
   const fileName = clean.endsWith('.wav') ? clean : `${clean}.wav`;
   if (!/^[a-zA-Z0-9._-]+\.wav$/.test(fileName)) return null;
   const full = path.join(RECORDINGS_DIR, fileName);
-  return fs.existsSync(full) ? full : null;
+  try {
+    const dir = fs.lstatSync(RECORDINGS_DIR);
+    const stat = fs.lstatSync(full);
+    return dir.isDirectory() && !dir.isSymbolicLink() && stat.isFile() && !stat.isSymbolicLink() ? full : null;
+  } catch { return null; }
+}
+
+export function removeBridgeRecording(fileName: string | null | undefined): void {
+  if (!fileName) return;
+  const full = resolveRecordingPath(fileName);
+  if (!full) return;
+  fs.unlinkSync(full);
 }
 
 export function pruneOldRecordings(maxKeep = MAX_STORED_RECORDINGS): void {
@@ -189,9 +206,11 @@ export function pruneOldRecordings(maxKeep = MAX_STORED_RECORDINGS): void {
       .filter((f) => f.endsWith('.wav'))
       .map((f) => {
         const full = path.join(RECORDINGS_DIR, f);
-        const st = fs.statSync(full);
+        const st = fs.lstatSync(full);
+        if (!st.isFile() || st.isSymbolicLink()) return null;
         return { full, mtimeMs: st.mtimeMs };
       })
+      .filter((entry): entry is { full: string; mtimeMs: number } => entry !== null)
       .sort((a, b) => b.mtimeMs - a.mtimeMs);
 
     for (const stale of files.slice(maxKeep)) {

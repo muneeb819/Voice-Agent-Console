@@ -10,6 +10,7 @@ exports.synthesizeTtsPreview = synthesizeTtsPreview;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const env_store_1 = require("./env-store");
+const http_limits_1 = require("./http-limits");
 const settings_builder_1 = require("./settings-builder");
 const speech_service_client_1 = require("./speech-service-client");
 const FEATURED_IDS = new Set([
@@ -221,7 +222,7 @@ async function fetchDeepgramVoiceCatalog(forceRefresh = false) {
                     if (apiKey && res.status === 401) {
                         throw new Error('DEEPGRAM_API_KEY was rejected (401 Unauthorized) by api.deepgram.com');
                     }
-                    return res.ok ? await res.json() : { tts: [], stt: [] };
+                    return res.ok ? JSON.parse(await (0, http_limits_1.readResponseText)(res, 4 * 1024 * 1024)) : { tts: [], stt: [] };
                 }
                 catch (e) {
                     if (String(e?.message || '').includes('401 Unauthorized'))
@@ -325,10 +326,10 @@ async function fetchAllowedSampleAudio(sampleUrl) {
         if (!/^audio\/(?:wav|x-wav|wave|mpeg|mp3|ogg|webm|mp4|x-m4a|aac|flac)(?:\s*;|$)/i.test(contentType)) {
             throw new Error('Upstream sample is not a supported audio type');
         }
-        const arr = await res.arrayBuffer();
-        if (!arr.byteLength)
+        const buffer = await (0, http_limits_1.readResponseBuffer)(res, 10 * 1024 * 1024);
+        if (!buffer.length)
             throw new Error('Upstream audio sample is empty');
-        return { buffer: Buffer.from(arr), contentType };
+        return { buffer, contentType };
     }
     catch (err) {
         const failure = new Error(`Voice sample unavailable: ${err?.message || 'upstream request failed'}`);
@@ -381,7 +382,7 @@ async function synthesizeTtsPreview(req) {
         });
         let res = await callSpeak(params);
         if (!res.ok && params.has('speed')) {
-            const bodyTxt = await res.text();
+            const bodyTxt = await (0, http_limits_1.readResponseText)(res, 4096);
             if (bodyTxt.includes('SPEED_NOT_SUPPORTED')) {
                 params.delete('speed');
                 res = await callSpeak(params);
@@ -394,15 +395,15 @@ async function synthesizeTtsPreview(req) {
             }
         }
         if (!res.ok) {
-            const bodyTxt = await res.text();
+            const bodyTxt = await (0, http_limits_1.readResponseText)(res, 4096);
             throw Object.assign(new Error(`Deepgram TTS error (${res.status}): ${bodyTxt.slice(0, 240)}`), {
                 statusCode: res.status === 401 ? 401 : 400,
                 code: 'DEEPGRAM_TTS_ERROR',
             });
         }
-        const arr = await res.arrayBuffer();
+        const buffer = await (0, http_limits_1.readResponseBuffer)(res, 20 * 1024 * 1024);
         return {
-            buffer: Buffer.from(arr),
+            buffer,
             contentType: res.headers.get('content-type') || 'audio/mpeg',
             usedModel: model,
         };
@@ -427,13 +428,13 @@ async function synthesizeTtsPreview(req) {
             signal: AbortSignal.timeout(15000),
         });
         if (!res.ok) {
-            const errTxt = await res.text();
+            const errTxt = await (0, http_limits_1.readResponseText)(res, 4096);
             throw Object.assign(new Error(`ElevenLabs TTS error (${res.status}): ${errTxt.slice(0, 200)}`), {
                 statusCode: 400,
             });
         }
         return {
-            buffer: Buffer.from(await res.arrayBuffer()),
+            buffer: await (0, http_limits_1.readResponseBuffer)(res, 20 * 1024 * 1024),
             contentType: res.headers.get('content-type') || 'audio/mpeg',
             usedModel: req.model,
         };
@@ -459,13 +460,13 @@ async function synthesizeTtsPreview(req) {
             signal: AbortSignal.timeout(15000),
         });
         if (!res.ok) {
-            const errTxt = await res.text();
+            const errTxt = await (0, http_limits_1.readResponseText)(res, 4096);
             throw Object.assign(new Error(`Cartesia TTS error (${res.status}): ${errTxt.slice(0, 200)}`), {
                 statusCode: 400,
             });
         }
         return {
-            buffer: Buffer.from(await res.arrayBuffer()),
+            buffer: await (0, http_limits_1.readResponseBuffer)(res, 20 * 1024 * 1024),
             contentType: 'audio/wav',
             usedModel: req.model,
         };

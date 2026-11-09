@@ -20,7 +20,7 @@ EXPOSE 8000
 HEALTHCHECK --interval=20s --timeout=5s --start-period=120s --retries=3 \
   CMD curl -fsS http://localhost:8000/healthz || exit 1
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["uvicorn", "--factory", "app.main:app_factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["uvicorn", "--factory", "app.main:app_factory", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--ws-max-size", "1048576", "--limit-concurrency", "100"]
 
 # ---- Isolated Chatterbox Turbo voice-cloning worker target ----
 FROM base AS clone
@@ -33,4 +33,4 @@ USER speech
 EXPOSE 8100
 HEALTHCHECK --interval=20s --timeout=5s --start-period=120s --retries=3 \
   CMD curl -fsS http://localhost:8100/healthz || exit 1
-CMD ["uvicorn", "clone_service.app:app", "--host", "0.0.0.0", "--port", "8100", "--workers", "1"]
+CMD ["uvicorn", "clone_service.app:app", "--host", "0.0.0.0", "--port", "8100", "--workers", "1", "--ws-max-size", "1048576", "--limit-concurrency", "100"]

@@ -33,11 +33,6 @@ function configureTestServices() {
     if (String(campaign.complianceRules || '').trim().length < 20 || /^REVIEW REQUIRED\b/i.test(campaign.complianceRules || '')) {
       campaign.complianceRules = 'Reviewed bridge test rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
     }
-    campaign.presenceCheckText = campaign.presenceCheckText || 'Can you hear me okay?';
-    campaign.deadAirTimeoutSec = 8;
-    campaign.deadAirDisposition = 'DAIR';
-    if (!String(campaign.dispos || '').split(/[ ,]+/).includes('DAIR')) campaign.dispos = `${campaign.dispos},DAIR`;
-    campaign.deadAirDispositionVerified = true;
   }
   saveConsoleState(state, 'Test setup: ready campaigns and services');
   const campaign = state.campaigns[0];
@@ -365,6 +360,11 @@ async function run() {
     const logsRes = await fetch(`${httpBase}/api/vici/logs?limit=10`);
     const logsJson = (await logsRes.json()) as any;
     assert(logsJson.ok && logsJson.logs.length >= 4, `Expected >=4 persisted bridge_calls CDRs in SQLite, got ${logsJson.logs?.length}`);
+    const filteredLogsRes = await fetch(`${httpBase}/api/vici/logs?limit=200&campaignId=${encodeURIComponent(fixture.campaignId)}`);
+    const filteredLogsJson = (await filteredLogsRes.json()) as any;
+    assert(filteredLogsRes.ok && filteredLogsJson.ok && filteredLogsJson.logs.length >= 1, 'Expected campaign-filtered bridge history');
+    assert(filteredLogsJson.logs.every((row: any) => row.campaignId === fixture.campaignId), 'Campaign filter must not mix other campaigns');
+    assert(/no-store/.test(filteredLogsRes.headers.get('cache-control') || ''), 'Campaign history must not be cached');
     assert(
       monitorEvents.some((e) => e.type === 'call_started') && monitorEvents.some((e) => e.type === 'call_ended'),
       'Expected /ws/vici-monitor to stream live call_started & call_ended telemetry'

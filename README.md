@@ -9,6 +9,16 @@ Unified production **Node.js + TypeScript** platform combining:
 
 ---
 
+## Public GitHub Pages demo
+
+**https://muneeb819.github.io/Voice-Agent-Console/**
+
+This is the browser-only static demo, published from `public/` after changes land on `main`. Its accounts and saved settings stay in the current browser; it does **not** deploy the Node API, WebSocket backend, or VICIdial bridge. Do not enter production credentials or rely on browser-local accounts for security. See the deployment section below for the full server requirements.
+
+`public/` is the canonical frontend. After changing it, run `npm run sync:static` to update the legacy `docs/` mirror, then `npm run build` and `npm test`. CI checks that both copies match and exercises static login/signup, cookie-only backend login, and legacy token cleanup.
+
+---
+
 ## 📂 Project Structure
 
 ```text
@@ -38,12 +48,13 @@ voice-agent-console/
 │   ├── index.html                # Single-Page Operator & Supervisor Console
 │   ├── styles.css                # Dark-mode responsive telemetry & studio styling
 │   ├── greetings.json             # Generated greeting catalog, also mirrored to docs/
-│   ├── opening.js                 # One-second listen/presence-check gate, also mirrored to docs/
+│   ├── opening.js                 # One-second listen/configured-opening gate, also mirrored to docs/
 │   └── app.js                    # Console UI, WebAudio engine, Wallboard & Live Bridge controls
 ├── deploy/
 │   ├── vicibox-install.sh        # One-command co-located ViciBox (OpenSUSE / Ubuntu / Debian) installer
 │   └── voice-agent-bridge.service # Hardened systemd service unit (Restart=always)
 ├── tests/
+│   ├── mock-audio-verify.ts      # Mock call PCM streaming, agent speaking UI, barge-in & cleanup
 │   ├── opening-verify.ts         # Composition, migration, timing, cancellation & early caller
 │   ├── bridge-opening-verify.ts  # Local AudioSocket/SIP+RTP timing and playback-drain fixtures
 │   ├── greetings-verify.ts       # Catalog, rotation, fallback and selection logging
@@ -70,7 +81,7 @@ The Console includes example outbound qualification bots with sample VICIdial ex
 | Slot | Agent | VICIdial Campaign | Dialplan Exten / Remote Agent | Closer In-Group | Key Gate & Compliance Rules |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **#1** | `Final Expense — Warm Intro` (`a1`) | `FETEST` (`c1`) | `88001` / `RA 9001` | `FE_CLOSERS` | Senior burial/final-expense screen (`50–85`), warm closer handoff, DNC compliance |
-| **#2** | `Medicare — Food & OTC Advisor` (`a_medicare`) | `MEDICARE` (`c_medicare`) | `88002` / `RA 9002` | `MED_CLOSERS` | Food & OTC Card hook, strict **Part A/B + Age `65–85`** hard-stop gate, `flux-general-multi` (`en,es`) instant Spanish `LANG` exit, verbatim `DNC` & scam-reassurance scripts, structured closer screen-pop metadata (`Name`, `Age`, `Medicare`, `Hook`) |
+| **#2** | `Medicare — Food & OTC Advisor` (`a_medicare`) | `MEDICARE` (`c_medicare`) | `88002` / `RA 9002` | `MED_CLOSERS` | Caller-confirmed **Medicare Part A/B** satisfies the sample campaign qualification step; the bot must not ask or infer age/DOB. Only a volunteered age outside the operator-defined `65–85` band disqualifies. Consent-based specialist handoff, `flux-general-multi` (`en,es`) Spanish `LANG` exit, DNC handling, and caller-stated-only closer metadata (`Name`, optional `Age`, `Medicare`, `Hook`) |
 
 ---
 
@@ -86,7 +97,11 @@ npm start
 # Or simply run ./start.sh (Linux/macOS) or start.bat (Windows)
 ```
 
-Open **`http://127.0.0.1:533`**. With no admin password or users, create the first account directly on loopback; proxied bootstrap is intentionally blocked. Once authentication is enabled, only a signed-in operator can create another account. All accounts currently have full operator privileges; there is no role separation.
+Open **`http://127.0.0.1:533`**. With no admin password or users, create the first account directly on loopback; proxied bootstrap is intentionally blocked. Once authentication is enabled, only a signed-in **owner or admin** can create another account. Accounts carry a role (`owner`, `admin`, `operator`, `qa`, `viewer`) and an active flag: privileged routes (secrets, state reset, release bundle, deploy script, provider verification, account administration, live-call hangup/transfer) require owner/admin, and `viewer` accounts are read-only. Roles gate actions, **not records** — all accounts still share one console state.
+
+Passwords for new or changed accounts must be at least 15 characters; existing shorter passwords keep working. Under **Account → Password & Sessions**, a signed-in account can rotate its password (which signs out every other device) or revoke its other sessions. Owners/admins can list accounts, change roles, disable accounts and revoke their sessions under `/api/users`; the last active owner cannot be disabled or demoted, and an `admin` cannot manage owner accounts or grant ownership. Disabling an account or demoting it to `viewer`/`qa` revokes its live sessions immediately.
+
+Troubleshooting: **[`docs/BACKEND-TROUBLESHOOTING.md`](./docs/BACKEND-TROUBLESHOOTING.md)** maps every real error code to its cause and fix. Security status: **[`docs/security/BACKEND-AUDIT-2026-11-09.md`](./docs/security/BACKEND-AUDIT-2026-11-09.md)**.
 
 ### Imported greetings and call rotation
 
@@ -94,11 +109,11 @@ Open **`http://127.0.0.1:533`**. With no admin password or users, create the fir
 - For each agent, set a **brief saved opening and identity** under **Agents** and save. For example: “Hi! This is Jessi from Example Services. How are you doing today?” Use your own verified identity. Rotation is enabled by default; a selected row varies the saved salutation and/or general question using suitable fragments or a short fallback, rather than appending the full imported greeting. To keep the saved opening unchanged, uncheck **Vary this opening using the imported greeting library** and save. Duplicates copy the source setting; newly created agents default to rotation on. Previews do not consume a selection.
 - Each bot randomly draws all 1,100 IDs without repeating until the pool is exhausted, avoiding the last ID at the next cycle boundary. The selector prefers a different composed wording from the preceding draw when another unused row permits it; different IDs can map to identical wording, so an occasional repeat remains possible, especially near the end of a cycle or with an unvaryable custom opening. Server-backed bridge calls and Live Bot tests share the bot's SQLite rotation across restarts and concurrent processes using the same database. Failed or interrupted starts can advance the rotation. Separate databases have separate rotations.
 - The campaign's spoken recording notice is **optional**. New agents and settings with no prior choice default to off; existing explicit choices are preserved. Change **Include the linked campaign recording notice** under **Agents** or **Live Bot**, then **Save & verify** to retain the per-agent choice. An unsaved Live Bot change applies to that test; bridge calls use saved settings. This controls the spoken notice only, not recording. A notice written inside the saved opening is not removed. Obtain any consent and make any disclosure required in your jurisdiction.
-- **Opening timing:** after the provider acknowledges settings, the app listens for caller speech for one full second while caller audio continues upstream. If the line is silent, it sends the selected campaign’s short presence-check once, then waits for a caller response; silence through the configured timeout triggers that campaign’s configured dead-air status and a hangup. A caller who speaks during the first second skips the check and receives a response to their actual turn. This is timed from provider readiness, not from the moment a telephone is answered; provider turn detection, message acceptance, network delay and playback remain variable, and offline tests cannot prove what a real caller heard.
+- **Opening timing:** after the provider acknowledges settings, the app listens for caller speech for one full second while caller audio continues upstream. A silent line then receives the configured opening once; an early caller turn takes priority and is answered without a duplicate opening. Silence alone never hangs up or applies a disposition. Comfort-silence PCM keep-alive remains enabled. This is timed from provider readiness, not from the moment a telephone is answered; provider turn detection, message acceptance, network delay and playback remain variable, and offline tests cannot prove what a real caller heard.
 - Selected IDs appear in Live Bot session details and saved server test history, bridge CDRs and CSV export. An ID records the selection, **not proof that audio was heard**. If selection fails or the library is empty, the saved opening is used and the session reports a warning. Lead placeholders are hydrated when enabled.
 - **Static hosting:** `docs/greetings.json` supports direct-browser Live Bot tests. Rotation is separate from server calls and shared only within that browser profile via IndexedDB. If storage is blocked, a temporary cycle is kept in the current tab and a warning is shown; clearing site data resets it. Static history is retained only for opted-in recorded tests.
 
-The exact old stock Nova and Food & OTC openings are migrated to shorter defaults; the exact old stock Medicare prompt's “already asked” line is corrected. Customized openings and prompts are not silently shortened or replaced. A long or multi-question custom opening can therefore remain long; edit it yourself if needed. The library's tone labels do not guarantee vocal prosody.
+The exact old stock Nova and Food & OTC openings are migrated to shorter defaults. Exact retired stock Medicare prompts, campaign rules and self-introductions are migrated to the current consent-handoff policy; Jessica keeps Jessica's identity. Customized openings, prompts, rules and introductions are not silently replaced. A long or multi-question custom opening can therefore remain long; edit it yourself if needed. The library's tone labels do not guarantee vocal prosody.
 
 **Review before placing calls:** the example Medicare / Food & OTC prompts and historical blueprint contain unverified representations, affiliations, eligibility rules and benefit claims, including state approval and card availability. Do not use these assertions without substantiation and appropriate review. Review all other agent scripts, identity, purpose, notice and consent requirements as well. The console does not verify them.
 
@@ -121,9 +136,16 @@ The original CSV is the source for the two browser catalogs. After intentionally
 
 Bridge loopback tests use a mock VICIdial API, so their transfer, disposition and DNC responses do not prove real updates. Historical bridge records do not reliably distinguish tests from live calls. **Run bridge loopback tests only on an isolated instance with no live calls**: they temporarily change shared bridge/provider routing, and configured custom webhooks may still execute for real. Static-site mode cannot run a bridge test and no longer displays its old synthetic browser-local bridge records as live CDRs.
 
-Scripted sandbox responses and the fake local-speech conversation have been removed. The local speech service still supports standalone health checks and voice previews, but it does not currently provide an LLM-backed Live Bot conversation. The avatar gestures are decorative text-driven animations; microphone byte counts show data queued to the socket, not proof of transcription. Review existing custom agent prompts and deployments before placing real calls; apart from the exact stock migration noted above, customized prompts are preserved.
+Scripted sandbox responses and the fake local-speech conversation have been removed. The local speech service still supports standalone health checks and voice previews, but it does not currently provide an LLM-backed Live Bot conversation. The decorative text-driven avatar was removed; the Live Bot stage shows provider-reported call state only. Microphone byte counts show data queued to the socket, not proof of transcription. Review existing custom agent prompts and deployments before placing real calls; apart from the exact stock migration noted above, customized prompts are preserved.
 
 The **Dashboard** is the first navigation item and the default page; existing `?tab=` links to individual sections still work. Its scores are configuration estimates, not certifications or proof of live connectivity.
+
+### Console layout, saving and Fleet Matrix
+
+- The header keeps only the centered, full landscape MMA banner for the active theme (the square icon remains the favicon). The banner is **live**: the waveform baked into the artwork is masked out and replaced with CSS-animated bars in the same windows, so the waves move continuously and brighten while an agent is speaking. Motion is compositor-only (`transform`), honors `prefers-reduced-motion` by restoring the original static artwork, and is decorative — it is not a meter of microphone or provider audio. Theme Studio is the small icon at the bottom-left of the side panel; API Keys and account/session links are at the bottom-right.
+- Side-rail sections, Dashboard KPI/compact pills, setup shortcuts and Fleet Matrix campaign/bot links are real anchors with project-relative `?tab=` URLs. Right-click → **Open link in new tab**, Ctrl/Cmd/Shift-click and middle-click use the browser's native behavior; a plain left click still navigates in-app without a full reload. New tabs load the last saved/shared configuration and the selected bot/campaign or Fleet detail from the URL, not another tab's uncommitted draft.
+- Configuration edits are explicit-save. Moving between sections does not force a save or discard the draft; the bottom-right **Save & Verify** dock appears only while changes need saving or a failed save needs retry. **Discard** restores the last saved state. The original tab can recover its own unsaved draft after a reload, but static-demo saved settings still live only in that browser profile.
+- **Fleet Matrix** starts with campaign names only. Selecting a campaign opens its live activity badge, configuration readiness, assigned bots, and retained-call analytics. **Active** means the connected bridge currently reports a live call for that campaign; **Inactive** means it reports none. Static demos show **Status unavailable** rather than inventing production activity. Analytics cover retained records only (up to 200 bridge calls and 100 browser tests across the console), not lifetime totals.
 
 See [opening test results](OPENING-TEST-RESULTS.md) for this release's commands, results and limitations. The tests use temporary data and environment files, loopback ports, synthetic credentials and mocked services. External `fetch` calls are blocked by default and the live Deepgram test is reported as skipped. A live run may incur provider charges and requires explicit opt-in with `VAC_TEST_LIVE=1` and a test key:
 
@@ -140,9 +162,9 @@ The full console needs a long-running Node 22.5+ service with WebSocket support.
 
 Browser API calls and WebSocket upgrades with an `Origin` must be same-origin; the console no longer advertises wildcard CORS. Non-browser clients may omit `Origin`. Local unauthenticated bootstrap and local PBX exemptions also require a loopback Host (`localhost`, `127.0.0.1`, or `[::1]`) to reduce DNS-rebinding risk. Deployments that need cross-origin access should use a same-origin reverse proxy rather than opening CORS. For a local cloudflared demo, configure an appropriate `TRUST_PROXY` (for example `loopback` when cloudflared connects directly from loopback) and restart the console; the launcher checks authentication and proxy readiness before opening the tunnel.
 
-The ViciBox installer preserves existing `.env` settings and creates a loopback-only configuration for a new installation. Review all listener, PBX, TLS and firewall settings before allowing remote traffic. `BRIDGE_SIP_PORT` overrides the saved console port, and an occupied port can cause a listener to select another port: check the actual bridge status and align the generated VICIdial configuration before placing calls. For wildcard binds with a remote PBX, set a reachable advertised `bridgeHost` explicitly. The `vercel.json`/GitHub Pages deployment is a static demo only: its browser-local accounts do **not** secure a server, and it provides no API, WebSocket backend or telephony bridge.
+The ViciBox installer preserves existing `.env` settings and creates a loopback-only configuration for a new installation. Review all listener, PBX, TLS and firewall settings before allowing remote traffic. `BRIDGE_SIP_PORT` overrides the saved console port. Occupied HTTP, AudioSocket, or SIP ports now fail startup instead of silently hopping to another port; align the generated VICIdial configuration with the configured listeners before placing calls. For wildcard binds with a remote PBX, set a reachable advertised `bridgeHost` explicitly. The `vercel.json`/GitHub Pages deployment is a static demo only: its browser-local accounts do **not** secure a server, and it provides no API, WebSocket backend or telephony bridge.
 
-The release bundle contains only files listed in `tools/release-manifest.json`; add new release files to that manifest. Runtime data, credentials and symlinks are excluded. Analytics describe the retained 200 bridge and 100 simulator calls, not lifetime totals.
+The release bundle contains only files listed in `tools/release-manifest.json`; add new release files to that manifest. Transparent full-banner WebP assets are generated from the JPEG masters in `brand-source/` with `python3 tools/build-brand-assets.py` (dependencies: `tools/requirements-brand.txt`); `--check` verifies the committed RGBA pixels and alpha cut in CI. The masters are not shipped as browser assets. Runtime data, credentials and symlinks are excluded. Analytics describe the retained 200 bridge and 100 simulator calls, not lifetime totals.
 
 ---
 

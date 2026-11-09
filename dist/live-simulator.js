@@ -37,6 +37,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.attachLiveSimulator = attachLiveSimulator;
+const auth_guard_1 = require("./auth-guard");
 const crypto_1 = __importDefault(require("crypto"));
 const ws_1 = __importStar(require("ws"));
 const db_1 = require("./db");
@@ -44,6 +45,8 @@ const opening_1 = require("./opening");
 const defaults_1 = require("./defaults");
 const env_store_1 = require("./env-store");
 const settings_builder_1 = require("./settings-builder");
+const persona_1 = require("./persona");
+const campaign_assignment_1 = require("./campaign-assignment");
 const webhook_executor_1 = require("./webhook-executor");
 function interpolateEnvPlaceholders(obj) {
     if (typeof obj === 'string') {
@@ -57,7 +60,7 @@ function interpolateEnvPlaceholders(obj) {
                 return (0, env_store_1.getSecret)('GROQ_API_KEY');
             if (varName === 'CARTESIA_KEY')
                 return (0, env_store_1.getSecret)('CARTESIA_API_KEY');
-            return process.env[varName] || '';
+            return ''; // unknown environment variables are not provider secrets
         });
     }
     if (Array.isArray(obj))
@@ -102,9 +105,17 @@ function hydrateLeadIntoPromptAndGreeting(settings, agent, campaign, lead) {
 }
 function attachLiveSimulator(server, noServer = false) {
     const wss = noServer
-        ? new ws_1.WebSocketServer({ noServer: true })
-        : new ws_1.WebSocketServer({ server, path: '/ws/simulator' });
-    wss.on('connection', (clientWs) => {
+        ? new ws_1.WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024, perMessageDeflate: false })
+        : new ws_1.WebSocketServer({ server, path: '/ws/simulator', maxPayload: 4 * 1024 * 1024, perMessageDeflate: false });
+    wss.on('connection', (clientWs, req) => {
+        if ((0, auth_guard_1.getAuthenticatedUser)(req)?.role === 'viewer') {
+            clientWs.close(1008, 'Read-only account');
+            return;
+        }
+        if (wss.clients.size > 64) {
+            clientWs.close(1013, 'Simulator capacity reached');
+            return;
+        }
         const callId = `sim_${Date.now().toString(36)}_${crypto_1.default.randomBytes(3).toString('hex')}`;
         const startedAtIso = new Date().toISOString();
         const startedAtMs = Date.now();
@@ -118,7 +129,32 @@ function attachLiveSimulator(server, noServer = false) {
         let pendingEndTimer = null;
         let connectTimer = null;
         let openingGate = null;
+        let heartbeatTimer = null;
+        let startTimer = null;
+        let alive = true;
+        let messageWindow = Date.now();
+        let messageCount = 0;
+        let preSettingsBytes = 0;
+        clientWs.on('pong', () => { alive = true; });
+        startTimer = setTimeout(() => { if (!started && !closed) {
+            sendFatalError('START_TIMEOUT', 'No call start message was received.');
+            finalizeCall('start_timeout');
+        } }, 15000);
+        heartbeatTimer = setInterval(() => {
+            if (!(0, auth_guard_1.isRequestAuthorized)(req)) {
+                finalizeCall('session_revoked');
+                return;
+            }
+            if (!alive) {
+                clientWs.terminate();
+                return;
+            }
+            alive = false;
+            if (clientWs.readyState === ws_1.default.OPEN)
+                clientWs.ping();
+        }, 30000);
         let activeState = null;
+        let persistedFunctions = [];
         let activeAgent = null;
         let activeCampaign;
         let selectedGreeting = null;
@@ -141,6 +177,7 @@ function attachLiveSimulator(server, noServer = false) {
         let pendingEndFunctionId = null;
         let fatalErrorMessage = null;
         let suppressStaleAgentAudio = false;
+        const conversationMemory = (0, persona_1.createConversationMemory)();
         const cancelledFnIds = new Set();
         const activeFunctionAborts = new Map();
         const pendingPreSettingsAudio = [];
@@ -148,6 +185,10 @@ function attachLiveSimulator(server, noServer = false) {
         const transcript = [];
         const functionCalls = [];
         const sendClientJson = (payload) => {
+            if (clientWs.bufferedAmount > 8 * 1024 * 1024) {
+                clientWs.close(1013, 'Client is not consuming events');
+                return;
+            }
             if (clientWs.readyState === ws_1.default.OPEN) {
                 clientWs.send(JSON.stringify(payload));
             }
@@ -161,6 +202,10 @@ function attachLiveSimulator(server, noServer = false) {
             });
         };
         const sendClientAudio = (pcmChunk) => {
+            if (clientWs.bufferedAmount > 8 * 1024 * 1024) {
+                clientWs.close(1013, 'Client is not consuming audio');
+                return;
+            }
             if (clientWs.readyState === ws_1.default.OPEN) {
                 rxAudioBytes += pcmChunk.length;
                 if (awaitingFirstAudioForTurn && lastUserTurnTs !== null) {
@@ -182,7 +227,9 @@ function attachLiveSimulator(server, noServer = false) {
         };
         const recordTranscript = (role, content, extra = {}) => {
             const ts = new Date().toISOString();
-            transcript.push({ ts, role, content });
+            if (transcript.length >= 2000)
+                transcript.shift();
+            transcript.push({ ts, role, content: content.slice(0, 16000) });
             sendClientJson({
                 type: 'transcript',
                 ts,
@@ -214,7 +261,9 @@ function attachLiveSimulator(server, noServer = false) {
                 sendClientJson({ type: 'function_call', ...entry });
                 return;
             }
-            const fnConfig = activeState?.functions.find((f) => f.name === fnReq.name);
+            // Drafts may change prompts, but executable webhook destinations/headers
+            // must come from persisted configuration reviewed by an administrator.
+            const fnConfig = persistedFunctions.find((f) => f.name === fnReq.name);
             const enabled = Boolean(fnConfig && activeAgent?.fnIds.includes(fnConfig.id));
             let resultPayload;
             if (!enabled) {
@@ -233,15 +282,22 @@ function attachLiveSimulator(server, noServer = false) {
                     };
             }
             else if (fnReq.name === 'transfer_to_live_agent') {
+                const sanitized = conversationMemory.sanitizeTransferArgs(parsedArgs);
+                parsedArgs = sanitized.args;
+                const blockers = conversationMemory.qualificationBlockers(activeCampaign);
                 const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(activeCampaign);
-                resultPayload = !allowedCodes.includes('XFER')
-                    ? { ok: false, error: 'XFER is not allowed by the explicitly selected campaign. No transfer was simulated.' }
-                    : {
-                        ok: false,
-                        simulated: true,
-                        requested_target: activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : null,
-                        error: 'Browser tests cannot transfer a real call. No VICIdial or PBX transfer was made.',
-                    };
+                resultPayload = blockers.length
+                    ? { ok: false, simulated: true, error: `Transfer blocked: ${blockers.join(' ')} No transfer was simulated.`, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}) }
+                    : !allowedCodes.includes('XFER')
+                        ? { ok: false, error: 'XFER is not allowed by the explicitly selected campaign. No transfer was simulated.' }
+                        : {
+                            ok: false,
+                            simulated: true,
+                            requested_target: activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : null,
+                            error: 'Browser tests cannot transfer a real call. No VICIdial or PBX transfer was made.',
+                            ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
+                            ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
+                        };
             }
             else if (fnReq.name === 'end_call') {
                 awaitingHangupAudioDone = true;
@@ -332,6 +388,14 @@ function attachLiveSimulator(server, noServer = false) {
                 clearTimeout(connectTimer);
                 connectTimer = null;
             }
+            if (heartbeatTimer) {
+                clearInterval(heartbeatTimer);
+                heartbeatTimer = null;
+            }
+            if (startTimer) {
+                clearTimeout(startTimer);
+                startTimer = null;
+            }
             openingGate?.cancel();
             openingGate = null;
             for (const controller of activeFunctionAborts.values())
@@ -406,12 +470,23 @@ function attachLiveSimulator(server, noServer = false) {
         clientWs.on('message', (data, isBinary) => {
             if (closed)
                 return;
+            const nowMs = Date.now();
+            if (nowMs - messageWindow >= 1000) {
+                messageWindow = nowMs;
+                messageCount = 0;
+            }
+            if (++messageCount > 200) {
+                sendFatalError('MESSAGE_RATE_LIMIT', 'Too many simulator messages.');
+                finalizeCall('message_rate_limit');
+                return;
+            }
             if (isBinary) {
                 const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
                 txAudioBytes += buf.length;
                 lastBrowserAudioAt = Date.now();
                 if (!settingsApplied) {
-                    if (pendingPreSettingsAudio.length < 25) {
+                    if (pendingPreSettingsAudio.length < 25 && preSettingsBytes + buf.length <= 1024 * 1024) {
+                        preSettingsBytes += buf.length;
                         pendingPreSettingsAudio.push(buf);
                     }
                     return;
@@ -424,6 +499,8 @@ function attachLiveSimulator(server, noServer = false) {
             let msg;
             try {
                 msg = JSON.parse(data.toString());
+                if (!msg || typeof msg !== 'object' || Array.isArray(msg))
+                    throw new Error('Expected object');
             }
             catch {
                 sendFatalError('BAD_CLIENT_JSON', 'Invalid JSON message sent to /ws/simulator');
@@ -443,24 +520,24 @@ function attachLiveSimulator(server, noServer = false) {
                 return;
             }
             if (msg.type === 'inject_agent_message') {
-                const content = String(msg.content || '').trim();
+                const content = String(msg.content || '').trim().slice(0, 8000);
                 if (!content)
                     return;
                 suppressStaleAgentAudio = false;
                 if (dgWs && dgWs.readyState === ws_1.default.OPEN && settingsApplied) {
-                    openingGate?.agentTurn();
                     dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message: content }));
                 }
                 return;
             }
             if (msg.type === 'inject_user_message') {
-                const content = String(msg.content || '').trim();
+                const content = String(msg.content || '').trim().slice(0, 8000);
                 if (!content)
                     return;
                 suppressStaleAgentAudio = false;
                 const injectPayload = JSON.stringify({ type: 'InjectUserMessage', content });
                 if (!settingsApplied) {
-                    pendingInjectedMessages.push(injectPayload);
+                    if (pendingInjectedMessages.length < 32)
+                        pendingInjectedMessages.push(injectPayload);
                 }
                 else if (dgWs && dgWs.readyState === ws_1.default.OPEN) {
                     openingGate?.userTurn();
@@ -472,10 +549,15 @@ function attachLiveSimulator(server, noServer = false) {
             }
             if (msg.type === 'start' && !started) {
                 started = true;
+                if (startTimer) {
+                    clearTimeout(startTimer);
+                    startTimer = null;
+                }
                 const startMsg = msg;
                 allowWebhooks = startMsg.allowWebhooks === true;
                 recordingRequested = startMsg.recordAudio === true;
                 const persistedState = (0, db_1.getConsoleState)();
+                persistedFunctions = persistedState.functions;
                 activeState = startMsg.draftState ? (0, defaults_1.normalizeState)(startMsg.draftState) : persistedState;
                 // Live calls always use saved global provider/model pairs and provider connection settings,
                 // never unsaved draft overrides. Agent prompt/behavior drafts remain testable in the simulator.
@@ -504,12 +586,12 @@ function attachLiveSimulator(server, noServer = false) {
                     return;
                 }
                 const requestedCampaign = activeState.campaigns.find((c) => c.id === startMsg.campaignId);
-                if (!requestedCampaign || requestedCampaign.agentId !== requestedAgent.id) {
+                if (!requestedCampaign || !(0, campaign_assignment_1.campaignHasAgent)(requestedCampaign, requestedAgent.id)) {
                     sendFatalError('CAMPAIGN_ASSIGNMENT_MISMATCH', 'The selected campaign is not assigned to this bot. Assign it in Campaigns and retry.');
                     finalizeCall('campaign_assignment_mismatch');
                     return;
                 }
-                const campaignBlockers = (0, settings_builder_1.getCampaignCallReadinessBlockers)(activeState, requestedCampaign);
+                const campaignBlockers = (0, settings_builder_1.getCampaignCallReadinessBlockers)(activeState, requestedCampaign, requestedAgent);
                 if (campaignBlockers.length) {
                     sendFatalError('CAMPAIGN_NOT_READY', `Campaign “${requestedCampaign.name}” is not ready: ${campaignBlockers.join('; ')}.`);
                     finalizeCall('campaign_not_ready');
@@ -587,8 +669,10 @@ function attachLiveSimulator(server, noServer = false) {
                 for (const fn of rawSettings.agent.think.functions || [])
                     fn.defer_until_eot = true;
                 let wireSettings;
+                let openingText = '';
                 try {
                     const prepared = (0, opening_1.prepareDelayedOpening)(interpolateEnvPlaceholders(rawSettings));
+                    openingText = prepared.greeting;
                     wireSettings = prepared.settings;
                 }
                 catch (err) {
@@ -597,20 +681,16 @@ function attachLiveSimulator(server, noServer = false) {
                     return;
                 }
                 openingGate = (0, opening_1.createOpeningGate)({
-                    presenceCheck: activeCampaign?.presenceCheckText || 'Hello? Are you there? Can you hear me?',
-                    responseTimeoutMs: Math.max(1, Number(activeCampaign?.deadAirTimeoutSec || 8)) * 1000,
-                    sendPresenceCheck: (message) => {
+                    greeting: openingText,
+                    sendOpening: (message) => {
                         if (!closed && dgWs?.readyState === ws_1.default.OPEN) {
                             dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
                         }
                     },
                     playAudio: sendClientAudio,
-                    onDeadAir: () => {
-                        if (closed)
-                            return;
-                        detectedDisposition = activeCampaign?.deadAirDisposition || null;
-                        recordTranscript('system', `No caller response to campaign presence check. Simulated dead-air status ${detectedDisposition || '(unset)'}; no VICIdial update was made.`);
-                        finalizeCall('dead_air');
+                    onSendError: () => {
+                        if (!closed)
+                            sendClientJson({ type: 'warning', message: 'The configured opening could not be sent to Deepgram. Check the provider connection.' });
                     },
                     onOverflow: () => sendClientJson({ type: 'warning', message: 'Early provider audio exceeded the opening buffer and was dropped.' }),
                 });
@@ -630,7 +710,7 @@ function attachLiveSimulator(server, noServer = false) {
                     settings: displaySettings,
                 });
                 try {
-                    dgWs = new ws_1.default(targetUrl, { headers: wsHeaders, family: 4 });
+                    dgWs = new ws_1.default(targetUrl, { headers: wsHeaders, family: 4, maxPayload: 4 * 1024 * 1024, handshakeTimeout: 15000 });
                 }
                 catch (err) {
                     sendFatalError('UPSTREAM_WS_ERROR', `Could not open the Deepgram connection: ${err.message}`);
@@ -695,6 +775,14 @@ function attachLiveSimulator(server, noServer = false) {
                                 clearTimeout(connectTimer);
                                 connectTimer = null;
                             }
+                            if (heartbeatTimer) {
+                                clearInterval(heartbeatTimer);
+                                heartbeatTimer = null;
+                            }
+                            if (startTimer) {
+                                clearTimeout(startTimer);
+                                startTimer = null;
+                            }
                             lastBrowserAudioAt = Date.now();
                             sendClientJson({
                                 type: 'session_started',
@@ -713,6 +801,7 @@ function attachLiveSimulator(server, noServer = false) {
                             sendClientJson({ type: 'agent_state', state: 'listening' });
                             while (pendingPreSettingsAudio.length > 0) {
                                 const chunk = pendingPreSettingsAudio.shift();
+                                preSettingsBytes -= chunk.length;
                                 if (dgWs?.readyState === ws_1.default.OPEN)
                                     dgWs.send(chunk, { binary: true });
                             }
@@ -750,6 +839,7 @@ function attachLiveSimulator(server, noServer = false) {
                         case 'ConversationText': {
                             const role = evt.role === 'user' ? 'user' : 'assistant';
                             if (role === 'user') {
+                                conversationMemory.addUserText(String(evt.content || ''));
                                 openingGate?.userTurn();
                                 turns += 1;
                                 lastUserTurnTs = Date.now();
@@ -757,7 +847,7 @@ function attachLiveSimulator(server, noServer = false) {
                                 suppressStaleAgentAudio = false;
                             }
                             else {
-                                openingGate?.agentTurn();
+                                conversationMemory.addAssistantText(String(evt.content || ''));
                                 suppressStaleAgentAudio = false;
                             }
                             recordTranscript(role, String(evt.content || ''), {
@@ -766,20 +856,17 @@ function attachLiveSimulator(server, noServer = false) {
                             break;
                         }
                         case 'AgentThinking': {
-                            openingGate?.agentTurn();
                             lastThinkingTs = Date.now();
                             suppressStaleAgentAudio = false;
                             sendClientJson({ type: 'agent_state', state: 'thinking' });
                             break;
                         }
                         case 'AgentStartedSpeaking': {
-                            openingGate?.agentTurn();
                             suppressStaleAgentAudio = false;
                             sendClientJson({ type: 'agent_state', state: 'speaking' });
                             break;
                         }
                         case 'AgentAudioDone': {
-                            openingGate?.agentAudioDone();
                             openingGate?.afterRelease(() => {
                                 if (closed)
                                     return;
@@ -815,8 +902,13 @@ function attachLiveSimulator(server, noServer = false) {
                         }
                         case 'FunctionCallRequest': {
                             const list = Array.isArray(evt.functions) ? evt.functions : [];
-                            for (const fnItem of list) {
-                                executeClientFunction(fnItem);
+                            for (const fnItem of list.slice(0, 32)) {
+                                if (!fnItem || typeof fnItem.id !== 'string' || typeof fnItem.name !== 'string')
+                                    continue;
+                                void executeClientFunction(fnItem).catch(() => { if (!closed) {
+                                    sendFatalError('FUNCTION_ERROR', 'A function could not be executed.');
+                                    finalizeCall('function_error');
+                                } });
                             }
                             break;
                         }

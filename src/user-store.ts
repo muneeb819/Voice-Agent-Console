@@ -18,6 +18,8 @@ export interface SignupInput {
 }
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Password-only administrative access needs length, not composition rules.
+// Existing shorter hashes keep working; only new/changed passwords are gated.
 const MIN_PASSWORD_LENGTH = 15;
 const MAX_PASSWORD_LENGTH = 200;
 const MAX_NAME_LENGTH = 80;
@@ -58,21 +60,27 @@ function ensureSchema(): void {
 
 // ---------------------------------------------------------------- passwords
 
-function hashPassword(password: string): string {
+const SCRYPT_OPTIONS = { N: 16384, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
+const scryptAsync = (password: string, salt: Buffer, keylen: number): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    crypto.scrypt(password, salt, keylen, SCRYPT_OPTIONS, (err, derived) => err ? reject(err) : resolve(derived));
+  });
+
+async function hashPassword(password: string): Promise<string> {
   const salt = crypto.randomBytes(16);
-  const hash = crypto.scryptSync(password, salt, 64);
+  const hash = await scryptAsync(password, salt, 64);
   return `scrypt$${salt.toString('hex')}$${hash.toString('hex')}`;
 }
 
-function verifyPassword(password: string, stored: string): boolean {
+async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const parts = String(stored || '').split('$');
   if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
   const salt = Buffer.from(parts[1], 'hex');
   const expected = Buffer.from(parts[2], 'hex');
-  if (salt.length === 0 || expected.length === 0) return false;
+  if (salt.length < 16 || salt.length > 64 || expected.length !== 64) return false;
   let actual: Buffer;
   try {
-    actual = crypto.scryptSync(password, salt, expected.length);
+    actual = await scryptAsync(password, salt, 64);
   } catch {
     return false;
   }
@@ -144,7 +152,7 @@ export interface CreateUserResult {
  * operator otherwise. Returns a field error for invalid input or a duplicate
  * email; other database or password hashing errors can propagate.
  */
-export function createUser(input: SignupInput): CreateUserResult {
+export async function createUser(input: SignupInput): Promise<CreateUserResult> {
   ensureSchema();
 
   const email = normalizeEmail(input.email);
@@ -160,29 +168,27 @@ export function createUser(input: SignupInput): CreateUserResult {
   if (pwErr) return { ok: false, field: 'password', error: pwErr };
 
   const db = getDb();
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-  if (existing) {
-    return { ok: false, field: 'email', error: 'An account with this email already exists.' };
-  }
-
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
-  const role: PublicUser['role'] = countUsers() === 0 ? 'owner' : 'operator';
+  // Hash off the event loop, then decide ownership and insert under one write
+  // lock. Two simultaneous first signups must not both become owner.
+  const passwordHash = await hashPassword(password);
   try {
-    db.prepare(
-      'INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at, role, active) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)'
-    ).run(id, email, fullName, hashPassword(password), now, role);
+    const role = db.transactionImmediate(() => {
+      const count = Number((db.prepare('SELECT COUNT(*) AS n FROM users').get() as any)?.n || 0);
+      const assigned: PublicUser['role'] = count === 0 ? 'owner' : 'operator';
+      db.prepare(
+        'INSERT INTO users (id, email, full_name, password_hash, created_at, last_login_at, role, active) VALUES (?, ?, ?, ?, ?, NULL, ?, 1)'
+      ).run(id, email, fullName, passwordHash, now, assigned);
+      return assigned;
+    })();
+    return { ok: true, user: { id, email, fullName, createdAt: now, lastLoginAt: null, role, active: true } };
   } catch (err: any) {
     if (String(err?.message || '').toLowerCase().includes('unique')) {
       return { ok: false, field: 'email', error: 'An account with this email already exists.' };
     }
     throw err;
   }
-
-  return {
-    ok: true,
-    user: { id, email, fullName, createdAt: now, lastLoginAt: null, role, active: true },
-  };
 }
 
 export function findUserByEmail(rawEmail: unknown): PublicUser | null {
@@ -198,13 +204,15 @@ export function findUserByEmail(rawEmail: unknown): PublicUser | null {
  * for a missing account, inactive account, or invalid credentials. Database
  * errors propagate.
  */
-export function authenticateUser(rawEmail: unknown, password: string): PublicUser | null {
+export async function authenticateUser(rawEmail: unknown, password: string): Promise<PublicUser | null> {
   ensureSchema();
   const email = normalizeEmail(rawEmail);
   if (!email) return null;
   const row: any = getDb().prepare('SELECT * FROM users WHERE email = ?').get(email);
   if (!row) return null;
-  if (Number(row.active ?? 1) !== 1 || !verifyPassword(password, String(row.password_hash))) return null;
+  if (Number(row.active ?? 1) !== 1 || !(await verifyPassword(password, String(row.password_hash)))) return null;
+  const active = Number((getDb().prepare('SELECT active FROM users WHERE id = ?').get(row.id) as any)?.active ?? 0);
+  if (active !== 1) return null;
   const now = new Date().toISOString();
   getDb().prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(now, row.id);
   const user = rowToUser(row);
@@ -226,6 +234,10 @@ export function getUserById(id: string): PublicUser | null {
 
 // ---------------------------------------------------------------- sessions
 
+function userSessionHash(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
 export function createUserSession(userId: string): string {
   ensureSchema();
   const token = crypto.randomBytes(32).toString('hex');
@@ -233,7 +245,7 @@ export function createUserSession(userId: string): string {
   getDb()
     .prepare('INSERT INTO user_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
     .run(
-      token,
+      userSessionHash(token),
       userId,
       new Date(now).toISOString(),
       new Date(now + SESSION_TTL_MS).toISOString()
@@ -250,10 +262,15 @@ export function getUserBySessionToken(token?: string | null): PublicUser | null 
   if (!token || token.length < 32 || token.includes('.')) return null;
   ensureSchema();
   const db = getDb();
-  const row: any = db.prepare('SELECT * FROM user_sessions WHERE token = ?').get(token);
+  const hashed = userSessionHash(token);
+  let row: any = db.prepare('SELECT * FROM user_sessions WHERE token = ?').get(hashed);
+  if (!row && /^[a-f0-9]{64}$/.test(token)) {
+    row = db.prepare('SELECT * FROM user_sessions WHERE token = ?').get(token);
+    if (row) db.prepare('UPDATE user_sessions SET token = ? WHERE token = ?').run(hashed, token);
+  }
   if (!row) return null;
   if (new Date(String(row.expires_at)).getTime() <= Date.now()) {
-    db.prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
+    db.prepare('DELETE FROM user_sessions WHERE token = ?').run(hashed);
     return null;
   }
   const user = getUserById(String(row.user_id));
@@ -263,7 +280,7 @@ export function getUserBySessionToken(token?: string | null): PublicUser | null 
 export function destroyUserSession(token?: string | null): void {
   if (!token || token.includes('.')) return;
   ensureSchema();
-  getDb().prepare('DELETE FROM user_sessions WHERE token = ?').run(token);
+  getDb().prepare('DELETE FROM user_sessions WHERE token = ? OR token = ?').run(userSessionHash(token), token);
 }
 
 /** Immediately revokes every active browser/API session belonging to one user. */
@@ -295,4 +312,130 @@ export function revokeAdminSession(token: string, expiresAt: number): void {
   getDb()
     .prepare('INSERT OR REPLACE INTO revoked_admin_sessions (token_hash, expires_at) VALUES (?, ?)')
     .run(sessionTokenHash(token), new Date(expiresAt).toISOString());
+}
+
+// ------------------------------------------------- account & session lifecycle
+
+/** Lists accounts newest-last for the administrator account screen. */
+export function listUsers(): PublicUser[] {
+  ensureSchema();
+  const rows = getDb().prepare('SELECT * FROM users ORDER BY created_at ASC, id ASC').all() as any[];
+  return rows.map(rowToUser);
+}
+
+/** Counts unexpired sessions per account so revocation can be verified in the UI. */
+export function countUserSessions(userId: string): number {
+  ensureSchema();
+  const row: any = getDb()
+    .prepare('SELECT COUNT(*) AS n FROM user_sessions WHERE user_id = ? AND expires_at > ?')
+    .get(userId, new Date().toISOString());
+  return Number(row?.n || 0);
+}
+
+function countActiveOwners(): number {
+  const row: any = getDb()
+    .prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'owner' AND active = 1")
+    .get();
+  return Number(row?.n || 0);
+}
+
+/**
+ * Deletes every session for an account, optionally keeping the caller's own
+ * session so a password change does not sign out the tab that performed it.
+ * Returns the number of sessions removed.
+ */
+export function destroyUserSessions(userId: string, keepToken?: string | null): number {
+  ensureSchema();
+  const db = getDb();
+  if (keepToken && !keepToken.includes('.')) {
+    const result = db
+      .prepare('DELETE FROM user_sessions WHERE user_id = ? AND token != ?')
+      .run(userId, userSessionHash(keepToken));
+    return Number(result.changes || 0);
+  }
+  const result = db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
+  return Number(result.changes || 0);
+}
+
+export interface AccountChangeResult {
+  ok: boolean;
+  error?: string;
+  field?: 'currentPassword' | 'newPassword' | 'role' | 'active';
+  revokedSessions?: number;
+  user?: PublicUser;
+}
+
+/**
+ * Changes an account password after verifying the current one, then revokes
+ * every other session so a stolen session cannot outlive the change.
+ */
+export async function changeUserPassword(
+  userId: string,
+  currentPassword: string,
+  newPassword: string,
+  keepToken?: string | null
+): Promise<AccountChangeResult> {
+  ensureSchema();
+  const row: any = getDb().prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!row) return { ok: false, error: 'Account not found.' };
+  if (Number(row.active ?? 1) !== 1) return { ok: false, error: 'This account is disabled.' };
+  if (!(await verifyPassword(String(currentPassword ?? ''), String(row.password_hash)))) {
+    return { ok: false, field: 'currentPassword', error: 'Current password is incorrect.' };
+  }
+  const validation = validatePassword(newPassword);
+  if (validation) return { ok: false, field: 'newPassword', error: validation };
+  if (String(currentPassword ?? '') === String(newPassword ?? '')) {
+    return { ok: false, field: 'newPassword', error: 'Choose a different password from the current one.' };
+  }
+  const passwordHash = await hashPassword(String(newPassword));
+  const db = getDb();
+  // Re-read under the write lock: the account may have been disabled or the
+  // password changed by another tab while hashing was in flight.
+  const revoked = db.transactionImmediate(() => {
+    const current: any = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!current || Number(current.active ?? 1) !== 1) return null;
+    if (String(current.password_hash) !== String(row.password_hash)) return null;
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, userId);
+    return destroyUserSessions(userId, keepToken);
+  })();
+  if (revoked === null) {
+    return { ok: false, error: 'The account changed while updating the password. Sign in again and retry.' };
+  }
+  return { ok: true, revokedSessions: revoked, user: getUserById(userId) || undefined };
+}
+
+/** Enables or disables an account. Disabling immediately revokes its sessions. */
+export function setUserActive(userId: string, active: boolean): AccountChangeResult {
+  ensureSchema();
+  const db = getDb();
+  return db.transactionImmediate(() => {
+    const row: any = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!row) return { ok: false, error: 'Account not found.' };
+    if (!active && String(row.role) === 'owner' && Number(row.active ?? 1) === 1 && countActiveOwners() <= 1) {
+      return { ok: false, field: 'active' as const, error: 'The last active owner cannot be disabled.' };
+    }
+    db.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, userId);
+    const revokedSessions = active ? 0 : destroyUserSessions(userId);
+    return { ok: true, revokedSessions, user: getUserById(userId) || undefined };
+  })();
+}
+
+/** Changes an account role. The last active owner cannot be demoted. */
+export function setUserRole(userId: string, role: PublicUser['role']): AccountChangeResult {
+  ensureSchema();
+  if (!['owner', 'admin', 'operator', 'qa', 'viewer'].includes(role)) {
+    return { ok: false, field: 'role', error: 'Unknown role.' };
+  }
+  const db = getDb();
+  return db.transactionImmediate(() => {
+    const row: any = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!row) return { ok: false, error: 'Account not found.' };
+    if (String(row.role) === 'owner' && role !== 'owner' && Number(row.active ?? 1) === 1 && countActiveOwners() <= 1) {
+      return { ok: false, field: 'role' as const, error: 'The last active owner cannot be demoted.' };
+    }
+    db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, userId);
+    // A demotion must not leave a live session with the previous privileges.
+    const revokedSessions = role === 'viewer' || role === 'qa' ? destroyUserSessions(userId) : 0;
+    return { ok: true, revokedSessions, user: getUserById(userId) || undefined };
+  })();
 }

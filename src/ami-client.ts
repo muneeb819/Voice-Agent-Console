@@ -36,6 +36,14 @@ export class AsteriskAmiClient {
     fields: Record<string, string | number> = {},
     timeoutMs = 3500
   ): Promise<AmiActionResult> {
+    const validToken = (value: unknown) => /^[^\r\n\x00]+$/.test(String(value));
+    if (!validToken(actionName) || !validToken(this.username) || /[\r\n\x00]/.test(this.secret) ||
+        Object.entries(fields).some(([k, v]) => !validToken(k) || /[\r\n\x00]/.test(String(v)))) {
+      return { ok: false, response: 'InvalidInput', message: 'AMI action fields must not contain CR, LF, or NUL.', raw: '' };
+    }
+    if (!Number.isInteger(this.port) || this.port < 1 || this.port > 65535) {
+      return { ok: false, response: 'InvalidPort', message: 'AMI port must be between 1 and 65535.', raw: '' };
+    }
     if (!this.secret) {
       return {
         ok: false,
@@ -79,6 +87,7 @@ export class AsteriskAmiClient {
 
       socket.on('data', (chunk) => {
         buffer += chunk.toString('utf8');
+        if (buffer.length > 65536) { finish({ ok: false, response: 'ProtocolError', message: 'AMI response exceeded 64 KiB.', raw: '' }); return; }
 
         if (!bannerSeen && buffer.includes('\r\n')) {
           bannerSeen = true;

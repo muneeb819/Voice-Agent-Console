@@ -42,14 +42,10 @@ async function main() {
   const legacy = createDefaultState();
   const stockMed = legacy.agents.find((a) => a.id === 'a_medicare')!;
   const correctedPrompt = stockMed.prompt;
-  const oldPhase = '- Phase 1 (Delivered in Greeting — Food & OTC Card Hook):\n' +
-    '  You already asked if they have Medicare Part A and B to release their Food & OTC card.\n';
-  const newPhase = '- Phase 1 (After the opening):\n' +
-    '  If Medicare status has not been established, ask whether they have Medicare Part A or Part B; do not assume the opening asked this.\n';
-  assert.ok(correctedPrompt.includes(newPhase));
-  const oldPrompt = correctedPrompt.replace(newPhase, oldPhase);
-  assert.notEqual(oldPrompt, correctedPrompt);
-  stockMed.prompt = oldPrompt;
+  assert.ok(correctedPrompt.includes('NEVER ask the caller their age'), 'Current stock Medicare policy must not ask age after confirmation');
+  assert.ok(correctedPrompt.includes('Would you like me to connect you now?'), 'Current stock Medicare policy offers a consent handoff');
+  const customizedPrompt = `${correctedPrompt}\nAn operator customization.`;
+  stockMed.prompt = customizedPrompt;
   legacy.agents.find((a) => a.id === 'a_nova')!.greeting = oldNova;
   stockMed.greeting = oldMed;
   legacy.agents[0].greeting = custom;
@@ -57,17 +53,16 @@ async function main() {
   const normalized = normalizeState(legacy);
   assert.equal(normalized.agents.find((a) => a.id === 'a_nova')!.greeting, migrateStockOpening(oldNova));
   assert.equal(normalized.agents.find((a) => a.id === 'a_medicare')!.greeting, migrateStockOpening(oldMed));
-  assert.equal(normalized.agents.find((a) => a.id === 'a_medicare')!.prompt, correctedPrompt, 'The exact stock prompt no longer assumes a question was asked');
-  const customizedOldPrompt = `${oldPrompt}\nAn operator customization.`;
-  assert.equal(migrateStockMedicarePrompt(customizedOldPrompt, correctedPrompt), customizedOldPrompt, 'Customized prompts are not migrated');
-  assert.equal(migrateStockMedicarePrompt(oldPrompt, ''), oldPrompt, 'Never guess when the stock reference is unavailable');
+  assert.equal(normalized.agents.find((a) => a.id === 'a_medicare')!.prompt, customizedPrompt, 'Customized Medicare prompts are preserved');
+  assert.equal(migrateStockMedicarePrompt(customizedPrompt, correctedPrompt), customizedPrompt, 'Customized prompts are not migrated');
+  assert.equal(migrateStockMedicarePrompt(customizedPrompt, ''), customizedPrompt, 'Never guess when the stock reference is unavailable');
   assert.equal(normalized.agents[0].greeting, custom, 'Custom saved openings are never silently truncated');
   assert.equal(normalized.agents[0].injectCampaignDisclosure, true, 'Existing notice choice is preserved');
   assert.ok(createDefaultState().agents.every((a) => a.injectCampaignDisclosure === false));
   const missing: any = structuredClone(legacy);
   delete missing.agents[0].injectCampaignDisclosure;
   assert.equal(normalizeState(missing).agents[0].injectCampaignDisclosure, false);
-  console.log('✓ Exact stock openings and Medicare phase migrate; customized scripts and explicit notices remain intact');
+  console.log('✓ Exact stock openings migrate; current Medicare consent/no-age policy and customized scripts/explicit notices remain intact');
 
   const display = { type: 'Settings', agent: { greeting: selected, think: { prompt: 'Be helpful.' } } };
   const prepared = prepareDelayedOpening(display);
@@ -83,14 +78,11 @@ async function main() {
   const sent: Array<{ text: string; at: number }> = [];
   const played: Array<{ text: string; at: number }> = [];
   const callbacks: string[] = [];
-  const deadAir: string[] = [];
   const start = Date.now();
   const silentGate = createOpeningGate({
-    presenceCheck: 'Can you hear me okay?',
-    responseTimeoutMs: 45,
-    sendPresenceCheck: (text) => sent.push({ text, at: Date.now() }),
+    greeting: selected,
+    sendOpening: (text) => sent.push({ text, at: Date.now() }),
     playAudio: (buf) => played.push({ text: buf.toString(), at: Date.now() }),
-    onDeadAir: () => deadAir.push('dead-air'),
   });
   silentGate.start();
   silentGate.start();
@@ -98,50 +90,50 @@ async function main() {
   silentGate.afterRelease(() => callbacks.push('released'));
   await wait(250);
   assert.equal(sent.length, 0); assert.equal(played.length, 0); assert.deepEqual(callbacks, []);
-  await until(() => sent.length === 1, 'one-second presence check');
-  assert.ok(sent[0].at - start >= 990, 'The presence check waits a full second');
-  assert.equal(sent[0].text, 'Can you hear me okay?');
-  assert.equal(played.length, 0, 'Initial unsolicited audio is discarded rather than played over the check');
+  await until(() => sent.length === 1, 'one-second configured opening');
+  assert.ok(sent[0].at - start >= 990, 'The opening waits a full second');
+  assert.equal(sent[0].text, selected);
+  assert.equal(played.length, 0, 'Unsolicited early audio cannot replace the configured opening');
   assert.deepEqual(callbacks, ['released']);
-  silentGate.agentAudioDone();
-  await until(() => deadAir.length === 1, 'configured dead-air callback', 500);
-  assert.deepEqual(deadAir, ['dead-air']);
+  silentGate.audio(Buffer.from('provider speech'));
+  assert.equal(played.at(-1)?.text, 'provider speech', 'Provider PCM flows after release');
+  await wait(1200);
+  assert.equal(sent.length, 1, 'Silence does not retry or replace the opening');
   silentGate.cancel();
-  console.log('✓ Silent caller: one-second listen, one presence check, then one dead-air callback');
+  console.log('✓ Silent caller: one-second listen, one configured opening, continued streaming and no silence-triggered hangup');
 
   const early: string[] = [];
   const earlyStart = Date.now();
   const userGate = createOpeningGate({
-    presenceCheck: 'Can you hear me?',
-    sendPresenceCheck: () => early.push('presence'),
+    greeting: selected,
+    sendOpening: () => early.push('unexpected opening'),
     playAudio: (buf) => early.push(`audio:${buf}`),
   });
   userGate.start();
   userGate.audio(Buffer.from('interrupted'));
   userGate.userStarted();
   userGate.userTurn();
-  userGate.agentTurn();
   userGate.audio(Buffer.from('reply'));
   userGate.afterRelease(() => early.push('done'));
   await wait(250); assert.deepEqual(early, []);
   await until(() => early.includes('done'), 'early caller reply');
   assert.ok(Date.now() - earlyStart >= 990);
-  assert.deepEqual(early, ['audio:reply', 'done'], 'Do not inject a presence check or play stale audio after caller speech');
+  assert.deepEqual(early, ['audio:reply', 'done'], 'Do not inject an opening or play stale audio after an early caller turn');
   userGate.cancel();
 
   let cancelledSent = 0, cancelledCallbacks = 0;
-  const cancelled = createOpeningGate({ presenceCheck: 'Can you hear me?', sendPresenceCheck: () => cancelledSent++, playAudio: () => cancelledCallbacks++ });
+  const cancelled = createOpeningGate({ greeting: selected, sendOpening: () => cancelledSent++, playAudio: () => cancelledCallbacks++ });
   cancelled.start(); cancelled.audio(Buffer.from('x')); cancelled.afterRelease(() => cancelledCallbacks++); cancelled.cancel();
   await wait(1100); assert.equal(cancelledSent, 0); assert.equal(cancelledCallbacks, 0);
   console.log('✓ Early caller gets one response; stale audio is cleared and hangup cancels timers');
 
   let noiseSent = 0, overflow = 0;
-  const noise = createOpeningGate({ presenceCheck: 'Can you hear me?', sendPresenceCheck: () => noiseSent++, playAudio: () => {}, onOverflow: () => overflow++ });
+  const noise = createOpeningGate({ greeting: selected, sendOpening: () => noiseSent++, playAudio: () => {}, onOverflow: () => overflow++ });
   noise.start(); noise.userStarted(); noise.audio(Buffer.alloc(300000)); noise.audio(Buffer.alloc(300000));
   await wait(1100); assert.equal(noiseSent, 0); assert.equal(overflow, 1);
-  await until(() => noiseSent === 1, 'single no-transcript presence-check fallback', 3000);
+  await until(() => noiseSent === 1, 'bounded unfinished-onset opening fallback', 3000);
   await wait(50); assert.equal(noiseSent, 1); noise.cancel();
-  console.log('✓ False VAD onset gets one bounded presence fallback and early audio memory stays capped');
+  console.log('✓ An unfinished VAD onset gets a bounded opening fallback; early audio memory stays capped');
 
   // Real local simulator WebSockets, with a synthetic caller who speaks before
   // the one-second deadline and an end_call immediately after the mock reply.
@@ -158,11 +150,6 @@ async function main() {
   assert.ok(campaign, 'Opening fixture requires an explicit campaign');
   campaign.agentId = state.agents[0].id;
   campaign.complianceRules = 'Reviewed test campaign rules: be truthful, do not claim unverified benefits, and honor do-not-call requests immediately.';
-  campaign.presenceCheckText = 'Can you hear me okay?';
-  campaign.deadAirTimeoutSec = 8;
-  campaign.deadAirDisposition = 'DAIR';
-  campaign.deadAirDispositionVerified = true;
-  if (!campaign.dispos.split(/[ ,]+/).includes('DAIR')) campaign.dispos += ',DAIR';
   state.agents[0].greeting = 'Hi, this is Jessi from Example Services. How are you doing?';
   state.agents[0].injectCampaignDisclosure = false;
   saveConsoleState(state, 'Early caller timing fixture');

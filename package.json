@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "demo": "node tools/start-demo.js",
     "build": "tsc",
+    "sync:static": "node tools/sync-static-site.js",
     "test:step1": "node tools/run-tests.js step1",
     "test:step2": "node tools/run-tests.js step2",
     "test:step3": "node tools/run-tests.js step3",
@@ -28,6 +29,7 @@
     "@types/express": "^5.0.0",
     "@types/node": "^20.17.16",
     "@types/ws": "^8.5.14",
+    "jsdom": "^26.1.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }

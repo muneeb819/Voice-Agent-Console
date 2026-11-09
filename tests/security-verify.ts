@@ -173,6 +173,14 @@ async function run() {
     const operatorLogin = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: json, body: JSON.stringify({ email: 'second@example.test', password: 'Test-Password-123!' }) });
     assert.strictEqual(operatorLogin.status, 200);
     const operatorCookie = String(operatorLogin.headers.get('set-cookie') || '').split(';')[0];
+    assert.strictEqual((await operatorLogin.json() as any).token, undefined, 'Account login must not expose a browser session token');
+    const operatorToken = decodeURIComponent(operatorCookie.slice(operatorCookie.indexOf('=') + 1));
+    for (const param of ['token', 'vac_token']) {
+      assert.strictEqual((await fetch(`${base}/api/state?${param}=${encodeURIComponent(operatorToken)}`)).status, 401, 'Query-string user credentials must be rejected');
+      assert.strictEqual((await fetch(`${base}/?${param}=${encodeURIComponent(operatorToken)}`, { redirect: 'manual' })).status, 302, 'Query-string user credentials must not unlock the console');
+      assert.strictEqual(await websocketStatus(`${base.replace('http:', 'ws:')}/ws/simulator?${param}=${encodeURIComponent(operatorToken)}`, {}), 401, 'Query-string WebSocket credentials must be rejected');
+    }
+    assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Cookie: operatorCookie } })).status, 200, 'The first-party account cookie remains valid');
     assert.strictEqual((await fetch(`${base}/api/secrets`, { headers: { Cookie: operatorCookie } })).status, 403, 'Operators cannot read administrator secrets');
     assert.strictEqual((await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Cookie: operatorCookie }, body: account('third@example.test') })).status, 403, 'Operators cannot provision additional accounts');
     const weakPassword = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Cookie: firstCookie }, body: JSON.stringify({ email: 'weak@example.test', fullName: 'Weak Password', password: 'short123' }) });
@@ -194,7 +202,7 @@ async function run() {
     const adminLogin = () => fetch(`${base}/api/auth/login`, { method: 'POST', headers: { ...json, 'X-Forwarded-Proto': 'https' }, body: JSON.stringify({ password: 'dummy-admin-password' }) });
     const firstLogin = await adminLogin();
     assert.strictEqual(firstLogin.status, 200);
-    assert.strictEqual(firstLogin.headers.get('referrer-policy'), 'no-referrer', 'URLs containing handoff tokens must not become referrers');
+    assert.strictEqual(firstLogin.headers.get('referrer-policy'), 'no-referrer', 'Console URLs must not become referrers');
     assert(!/; Secure/i.test(firstLogin.headers.get('set-cookie') || ''), 'Untrusted forwarded proto must not set Secure cookie');
     const adminCookie1 = String(firstLogin.headers.get('set-cookie') || '').split(';')[0];
     const secondAdminLogin = await adminLogin();
@@ -204,6 +212,14 @@ async function run() {
     const adminToken1 = decodeURIComponent(adminCookie1.split('=').slice(1).join('='));
     const adminToken2 = decodeURIComponent(adminCookie2.split('=').slice(1).join('='));
     const cookie = adminCookie2;
+    for (const param of ['token', 'vac_token']) {
+      for (const credential of [adminToken2, 'dummy-admin-password']) {
+        const query = `?${param}=${encodeURIComponent(credential)}`;
+        assert.strictEqual((await fetch(`${base}/api/state${query}`)).status, 401, 'Query-string admin credentials must be rejected');
+        assert.strictEqual((await fetch(`${base}/${query}`, { redirect: 'manual' })).status, 302, 'Query-string admin credentials must not unlock the console');
+        assert.strictEqual(await websocketStatus(`${base.replace('http:', 'ws:')}/ws/simulator${query}`, {}), 401, 'Query-string admin WebSocket credentials must be rejected');
+      }
+    }
     const foreignOrigin = { Cookie: cookie, Origin: 'https://attacker.example' };
     assert.strictEqual((await fetch(`${base}/api/auth/logout`, { method: 'POST', headers: foreignOrigin })).status, 403, 'Cross-origin cookie logout must be rejected');
     assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Cookie: cookie } })).status, 200, 'Rejected logout must not revoke the session');
@@ -241,7 +257,11 @@ async function run() {
     try {
       const response = await fetch(`http://127.0.0.1:${trustedPort}/api/auth/login`, { method: 'POST', headers: { ...json, 'X-Forwarded-Proto': 'https' }, body: JSON.stringify({ password: 'dummy-admin-password' }) });
       assert.strictEqual(response.status, 200);
-      assert(/; Secure/i.test(response.headers.get('set-cookie') || ''), 'Trusted TLS proxy must set secure cookie');
+      const trustedCookie = response.headers.get('set-cookie') || '';
+      assert(/; Secure/i.test(trustedCookie) && /;\s*SameSite=Lax/i.test(trustedCookie), 'Trusted TLS proxy must set a secure first-party cookie');
+      const logout = await fetch(`http://127.0.0.1:${trustedPort}/api/auth/logout`, { method: 'POST', headers: { 'X-Forwarded-Proto': 'https', Cookie: trustedCookie.split(';')[0] } });
+      const expiredCookie = logout.headers.get('set-cookie') || '';
+      assert(/;\s*SameSite=Lax/i.test(expiredCookie) && /;\s*Secure/i.test(expiredCookie) && /;\s*Max-Age=0/i.test(expiredCookie) && !/Partitioned/i.test(expiredCookie), 'Logout must expire the same first-party cookie');
       assert.strictEqual(await isTunnelProxyReady(trustedPort), true, 'The local tunnel probe recognizes configured proxy trust');
       const forwarded = { 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': 'console.example', Cookie: cookie };
       assert.strictEqual((await fetch(`http://127.0.0.1:${trustedPort}/api/state`, { headers: { ...forwarded, Origin: 'https://console.example' } })).status, 200, 'Trusted proxy may convey the external origin');
@@ -320,7 +340,7 @@ async function run() {
       assert.strictEqual(download.status, 409, 'An unreviewed default campaign must not produce a deployable archive');
       const blocked = await download.json() as any;
       assert.strictEqual(blocked.ok, false);
-      assert.ok(blocked.blockers.some((message: string) => /Operator confirmed this code exists/i.test(message)), 'The readiness response identifies unverified campaign status codes');
+      assert.ok(blocked.blockers.some((message: string) => /One global (STT|LLM|TTS) provider is selected/i.test(message)), 'The readiness response identifies unconfigured global services rather than a retired automatic-silence code');
       assert.strictEqual(fs.existsSync(path.join(outDir, 'voice-agent-vicibox-release.tar.gz')), false, 'Readiness failure must not create an archive');
     } finally { child.kill(); await waitExit(child); }
     console.log('✓ 6. Real archive download excludes synthetic secrets and unlisted files');

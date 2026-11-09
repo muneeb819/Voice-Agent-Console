@@ -146,6 +146,7 @@ async function run() {
     await inventory(page, 'admin-login');
     await page.fill('#admin-password', 'dummy-browser-admin');
     await page.click('#admin-submit');
+    await page.evaluate(() => { const pop = document.getElementById('account-popover'); if (pop?.hidden) document.getElementById('btn-account-menu')?.click(); });
     await page.waitForSelector('#btn-create-account:visible');
     await page.click('#btn-create-account');
     await page.waitForSelector('#signup-form:not([hidden])');
@@ -154,6 +155,7 @@ async function run() {
     await page.fill('#signup-email', 'operator@example.test');
     await page.fill('#signup-password', 'dummy-browser-password-123');
     await page.click('#signup-submit');
+    await page.evaluate(() => { const pop = document.getElementById('account-popover'); if (pop?.hidden) document.getElementById('btn-account-menu')?.click(); });
     await page.waitForSelector('#btn-logout:visible');
     await page.waitForTimeout(500);
   });
@@ -165,11 +167,13 @@ async function run() {
     await page.fill('#signin-email', 'operator@example.test');
     await page.fill('#signin-password', 'dummy-browser-password-123');
     await page.click('#signin-submit');
+    await page.evaluate(() => { const pop = document.getElementById('account-popover'); if (pop?.hidden) document.getElementById('btn-account-menu')?.click(); });
     await page.waitForSelector('#btn-logout:visible');
     await page.waitForTimeout(500);
     assert.equal(new URL(page.url()).searchParams.has('vac_token'), false, 'handoff token should be removed from the address bar');
   });
   await check('Dashboard is the first, dedicated default page and its cards navigate', async () => {
+    assert.equal(await page.locator('#nav a.nav-item').count(), 9, 'Side-rail sections are real links');
     assert.equal(await page.locator('#nav [data-t]').first().getAttribute('data-t'), 'dashboard');
     assert.equal(await page.locator('#nav [data-t="dashboard"]').getAttribute('aria-current'), 'page');
     assert(await page.locator('main #cmd-deck').isVisible());
@@ -193,17 +197,34 @@ async function run() {
     await page.goto(`${base}/?tab=agents`);
     await page.waitForSelector('[data-p="a.name"]');
   });
-  await check('Agent field is labelled, edited and discarded', async () => {
+  await check('Navigation links keep the native right-click/new-tab behavior', async () => {
+    const link = page.locator('#nav a[data-t="campaigns"]');
+    assert.equal(await link.getAttribute('target'), null, 'Links do not force a target');
+    const href = await link.getAttribute('href');
+    assert(href && href.includes('?tab=campaigns'), 'Section link has a real URL');
+    const prevented = await link.evaluate((el) => {
+      const evt = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 });
+      el.dispatchEvent(evt);
+      return evt.defaultPrevented;
+    });
+    assert.equal(prevented, false, 'Context menu is not blocked');
+    const before = await page.locator('#nav a.nav-item.on').getAttribute('data-t');
+    await link.evaluate((el) => el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, button: 0, ctrlKey: true })));
+    assert.equal(await page.locator('#nav a.nav-item.on').getAttribute('data-t'), before, 'Ctrl+click is left to the browser');
+  });
+  await check('Agent field is labelled, navigation keeps drafts, and discard restores saved state', async () => {
     const field = page.locator('[data-p="a.name"]').first();
     const original = await field.inputValue();
     assert(await field.evaluate((el) => Boolean(el.labels?.length)));
+    assert.equal(await page.locator('#save-dock').isVisible(), false, 'Clean state hides the save dock');
     await field.fill('Browser discarded agent');
-    const confirm = new Promise((resolve) => page.once('dialog', async (dialog) => { const message = dialog.message(); await dialog.dismiss(); resolve(message); }));
-    await page.click('#btn-create-account');
-    assert.match(await confirm, /unsaved changes/i);
-    assert.equal(await field.inputValue(), 'Browser discarded agent', 'Canceling account navigation preserves unsaved edits');
+    assert.equal(await page.locator('#save-dock').isVisible(), true, 'Dirty state opens the bottom-right save dock');
+    await page.locator('#nav [data-t="campaigns"]').click();
+    await page.locator('#nav [data-t="agents"]').click();
+    assert.equal(await field.inputValue(), 'Browser discarded agent', 'Section navigation preserves unsaved edits without a save prompt');
     await page.click('#dc');
     await page.waitForFunction((value) => document.querySelector('[data-p="a.name"]')?.value === value, original);
+    assert.equal(await page.locator('#save-dock').isVisible(), false);
   });
   await check('Save and reload an isolated agent edit', async () => {
     await page.locator('[data-p="a.name"]').first().fill('Browser saved agent');
@@ -249,8 +270,8 @@ async function run() {
     assert.match(await page.locator('main').innerText(), /does not disable recording/i);
     await page.check('#sim-disclosure');
     await Promise.all([page.waitForResponse((r) => r.url().endsWith('/api/state') && r.request().method() === 'PUT' && r.ok()), page.click('#sv')]);
-    // Tab and agent selection are not persisted in the URL. Reopen the same
-    // agent explicitly to verify the saved setting rather than the default bot.
+    // Section URLs now carry the selected agent, but reopen the saved setting
+    // explicitly so this check does not depend on the current draft selection.
     await page.goto(`${base}/?tab=test`);
     await page.waitForSelector('#sim-disclosure');
     await page.selectOption('#sel-a', editedAgentId);
@@ -265,7 +286,7 @@ async function run() {
     await page.selectOption('#sel-a', editedAgentId);
     assert.equal(await page.locator('#sim-disclosure').isChecked(), false, 'Opt-out survives reload');
   });
-  await check('Theme, exposure and API-key modals', async () => {
+  await check('Theme and API-key modals', async () => {
     await page.click('#btn-theme');
     await page.waitForSelector('#theme-modal:not([hidden])');
     await inventory(page, 'theme-modal');
@@ -273,8 +294,6 @@ async function run() {
     const theme = await secondTheme.getAttribute('data-pick-theme');
     await secondTheme.click();
     assert.equal(await page.locator('html').getAttribute('data-theme'), theme);
-    await page.click('#exposure-seg [data-exp="minimal"]');
-    assert.equal(await page.locator('html').getAttribute('data-exposure'), 'minimal');
     await page.click('#theme-close');
     await page.click('#btn-keys');
     await page.waitForSelector('#keys-modal:not([hidden])');

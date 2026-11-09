@@ -1,4 +1,5 @@
 import { getSecret } from './env-store';
+import { readResponseText } from './http-limits';
 import { ViciConfig } from './types';
 
 export interface ParsedViciCallerCode {
@@ -198,11 +199,13 @@ export class VicidialApiClient {
     try {
       const res = await fetch(fullUrl, {
         method: 'GET',
+        redirect: 'error',
         headers: { 'Accept-Encoding': 'identity' },
         signal: AbortSignal.timeout(timeoutMs),
       });
-      const text = (await res.text()).trim();
+      const text = (await readResponseText(res, 1024 * 1024)).trim();
       const ok = res.ok && !/^ERROR:/i.test(text);
+      if (this.auditLog.length >= 200) this.auditLog.shift();
       this.auditLog.push({
         ts: new Date().toISOString(),
         api: apiKind,
@@ -215,6 +218,7 @@ export class VicidialApiClient {
       return { ok, status: res.status, text };
     } catch (err: any) {
       const errMsg = err?.message || 'HTTP request failed';
+      if (this.auditLog.length >= 200) this.auditLog.shift();
       this.auditLog.push({
         ts: new Date().toISOString(),
         api: apiKind,

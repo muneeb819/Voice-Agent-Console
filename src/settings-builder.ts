@@ -1,6 +1,8 @@
 import { Agent, Campaign, ConsoleState, Provider, ValidationItem } from './types';
 import { deepgramModelsForProviderType, VOICE_AGENT_STT_MODELS } from './defaults';
 import { composeOpening } from './opening';
+import { composeBehavioralPrompt } from './persona';
+import { campaignAgentIds, campaignHasAgent, primaryCampaignAgent } from './campaign-assignment';
 
 export function isPlainObject(val: unknown): val is Record<string, any> {
   return typeof val === 'object' && val !== null && !Array.isArray(val);
@@ -69,84 +71,6 @@ export function allowedCampaignDispositionCodes(campaign?: Pick<Campaign, 'dispo
     .filter((code, index, all) => all.indexOf(code) === index);
 }
 
-export function composeBehavioralPrompt(agent: Agent, campaign?: Campaign): string {
-  const basePrompt = (agent.prompt || '').trim();
-  const b = agent.behavior;
-  const toneMap: Record<string, string> = {
-    warm_empathetic:
-      'Warm, caring, empathetic, and reassuring — sound genuinely attentive and human.',
-    energetic_upbeat:
-      'Bright, upbeat, friendly, and enthusiastic — speak with a natural smile in your voice.',
-    charismatic_closer:
-      'Confident, poised, articulate, and high-trust — crisp executive advisor energy.',
-    calm_concierge:
-      'Calm, composed, clear, and soothing — smooth concierge presence.',
-  };
-
-  const lines: string[] = [];
-  if (b) {
-    lines.push(
-      '',
-      '=== REAL-TIME VOICE ASSISTANT, BARGE-IN, EXPRESSIONS & GENERAL Q&A ===',
-      '- Be honest about being an AI assistant if asked. Do not claim an external action succeeded unless its tool result confirms success.'
-    );
-    if (b.selfIntro && b.selfIntro.trim()) {
-      lines.push(
-        `- SELF-INTRODUCTION: Whenever greeted casually or asked "Who are you?", "What is your name?", "Introduce yourself", or "What can you do?", warmly introduce yourself in 1–2 natural spoken sentences based on: "${b.selfIntro.trim()}"`
-      );
-    }
-    if (b.allowGeneralQa !== false) {
-      lines.push(
-        '- GENERAL KNOWLEDGE & OPEN Q&A: If the caller asks ANY general question (science, math, geography, technology, definitions, advice, trivia, or everyday small talk), answer it directly, accurately, and warmly in 1–2 concise spoken sentences instead of deflecting. Always honor the assigned campaign rules, DNC, language barriers, and eligibility gates first.'
-      );
-    }
-    if (b.bargeIn !== 'off') {
-      lines.push(
-        '- LIVE BARGE-IN AWARENESS: The caller can interrupt you mid-sentence at any time. If interrupted, never repeat cut-off sentences — pivot immediately and naturally to their latest question or remark.'
-      );
-    }
-    lines.push(`- VOCAL EXPRESSION STYLE: ${toneMap[b.expressionStyle] || toneMap.warm_empathetic}`);
-    if (b.vocalGestures !== false) {
-      lines.push(
-        '- NATURAL VOCAL GESTURES: Use subtle, authentic spoken micro-gestures when natural (e.g., "Oh, great question!", "Gotcha —", "Mm-hmm, I hear you.", "Right, so—", light warmth) and natural conversational pauses ("—"). NEVER output bracketed or asterisk tags like [laughs], [smiles], (sighs), or *waves* because TTS speaks brackets literally.'
-      );
-    }
-    if (b.latencyProfile === 'ultra') {
-      lines.push(
-        '- ULTRA-LOW LATENCY STREAMING: Begin every reply immediately with the core answer or reaction in the first 4–6 words. Keep turns crisp (1–2 spoken sentences, ~15–35 words unless asked for detail) in plain spoken words with zero markdown (*, #, bullets).'
-      );
-    }
-  }
-
-  if (campaign) {
-    const rules = String(campaign.complianceRules || '').trim();
-    lines.push(
-      '',
-      '=== MANDATORY CAMPAIGN-SPECIFIC COMPLIANCE & RULES ===',
-      `- The only campaign assigned to this call is ${JSON.stringify(campaign.name)} (VICIdial campaign ${JSON.stringify(campaign.viciCampaign)}). Do not use another campaign’s rules.`,
-      '- The rules below are mandatory and override any conflicting persona, sales script, saved agent prompt, or general-answer instruction. Follow them throughout the call.',
-      `- Campaign rules:\n${rules || '[NO CAMPAIGN RULES CONFIGURED — do not start a live call.]'}`,
-      `- If the caller is silent for one second, the bridge sends this one presence-check line: ${JSON.stringify(campaign.presenceCheckText || '')}. Say it briefly, then wait for a caller turn; do not continue the sales script until they respond.`,
-      `- After the presence check, the bridge waits ${Number(campaign.deadAirTimeoutSec) || 8} seconds for a caller response. The bridge, not the model, applies dead-air status ${JSON.stringify(campaign.deadAirDisposition || '')} and hangs up; do not claim a status update succeeded.`
-    );
-    if (campaign.disclosure && campaign.disclosure.trim()) {
-      lines.push(
-        `- Campaign disclosure text is ${JSON.stringify(campaign.disclosure.trim())}. It is prepended to the opening only when this agent’s campaign-disclosure setting is enabled; never claim a recording or practice that is not actually in effect.`
-      );
-    }
-  }
-
-  const suffix = lines.join('\n').trim();
-  if (!suffix) return basePrompt;
-  const maxPromptLength = 24950;
-  const availableBaseLength = Math.max(0, maxPromptLength - suffix.length - 1);
-  const safeBase = basePrompt.slice(0, availableBaseLength);
-  const truncationNote = basePrompt.length > safeBase.length
-    ? '\n[Agent prompt shortened to preserve the mandatory campaign rules below.]'
-    : '';
-  return `${safeBase}${truncationNote}\n${suffix}`.trim();
-}
-
 export function buildDeepgramSettings(
   state: ConsoleState,
   agent: Agent,
@@ -157,9 +81,9 @@ export function buildDeepgramSettings(
   const lp: Partial<Provider> = state.providers.find((p) => p.kind === 'llm' && p.id === state.services?.llm?.providerId) || {};
   const tp: Partial<Provider> = state.providers.find((p) => p.kind === 'tts' && p.id === state.services?.tts?.providerId) || {};
 
-  const linkedCampaigns = state.campaigns.filter((campaign) => campaign.agentId === agent.id);
+  const linkedCampaigns = state.campaigns.filter((campaign) => campaignHasAgent(campaign, agent.id));
   const assignedExplicitCampaign = explicitCampaign
-    ? state.campaigns.find((campaign) => campaign.id === explicitCampaign.id && campaign.agentId === agent.id)
+    ? state.campaigns.find((campaign) => campaign.id === explicitCampaign.id && campaignHasAgent(campaign, agent.id))
     : undefined;
   if (explicitCampaign && !assignedExplicitCampaign) {
     throw new Error(`Selected campaign “${explicitCampaign.name}” is not explicitly assigned to agent “${agent.name}”.`);
@@ -533,7 +457,7 @@ export function validateAgent(state: ConsoleState, agent: Agent): ValidationItem
   push(/(dnc|do not call|take me off|stop)/i.test(agent.prompt), 'System prompt handles Do-Not-Call requests');
   push(fnNames.includes('end_call'), 'end_call function enabled');
   push(Number(agent.audio.inRate) === 8000, '8000 Hz input sample rate matches Asterisk/VICIdial telephony', true);
-  push(state.campaigns.some((c) => c.agentId === agent.id), 'Explicitly assigned to at least one campaign before deployment');
+  push(state.campaigns.some((c) => campaignHasAgent(c, agent.id)), 'Explicitly assigned to at least one campaign before deployment');
 
   return items;
 }
@@ -552,41 +476,23 @@ export function validateCampaign(state: ConsoleState, campaign: Campaign): Valid
   const viciCampaign = String(campaign.viciCampaign || '').trim();
   const xferTarget = String(campaign.xferTarget || '').trim();
   const complianceRules = String(campaign.complianceRules || '').trim();
-  const presenceCheckText = String(campaign.presenceCheckText || '').trim();
-  const deadAirDisposition = String(campaign.deadAirDisposition || '').trim().toUpperCase();
   const allowedDispositions = allowedCampaignDispositionCodes(campaign);
-  const assignedAgent = state.agents.find((a) => a.id === campaign.agentId);
+  const assignedAgents = campaignAgentIds(campaign).map((id) => state.agents.find((a) => a.id === id)).filter((a): a is Agent => Boolean(a));
 
   push(Boolean(viciCampaign), 'VICIdial campaign ID is set');
   push(Boolean(xferTarget), 'Live-agent transfer target (ingroup/extension/number) is set');
   push(Boolean(campaign.dnc), 'DNC scrub is enabled');
   push(Boolean(String(campaign.disclosure || '').trim()), 'Call recording disclosure line is present', true);
   push(campaign.start < campaign.end, `Calling window valid (${campaign.start} – ${campaign.end})`);
-  push(Boolean(assignedAgent), 'Explicitly assigned to an existing bot agent');
+  push(assignedAgents.length > 0 && assignedAgents.length === campaignAgentIds(campaign).length, 'Explicitly assigned to at least one existing bot agent');
   push(allowedDispositions.length > 0, 'At least one allowed VICIdial disposition code is configured');
   const transferFunction = state.functions.find((fn) => fn.name === 'transfer_to_live_agent');
-  const transferEnabled = Boolean(assignedAgent && transferFunction && assignedAgent.fnIds.includes(transferFunction.id));
+  const transferEnabled = Boolean(transferFunction && assignedAgents.some((agent) => agent.fnIds.includes(transferFunction.id)));
   push(!transferEnabled || allowedDispositions.includes('XFER'), 'XFER is in the allowed disposition list when live-agent transfer is enabled');
   push(
     complianceRules.length >= 20 && complianceRules.length <= 8000 && !/^REVIEW REQUIRED\b/i.test(complianceRules),
     'Campaign-specific compliance & rules are written and reviewed (20–8,000 characters)'
   );
-  push(presenceCheckText.length >= 8 && presenceCheckText.length <= 280, 'One brief campaign presence-check line is configured (8–280 characters)');
-  push(
-    Number.isInteger(Number(campaign.deadAirTimeoutSec)) && Number(campaign.deadAirTimeoutSec) >= 3 && Number(campaign.deadAirTimeoutSec) <= 30,
-    'Dead-air response timeout is an integer from 3 to 30 seconds'
-  );
-  const validDeadAirCode = /^[A-Z0-9_-]{2,6}$/.test(deadAirDisposition);
-  push(validDeadAirCode, 'A campaign-specific dead-air disposition code is configured');
-  push(
-    validDeadAirCode && allowedDispositions.includes(deadAirDisposition),
-    `Dead-air code ${deadAirDisposition || '(unset)'} is included in this campaign’s allowed disposition list`
-  );
-  push(
-    campaign.deadAirDispositionVerified === true,
-    'Operator confirmed this code exists in the matching VICIdial campaign status list'
-  );
-
   return items;
 }
 
@@ -596,10 +502,11 @@ export function getCampaignDeploymentBlockers(state: ConsoleState, campaign: Cam
     .map((item) => item.message);
 }
 
-export function getCampaignCallReadinessBlockers(state: ConsoleState, campaign: Campaign): string[] {
+export function getCampaignCallReadinessBlockers(state: ConsoleState, campaign: Campaign, selectedAgent?: Agent): string[] {
   const blockers = getCampaignDeploymentBlockers(state, campaign).map((message) => `Campaign “${campaign.name}”: ${message}.`);
-  const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+  const agent = selectedAgent || primaryCampaignAgent(state, campaign);
   if (!agent) return [...new Set([...blockers, `Campaign “${campaign.name}” is not assigned to an existing bot agent.`])];
+  if (!campaignHasAgent(campaign, agent.id)) return [...new Set([...blockers, `Agent “${agent.name}” is not assigned to campaign “${campaign.name}”.`])];
   blockers.push(
     ...validateAgent(state, agent)
       .filter((item) => item.level === 'er')
@@ -611,7 +518,7 @@ export function getCampaignCallReadinessBlockers(state: ConsoleState, campaign: 
 export function getDeploymentReadinessBlockers(state: ConsoleState): string[] {
   const blockers: string[] = [];
   for (const agent of state.agents) {
-    if (!state.campaigns.some((campaign) => campaign.agentId === agent.id)) {
+    if (!state.campaigns.some((campaign) => campaignHasAgent(campaign, agent.id))) {
       blockers.push(`Agent “${agent.name}” must be explicitly assigned to at least one campaign.`);
     }
     blockers.push(
@@ -684,7 +591,8 @@ export function generateViciConfig(state: ConsoleState): string {
 
   const campaignLines = state.campaigns
     .map((c, idx) => {
-      const ag = state.agents.find((a) => a.id === c.agentId);
+      const ag = primaryCampaignAgent(state, c);
+      const pool = campaignAgentIds(c).map((id) => state.agents.find((a) => a.id === id)?.name || id).join(', ');
       const ext = `${v.aiExten}${idx + 1}`;
       const xferNote =
         c.xferType === 'ingroup'
@@ -693,12 +601,11 @@ export function generateViciConfig(state: ConsoleState): string {
       return [
         `; [Campaign ${idx + 1}: ${c.name}]`,
         `;   VICIdial Campaign ID : ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCalls}`,
-        `;   Bot Persona          : ${ag ? ag.name : '(missing)'} (${ag?.mode || 'outbound'})`,
+        `;   Assigned Bot Pool    : ${pool || '(missing)'}`,
+        `;   Telephone Persona    : ${ag ? ag.name : '(missing)'} (${ag?.mode || 'outbound'}); browser tests may select any assigned bot`,
         `;   Remote Agent Exten   : ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + idx})`,
         `;   Live Closer Transfer : ${xferNote}`,
         `;   Allowed Dispositions : ${c.dispos}`,
-        `;   Dead-Air Disposition : ${c.deadAirDisposition || '(unset)'} after ${c.deadAirTimeoutSec}s; verified in VICIdial: ${c.deadAirDispositionVerified ? 'YES' : 'NO'}`,
-        `;   Presence Check       : ${String(c.presenceCheckText || '').replace(/[\r\n]+/g, ' ')}`,
         `;   Campaign Rules       : ${String(c.complianceRules || '').trim() ? `${String(c.complianceRules).trim().length} characters; injected into the assigned bot prompt` : 'MISSING — deployment blocked'}`,
       ].join('\n');
     })

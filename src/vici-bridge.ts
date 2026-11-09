@@ -20,6 +20,8 @@ import {
   ulawToLinear16,
 } from './g711';
 import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCallReadinessBlockers } from './settings-builder';
+import { createConversationMemory } from './persona';
+import { primaryCampaignAgent } from './campaign-assignment';
 import { Agent, Campaign, ConsoleState } from './types';
 import {
   HydratedViciLead,
@@ -62,6 +64,7 @@ interface PreCallRecord {
 
 export interface ActiveBridgeCallSummary {
   callId: string;
+  campaignId: string;
   transport: 'audiosocket' | 'sip_rtp';
   exten: string;
   callerCode: string;
@@ -69,6 +72,7 @@ export interface ActiveBridgeCallSummary {
   phone: string;
   campaignName: string;
   viciCampaign: string;
+  agentId: string;
   agentName: string;
   remoteAgentUser: string;
   state: string;
@@ -87,7 +91,7 @@ function interpolateEnvPlaceholders(obj: any): any {
       if (varName === 'ELEVEN_KEY' || varName === 'ELEVEN_LABS_API_KEY') return getSecret('ELEVENLABS_API_KEY');
       if (varName === 'GROQ_KEY') return getSecret('GROQ_API_KEY');
       if (varName === 'CARTESIA_KEY') return getSecret('CARTESIA_API_KEY');
-      return process.env[varName] || '';
+      return ''; // unknown environment variables are not provider secrets
     });
   }
   if (Array.isArray(obj)) return obj.map(interpolateEnvPlaceholders);
@@ -141,7 +145,7 @@ export function resolveCampaignAndAgent(
   }
 
   const campaign = state.campaigns[idx];
-  const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+  const agent = primaryCampaignAgent(state, campaign);
   if (!agent) {
     return {
       campaign,
@@ -239,8 +243,9 @@ export class VicidialBridgeService {
   private monitorWss: WebSocketServer | null = null;
 
   private readonly preCallRegistry = new Map<string, PreCallRecord>();
+  private preCallSweepTimer: NodeJS.Timeout | null = null;
   private readonly activeCalls = new Map<string, ActiveBridgeCallSummary>();
-  private readonly activeSessionClosers = new Map<string, (reason: string) => void>();
+  private readonly activeSessionClosers = new Map<string, (reason: string) => void | Promise<void>>();
   private readonly activeSessionTransferrers = new Map<string, (reason: string) => Promise<void>>();
 
   private stats = {
@@ -272,7 +277,7 @@ export class VicidialBridgeService {
   }
 
   public createMonitorWebSocketServer(): WebSocketServer {
-    this.monitorWss = new WebSocketServer({ noServer: true });
+    this.monitorWss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
     this.monitorWss.on('connection', (ws) => {
       ws.send(
         JSON.stringify({
@@ -325,7 +330,7 @@ export class VicidialBridgeService {
     }
     let activeOnCampaign = 0;
     for (const c of this.activeCalls.values()) {
-      if (c.viciCampaign === campaign.viciCampaign && c.campaignName === campaign.name) {
+      if (c.campaignId === campaign.id) {
         activeOnCampaign += 1;
       }
     }
@@ -375,6 +380,7 @@ export class VicidialBridgeService {
       campaignId: campaign?.viciCampaign,
     });
 
+    if (this.preCallRegistry.size >= 512) throw new Error('Too many unclaimed pre-call registrations.');
     const uuid = crypto.randomUUID();
     this.preCallRegistry.set(uuid, {
       uuid,
@@ -401,16 +407,32 @@ export class VicidialBridgeService {
   }
 
   public async start(): Promise<void> {
+    this.preCallSweepTimer = setInterval(() => {
+      const cutoff = Date.now() - 45000;
+      for (const [key, rec] of this.preCallRegistry) if (rec.createdAt <= cutoff) this.preCallRegistry.delete(key);
+    }, 15000);
+    this.preCallSweepTimer.unref();
     await this.startAudioSocketServer();
-    await this.startSipRtpServer();
+    try {
+      await this.startSipRtpServer();
+    } catch (err) {
+      await this.stop();
+      throw err;
+    }
   }
 
   public async stop(): Promise<void> {
-    for (const closer of this.activeSessionClosers.values()) {
-      try {
-        closer('bridge_shutdown');
-      } catch {}
+    if (this.preCallSweepTimer) { clearInterval(this.preCallSweepTimer); this.preCallSweepTimer = null; }
+    this.preCallRegistry.clear();
+    if (this.monitorWss) {
+      for (const client of this.monitorWss.clients) client.terminate();
+      this.monitorWss.close();
+      this.monitorWss = null;
     }
+    const closing = Array.from(this.activeSessionClosers.values()).map(async (closer) => {
+      try { await closer('bridge_shutdown'); } catch {}
+    });
+    await Promise.allSettled(closing);
     this.activeSessionClosers.clear();
     this.activeCalls.clear();
 
@@ -590,14 +612,6 @@ export class VicidialBridgeService {
       const tryListen = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           this.tcpServer!.removeListener('error', onErr);
-          if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
-            const nextPort = candidatePort + 1;
-            console.warn(
-              `[ViciBridge] AudioSocket TCP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`
-            );
-            tryListen(nextPort, candidateHost, retriesLeft - 1);
-            return;
-          }
           reject(err);
         };
         this.tcpServer!.once('error', onErr);
@@ -611,7 +625,7 @@ export class VicidialBridgeService {
           resolve();
         });
       };
-      tryListen(this.audioSocketPort, this.host, 100);
+      tryListen(this.audioSocketPort, this.host, 0);
     });
   }
 
@@ -690,13 +704,15 @@ export class VicidialBridgeService {
     };
 
     sock.on('message', async (msgBuf, rinfo) => {
+      try {
       const raw = msgBuf.toString('utf8');
       const { startLine, headers, body } = parseSipMessage(raw);
       if (!startLine || startLine.startsWith('SIP/2.0')) return;
 
       const [methodRaw, requestUri] = startLine.split(/\s+/);
       const method = (methodRaw || '').toUpperCase();
-      const callId = firstHeader(headers, 'call-id', 'i');
+      const callId = firstHeader(headers, 'call-id', 'i').slice(0, 256);
+      if (!callId || /[\r\n\x00]/.test(callId)) return;
       const toRaw = firstHeader(headers, 'to', 't');
       const fromRaw = firstHeader(headers, 'from', 'f');
 
@@ -778,17 +794,35 @@ export class VicidialBridgeService {
         // Parse remote RTP endpoint from SDP
         const cMatch = /^c=IN IP4\s+([^\r\n\s]+)/m.exec(body);
         const mMatch = /^m=audio\s+(\d+)\s+RTP\/AVP/m.exec(body);
-        const remoteRtpIp = cMatch ? cMatch[1].trim() : rinfo.address;
+        const rawRemoteRtpIp = cMatch ? cMatch[1].trim() : rinfo.address;
+        const remoteRtpIp = rawRemoteRtpIp.toLowerCase() === 'localhost' ? '127.0.0.1' : rawRemoteRtpIp;
+        if (net.isIP(remoteRtpIp) === 0) {
+          sendSipResponse('488 Not Acceptable Here', headers, toRaw, [], '', rinfo);
+          return;
+        }
         const remoteRtpPort = mMatch ? Number(mMatch[1]) : 0;
 
-        if (!remoteRtpPort) {
+        if (!Number.isInteger(remoteRtpPort) || remoteRtpPort < 1024 || remoteRtpPort > 65535 || !isBridgePeerIpAllowed(remoteRtpIp)) {
+          this.stats.lastError = 'SIP SDP media endpoint is missing or outside the trusted PBX allowlist.';
           sendSipResponse('488 Not Acceptable Here', headers, toRaw, [], '', rinfo);
           return;
         }
 
         // Bind dedicated UDP RTP socket for this call
         const rtpSocket = dgram.createSocket('udp4');
-        await new Promise<void>((r) => rtpSocket.bind(0, this.host, () => r()));
+        rtpSocket.on('error', () => { try { rtpSocket.close(); } catch {} });
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const onError = (err: Error) => reject(err);
+            rtpSocket.once('error', onError);
+            rtpSocket.bind(0, this.host, () => { rtpSocket.removeListener('error', onError); resolve(); });
+          });
+        } catch {
+          sendSipResponse('503 Service Unavailable', headers, toRaw, [], '', rinfo);
+          return;
+        }
+        // An earlier concurrent INVITE may have won while this socket was binding.
+        if (dialogs.has(callId)) { try { rtpSocket.close(); } catch {} return; }
         const localRtpPort = (rtpSocket.address() as net.AddressInfo).port;
 
         const localIpForSdp = resolveSdpAdvertisedHost(rinfo.address, getConsoleState().vici.bridgeHost || '', this.host);
@@ -937,8 +971,8 @@ export class VicidialBridgeService {
           hooks,
         });
 
-        rtpSocket.on('message', (pktBuf) => {
-          if (rtpClosed) return;
+        rtpSocket.on('message', (pktBuf, peer) => {
+          if (rtpClosed || peer.address !== remoteRtpIp || peer.port !== remoteRtpPort) return;
           const parsed = parseRtpPacket(pktBuf);
           if (!parsed) return;
           if (parsed.payloadType === 0 && parsed.payload.length > 0) {
@@ -966,18 +1000,15 @@ export class VicidialBridgeService {
           },
         });
       }
+      } catch (err: any) {
+        this.stats.lastError = `SIP request failed: ${err?.message || 'unknown error'}`;
+      }
     });
 
     await new Promise<void>((resolve, reject) => {
       const tryBind = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           sock.removeListener('error', onErr);
-          if (err.code === 'EADDRINUSE' && retriesLeft > 0 && candidatePort !== 0) {
-            const nextPort = candidatePort + 1;
-            console.warn(`[ViciBridge] SIP UDP port ${candidatePort} occupied (EADDRINUSE) — trying ${nextPort}...`);
-            tryBind(nextPort, candidateHost, retriesLeft - 1);
-            return;
-          }
           reject(err);
         };
         sock.once('error', onErr);
@@ -991,7 +1022,7 @@ export class VicidialBridgeService {
           resolve();
         });
       };
-      tryBind(this.sipPort, this.host, 100);
+      tryBind(this.sipPort, this.host, 0);
     });
   }
 
@@ -1078,10 +1109,11 @@ export class VicidialBridgeService {
     const ttfbSamples: number[] = [];
 
     let disposition: string | null = null;
-    let deadAirStatusForHangup: string | null = null;
     let transferredTo: string | null = null;
     let dncAdded = false;
     let transferExecuted = false;
+    let transferCompletion: Promise<void> | null = null;
+    let resolveTransferCompletion: (() => void) | null = null;
     let pendingTransferArgs: {
       reason: string;
       prospect_name?: string;
@@ -1091,6 +1123,7 @@ export class VicidialBridgeService {
     } | null = null;
     let awaitingHangupAfterSpeech = false;
 
+    const conversationMemory = createConversationMemory();
     const cancelledFnIds = new Set<string>();
     const preSettingsAudioQueue: Buffer[] = [];
     const transcript: Array<{ ts: string; role: 'user' | 'assistant' | 'system'; content: string }> = [];
@@ -1105,6 +1138,7 @@ export class VicidialBridgeService {
 
     const summary: ActiveBridgeCallSummary = {
       callId,
+      campaignId: campaign.id,
       transport: opts.transport,
       exten,
       callerCode: parsedCaller.callerCode,
@@ -1112,6 +1146,7 @@ export class VicidialBridgeService {
       phone: parsedCaller.phone,
       campaignName: campaign?.name || 'Default',
       viciCampaign: campaign?.viciCampaign || '',
+      agentId: agent.id,
       agentName: agent.name,
       remoteAgentUser,
       state: 'hydrating_lead',
@@ -1141,6 +1176,7 @@ export class VicidialBridgeService {
     const executeTransferAction = async (args: { reason: string; confirmed_age?: string }) => {
       if (transferExecuted || closed) return;
       transferExecuted = true;
+      transferCompletion = new Promise<void>((resolve) => { resolveTransferCompletion = resolve; });
 
       const xferType = campaign?.xferType || 'ingroup';
       const xferTarget = campaign?.xferTarget || 'DEFAULTINGROUP';
@@ -1190,17 +1226,20 @@ export class VicidialBridgeService {
           addTranscript('system', `Transfer failed (${detail}); campaign fallback disposition ${fbCode} is not in the selected campaign’s allowed status list, so no fallback status was applied.`);
         } else {
           disposition = fbCode;
-          await viciClient.updateLeadDisposition({
+          const fallbackUpdate = await viciClient.updateLeadDisposition({
             leadId: summary.leadId,
             phone: summary.phone,
             status: fbCode,
             notes: `Transfer fallback (${detail}) — AI qualified: ${args.reason}`,
           });
-          addTranscript('system', `Transfer failed (${detail}); applied fallback disposition ${fbCode}`);
+          if (fallbackUpdate.ok) disposition = fbCode;
+          addTranscript('system', `Transfer failed (${detail}); fallback disposition ${fbCode} ${fallbackUpdate.ok ? 'was accepted' : 'was NOT accepted'} by VICIdial.`);
         }
       }
 
       updateState('transferred');
+      resolveTransferCompletion?.();
+      resolveTransferCompletion = null;
       finalizeSession('transferred_to_closer');
     };
 
@@ -1230,39 +1269,12 @@ export class VicidialBridgeService {
         } catch {}
       }
 
-      // Dead air is a campaign-specific status update, never a generic no-answer alias.
-      // Attempt update_lead first; retain the configured code for the Remote Agent hangup
-      // even if the lead update fails, and record the actual API result in the CDR.
-      if (reason === 'dead_air') {
-        const code = String(campaign.deadAirDisposition || '').trim().toUpperCase();
-        const allowedCodes = allowedCampaignDispositionCodes(campaign);
-        if (campaign.deadAirDispositionVerified !== true || !allowedCodes.includes(code)) {
-          this.stats.lastError = `Dead-air disposition ${code || '(unset)'} is not verified and allowed for VICIdial campaign ${campaign.viciCampaign}.`;
-          addTranscript('system', `Dead-air status was not applied: ${this.stats.lastError}`);
-        } else {
-          deadAirStatusForHangup = code;
-          const upd = await viciClient.updateLeadDisposition({
-            leadId: summary.leadId,
-            phone: summary.phone,
-            status: code,
-            notes: `No caller response after the one-second listen and campaign presence check. Campaign ${campaign.viciCampaign}.`,
-          });
-          if (upd.ok) {
-            disposition = code;
-            addTranscript('system', `Dead-air disposition ${code} was accepted by VICIdial update_lead.`);
-          } else {
-            addTranscript('system', `VICIdial did not confirm dead-air update_lead status ${code}; the bridge will still request ${code} on Remote Agent hangup. See the Vici API audit.`);
-          }
-          functionCalls.push({
-            ts: new Date().toISOString(),
-            id: `dead_air_${callId}`,
-            name: 'apply_dead_air_disposition',
-            args: { code, campaign: campaign.viciCampaign },
-            status: upd.ok ? 'completed' : 'failed',
-            response: { ok: upd.ok, requestedCode: code, responseText: upd.responseText },
-          });
-        }
+      // Do not race a HANGUP ahead of an in-flight EXTENSIONTRANSFER when the
+      // mock/transport closes immediately after requesting the transfer.
+      if (transferCompletion && reason !== 'transferred_to_closer') {
+        await Promise.race([transferCompletion, new Promise((resolve) => setTimeout(resolve, 12000))]);
       }
+      opts.hooks.hangupTransport();
 
       // Release Remote Agent call slot via ra_call_control HANGUP if call was NOT transferred
       if (!transferredTo && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
@@ -1270,18 +1282,15 @@ export class VicidialBridgeService {
           .hangupRemoteAgentCall({
             callerCode: parsedCaller.callerCode,
             remoteAgentUser,
-            status: deadAirStatusForHangup || disposition || 'NA',
+            status: disposition || 'NA',
           })
           .catch(() => {});
       }
 
-      opts.hooks.hangupTransport();
-
-      this.activeCalls.delete(callId);
-      this.activeSessionClosers.delete(callId);
-      this.activeSessionTransferrers.delete(callId);
-
-      const savedRec = recorder.finalizeAndSave(callId);
+      let savedRec: ReturnType<StereoCallRecorder8k['finalizeAndSave']> = null;
+      try { savedRec = recorder.finalizeAndSave(callId); } catch (err: any) {
+        this.stats.lastError = `Call recording could not be saved: ${err?.message || 'storage error'}`;
+      }
 
       const endedAtIso = new Date().toISOString();
       const durationMs = Math.max(1, Date.now() - startedAtMs);
@@ -1319,8 +1328,13 @@ export class VicidialBridgeService {
 
       try {
         saveBridgeCallLog(cdr);
-      } catch {}
+      } catch (err: any) {
+        this.stats.lastError = `Call history could not be saved: ${err?.message || 'database error'}`;
+      }
 
+      this.activeCalls.delete(callId);
+      this.activeSessionClosers.delete(callId);
+      this.activeSessionTransferrers.delete(callId);
       this.broadcastMonitor({
         type: 'call_ended',
         callId,
@@ -1408,8 +1422,10 @@ export class VicidialBridgeService {
       };
       hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
       let wireSettings: any;
+      let openingText = '';
       try {
         const prepared = prepareDelayedOpening(interpolateEnvPlaceholders(rawSettings));
+        openingText = prepared.greeting;
         wireSettings = prepared.settings;
       } catch (err: any) {
         this.stats.lastError = err.message || 'Could not prepare the opening.';
@@ -1418,9 +1434,8 @@ export class VicidialBridgeService {
         return;
       }
       openingGate = createOpeningGate({
-        presenceCheck: campaign.presenceCheckText,
-        responseTimeoutMs: Number(campaign.deadAirTimeoutSec) * 1000,
-        sendPresenceCheck: (message) => {
+        greeting: openingText,
+        sendOpening: (message) => {
           if (!closed && dgWs?.readyState === WebSocket.OPEN) {
             dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
           }
@@ -1434,15 +1449,16 @@ export class VicidialBridgeService {
           recorder.recordBotPcm8k(pcm8k);
           opts.hooks.enqueueBotPcm8k(pcm8k);
         },
-        onDeadAir: () => {
-          if (closed) return;
-          void finalizeSession('dead_air');
+        onSendError: () => {
+          if (!closed) addTranscript('system', 'The configured opening could not be sent to Deepgram. Check the provider connection.');
         },
         onOverflow: () => addTranscript('system', 'Early provider audio exceeded the opening buffer and was dropped.'),
       });
 
       updateState('connecting_deepgram');
       dgWs = new WebSocket(targetUrl, {
+        maxPayload: 4 * 1024 * 1024,
+        handshakeTimeout: 15000,
         headers: dgKey ? { Authorization: `Token ${dgKey}` } : {},
         family: 4,
       });
@@ -1539,30 +1555,28 @@ export class VicidialBridgeService {
               turns += 1;
               lastUserTurnTs = Date.now();
               awaitingFirstAudioForTurn = true;
-            } else {
-              openingGate?.agentTurn();
             }
             suppressStaleBotAudio = false;
-            addTranscript(role, String(evt.content || ''));
+            const content = String(evt.content || '');
+            if (role === 'user') conversationMemory.addUserText(content);
+            else conversationMemory.addAssistantText(content);
+            addTranscript(role, content);
             break;
           }
 
           case 'AgentThinking': {
-            openingGate?.agentTurn();
             suppressStaleBotAudio = false;
             updateState('thinking');
             break;
           }
 
           case 'AgentStartedSpeaking': {
-            openingGate?.agentTurn();
             suppressStaleBotAudio = false;
             updateState('bot_speaking');
             break;
           }
 
           case 'AgentAudioDone': {
-            openingGate?.agentAudioDone();
             openingGate?.afterRelease(() => {
               if (closed) return;
               updateState('listening');
@@ -1604,13 +1618,17 @@ export class VicidialBridgeService {
                 args = { _raw: fnItem.arguments || '' };
               }
 
+              if (closed || cancelledFnIds.has(fnItem.id)) continue;
               let resultPayload: Record<string, any> = { ok: true };
 
               if (fnItem.name === 'set_disposition') {
                 const code = String(args.code || '').trim().toUpperCase();
                 const allowedCodes = allowedCampaignDispositionCodes(campaign);
+                const qualificationBlockers = code === 'XFER' ? conversationMemory.qualificationBlockers(campaign) : [];
                 if (!allowedCodes.includes(code)) {
                   resultPayload = { ok: false, error: `Disposition ${code || '(empty)'} is not allowed by selected campaign ${campaign.viciCampaign}. No VICIdial status was changed.` };
+                } else if (qualificationBlockers.length) {
+                  resultPayload = { ok: false, error: `XFER blocked: ${qualificationBlockers.join(' ')} No VICIdial status was changed.` };
                 } else {
                   disposition = code;
                   const upd = await viciClient.updateLeadDisposition({
@@ -1642,10 +1660,15 @@ export class VicidialBridgeService {
               } else if (fnItem.name === 'transfer_to_live_agent') {
                 const allowedCodes = allowedCampaignDispositionCodes(campaign);
                 const transferDisposition = disposition || 'XFER';
-                if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
+                const sanitized = conversationMemory.sanitizeTransferArgs(args);
+                const qualificationBlockers = conversationMemory.qualificationBlockers(campaign);
+                if (qualificationBlockers.length) {
+                  resultPayload = { ok: false, error: `Transfer blocked: ${qualificationBlockers.join(' ')} No transfer was scheduled.`, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}) };
+                } else if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
                   resultPayload = { ok: false, error: `Transfer requires the allowed XFER disposition for selected campaign ${campaign.viciCampaign}; current disposition is ${transferDisposition}. No transfer was scheduled.` };
                 } else {
                   if (!disposition) disposition = 'XFER';
+                  args = sanitized.args;
                   const reason = String(args.reason || 'Qualified & interested lead');
                 const metaParts = [
                   args.prospect_name ? `Name:${args.prospect_name}` : hydratedLead.first_name ? `Name:${hydratedLead.first_name}` : '',
@@ -1656,7 +1679,7 @@ export class VicidialBridgeService {
                 const noteSummary = `[AI Qualified${metaParts.length ? ' | ' + metaParts.join(' | ') : ''}] ${reason}`;
 
                 // Push structured metadata into vicidial_list BEFORE transfer so closer screen-pop shows Name, Age, Medicare Status & Hook Type!
-                await viciClient.updateLeadDisposition({
+                const notesUpdate = await viciClient.updateLeadDisposition({
                   leadId: summary.leadId,
                   phone: summary.phone,
                   status: disposition,
@@ -1681,8 +1704,10 @@ export class VicidialBridgeService {
 
                 resultPayload = {
                   ok: true,
+                  ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
+                  ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
                   transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
-                  closer_screen_pop_notes_saved: true,
+                  closer_screen_pop_notes_saved: notesUpdate.ok,
                   metadata_passed: {
                     prospect_name: args.prospect_name || hydratedLead.first_name || null,
                     confirmed_age: args.confirmed_age || null,
@@ -1699,7 +1724,7 @@ export class VicidialBridgeService {
                 }, 9000);
                 resultPayload = { ok: true, action: 'hangup_after_speech' };
               } else {
-                const fnConfig = state.functions.find((f) => f.name === fnItem.name);
+                const fnConfig = state.functions.find((f) => f.name === fnItem.name && agent.fnIds.includes(f.id));
                 const whRes = await executeCustomFunctionWebhook(fnConfig, args, {
                   callId,
                   callerCode: parsedCaller.callerCode,
@@ -1720,12 +1745,13 @@ export class VicidialBridgeService {
                   : whRes.data;
               }
 
+              if (closed || cancelledFnIds.has(fnItem.id)) continue;
               functionCalls.push({
                 ts: new Date().toISOString(),
                 id: fnItem.id,
                 name: fnItem.name,
                 args,
-                status: 'completed',
+                status: resultPayload.ok === false ? 'failed' : 'completed',
                 response: resultPayload,
               });
 
@@ -1783,7 +1809,10 @@ export class VicidialBridgeService {
         this.stats.lastError = err.message;
         if (!closed) finalizeSession('deepgram_ws_error').catch(() => {});
       });
-    })();
+    })().catch((err: any) => {
+      this.stats.lastError = `Bridge session failed: ${err?.message || 'unknown error'}`;
+      void finalizeSession('bridge_session_error').catch(() => {});
+    });
 
     return {
       onCallerPcm8k: (pcm8k: Buffer) => {

@@ -146,6 +146,7 @@ async function run() {
   await page.click('#admin-toggle');
   await page.fill('#admin-password', 'synthetic-browser-admin');
   await page.click('#admin-submit');
+  await page.evaluate(() => { const pop = document.getElementById('account-popover'); if (pop?.hidden) document.getElementById('btn-account-menu')?.click(); });
   await page.waitForSelector('#btn-logout:visible');
   await page.evaluate(async () => {
     const data = await (await fetch('/api/state')).json();
@@ -156,12 +157,6 @@ async function run() {
     };
     for (const campaign of data.state.campaigns) {
       campaign.complianceRules = 'Browser fixture campaign rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
-      campaign.presenceCheckText = 'Can you hear me okay?';
-      campaign.deadAirTimeoutSec = 8;
-      campaign.deadAirDisposition = 'DAIR';
-      const dispositions = String(campaign.dispos || '').split(/[ ,]+/).filter(Boolean);
-      if (!dispositions.includes('DAIR')) campaign.dispos = [...dispositions, 'DAIR'].join(',');
-      campaign.deadAirDispositionVerified = true;
     }
     const result = await fetch('/api/state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ state: data.state }) });
     if (!result.ok) throw new Error('Could not save isolated test services');
@@ -195,14 +190,16 @@ async function run() {
     const agent = state.agents.find((item) => item.id === document.querySelector('#sel-a').value);
     return { agent, campaign: state.campaigns.find((item) => item.id === document.querySelector('#sim-campaign').value) };
   });
-  await until(() => openingMessages.some((entry) => entry.index === 0), 'single delayed presence check');
+  await until(() => openingMessages.some((entry) => entry.index === 0), 'single delayed configured opening');
   const firstOpening = openingMessages.find((entry) => entry.index === 0);
-  assert(firstOpening.at - settingsAppliedTimes[0] >= 990, 'Server presence check must wait at least one second');
-  assert.equal(firstOpening.message, savedAgentData.campaign.presenceCheckText);
+  assert(firstOpening.at - settingsAppliedTimes[0] >= 990, 'Server opening must wait at least one second');
+  const expectedServerOpening = composeOpening(savedAgentData.agent.greeting, serverGreeting.greeting_text, false, '')
+    .replace(/\{\{first_name\}\}/g, 'Robert').replace(/\{\{state\}\}/g, 'FL');
+  assert.equal(firstOpening.message, expectedServerOpening);
   assert(!firstOpening.message.includes(serverGreeting.greeting_text));
   assert.equal(openingMessages.filter((entry) => entry.index === 0).length, 1);
   assert.equal(await page.locator('#sim-disclosure').isDisabled(), true);
-  console.log('PASS Browser mic and server send one campaign presence check after the one-second listen');
+  console.log('PASS Browser mic and server send one configured opening after the one-second listen');
 
   await page.click('#btn-sim-mute');
   await page.waitForTimeout(500);
@@ -249,9 +246,9 @@ async function run() {
   await page.check('#sim-disclosure');
   await page.click('#btn-call-nomic');
   await page.waitForSelector('#sim-inject-input:enabled');
-  await until(() => openingMessages.some((entry) => entry.index === noticeCallIndex), 'draft notice call presence check');
+  await until(() => openingMessages.some((entry) => entry.index === noticeCallIndex), 'draft notice call opening');
   const withNotice = openingMessages.find((entry) => entry.index === noticeCallIndex);
-  assert.equal(withNotice.message, savedAgentData.campaign.presenceCheckText, 'The presence check must remain distinct from the greeting');
+  assert.ok(withNotice.message.startsWith(savedAgentData.campaign.disclosure), 'The opted-in notice is prepended to the configured opening');
   assert.ok(settingsReceived[noticeCallIndex].agent.think.prompt.includes(savedAgentData.campaign.disclosure),
     'The unsaved notice draft must reach the next test prompt');
   const persistedNotice = await page.evaluate(async (id) => {
@@ -446,12 +443,6 @@ async function run() {
   state.services = { stt: { providerId: 's1', model: 'nova-3' }, llm: { providerId: 'l1', model: 'gpt-4o-mini' }, tts: { providerId: 't1', model: 'aura-2-thalia-en' } };
   for (const campaign of state.campaigns) {
     campaign.complianceRules = 'Static browser fixture campaign rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
-    campaign.presenceCheckText = 'Can you hear me okay?';
-    campaign.deadAirTimeoutSec = 8;
-    campaign.deadAirDisposition = 'DAIR';
-    const dispositions = String(campaign.dispos || '').split(/[ ,]+/).filter(Boolean);
-    if (!dispositions.includes('DAIR')) campaign.dispos = [...dispositions, 'DAIR'].join(',');
-    campaign.deadAirDispositionVerified = true;
   }
   state.functions.push({ id: 'browser_custom', name: 'custom_demo', description: 'test', params: '{"type":"object","properties":{}}', defer: false,
     url: 'https://example.invalid/never-execute', method: 'post', headers: '{}' });
@@ -541,8 +532,9 @@ async function run() {
   const staticCampaign = state.campaigns.find((campaign) => campaign.agentId === staticAgent.id);
   assert.equal(staticWire.settings.agent.greeting, undefined);
   assert.equal(staticWire.openings.length, 1);
-  assert.ok(staticWire.openings[0].at - staticWire.appliedAt >= 990, 'Static presence check must wait at least one second');
-  assert.equal(staticWire.openings[0].message, staticCampaign.presenceCheckText);
+  assert.ok(staticWire.openings[0].at - staticWire.appliedAt >= 990, 'Static opening must wait at least one second');
+  assert.equal(staticWire.openings[0].message, composeOpening(staticAgent.greeting, staticGreeting.greeting_text, false, '')
+    .replace(/\{\{first_name\}\}/g, 'Robert').replace(/\{\{state\}\}/g, 'FL'));
   assert.ok(!staticWire.openings[0].message.includes(staticGreeting.greeting_text));
   assert.ok(staticWire.settings.agent.think.functions.every((f) => !f.endpoint && f.defer_until_eot === true));
   assert.ok(!staticWire.responses.some((r) => r.id === 'cancelled'));
@@ -572,7 +564,7 @@ async function run() {
 
   // Send a caller turn immediately after SettingsApplied in direct-browser
   // mode. The mock replies immediately, but the browser must not play early
-  // audio or inject a second presence check over that response.
+  // audio or inject a second opening over that response.
   const beforeEarly = await staticPage.evaluate(() => ({ openings: window.__mockWs.openings.length, playback: window.__mockWs.playbackTimes.length }));
   await staticPage.click('#btn-call-nomic');
   await staticPage.waitForSelector('#sim-inject-input:enabled');
@@ -588,11 +580,11 @@ async function run() {
   const afterEarly = await staticPage.evaluate(() => window.__mockWs);
   assert.ok(afterEarly.playbackTimes[beforeEarly.playback] - earlyTiming.appliedAt >= 990, 'Direct-browser response must wait for the one-second listen');
   await staticPage.waitForTimeout(100);
-  assert.equal(await staticPage.evaluate(() => window.__mockWs.openings.length), beforeEarly.openings, 'Early caller must not get a second presence check');
+  assert.equal(await staticPage.evaluate(() => window.__mockWs.openings.length), beforeEarly.openings, 'Early caller must not get a second opening');
   assert.match(await staticPage.locator('#sim-feed').innerText(), /Hello before the opening/);
   await staticPage.click('#btn-call-hangup');
   await staticPage.waitForSelector('#btn-call-nomic:enabled');
-  console.log('PASS Direct-browser early caller gets delayed audio without a duplicate presence check');
+  console.log('PASS Direct-browser early caller gets delayed audio without a duplicate opening');
 
   // Two tabs in the same profile must serialize their per-bot IndexedDB draws.
   const secondStaticPage = await staticContext.newPage();
@@ -669,9 +661,10 @@ async function run() {
   await fallbackPage.waitForSelector('#btn-call-nomic:enabled');
   await fallbackPage.click('#btn-call-nomic');
   await fallbackPage.waitForSelector('#sim-inject-input:enabled');
-  assert.match(await fallbackPage.locator('#sim-feed').innerText(), /Greeting library unavailable; the configured campaign opening will be used after the caller responds/i);
+  assert.match(await fallbackPage.locator('#sim-feed').innerText(), /Greeting library unavailable; the configured campaign opening will be used after the one-second listen/i);
   await fallbackPage.waitForFunction(() => window.__mockWs.openings.length === 1);
-  assert.equal(await fallbackPage.evaluate(() => window.__mockWs.openings[0].message), staticCampaign.presenceCheckText);
+  assert.equal(await fallbackPage.evaluate(() => window.__mockWs.openings[0].message), composeOpening(staticAgent.greeting, '', false, '')
+    .replace(/\{\{first_name\}\}/g, 'Robert').replace(/\{\{state\}\}/g, 'FL'));
   await fallbackPage.click('#btn-call-hangup');
   await fallbackPage.close();
   await staticContext.unroute('**/greetings.json', rejectCatalog);

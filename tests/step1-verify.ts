@@ -230,7 +230,7 @@ async function run() {
       'The opted-in campaign disclosure should prepend to the opening'
     );
     const dispoFn = settings.agent.think.functions.find((f: any) => f.name === 'set_disposition');
-    assert.deepStrictEqual(dispoFn.parameters.properties.code.enum, ['XFER', 'NI', 'DNC', 'NA', 'CALLBK', 'DEC', 'DAIR']);
+    assert.deepStrictEqual(dispoFn.parameters.properties.code.enum, ['XFER', 'NI', 'DNC', 'NA', 'CALLBK', 'DEC']);
 
     // Add second campaign and verify generateViciConfig includes BOTH campaigns + separated Vici APIs
     st.campaigns.push({ ...st.campaigns[0], id: 'c2', name: 'Medicare Inbound', viciCampaign: 'MEDINB' });
@@ -291,7 +291,6 @@ async function run() {
 
   await check('13. Regression: Aura v1 (aura-stella-en), Jessica - Medicare, Nova Concierge & Medicare — Fronter Outbound pass with 0 errors/warnings', () => {
     const raw: any = configureTestServices(createDefaultState());
-    raw.campaigns.forEach((campaign: any) => { campaign.deadAirDispositionVerified = true; });
     raw.services.tts = { providerId: 't1', model: 'aura-stella-en' };
     raw.agents.push({
       id: 'a_jessica',
@@ -325,12 +324,8 @@ async function run() {
       fallback: 'Dispo CALLBK',
       dnc: true,
       disclosure: '',
-      dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK,DAIR',
+      dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK',
       complianceRules: 'Medicare campaign rules reviewed: identify accurately, avoid benefit and coverage guarantees, never invent eligibility, and honor refusal or do-not-call requests immediately.',
-      presenceCheckText: 'Can you hear me okay?',
-      deadAirTimeoutSec: 8,
-      deadAirDisposition: 'DAIR',
-      deadAirDispositionVerified: true,
     });
 
     const normalized = normalizeState(raw);
@@ -350,7 +345,6 @@ async function run() {
     const state = configureTestServices(createDefaultState());
     const agent = state.agents[0];
     const first = state.campaigns.find((campaign: any) => campaign.agentId === agent.id)!;
-    first.deadAirDispositionVerified = true;
     const firstRules = first.complianceRules;
     const firstSettings = buildDeepgramSettings(state, agent, first);
     assert.ok(firstSettings.agent.think.prompt.includes(firstRules));
@@ -365,28 +359,60 @@ async function run() {
     const wrongAssignment = structuredClone(state);
     const wrongCampaign = wrongAssignment.campaigns.find((campaign: any) => campaign.id === second.id)!;
     wrongCampaign.agentId = 'someone-else';
+    wrongCampaign.agentIds = ['someone-else'];
     assert.throws(() => buildDeepgramSettings(wrongAssignment, wrongAssignment.agents[0], wrongCampaign), /not explicitly assigned/i);
     assert.deepStrictEqual(getCampaignCallReadinessBlockers(state, first), [], 'Multiple campaign assignments are allowed');
 
     const noCampaigns = normalizeState({ ...structuredClone(state), campaigns: [] });
     assert.deepStrictEqual(noCampaigns.campaigns, [], 'Missing campaigns are not silently recreated from defaults');
-    const orphan = normalizeState({ ...structuredClone(state), campaigns: [{ ...first, agentId: '', viciCampaign: '', xferTarget: '' }] });
+    const orphan = normalizeState({ ...structuredClone(state), campaigns: [{ ...first, agentId: '', agentIds: [], viciCampaign: '', xferTarget: '' }] });
     assert.equal(orphan.campaigns[0].agentId, '', 'Missing agent assignment is not silently defaulted');
     assert.equal(orphan.campaigns[0].viciCampaign, '', 'Missing VICIdial ID is not replaced with a made-up campaign');
     assert.equal(orphan.campaigns[0].xferTarget, '', 'Missing closer routing is not inferred from the campaign name');
     assert.ok(getCampaignCallReadinessBlockers(orphan, orphan.campaigns[0]).length > 0);
-    const noXferDisposition = { ...first, dispos: 'DAIR,NI,DNC' };
+    const noXferDisposition = { ...first, dispos: 'NI,DNC' };
     assert.ok(getCampaignCallReadinessBlockers(state, noXferDisposition).some((message) => message.includes('XFER')));
     const noDispositions = { ...first, dispos: '' };
     assert.ok(getCampaignCallReadinessBlockers(state, noDispositions).some((message) => message.includes('At least one')));
 
     const unassigned = structuredClone(state);
-    unassigned.campaigns = unassigned.campaigns.filter((campaign: any) => campaign.agentId !== agent.id);
+    unassigned.campaigns = unassigned.campaigns.filter((campaign: any) => campaign.agentId !== agent.id).map((campaign: any) => ({ ...campaign, agentIds: (campaign.agentIds || []).filter((id: string) => id !== agent.id) }));
     assert.ok(validateAgent(unassigned, agent).some((item) => item.level === 'er' && item.message.includes('assigned')));
     assert.ok(getDeploymentReadinessBlockers(unassigned).some((message) => message.includes('must be explicitly assigned')));
 
-    const unverified = { ...first, deadAirDispositionVerified: false };
-    assert.ok(getCampaignCallReadinessBlockers(state, unverified).some((message) => message.includes('confirmed')));
+    const legacyAutomaticSilence = normalizeState({ ...structuredClone(state), campaigns: [{ ...first,
+      presenceCheckText: 'Old presence prompt', deadAirTimeoutSec: 3, deadAirDisposition: 'DAIR', deadAirDispositionVerified: false,
+    }] });
+    assert.deepStrictEqual(getCampaignCallReadinessBlockers(legacyAutomaticSilence, legacyAutomaticSilence.campaigns[0]), [],
+      'Retired automatic-silence fields must not block a saved campaign');
+    for (const key of ['presenceCheckText', 'deadAirTimeoutSec', 'deadAirDisposition', 'deadAirDispositionVerified']) {
+      assert.equal(Object.prototype.hasOwnProperty.call(legacyAutomaticSilence.campaigns[0], key), false);
+    }
+    assert.ok(!buildDeepgramSettings(legacyAutomaticSilence, agent, legacyAutomaticSilence.campaigns[0]).agent.think.prompt.includes('Old presence prompt'));
+  });
+
+  await check('14. Multi-bot campaign assignment migrates legacy state, preserves primary routing and rejects unassigned bots', () => {
+    const state = configureTestServices(createDefaultState());
+    const campaign = state.campaigns[0];
+    const secondary = state.agents[1];
+    campaign.agentIds = [campaign.agentId, secondary.id, secondary.id];
+    const normalized = normalizeState(state);
+    const saved = normalized.campaigns[0];
+    assert.deepStrictEqual(saved.agentIds, [campaign.agentId, secondary.id]);
+    assert.equal(saved.agentId, campaign.agentId);
+    assert.deepStrictEqual(getCampaignCallReadinessBlockers(normalized, saved, secondary), []);
+    assert(buildDeepgramSettings(normalized, secondary, saved).agent.think.prompt.includes('Medicare'));
+    const outsider = normalized.agents[2];
+    assert.throws(() => buildDeepgramSettings(normalized, outsider, saved), /not explicitly assigned/i);
+    assert(getCampaignCallReadinessBlockers(normalized, saved, outsider).some((message) => message.includes('not assigned')));
+    const legacy = normalizeState({ ...structuredClone(state), campaigns: [{ ...campaign, agentIds: undefined }] });
+    assert.deepStrictEqual(legacy.campaigns[0].agentIds, [campaign.agentId]);
+    const stale = normalizeState({ ...structuredClone(state), campaigns: [{ ...campaign, agentId: 'missing', agentIds: [secondary.id, 'missing'] }] });
+    assert.equal(stale.campaigns[0].agentId, secondary.id);
+    assert.deepStrictEqual(stale.campaigns[0].agentIds, [secondary.id]);
+    const exportPayload = generateViciConfig(normalized);
+    assert(exportPayload.includes('Assigned Bot Pool'));
+    assert(exportPayload.includes(secondary.name));
   });
 
   console.log(`\nALL ${results.length}/${results.length} STEP 1 VERIFICATION CHECKS PASSED!`);

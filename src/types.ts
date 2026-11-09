@@ -71,7 +71,8 @@ export interface Agent {
 export interface Campaign {
   id: string;
   name: string;
-  agentId: string;
+  agentId: string; // Primary bot for the single telephone route.
+  agentIds: string[]; // All bots allowed to use this campaign (browser tests and exports).
   viciCampaign: string;
   lists: string;
   start: string;
@@ -87,10 +88,6 @@ export interface Campaign {
   disclosure: string;
   dispos: string;
   complianceRules: string;
-  presenceCheckText: string;
-  deadAirTimeoutSec: number;
-  deadAirDisposition: string;
-  deadAirDispositionVerified: boolean;
 }
 
 export interface ViciConfig {

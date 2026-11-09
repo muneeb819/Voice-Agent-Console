@@ -145,19 +145,9 @@ async function main() {
   assert.ok(liveCampaign, 'Greeting integration fixture requires an explicit campaign');
   liveCampaign.agentId = a1.id;
   liveCampaign.complianceRules = 'Reviewed greeting fixture rules: identify accurately, avoid unsupported claims, and honor do-not-call requests immediately.';
-  liveCampaign.presenceCheckText = 'Can you hear me okay?';
-  liveCampaign.deadAirTimeoutSec = 8;
-  liveCampaign.deadAirDisposition = 'DAIR';
-  liveCampaign.deadAirDispositionVerified = true;
-  if (!liveCampaign.dispos.split(/[ ,]+/).includes('DAIR')) liveCampaign.dispos += ',DAIR';
   for (const fixtureCampaign of state.campaigns) {
     fixtureCampaign.complianceRules = fixtureCampaign.complianceRules || liveCampaign.complianceRules;
     if (String(fixtureCampaign.complianceRules).trim().length < 20 || /^REVIEW REQUIRED\b/i.test(fixtureCampaign.complianceRules)) fixtureCampaign.complianceRules = liveCampaign.complianceRules;
-    fixtureCampaign.presenceCheckText = fixtureCampaign.presenceCheckText || liveCampaign.presenceCheckText;
-    fixtureCampaign.deadAirTimeoutSec = 8;
-    fixtureCampaign.deadAirDisposition = 'DAIR';
-    if (!fixtureCampaign.dispos.split(/[ ,]+/).includes('DAIR')) fixtureCampaign.dispos += ',DAIR';
-    fixtureCampaign.deadAirDispositionVerified = true;
   }
   a1.greeting = 'Hello {{first_name}}, from the example team.';
   a1.randomGreetingEnabled = true;
@@ -177,7 +167,7 @@ async function main() {
         const message = JSON.parse(data.toString());
         if (message.type === 'Settings') {
           const prompt = String(message.agent?.think?.prompt || '');
-          const marker = 'begin this one assigned campaign opening without repeating the check or adding a second greeting: ';
+          const marker = 'The assigned opening is: ';
           const markerAt = prompt.indexOf(marker);
           let delayedGreeting = '';
           if (markerAt >= 0) {
@@ -227,20 +217,19 @@ async function main() {
     const received = settingsReceived[index];
     const wire = received.settings;
     assert.equal(wire.agent.greeting, undefined, 'Do not allow the provider to speak its automatic greeting');
-    const presence = await waitFor(received.openings, () => true, 'campaign presence check');
-    assert.equal(presence.message, sessionCampaign.presenceCheckText);
-    assert.ok(presence.at - received.appliedAt >= 990, 'Presence check waits a full second after readiness');
+    const opening = await waitFor(received.openings, () => true, 'configured opening after silence');
+    assert.equal(opening.message, started.settings.agent.greeting);
+    assert.ok(opening.at - received.appliedAt >= 990, 'The configured opening waits a full second after readiness');
     assert.equal(received.openings.length, 1);
     assert.equal(received.delayedGreeting, started.settings.agent.greeting, 'Provider prompt and display use the same selected campaign opening');
-    ws.send(JSON.stringify({ type: 'inject_user_message', content: 'I can hear you.' }));
     const reply = await waitFor(events, (event) => event.type === 'transcript' && event.role === 'assistant' &&
-      event.content === started.settings.agent.greeting, 'campaign opening after the caller responds');
+      event.content === started.settings.agent.greeting, 'configured opening spoken to a silent caller');
     ws.send(JSON.stringify({ type: 'stop' }));
     const ended = await waitFor(events, (event) => event.type === 'call_ended', 'session end');
     assert.equal(ended.logSaved, true);
     const log = getSimulatorCallLog(started.callId)!;
     assert.equal(log.greetingId, started.greeting?.greeting_id || null);
-    return { started, ended, wire, opening: reply.content as string, presence: presence.message as string, log, events };
+    return { started, ended, wire, opening: reply.content as string, injectedOpening: opening.message as string, log, events };
   }
 
   try {
@@ -283,10 +272,9 @@ async function main() {
       transport: 'audiosocket', scenario: 'dnc_request', upstream: 'mock_ai', campaignId: liveCampaign.id,
     });
     assert.equal(bridgeCall.cdr.greetingId, 'fixture-lead');
-    const bridgePresence = bridgeCall.cdr.transcript.find((entry) => entry.role === 'assistant')?.content || '';
-    assert.equal(bridgePresence, liveCampaign.presenceCheckText, 'Silent bridge calls speak the selected campaign presence check before waiting');
-    assert.ok(bridgeCall.cdr.functionCalls.some((entry: any) => entry.name === 'apply_dead_air_disposition') === false,
-      'The caller speaks during the presence-check window, so this is not a dead-air disposition');
+    const bridgeOpening = bridgeCall.cdr.transcript.find((entry) => entry.role === 'assistant')?.content || '';
+    assert.match(bridgeOpening, /Hello|Hi|Hey/, 'Silent bridge calls receive the selected opening before the synthetic caller reply');
+    assert.equal(bridgeCall.cdr.disposition, 'DNC', 'Only the explicit caller request changes disposition');
     assert.equal(listBridgeCallLogs(10).find((log) => log.id === bridgeCall.cdr.id)?.greetingId, 'fixture-lead');
     assert.match(exportBridgeLogsCsv(), /greeting_id/);
     assert.match(exportBridgeLogsCsv(), /fixture-lead/);

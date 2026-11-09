@@ -14,6 +14,23 @@ The repository has meaningful security controls: scrypt password hashes, random 
 
 However, the review found authorization-model gaps and browser credential exposure that should be addressed before exposing the console to multiple real operators or the public internet. Existing tests cover several bootstrap, origin, and unauthenticated access cases, but do not establish role separation or comprehensive route-level authorization.
 
+## Status update — 2026-11-09 (`elite-2.35`)
+
+This document is the historical record of the `45cb0ef` review and is preserved as written below. The following findings have since been remediated; see [`BACKEND-AUDIT-2026-11-09.md`](./BACKEND-AUDIT-2026-11-09.md) for evidence:
+
+| Finding | Status on 2026-11-09 |
+| --- | --- |
+| A-01 flat privileges | **Partly closed** — roles + active flag, admin-only routes, read-only viewers, owner/admin provisioning. Per-user *data* isolation still open. |
+| A-02 token in JSON + localStorage | **Closed** — cookie-only browser sessions; legacy browser tokens cleared. |
+| A-03 process-local throttling | **Open** — still needs a shared store for multi-instance deployments. |
+| A-04 no revocation / password change | **Closed** — password change with session invalidation, revoke-all, account disable, role-change invalidation, last-owner protection. |
+| A-05 eight-character minimum | **Closed** — 15-character minimum for new/changed passwords. MFA and breach screening still open. |
+| A-06 no-Origin requests allowed | **Open** — Fetch Metadata added, but no CSRF token for cookie mutations. |
+| A-07 SameSite=None + Partitioned | **Closed** — HTTPS cookies use `SameSite=Lax; Secure`. |
+| A-08 WebSocket handshake rate | **Closed** — per-key handshake bucket plus a concurrency-slot leak fix on failed `accept()`. |
+
+The release decision below still stands: this is not a production certification.
+
 ## Findings
 
 ### A-01 — Every authenticated account receives the same console-wide privileges

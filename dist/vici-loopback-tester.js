@@ -89,6 +89,8 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
         dnc_request: 'Stop calling my phone right now, put me on your do not call list immediately.',
         not_interested: 'No thank you, I am not interested at all, goodbye.',
         medicare_qualified_xfer: 'Yes, I have both Medicare Part A and Part B, and my current age is 71.',
+        medicare_qualified_no_age_xfer: 'Yes, I have Medicare Part A and Part B. Please connect me with a specialist.',
+        medicare_fabricated_age_xfer: 'Yes, I have Medicare Part A. Please connect me with a specialist.',
         medicare_underage_dq: 'Yes I have Medicare, and my current age is 61 years old.',
         medicare_spanish_lang: 'Hola, disculpe, no hablo inglés, yo solo hablo español.',
     };
@@ -185,8 +187,18 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
                         ws.send(JSON.stringify({ type: 'UserStartedSpeaking' }));
                         ws.send(JSON.stringify({ type: 'ConversationText', role: 'user', content: callerSpeechText }));
                         ws.send(JSON.stringify({ type: 'AgentThinking' }));
-                        if (opts.scenario === 'qualified_xfer' || opts.scenario === 'medicare_qualified_xfer') {
-                            const isMed = opts.scenario === 'medicare_qualified_xfer';
+                        if (opts.scenario === 'qualified_xfer' || opts.scenario === 'medicare_qualified_xfer' || opts.scenario === 'medicare_qualified_no_age_xfer' || opts.scenario === 'medicare_fabricated_age_xfer') {
+                            const isMed = opts.scenario !== 'qualified_xfer';
+                            const medNotes = opts.scenario === 'medicare_qualified_xfer'
+                                ? 'Qualified Medicare Part A & B, Age 71, Hook: Food & OTC Card'
+                                : opts.scenario === 'medicare_fabricated_age_xfer'
+                                    ? 'Qualified Medicare Part A, Hook: Food & OTC Card'
+                                    : 'Qualified Medicare Part A & B, Hook: Food & OTC Card';
+                            const medArgs = opts.scenario === 'medicare_qualified_xfer'
+                                ? { reason: 'Qualified Medicare beneficiary ready for Food & OTC benefit review', prospect_name: 'Robert', confirmed_age: '71', medicare_status: 'Medicare Part A & B', hook_type: 'Food & OTC Card' }
+                                : opts.scenario === 'medicare_qualified_no_age_xfer'
+                                    ? { reason: 'Qualified Medicare beneficiary ready for Food & OTC benefit review', prospect_name: 'Robert', medicare_status: 'Part A & B', hook_type: 'Food & OTC Card' }
+                                    : { reason: 'Qualified Medicare beneficiary ready for Food & OTC benefit review', prospect_name: 'Robert', confirmed_age: '71', medicare_status: 'Part A & B', hook_type: 'Food & OTC Card' };
                             ws.send(JSON.stringify({
                                 type: 'FunctionCallRequest',
                                 functions: [
@@ -195,24 +207,14 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
                                         name: 'set_disposition',
                                         arguments: JSON.stringify({
                                             code: 'XFER',
-                                            notes: isMed
-                                                ? 'Qualified Medicare Part A & B, Age 71, Hook: Food & OTC Card'
-                                                : 'Robert age 64 FL qualified',
+                                            notes: isMed ? medNotes : 'Robert age 64 FL qualified',
                                         }),
                                         client_side: true,
                                     },
                                     {
                                         id: 'fc_2',
                                         name: 'transfer_to_live_agent',
-                                        arguments: JSON.stringify(isMed
-                                            ? {
-                                                reason: 'Qualified Medicare beneficiary ready for Food & OTC benefit review',
-                                                prospect_name: 'Robert',
-                                                confirmed_age: '71',
-                                                medicare_status: 'Medicare Part A & B',
-                                                hook_type: 'Food & OTC Card',
-                                            }
-                                            : { reason: 'Robert age 64 in FL wants FE quote', confirmed_age: '64' }),
+                                        arguments: JSON.stringify(isMed ? medArgs : { reason: 'Robert age 64 in FL wants FE quote', confirmed_age: '64' }),
                                         client_side: true,
                                     },
                                 ],

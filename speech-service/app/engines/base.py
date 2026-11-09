@@ -68,19 +68,32 @@ async def aiter_blocking(factory: Callable[[], Iterator]):
     """Run a blocking generator in a worker thread and yield its items asynchronously.
     Closing/cancelling the consumer stops the producer after the current chunk."""
     loop = asyncio.get_running_loop()
-    q: asyncio.Queue = asyncio.Queue()
+    q: asyncio.Queue = asyncio.Queue(maxsize=8)
     stop = threading.Event()
+
+    def put_bounded(item) -> bool:
+        fut = asyncio.run_coroutine_threadsafe(q.put(item), loop)
+        while not fut.done():
+            if stop.wait(0.05):
+                fut.cancel()
+                return False
+        try:
+            fut.result()
+            return True
+        except Exception:
+            return False
 
     def worker() -> None:
         try:
             for item in factory():
                 if stop.is_set():
                     break
-                loop.call_soon_threadsafe(q.put_nowait, item)
+                if not put_bounded(item):
+                    break
         except BaseException as exc:  # noqa: BLE001 - forwarded to the consumer
-            loop.call_soon_threadsafe(q.put_nowait, exc)
+            put_bounded(exc)
         finally:
-            loop.call_soon_threadsafe(q.put_nowait, _DONE)
+            put_bounded(_DONE)
 
     fut = loop.run_in_executor(None, worker)
     try:

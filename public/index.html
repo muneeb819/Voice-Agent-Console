@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="cyan_signal" data-exposure="studio" data-glass="frosted">
+<html lang="en" data-theme="cyan_signal">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -7,24 +7,27 @@
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>MMA Digital Labs | Voice Agent Console — AI Telephony &amp; VICIdial Studio</title>
-  <link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />
-  <link rel="apple-touch-icon" href="./assets/monogram.svg" />
+  <link rel="icon" type="image/jpeg" href="./assets/brand/mma-cyan-signal-icon.jpg" />
+  <link rel="apple-touch-icon" href="./assets/brand/mma-cyan-signal-icon.jpg" />
   <meta name="theme-color" content="#0B0F14" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=elite-2.25" />
+  <link rel="stylesheet" href="./styles.css?v=elite-2.36" />
+  <link rel="stylesheet" href="./brand-logos.css?v=elite-2.36" />
   <script>
     (function () {
-      var CURRENT_BUILD = 'elite-2.25';
-      // Capture cross-site iframe auth handoff token (?vac_token=...) into storage & clean URL bar
+      var CURRENT_BUILD = 'elite-2.36';
+      // Discard legacy token handoffs; browser authentication uses HttpOnly cookies.
+      try {
+        sessionStorage.removeItem('vac_auth_token');
+        localStorage.removeItem('vac_auth_token');
+      } catch (e) {}
       try {
         var sp = new URLSearchParams(window.location.search || '');
-        var handoffTok = sp.get('vac_token');
-        if (handoffTok) {
-          try { sessionStorage.setItem('vac_auth_token', handoffTok); } catch (e) {}
-          try { localStorage.setItem('vac_auth_token', handoffTok); } catch (e) {}
+        if (sp.has('vac_token') || sp.has('token')) {
           sp.delete('vac_token');
+          sp.delete('token');
           var rest = sp.toString();
           window.history.replaceState(null, '', window.location.pathname + (rest ? '?' + rest : '') + window.location.hash);
         } else if (window.location.search && /^[?&](v|cb|_)=/.test(window.location.search)) {
@@ -46,15 +49,9 @@
 </head>
 <body>
   <!-- GPU-Composited Ambient Light Exposure & Architectural Grid Canvas -->
-  <div class="ambient-canvas" aria-hidden="true">
-    <div class="ambient-orb orb-1"></div>
-    <div class="ambient-orb orb-2"></div>
-    <div class="ambient-orb orb-3"></div>
-    <div class="ambient-grid"></div>
   </div>
 
   <header class="console-header" role="banner">
-    <!-- Zone 1: Navigation Trigger, Brand Identity & Active Workspace Capsule -->
     <div class="hdr-zone hdr-zone-left">
       <button class="g rail-toggle-btn" id="btn-sidebar-toggle" type="button" title="Collapse Side Menu (Ctrl+B)" aria-label="Toggle Side Control Panel" aria-expanded="true">
         <svg id="sidebar-toggle-svg" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -63,63 +60,11 @@
           <polyline id="sidebar-toggle-chevron" points="16 9 13 12 16 15"></polyline>
         </svg>
       </button>
-
-      <div class="brand">
-        <span class="brand-mark" id="brand-mark" aria-hidden="true"></span>
-        <div class="brand-copy">
-          <div class="brand-row">
-            <h1>MMA <span>Digital Labs</span></h1>
-          </div>
-          <span class="brand-sub">Voice Agent Console &bull; Deepgram Flux &bull; VICIdial</span>
-        </div>
-      </div>
-
-      <span class="hdr-sep" aria-hidden="true"></span>
-
-      <div class="hdr-context-group" aria-label="Active Workspace and Storage Status">
-        <span class="pill nav-crumb" id="active-nav-crumb" title="Active Workspace View">Dashboard</span>
-        <span class="pill ok hdr-db-pill" id="db-pill" title="Backed by server SQLite WAL + JSON mirror">
-          <span class="hdr-live-led" aria-hidden="true"></span>
-          <span>SQLite Ready</span>
-        </span>
-      </div>
     </div>
-
-    <!-- Zone 2: Live Sync State & Client Demo Share Capsule -->
-    <div class="hdr-zone hdr-zone-center">
-      <span id="st" title="Configuration synchronization status">Loading…</span>
-      <button class="g hdr-share-btn" id="btn-share-demo" type="button" style="display:none" title="Copy public HTTPS Client Demo URL to clipboard">
-        <span class="hdr-share-led" aria-hidden="true"></span>
-        <span>Client Link</span>
-      </button>
-      <a class="g hdr-newtab-btn" id="btn-newtab" href="./" target="_blank" rel="noopener" style="text-decoration:none;display:none" title="Open console in a dedicated browser tab for unrestricted microphone access">↗ Open Tab</a>
+    <div class="brand header-brand" role="img" aria-label="MMA Digital Labs — Voice Agent Bots Console">
+      <span class="brand-mark mma-brand-logo" id="brand-mark" aria-hidden="true"></span>
     </div>
-
-    <!-- Zone 3: Precision Utility Dock & Transaction Commit Controls -->
-    <div class="hdr-zone hdr-zone-right header-actions">
-      <div class="hdr-tool-dock" role="group" aria-label="Appearance, Security and Account Controls">
-        <button class="g theme-trigger hdr-dock-btn" id="btn-theme" type="button" title="Open Appearance &amp; Theme Studio (10 Visual Systems + Exposure &amp; Glass Controls)">
-          <span class="theme-dot" id="theme-active-dot"></span>
-          <span class="hdr-btn-txt" id="theme-active-lbl">Theme</span>
-        </button>
-        <button class="g hdr-dock-btn" id="btn-keys" type="button" title="Configure server-side .env API keys &amp; security">
-          <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="4.2"/><path d="m11 11 8.5 8.5M16 16l2.2-2.2M18.5 18.5 21 16"/></svg>
-          <span class="hdr-btn-txt">API Keys</span>
-        </button>
-        <a class="g hdr-dock-btn" id="btn-create-account" href="/signup" style="display:none;text-decoration:none" title="Create another account">Create Account</a>
-        <button class="g hdr-dock-btn hdr-logout-btn" id="btn-logout" type="button" style="display:none" title="Sign out of the console">
-          <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="10.5" width="11" height="10" rx="2.2"/><path d="M7.5 10.5V7.8a4 4 0 0 1 7.4-2.1"/><circle cx="9.5" cy="15.5" r="1.1"/></svg>
-          <span class="hdr-btn-txt">Sign Out</span>
-        </button>
-      </div>
-
-      <span class="hdr-sep" aria-hidden="true"></span>
-
-      <div class="hdr-commit-group" role="group" aria-label="Save or Discard Changes">
-        <button class="g hdr-discard-btn" id="dc" type="button" disabled title="Discard unsaved local edits">Discard</button>
-        <button class="b hdr-save-btn" id="sv" type="button" disabled title="Save to SQLite &amp; run full pre-flight verification">Save &amp; Verify</button>
-      </div>
-    </div>
+    <div class="hdr-zone hdr-zone-right" aria-hidden="true"></div>
   </header>
 
   <div class="app-shell" id="app-shell">
@@ -127,12 +72,42 @@
 
     <aside class="side-rail" id="side-rail" aria-label="Side Collapsible Control Panel">
       <nav id="nav" class="side-nav" aria-label="Console Workspace Navigation"></nav>
+      <div class="side-rail-footer">
+        <button class="g side-utility-btn theme-trigger" id="btn-theme" type="button" title="Appearance & Theme Studio" aria-label="Open Appearance and Theme Studio">
+          <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18h1.2a2.2 2.2 0 0 0 1.6-3.7c-.5-.6-.1-1.5.7-1.5H17a4 4 0 0 0 4-4c0-5-4-9-9-9Z"/><circle cx="7.5" cy="11.5" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="14.5" cy="7.5" r="1"/></svg>
+          <span class="theme-dot" id="theme-active-dot" aria-hidden="true"></span>
+          <span class="side-utility-lbl" id="theme-active-lbl">Theme</span>
+        </button>
+        <div class="side-utility-dock hdr-tool-dock" role="group" aria-label="API keys and account controls">
+          <button class="g side-utility-btn" id="btn-keys" type="button" title="API keys & security" aria-label="Open API keys and security">
+            <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="4.2"/><path d="m11 11 8.5 8.5M16 16l2.2-2.2M18.5 18.5 21 16"/></svg>
+            <span class="side-utility-lbl">API Keys</span>
+          </button>
+          <button class="g side-utility-btn" id="btn-account-menu" type="button" title="Account & session links" aria-label="Open account and session links" aria-expanded="false" aria-controls="account-popover">
+            <svg class="btn-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
+            <span class="side-utility-lbl">Account</span>
+          </button>
+          <div class="account-popover" id="account-popover" hidden>
+            <a class="g" id="btn-create-account" href="/signup" style="display:none;text-decoration:none">Create Account</a>
+            <button class="g" id="btn-account-security" type="button" style="display:none">Password &amp; Sessions</button>
+            <button class="g" id="btn-logout" type="button" style="display:none">Sign Out</button>
+            <button class="g" id="btn-share-demo" type="button" style="display:none">Copy Client Link</button>
+            <a class="g" id="btn-newtab" href="./" target="_blank" rel="noopener" style="display:none;text-decoration:none">Open Tab</a>
+          </div>
+        </div>
+      </div>
     </aside>
 
     <div class="workspace-stage">
       <div id="vr"></div>
       <main id="m"></main>
     </div>
+  </div>
+
+  <div class="save-dock hdr-commit-group" id="save-dock" role="group" aria-label="Unsaved changes" hidden>
+    <span class="save-dock-lbl" id="save-dock-lbl">Unsaved changes</span>
+    <button class="g hdr-discard-btn" id="dc" type="button" disabled title="Discard unsaved local edits">Discard</button>
+    <button class="b hdr-save-btn" id="sv" type="button" disabled title="Save changes and run verification">Save &amp; Verify</button>
   </div>
 
   <!-- Elite Appearance & Theme Studio Modal -->
@@ -152,6 +127,7 @@
       <div id="theme-loader-preview" class="theme-loader-preview" hidden>
         <div class="theme-loader-card">
           <div class="theme-loader-kicker">MMA DIGITAL LABS &bull; ACOUSTIC TELEMETRY</div>
+          <div class="theme-loader-logo mma-brand-logo" id="theme-loader-logo" aria-hidden="true"></div>
           <div class="theme-loader-bars" aria-hidden="true">
             <span></span><span></span><span></span><span></span><span></span><span></span>
             <span></span><span></span><span></span><span></span><span></span><span></span>
@@ -164,24 +140,6 @@
       <h2 class="studio-sec-title">Choose an Identity — Click a card to re-skin the entire system</h2>
       <div class="theme-grid" id="theme-swatch-grid"></div>
 
-      <div class="row" style="margin-top:16px">
-        <div>
-          <label>✨ Ambient Light Exposure</label>
-          <div class="seg-group" id="exposure-seg">
-            <button type="button" data-exp="minimal">Matte Off</button>
-            <button type="button" data-exp="studio">Studio Glow</button>
-            <button type="button" data-exp="cinema">Vivid Cinema</button>
-          </div>
-        </div>
-        <div>
-          <label>💎 Surface Glass &amp; Specular Depth</label>
-          <div class="seg-group" id="glass-seg">
-            <button type="button" data-gls="solid">Crisp Solid</button>
-            <button type="button" data-gls="frosted">Frosted Glass</button>
-            <button type="button" data-gls="crystal">Ultra Crystal</button>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -197,6 +155,28 @@
       <div class="note er" id="auth-err-msg" style="margin-top:8px"></div>
       <div class="bar" style="margin-top:14px;justify-content:flex-end">
         <button class="b" id="btn-auth-login">Unlock Console</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Account security: password rotation and session revocation -->
+  <div class="modal-backdrop" id="account-security-modal" hidden>
+    <div class="modal" style="max-width:460px">
+      <div class="modal-head">
+        <h3>Password &amp; Sessions</h3>
+        <button class="g" id="account-security-close-x" type="button" aria-label="Close password and sessions">✕</button>
+      </div>
+      <div class="note" id="account-security-who" style="margin-bottom:10px"></div>
+      <label for="account-current-password">Current password</label>
+      <input type="password" id="account-current-password" autocomplete="current-password" />
+      <label for="account-new-password" style="margin-top:8px">New password</label>
+      <input type="password" id="account-new-password" autocomplete="new-password" minlength="15" placeholder="At least 15 characters" />
+      <div class="note" style="margin-top:6px">Changing your password signs out every other device. Use a multi-word passphrase.</div>
+      <div class="note" id="account-security-msg" role="status" aria-live="polite" style="margin-top:8px;white-space:pre-line"></div>
+      <div class="bar" style="margin-top:14px;justify-content:flex-end">
+        <button class="g" id="btn-revoke-sessions" type="button" style="margin-right:auto">Sign Out Other Devices</button>
+        <button class="g" id="account-security-close" type="button">Close</button>
+        <button class="b" id="btn-change-password" type="button">Update Password</button>
       </div>
     </div>
   </div>
@@ -223,7 +203,9 @@
   </div>
 
   <input type="file" id="import-file" accept="application/json,.json" hidden />
-  <script src="./opening.js?v=elite-2.25"></script>
-  <script src="./app.js?v=elite-2.25"></script>
+  <script src="./opening.js?v=elite-2.36"></script>
+  <script src="./persona.js?v=elite-2.36"></script>
+  <script src="./brand-logos.js?v=elite-2.36"></script>
+  <script src="./app.js?v=elite-2.36"></script>
 </body>
 </html>

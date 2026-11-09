@@ -34,11 +34,12 @@ async function main() {
   assert.ok(campaign, 'Live Bot fixture requires an explicit campaign');
   campaign.agentId = 'a1';
   campaign.complianceRules = 'Reviewed Live Bot fixture rules: be truthful, do not claim unverified benefits, and honor do-not-call requests immediately.';
-  campaign.presenceCheckText = 'Can you hear me okay?';
-  campaign.deadAirTimeoutSec = 8;
-  campaign.deadAirDisposition = 'DAIR';
-  campaign.deadAirDispositionVerified = true;
-  if (!campaign.dispos.split(/[ ,]+/).includes('DAIR')) campaign.dispos += ',DAIR';
+  state.functions.push({ id: 'fn_custom_test', name: 'test_webhook', description: 'Local test webhook',
+    params: '{"type":"object","properties":{}}', defer: false,
+    url: '', method: 'post', headers: '{}' });
+  state.functions.push({ id: 'fn_missing_test', name: 'missing_url', description: 'Missing test webhook',
+    params: '{"type":"object","properties":{}}', defer: false, url: '', method: 'post', headers: '{}' });
+  state.agents.find((a) => a.id === 'a1')!.fnIds.push('fn_custom_test', 'fn_missing_test');
   saveConsoleState(state, 'Local mock Live Bot test');
 
   const webhookRequests: Array<{ path: string; body: any }> = [];
@@ -113,13 +114,10 @@ async function main() {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   const simPort = (server.address() as any).port;
 
-  const draft = structuredClone(state);
-  draft.functions.push({ id: 'fn_custom_test', name: 'test_webhook', description: 'Local test webhook',
-    params: '{"type":"object","properties":{}}', defer: false,
-    url: `http://127.0.0.1:${port}/webhook?lead={{lead.lead_id}}`, method: 'post', headers: '{}' });
-  draft.functions.push({ id: 'fn_missing_test', name: 'missing_url', description: 'Missing test webhook',
-    params: '{"type":"object","properties":{}}', defer: false, url: '', method: 'post', headers: '{}' });
-  draft.agents.find((a) => a.id === 'a1')!.fnIds.push('fn_custom_test', 'fn_missing_test');
+  const persistedWithWebhook = structuredClone(state);
+  persistedWithWebhook.functions.find((f) => f.id === 'fn_custom_test')!.url = `http://127.0.0.1:${port}/webhook?lead={{lead.lead_id}}`;
+  saveConsoleState(persistedWithWebhook, 'Persist local webhook destination before browser test');
+  const draft = structuredClone(persistedWithWebhook);
 
   async function openSession(allowWebhooks: boolean) {
     const events: any[] = [];
@@ -134,8 +132,10 @@ async function main() {
   }
 
   async function exercise(allowWebhooks: boolean, suffix: string, fail = false) {
-    draft.functions.find((f) => f.id === 'fn_custom_test')!.url =
+    const saved = structuredClone(draft);
+    saved.functions.find((f) => f.id === 'fn_custom_test')!.url =
       `http://127.0.0.1:${port}/${fail ? 'failure' : 'webhook'}?lead={{lead.lead_id}}`;
+    saveConsoleState(saved, 'Persist test webhook destination');
     const { client, events } = await openSession(allowWebhooks);
     client.send(JSON.stringify({ type: 'inject_user_message', content: suffix }));
     for (const prefix of ['webhook', 'missing', 'unknown', 'xfer', 'dispo']) {

@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.asyncRoute = asyncRoute;
 exports.createApp = createApp;
 exports.createServerWithSimulator = createServerWithSimulator;
 const dns_1 = __importDefault(require("dns"));
@@ -28,6 +29,7 @@ const env_store_1 = require("./env-store");
 const live_simulator_1 = require("./live-simulator");
 const simulator_recordings_1 = require("./simulator-recordings");
 const settings_builder_1 = require("./settings-builder");
+const campaign_assignment_1 = require("./campaign-assignment");
 const vici_bridge_1 = require("./vici-bridge");
 const vici_client_1 = require("./vici-client");
 const vici_loopback_tester_1 = require("./vici-loopback-tester");
@@ -36,6 +38,9 @@ const user_store_1 = require("./user-store");
 const demo_tunnel_1 = require("./demo-tunnel");
 const speech_service_client_1 = require("./speech-service-client");
 (0, env_store_1.loadEnv)();
+function asyncRoute(handler) {
+    return (req, res, next) => { void Promise.resolve(handler(req, res, next)).catch(next); };
+}
 function createApp(viciBridge) {
     const app = (0, express_1.default)();
     // Proxy headers are untrusted by default. Configure only known proxy IPs or
@@ -44,18 +49,24 @@ function createApp(viciBridge) {
     if (trustedProxies)
         app.set('trust proxy', trustedProxies.split(',').map((x) => x.trim()).filter(Boolean));
     const loginAttempts = new Map();
+    const loginIpAttempts = new Map();
     const signupAttempts = new Map();
     const loginWindowMs = 15 * 60 * 1000;
     const loginAttemptLimit = 5;
     const signupAttemptLimit = 10;
     app.use((req, res, next) => {
-        // Login handoff and WebSocket URLs can carry a session token; do not send
-        // the current URL as a Referer on subsequent browser requests.
+        // Avoid leaking console URLs to external providers or sample hosts.
         res.setHeader('Referrer-Policy', 'no-referrer');
-        // Cookies can be sent cross-site (including when HTTPS uses SameSite=None).
+        // Session cookies are first-party (SameSite=Lax).
         // Do not grant cross-origin API access, and reject browser requests with a
         // mismatched Origin even when they would not need a CORS preflight.
-        if (req.path.startsWith('/api/') && !(0, request_origin_1.isSameOriginRequest)(req, app.get('trust proxy fn'))) {
+        const requestPath = new URL(req.originalUrl || req.url || '/', 'http://local.invalid').pathname.toLowerCase();
+        const site = String(req.headers['sec-fetch-site'] || '').toLowerCase();
+        if (requestPath.startsWith('/api/') && (site === 'cross-site' || (site === 'same-site' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)))) {
+            res.status(403).json({ ok: false, code: 'CROSS_SITE_REQUEST_BLOCKED', error: 'Cross-site API requests are not allowed.' });
+            return;
+        }
+        if (requestPath.startsWith('/api/') && !(0, request_origin_1.isSameOriginRequest)(req, app.get('trust proxy fn'))) {
             res.status(403).json({ ok: false, error: 'Cross-origin API requests are not allowed.' });
             return;
         }
@@ -63,7 +74,7 @@ function createApp(viciBridge) {
         // An image/navigation request may have no Origin, so also reject browser
         // fetches to these endpoints from another site or origin.
         const fetchSite = req.get('sec-fetch-site');
-        if ((req.path === '/api/vici/register-call' || req.path === '/api/vici/precall') &&
+        if ((requestPath === '/api/vici/register-call' || requestPath === '/api/vici/precall') &&
             fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
             res.status(403).json({ ok: false, error: 'Cross-origin pre-call requests are not allowed.' });
             return;
@@ -92,7 +103,16 @@ function createApp(viciBridge) {
         const baseIp = String(req.ip || req.socket?.remoteAddress || 'unknown');
         return subKey ? `${baseIp}:${subKey}` : baseIp;
     };
-    const canCreateAccount = (req) => (0, auth_guard_1.hasActiveAuthSession)(req) || (!(0, auth_guard_1.isAuthEnabled)() && (0, auth_guard_1.isRequestAuthorized)(req));
+    /** Allows direct bootstrap or an active session with an owner, admin, or no resolved account. */
+    const canCreateAccount = (req) => {
+        if (!(0, auth_guard_1.isAuthEnabled)() && (0, auth_guard_1.isRequestAuthorized)(req))
+            return true;
+        if (!(0, auth_guard_1.hasActiveAuthSession)(req))
+            return false;
+        const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+        // Legacy ADMIN_PASSWORD sessions remain owner-equivalent for recovery.
+        return !account || account.role === 'owner' || account.role === 'admin';
+    };
     const rateLimited = (key, bucket = loginAttempts, limit = loginAttemptLimit) => {
         const now = Date.now();
         const attempts = bucket.get(key);
@@ -143,7 +163,7 @@ function createApp(viciBridge) {
         res.json({ ok: true, user });
     });
     // Create a new account (email + full name + password) and sign in immediately.
-    app.post('/api/auth/signup', (req, res) => {
+    app.post('/api/auth/signup', asyncRoute(async (req, res) => {
         if (!canCreateAccount(req)) {
             res.status(403).json({
                 ok: false,
@@ -159,7 +179,7 @@ function createApp(viciBridge) {
             res.status(429).json({ ok: false, code: 'SIGNUP_RATE_LIMITED', error: 'Too many attempts. Try again later.' });
             return;
         }
-        const result = (0, user_store_1.createUser)(req.body || {});
+        const result = await (0, user_store_1.createUser)(req.body || {});
         if (!result.ok || !result.user) {
             noteFailure(key, signupAttempts);
             res.status(400).json({
@@ -174,17 +194,34 @@ function createApp(viciBridge) {
         signupAttempts.delete(key);
         (0, auth_guard_1.invalidateUserCountCache)();
         (0, user_store_1.purgeExpiredSessions)();
-        const token = (0, user_store_1.createUserSession)(result.user.id);
-        (0, auth_guard_1.setAuthCookie)(res, token, req);
+        // Preserve an existing administrator's session when provisioning an account.
+        // Only the first loopback bootstrap account needs an automatically issued session.
+        if (!(0, auth_guard_1.hasActiveAuthSession)(req)) {
+            const token = (0, user_store_1.createUserSession)(result.user.id);
+            (0, auth_guard_1.setAuthCookie)(res, token, req);
+        }
         res.status(201).json({
             ok: true,
             authEnabled: true,
             authenticated: true,
             user: result.user,
-            token,
         });
-    });
-    app.post('/api/auth/login', (req, res) => {
+    }));
+    app.post('/api/auth/login', asyncRoute(async (req, res) => {
+        const ip = req.socket?.remoteAddress || 'unknown';
+        const ipNow = Date.now();
+        let ipBucket = loginIpAttempts.get(ip);
+        if (!ipBucket || ipBucket.resetAt <= ipNow) {
+            if (loginIpAttempts.size >= 1000 && !loginIpAttempts.has(ip))
+                loginIpAttempts.delete(loginIpAttempts.keys().next().value);
+            ipBucket = { count: 0, resetAt: ipNow + 60_000 };
+            loginIpAttempts.set(ip, ipBucket);
+        }
+        if (++ipBucket.count > 30) {
+            res.setHeader('Retry-After', String(Math.max(1, Math.ceil((ipBucket.resetAt - ipNow) / 1000))));
+            res.status(429).json({ ok: false, code: 'RATE_LIMITED', error: 'Too many sign-in attempts. Please wait a minute.' });
+            return;
+        }
         const email = String(req.body?.email ?? '').trim();
         const candidate = String(req.body?.password ?? '');
         const key = rateKey(req, email ? email.toLowerCase() : 'admin');
@@ -196,7 +233,7 @@ function createApp(viciBridge) {
         }
         // --- Email/password account sign-in ---
         if (email) {
-            const user = (0, user_store_1.authenticateUser)(email, candidate);
+            const user = await (0, user_store_1.authenticateUser)(email, candidate);
             if (!user) {
                 noteFailure(key);
                 res.status(401).json({ ok: false, code: 'INVALID_CREDENTIALS', error: 'Invalid email or password.' });
@@ -205,7 +242,7 @@ function createApp(viciBridge) {
             loginAttempts.delete(key);
             const token = (0, user_store_1.createUserSession)(user.id);
             (0, auth_guard_1.setAuthCookie)(res, token, req);
-            res.json({ ok: true, authEnabled: true, authenticated: true, user, token });
+            res.json({ ok: true, authEnabled: true, authenticated: true, user });
             return;
         }
         // --- Legacy admin password sign-in ---
@@ -225,8 +262,8 @@ function createApp(viciBridge) {
         loginAttempts.delete(key);
         const token = (0, auth_guard_1.createSessionToken)();
         (0, auth_guard_1.setAuthCookie)(res, token, req);
-        res.json({ ok: true, authEnabled: true, authenticated: true, token });
-    });
+        res.json({ ok: true, authEnabled: true, authenticated: true });
+    }));
     app.post('/api/auth/logout', (req, res) => {
         const token = (0, auth_guard_1.getRequestSessionToken)(req);
         (0, auth_guard_1.invalidateAdminSession)(token);
@@ -235,6 +272,147 @@ function createApp(viciBridge) {
         res.json({ ok: true, authEnabled: true, authenticated: false });
     });
     app.use('/api', auth_guard_1.apiAuthMiddleware);
+    // ---------------- account security: password change and session revocation
+    // Registered after apiAuthMiddleware. /api/auth/* is intentionally reachable
+    // before authentication, so each handler below re-resolves the account from
+    // the session itself; no client supplied identifier can act on another
+    // account. /api/users/* additionally passes the middleware adminOnly check.
+    app.post('/api/auth/change-password', asyncRoute(async (req, res) => {
+        const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+        if (!account) {
+            res.status(403).json({
+                ok: false,
+                code: 'ACCOUNT_REQUIRED',
+                error: 'Sign in with an email account to change a password. The server ADMIN_PASSWORD is changed in .env.',
+            });
+            return;
+        }
+        const ip = req.socket?.remoteAddress || 'unknown';
+        const key = `${ip}:password-change:${account.id}`;
+        const gate = rateLimited(key, loginAttempts);
+        if (gate.limited) {
+            res.setHeader('Retry-After', String(gate.retryAfter));
+            res.status(429).json({ ok: false, code: 'RATE_LIMITED', error: 'Too many attempts. Try again later.' });
+            return;
+        }
+        const result = await (0, user_store_1.changeUserPassword)(account.id, String(req.body?.currentPassword ?? ''), String(req.body?.newPassword ?? ''), (0, auth_guard_1.getRequestSessionToken)(req));
+        if (!result.ok) {
+            if (result.field === 'currentPassword')
+                noteFailure(key, loginAttempts);
+            res.status(result.field ? 400 : 409).json({
+                ok: false,
+                code: 'PASSWORD_CHANGE_FAILED',
+                field: result.field || null,
+                error: result.error || 'Unable to change the password.',
+            });
+            return;
+        }
+        loginAttempts.delete(key);
+        res.json({
+            ok: true,
+            user: result.user,
+            revokedSessions: result.revokedSessions ?? 0,
+            message: 'Password updated. Other devices were signed out.',
+        });
+    }));
+    app.post('/api/auth/revoke-sessions', (req, res) => {
+        const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+        if (!account) {
+            res.status(403).json({ ok: false, code: 'ACCOUNT_REQUIRED', error: 'Sign in with an email account first.' });
+            return;
+        }
+        const keepCurrent = req.body?.keepCurrent !== false;
+        const revoked = (0, user_store_1.destroyUserSessions)(account.id, keepCurrent ? (0, auth_guard_1.getRequestSessionToken)(req) : null);
+        if (!keepCurrent)
+            (0, auth_guard_1.clearAuthCookie)(res, req);
+        res.json({ ok: true, revokedSessions: revoked, authenticated: keepCurrent });
+    });
+    app.get('/api/auth/sessions', (req, res) => {
+        const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+        if (!account) {
+            res.status(403).json({ ok: false, code: 'ACCOUNT_REQUIRED', error: 'Sign in with an email account first.' });
+            return;
+        }
+        res.json({ ok: true, activeSessions: (0, user_store_1.countUserSessions)(account.id) });
+    });
+    // ---------------- owner/admin account administration
+    const requireAccountAdmin = (req, res) => {
+        const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+        // A legacy ADMIN_PASSWORD session has no account row and stays owner-equivalent.
+        if (account && account.role !== 'owner' && account.role !== 'admin') {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Administrator permission required.' });
+            return false;
+        }
+        return true;
+    };
+    /**
+     * Owner accounts are managed only by another owner (or the legacy
+     * ADMIN_PASSWORD recovery session). Without this, an admin could disable the
+     * owner or grant itself ownership and escape the intended privilege boundary.
+     */
+    const mayManageTarget = (req, res, targetRole, grantingOwner = false) => {
+        const actor = (0, auth_guard_1.getAuthenticatedUser)(req);
+        if (!actor)
+            return true; // legacy ADMIN_PASSWORD session is owner-equivalent
+        if (actor.role === 'owner')
+            return true;
+        if (targetRole === 'owner' || grantingOwner) {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Only an owner can manage owner accounts or grant ownership.' });
+            return false;
+        }
+        return true;
+    };
+    app.get('/api/users', (req, res) => {
+        if (!requireAccountAdmin(req, res))
+            return;
+        res.json({
+            ok: true,
+            users: (0, user_store_1.listUsers)().map((user) => ({ ...user, activeSessions: (0, user_store_1.countUserSessions)(user.id) })),
+        });
+    });
+    app.post('/api/users/:id/status', (req, res) => {
+        if (!requireAccountAdmin(req, res))
+            return;
+        const active = req.body?.active;
+        if (typeof active !== 'boolean') {
+            res.status(400).json({ ok: false, code: 'INVALID_BODY', error: 'active must be a boolean.' });
+            return;
+        }
+        const target = (0, user_store_1.listUsers)().find((user) => user.id === String(req.params.id));
+        if (target && !mayManageTarget(req, res, target.role))
+            return;
+        const result = (0, user_store_1.setUserActive)(String(req.params.id), active);
+        if (!result.ok) {
+            res.status(result.field ? 409 : 404).json({ ok: false, code: 'ACCOUNT_UPDATE_FAILED', error: result.error });
+            return;
+        }
+        (0, auth_guard_1.invalidateUserCountCache)();
+        res.json({ ok: true, user: result.user, revokedSessions: result.revokedSessions ?? 0 });
+    });
+    app.post('/api/users/:id/role', (req, res) => {
+        if (!requireAccountAdmin(req, res))
+            return;
+        const role = String(req.body?.role ?? '');
+        const target = (0, user_store_1.listUsers)().find((user) => user.id === String(req.params.id));
+        if (target && !mayManageTarget(req, res, target.role, role === 'owner'))
+            return;
+        const result = (0, user_store_1.setUserRole)(String(req.params.id), role);
+        if (!result.ok) {
+            res.status(result.field === 'role' && result.error === 'Unknown role.' ? 400 : result.field ? 409 : 404)
+                .json({ ok: false, code: 'ACCOUNT_UPDATE_FAILED', error: result.error });
+            return;
+        }
+        res.json({ ok: true, user: result.user, revokedSessions: result.revokedSessions ?? 0 });
+    });
+    app.post('/api/users/:id/revoke-sessions', (req, res) => {
+        if (!requireAccountAdmin(req, res))
+            return;
+        const target = (0, user_store_1.listUsers)().find((user) => user.id === String(req.params.id));
+        if (target && !mayManageTarget(req, res, target.role))
+            return;
+        const revoked = (0, user_store_1.destroyUserSessions)(String(req.params.id));
+        res.json({ ok: true, revokedSessions: revoked });
+    });
     const buildTelemetryOverview = (state = (0, db_1.getConsoleState)(), validations = (0, settings_builder_1.validateState)(state), publicDemoUrl = (0, demo_tunnel_1.getCachedTunnelUrlSync)()) => {
         const okChecks = validations.filter((v) => v.level === 'ok').length;
         const wnChecks = validations.filter((v) => v.level === 'wn').length;
@@ -412,16 +590,19 @@ function createApp(viciBridge) {
             er: validations.filter((v) => v.level === 'er').length,
         };
         const settingsByCampaignId = Object.fromEntries(state.campaigns.map((campaign) => {
-            const agent = state.agents.find((entry) => entry.id === campaign.agentId);
+            const agent = (0, campaign_assignment_1.primaryCampaignAgent)(state, campaign);
+            const agents = (0, campaign_assignment_1.campaignAgentIds)(campaign).map((id) => state.agents.find((entry) => entry.id === id)).filter((entry) => Boolean(entry));
             return [campaign.id, {
                     campaignId: campaign.id,
                     campaignName: campaign.name,
-                    agentId: campaign.agentId || null,
+                    agentId: agent?.id || null,
+                    agentIds: agents.map((entry) => entry.id),
                     settings: agent ? (0, settings_builder_1.buildDeepgramSettings)(state, agent, campaign) : null,
+                    settingsByAgentId: Object.fromEntries(agents.map((entry) => [entry.id, (0, settings_builder_1.buildDeepgramSettings)(state, entry, campaign)])),
                 }];
         }));
         const settingsByAgentId = Object.fromEntries(state.agents.map((agent) => {
-            const campaigns = state.campaigns.filter((campaign) => campaign.agentId === agent.id);
+            const campaigns = state.campaigns.filter((campaign) => (0, campaign_assignment_1.campaignHasAgent)(campaign, agent.id));
             const selectedCampaign = campaigns.length === 1 ? campaigns[0] : undefined;
             return [agent.id, {
                     agentId: agent.id,
@@ -446,6 +627,27 @@ function createApp(viciBridge) {
             telemetry: buildTelemetryOverview(state, validations, pubUrl),
         };
     };
+    // Container/orchestrator probes. Liveness must not depend on external providers.
+    app.get('/health/live', (_req, res) => {
+        res.status(200).json({ ok: true, status: 'live', service: 'voice-agent-console' });
+    });
+    // Readiness verifies local persisted state only; upstream outages must not cause restart loops.
+    app.get('/health/ready', (_req, res) => {
+        try {
+            const state = (0, db_1.getConsoleState)();
+            const stateUsable = Boolean(state && Array.isArray(state.agents) && Array.isArray(state.campaigns) &&
+                Array.isArray(state.providers) && state.services && typeof state.services === 'object');
+            if (!stateUsable) {
+                res.status(503).json({ ok: false, status: 'not_ready', service: 'voice-agent-console', reason: 'application_state_unavailable' });
+                return;
+            }
+            res.status(200).json({ ok: true, status: 'ready', service: 'voice-agent-console', checks: { applicationState: 'ok' } });
+        }
+        catch {
+            // Never expose filesystem paths, database errors, secrets, or configuration in probes.
+            res.status(503).json({ ok: false, status: 'not_ready', service: 'voice-agent-console', reason: 'application_state_unavailable' });
+        }
+    });
     app.get('/api/health', (req, res) => {
         const authed = (0, auth_guard_1.isRequestAuthorized)(req);
         res.json({
@@ -461,11 +663,11 @@ function createApp(viciBridge) {
             ...(authed ? { secrets: (0, env_store_1.getSecretsStatus)() } : {}),
         });
     });
-    app.get('/api/state', async (_req, res) => {
+    app.get('/api/state', asyncRoute(async (_req, res) => {
         const liveTunnel = await (0, demo_tunnel_1.discoverActiveTunnelUrl)();
         res.json({ ok: true, ...buildPayload((0, db_1.getConsoleState)(), liveTunnel) });
-    });
-    app.get('/api/telemetry/overview', async (_req, res) => {
+    }));
+    app.get('/api/telemetry/overview', asyncRoute(async (_req, res) => {
         const state = (0, db_1.getConsoleState)();
         const liveTunnel = await (0, demo_tunnel_1.discoverActiveTunnelUrl)();
         res.json({
@@ -473,8 +675,8 @@ function createApp(viciBridge) {
             telemetry: buildTelemetryOverview(state, (0, settings_builder_1.validateState)(state), liveTunnel),
             publicDemoUrl: liveTunnel,
         });
-    });
-    app.get('/api/demo-tunnel/status', async (_req, res) => {
+    }));
+    app.get('/api/demo-tunnel/status', asyncRoute(async (_req, res) => {
         const url = await (0, demo_tunnel_1.discoverActiveTunnelUrl)();
         res.json({
             ok: true,
@@ -484,8 +686,8 @@ function createApp(viciBridge) {
             signupUrl: url ? `${url}/signup` : null,
             lanIp: (0, demo_tunnel_1.getPreferredLanIpv4)(),
         });
-    });
-    app.post('/api/demo-tunnel/start', async (req, res) => {
+    }));
+    app.post('/api/demo-tunnel/start', asyncRoute(async (req, res) => {
         if (!(0, auth_guard_1.isAuthEnabled)() || !(0, auth_guard_1.hasActiveAuthSession)(req)) {
             res.status(403).json({ ok: false, error: 'Sign in before opening a public tunnel.' });
             return;
@@ -507,7 +709,7 @@ function createApp(viciBridge) {
             loginUrl: `${out.publicUrl}/login`,
             signupUrl: `${out.publicUrl}/signup`,
         });
-    });
+    }));
     app.post('/api/demo-tunnel/stop', (_req, res) => {
         (0, demo_tunnel_1.stopPublicDemoTunnel)();
         res.json({ ok: true, active: false, publicUrl: null });
@@ -547,9 +749,10 @@ function createApp(viciBridge) {
     // Step 2: Simulator call log history endpoints
     app.get('/api/simulator/logs', (req, res) => {
         const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
+        const campaignId = typeof req.query.campaignId === 'string' ? req.query.campaignId : undefined;
         const requested = typeof req.query.limit === 'string' ? Number(req.query.limit) : 20;
         const limit = Number.isFinite(requested) && requested > 0 ? Math.max(1, Math.min(100, Math.floor(requested))) : 20;
-        const logs = (0, db_1.listSimulatorCallLogs)(agentId, limit);
+        const logs = (0, db_1.listSimulatorCallLogs)(agentId, limit).filter((row) => !campaignId || row.campaignId === campaignId);
         res.setHeader('Cache-Control', 'private, no-store');
         res.json({ ok: true, count: logs.length, logs });
     });
@@ -682,8 +885,12 @@ function createApp(viciBridge) {
             logs: (0, db_1.listBridgeCallLogs)(20),
         });
     });
-    app.get('/api/vici/logs', (_req, res) => {
-        const logs = (0, db_1.listBridgeCallLogs)(25);
+    app.get('/api/vici/logs', (req, res) => {
+        const requested = typeof req.query.limit === 'string' ? Number(req.query.limit) : 25;
+        const limit = Number.isFinite(requested) && requested > 0 ? Math.max(1, Math.min(200, Math.floor(requested))) : 25;
+        const campaignId = typeof req.query.campaignId === 'string' ? req.query.campaignId : undefined;
+        const logs = (0, db_1.listBridgeCallLogs)(limit).filter((row) => !campaignId || row.campaignId === campaignId);
+        res.setHeader('Cache-Control', 'private, no-store');
         res.json({ ok: true, count: logs.length, logs });
     });
     app.delete('/api/vici/logs', (_req, res) => {
@@ -694,7 +901,7 @@ function createApp(viciBridge) {
         const parsed = (0, vici_client_1.parseVicidialCallerCode)(req.body?.callerIdName, req.body?.callerIdNum);
         res.json({ ok: true, parsed });
     });
-    app.post('/api/vici/verify', async (req, res) => {
+    app.post('/api/vici/verify', asyncRoute(async (req, res) => {
         try {
             const st = (0, db_1.getConsoleState)();
             const viciCfg = req.body?.vici ? { ...st.vici, ...req.body.vici } : st.vici;
@@ -714,8 +921,8 @@ function createApp(viciBridge) {
         catch (err) {
             res.status(400).json({ ok: false, error: err?.message || 'VICIdial verification failed' });
         }
-    });
-    app.post('/api/vici/simulate-call', async (req, res) => {
+    }));
+    app.post('/api/vici/simulate-call', asyncRoute(async (req, res) => {
         if (!viciBridge) {
             res.status(503).json({ ok: false, error: 'VICIdial Bridge service is not attached' });
             return;
@@ -727,6 +934,8 @@ function createApp(viciBridge) {
                 'dnc_request',
                 'not_interested',
                 'medicare_qualified_xfer',
+                'medicare_qualified_no_age_xfer',
+                'medicare_fabricated_age_xfer',
                 'medicare_underage_dq',
                 'medicare_spanish_lang',
             ];
@@ -751,7 +960,7 @@ function createApp(viciBridge) {
                 error: err?.message || 'Simulated VICIdial bridge call failed',
             });
         }
-    });
+    }));
     app.get('/api/vici/deploy-script', (_req, res) => {
         const blockers = (0, settings_builder_1.getDeploymentReadinessBlockers)((0, db_1.getConsoleState)());
         if (blockers.length) {
@@ -805,7 +1014,7 @@ function createApp(viciBridge) {
         }
         res.json({ ok: true, callId, action: 'force_hangup' });
     });
-    app.post('/api/vici/calls/:callId/transfer', async (req, res) => {
+    app.post('/api/vici/calls/:callId/transfer', asyncRoute(async (req, res) => {
         if (!viciBridge) {
             res.status(503).json({ ok: false, error: 'Bridge service not attached' });
             return;
@@ -817,8 +1026,8 @@ function createApp(viciBridge) {
             return;
         }
         res.json({ ok: true, callId, action: 'force_transfer' });
-    });
-    app.post('/api/functions/test-webhook', async (req, res) => {
+    }));
+    app.post('/api/functions/test-webhook', asyncRoute(async (req, res) => {
         try {
             const state = (0, db_1.getConsoleState)();
             const fnDef = req.body?.fn ||
@@ -848,7 +1057,7 @@ function createApp(viciBridge) {
         catch (err) {
             res.status(400).json({ ok: false, error: err?.message || 'Webhook test failed' });
         }
-    });
+    }));
     app.get('/api/vici/release-bundle', (_req, res) => {
         const blockers = (0, settings_builder_1.getDeploymentReadinessBlockers)((0, db_1.getConsoleState)());
         if (blockers.length) {
@@ -872,7 +1081,7 @@ function createApp(viciBridge) {
     app.get('/api/secrets', (_req, res) => {
         res.json({ ok: true, secrets: (0, env_store_1.getSecretsStatus)() });
     });
-    app.post('/api/secrets', async (req, res) => {
+    app.post('/api/secrets', asyncRoute(async (req, res) => {
         try {
             const incoming = req.body || {};
             const updates = {};
@@ -913,8 +1122,8 @@ function createApp(viciBridge) {
                 secrets: (0, env_store_1.getSecretsStatus)(),
             });
         }
-    });
-    app.post('/api/deepgram/verify', async (req, res) => {
+    }));
+    app.post('/api/deepgram/verify', asyncRoute(async (req, res) => {
         try {
             const explicitKey = typeof req.body?.apiKey === 'string' ? req.body.apiKey : undefined;
             const diagnostic = await (0, env_store_1.verifyDeepgramConnection)(explicitKey);
@@ -930,8 +1139,8 @@ function createApp(viciBridge) {
                 error: err?.message || 'Deepgram diagnostic check failed',
             });
         }
-    });
-    app.get('/api/deepgram/voices', async (req, res) => {
+    }));
+    app.get('/api/deepgram/voices', asyncRoute(async (req, res) => {
         try {
             const force = req.query.refresh === '1' || req.query.refresh === 'true';
             const catalog = await (0, deepgram_catalog_1.fetchDeepgramVoiceCatalog)(force);
@@ -988,12 +1197,12 @@ function createApp(viciBridge) {
                 error: err?.message || 'Failed to load Deepgram voice catalog',
             });
         }
-    });
-    app.get('/api/deepgram/llm-models', async (_req, res) => {
+    }));
+    app.get('/api/deepgram/llm-models', asyncRoute(async (_req, res) => {
         const models = await (0, deepgram_catalog_1.fetchDeepgramLlmModels)();
         res.json({ ok: true, count: models.length, models });
-    });
-    app.get('/api/deepgram/sample', async (req, res) => {
+    }));
+    app.get('/api/deepgram/sample', asyncRoute(async (req, res) => {
         try {
             const sampleUrl = String(req.query.url || '');
             const { buffer, contentType } = await (0, deepgram_catalog_1.fetchAllowedSampleAudio)(sampleUrl);
@@ -1004,8 +1213,8 @@ function createApp(viciBridge) {
         catch (err) {
             res.status(err?.statusCode || 400).json({ ok: false, code: err?.code, error: err?.message || 'Unable to stream sample audio' });
         }
-    });
-    app.post('/api/tts/preview', async (req, res) => {
+    }));
+    app.post('/api/tts/preview', asyncRoute(async (req, res) => {
         try {
             const result = await (0, deepgram_catalog_1.synthesizeTtsPreview)(req.body || {});
             res.setHeader('Content-Type', result.contentType);
@@ -1021,9 +1230,9 @@ function createApp(viciBridge) {
                 error: err?.message || 'Failed to synthesize TTS preview',
             });
         }
-    });
+    }));
     // ==================== LOCAL SPEECH SERVICE (1-CLICK STT + TTS) ====================
-    app.get('/api/speech-service/status', async (req, res) => {
+    app.get('/api/speech-service/status', asyncRoute(async (req, res) => {
         try {
             const explicitUrl = typeof req.query.url === 'string' ? req.query.url : undefined;
             const diagnostic = await (0, speech_service_client_1.verifySpeechServiceConnection)(explicitUrl);
@@ -1044,8 +1253,8 @@ function createApp(viciBridge) {
                 error: err?.message || 'Failed to query Speech Service status',
             });
         }
-    });
-    app.post('/api/speech-service/test', async (req, res) => {
+    }));
+    app.post('/api/speech-service/test', asyncRoute(async (req, res) => {
         try {
             const result = await (0, speech_service_client_1.runSpeechServiceRoundTripSmoke)({
                 url: typeof req.body?.url === 'string' ? req.body.url : undefined,
@@ -1061,8 +1270,8 @@ function createApp(viciBridge) {
                 error: err?.message || 'Speech Service round-trip test failed',
             });
         }
-    });
-    app.post('/api/speech-service/activate', async (req, res) => {
+    }));
+    app.post('/api/speech-service/activate', asyncRoute(async (req, res) => {
         try {
             const secretUpdates = {};
             if (typeof req.body?.url === 'string' && req.body.url.trim()) {
@@ -1123,15 +1332,25 @@ function createApp(viciBridge) {
                 error: err?.message || 'Failed to activate Local Speech Service',
             });
         }
-    });
+    }));
     const publicDir = path_1.default.resolve(__dirname, '..', 'public');
     // Dedicated authentication pages (same shell, tabbed Sign In / Create Account)
+    const safeNextPath = (raw) => {
+        const value = typeof raw === 'string' ? raw : '';
+        if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\') || /[\x00-\x1f\x7f]/.test(value))
+            return '/';
+        try {
+            const parsed = new URL(value, 'http://local.invalid');
+            return parsed.origin === 'http://local.invalid' ? `${parsed.pathname}${parsed.search}` : '/';
+        }
+        catch {
+            return '/';
+        }
+    };
     const serveAuthShell = (req, res) => {
         // A signed-in operator can explicitly open /signup to provision an account.
         if ((0, auth_guard_1.hasActiveAuthSession)(req) && req.path !== '/signup') {
-            const rawNext = typeof req.query.next === 'string' ? req.query.next : '';
-            const target = rawNext.startsWith('/') && !rawNext.startsWith('//') ? rawNext : '/';
-            res.redirect(target);
+            res.redirect(safeNextPath(req.query.next));
             return;
         }
         res.setHeader('Cache-Control', 'no-store');
@@ -1158,6 +1377,17 @@ function createApp(viciBridge) {
     app.get('/index.html', serveConsoleEntry);
     app.use(express_1.default.static(publicDir, { index: false }));
     app.get('*', serveConsoleEntry);
+    app.use((err, req, res, next) => {
+        if (res.headersSent) {
+            next(err);
+            return;
+        }
+        const explicit = Number(err?.statusCode || err?.status);
+        const status = err?.type === 'entity.too.large' ? 413 : err?.type === 'entity.parse.failed' ? 400 : explicit >= 400 && explicit < 500 ? explicit : 500;
+        if (status >= 500)
+            console.error('[http] Unhandled request failure:', err instanceof Error ? err.name : 'Error');
+        res.status(status).json({ ok: false, code: status === 413 ? 'BODY_TOO_LARGE' : status === 400 ? 'INVALID_BODY' : 'INTERNAL_ERROR', error: status === 413 ? 'Request body is too large.' : status === 400 ? 'Request body is invalid.' : 'The server could not complete this request.' });
+    });
     return app;
 }
 function createServerWithSimulator(bridgeOpts) {
@@ -1165,35 +1395,45 @@ function createServerWithSimulator(bridgeOpts) {
     const viciBridge = enableBridge ? new vici_bridge_1.VicidialBridgeService(bridgeOpts) : undefined;
     const app = createApp(viciBridge);
     const server = http_1.default.createServer(app);
+    server.requestTimeout = 60_000;
+    server.headersTimeout = 15_000;
+    server.keepAliveTimeout = 5_000;
+    server.maxRequestsPerSocket = 1000;
     const simWss = (0, live_simulator_1.attachLiveSimulator)(undefined, true);
     const monitorWss = viciBridge ? viciBridge.createMonitorWebSocketServer() : null;
     server.on('upgrade', (req, socket, head) => {
-        if (!(0, request_origin_1.isSameOriginRequest)(req, app.get('trust proxy fn'))) {
-            socket.write('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nForbidden');
-            socket.destroy();
-            return;
+        socket.on('error', () => { });
+        try {
+            if (!(0, request_origin_1.isSameOriginRequest)(req, app.get('trust proxy fn'))) {
+                socket.write('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nForbidden');
+                socket.destroy();
+                return;
+            }
+            if (!(0, auth_guard_1.isRequestAuthorized)(req)) {
+                socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n\r\nUnauthorized');
+                socket.destroy();
+                return;
+            }
+            const pathname = (req.url || '').split('?')[0];
+            if (pathname === '/ws/simulator') {
+                simWss.handleUpgrade(req, socket, head, (ws) => {
+                    simWss.emit('connection', ws, req);
+                });
+            }
+            else if (pathname === '/ws/vici-monitor' && monitorWss) {
+                monitorWss.handleUpgrade(req, socket, head, (ws) => {
+                    monitorWss.emit('connection', ws, req);
+                });
+            }
+            else {
+                socket.destroy();
+            }
         }
-        if (!(0, auth_guard_1.isRequestAuthorized)(req)) {
-            socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nContent-Length: 12\r\n\r\nUnauthorized');
-            socket.destroy();
-            return;
-        }
-        const pathname = (req.url || '').split('?')[0];
-        if (pathname === '/ws/simulator') {
-            simWss.handleUpgrade(req, socket, head, (ws) => {
-                simWss.emit('connection', ws, req);
-            });
-        }
-        else if (pathname === '/ws/vici-monitor' && monitorWss) {
-            monitorWss.handleUpgrade(req, socket, head, (ws) => {
-                monitorWss.emit('connection', ws, req);
-            });
-        }
-        else {
+        catch {
             socket.destroy();
         }
     });
-    return { app, server, viciBridge };
+    return { app, server, viciBridge, liveSimulator: simWss };
 }
 if (require.main === module) {
     const requestedPort = Number(process.env.PORT || 533);
@@ -1206,7 +1446,7 @@ if (require.main === module) {
         console.error('[VoiceAgentConsole] Refusing to bind to a non-loopback interface without an admin password or a registered user.');
         process.exit(1);
     }
-    const { server, viciBridge } = createServerWithSimulator({ enableBridge: true });
+    const { server, viciBridge, liveSimulator } = createServerWithSimulator({ enableBridge: true });
     (async () => {
         if (initialPort !== requestedPort) {
             console.warn(`[VoiceAgentConsole] Cloud preview proxy blocks privileged ports <1024 (port ${requestedPort}) — mapping preview listener to port ${initialPort} (production ViciBox/115.186.137.240 keeps port ${requestedPort}).`);
@@ -1220,13 +1460,6 @@ if (require.main === module) {
                     if (err.code === 'EACCES' && candidatePort < 1024 && retriesLeft > 0) {
                         const nextPort = candidatePort + 5000;
                         console.warn(`[VoiceAgentConsole] Privileged port ${candidatePort} requires CAP_NET_BIND_SERVICE (EACCES) — switching automatically to port ${nextPort}...`);
-                        server.removeListener('error', onError);
-                        listenWithFallback(nextPort, retriesLeft - 1);
-                        return;
-                    }
-                    if (err.code === 'EADDRINUSE' && retriesLeft > 0) {
-                        const nextPort = candidatePort + 1;
-                        console.warn(`[VoiceAgentConsole] Port ${candidatePort} is busy (EADDRINUSE) — switching automatically to port ${nextPort}...`);
                         server.removeListener('error', onError);
                         listenWithFallback(nextPort, retriesLeft - 1);
                         return;
@@ -1253,8 +1486,30 @@ if (require.main === module) {
                 server.once('listening', onListening);
                 server.listen(candidatePort, bindHost);
             };
-            listenWithFallback(initialPort, 100);
+            listenWithFallback(initialPort, 0);
         });
+        let shuttingDown = false;
+        const shutdown = async (signal) => {
+            if (shuttingDown)
+                return;
+            shuttingDown = true;
+            console.log(`[VoiceAgentConsole] ${signal} received; shutting down.`);
+            const force = setTimeout(() => process.exit(1), 10000);
+            force.unref();
+            (0, demo_tunnel_1.stopPublicDemoTunnel)();
+            for (const client of liveSimulator.clients)
+                client.terminate();
+            await new Promise((resolve) => liveSimulator.close(() => resolve()));
+            if (viciBridge)
+                await viciBridge.stop().catch(() => { });
+            await new Promise((resolve) => server.close(() => resolve()));
+            server.closeAllConnections?.();
+            (0, db_1.closeDb)();
+            clearTimeout(force);
+            process.exit(0);
+        };
+        process.once('SIGTERM', () => void shutdown('SIGTERM'));
+        process.once('SIGINT', () => void shutdown('SIGINT'));
         if (viciBridge) {
             try {
                 await viciBridge.start();
