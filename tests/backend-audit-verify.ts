@@ -60,7 +60,7 @@ async function main() {
   assert.equal(new Set(malformed.agents.map((a) => a.id)).size, malformed.agents.length);
   assert.equal(new Set(malformed.campaigns.map((c) => c.id)).size, malformed.campaigns.length);
   assert.ok(malformed.campaigns.every((c) => !c.agentId || malformed.agents.some((a) => a.id === c.agentId)));
-  const bounded = normalizeState({ agents: [{ id: 'a', stt: { eot: 999 }, tts: { speed: -5 }, llm: { temp: 99 } }], campaigns: [{ id: 'c', maxCalls: 1e12, deadAirTimeoutSec: -1 }] });
+  const bounded = normalizeState({ agents: [{ id: 'a', stt: { eot: 999 }, tts: { speed: -5 }, llm: { temp: 99 } }], campaigns: [{ id: 'c', maxCalls: 1e12 }] });
   assert.equal(bounded.agents[0].tts.speed, 0.5);
   assert.equal(bounded.campaigns[0].maxCalls, 1000);
   console.log('✓ Malformed imports cannot crash normalization or create duplicate routing IDs');

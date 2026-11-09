@@ -33,11 +33,6 @@ function configureTestServices() {
     if (String(campaign.complianceRules || '').trim().length < 20 || /^REVIEW REQUIRED\b/i.test(campaign.complianceRules || '')) {
       campaign.complianceRules = 'Reviewed step 4 fixture rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
     }
-    campaign.presenceCheckText = campaign.presenceCheckText || 'Can you hear me okay?';
-    campaign.deadAirTimeoutSec = 8;
-    campaign.deadAirDisposition = 'DAIR';
-    if (!String(campaign.dispos || '').split(/[ ,]+/).includes('DAIR')) campaign.dispos = `${campaign.dispos},DAIR`;
-    campaign.deadAirDispositionVerified = true;
   }
   saveConsoleState(state, 'Test setup: ready campaigns and services');
   const primaryIndex = 0;
@@ -487,10 +482,6 @@ async function run() {
     const medAgent = freshDefaults.agents.find((a) => a.id === 'a_medicare');
     const medCamp = freshDefaults.campaigns.find((c) => c.id === 'c_medicare');
     if (!medAgent || !medCamp) throw new Error('Expected a_medicare agent & c_medicare campaign in defaults');
-    medCamp.deadAirDisposition = 'DAIR';
-    medCamp.deadAirDispositionVerified = true;
-    medCamp.deadAirTimeoutSec = 8;
-    if (!medCamp.dispos.split(/[ ,]+/).includes('DAIR')) medCamp.dispos += ',DAIR';
 
     // Sync Medicare agent/campaign/fn_xfer into persisted SQLite state if not yet present
     const curDbState = getConsoleState();

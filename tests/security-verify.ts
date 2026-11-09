@@ -335,7 +335,7 @@ async function run() {
       assert.strictEqual(download.status, 409, 'An unreviewed default campaign must not produce a deployable archive');
       const blocked = await download.json() as any;
       assert.strictEqual(blocked.ok, false);
-      assert.ok(blocked.blockers.some((message: string) => /Operator confirmed this code exists/i.test(message)), 'The readiness response identifies unverified campaign status codes');
+      assert.ok(blocked.blockers.some((message: string) => /One global (STT|LLM|TTS) provider is selected/i.test(message)), 'The readiness response identifies unconfigured global services rather than a retired automatic-silence code');
       assert.strictEqual(fs.existsSync(path.join(outDir, 'voice-agent-vicibox-release.tar.gz')), false, 'Readiness failure must not create an archive');
     } finally { child.kill(); await waitExit(child); }
     console.log('✓ 6. Real archive download excludes synthetic secrets and unlisted files');

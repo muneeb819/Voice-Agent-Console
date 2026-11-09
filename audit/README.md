@@ -48,7 +48,7 @@ The concatenation behavior in this earlier follow-up was superseded by the singl
 
 ### Campaign readiness and one-second opening follow-up (`elite-2.25`, 2026-11-08)
 
-- The current `npm run build && npm test` run passed. One live Deepgram test was skipped without a key. Fourteen local AudioSocket/SIP+RTP bridge scenarios covered the one-second listen, presence check, caller-response timeout, dead-air update failure with Remote Agent hangup status, rejected dispositions, and DNC transfer blocking.
+- Historical `elite-2.25`: `npm run build && npm test` passed with one live Deepgram test skipped. Its fourteen bridge scenarios included the now-retired presence-check/dead-air path. In `elite-2.31` that path was removed; the current bridge scenarios instead verify that a silent line receives the configured opening, keeps streaming comfort silence, and stays connected until an explicit hangup. See [OPENING-TEST-RESULTS.md](../OPENING-TEST-RESULTS.md) for the current mock audio results.
 - `npm audit --audit-level=low` reported zero vulnerabilities. The browser audit was not rerun for this build; its checked-in timing assertions now expect at least 990 ms. No live provider, physical microphone, carrier, VICIdial/Asterisk server, or production call was tested. See [OPENING-TEST-RESULTS.md](../OPENING-TEST-RESULTS.md) for the current run and the separate historical browser/Python results.
 
 ### Reproducing the browser smoke

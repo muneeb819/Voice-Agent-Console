@@ -108,9 +108,24 @@ async function run() {
   const text = dashboard.d.getElementById('m')!.textContent || '';
   assert.match(text, /Configuration Readiness/);
   assert.match(text, /no score is a 99\.999% reliability guarantee/);
-  assert.match(text, /What still needs attention/);
+  assert.match(text, /What still needs attention|All configuration checks passed/);
   assert(!/GRADE D/.test(text), 'Valid shipped examples must not receive an arbitrary failing grade');
   dashboard.w.close();
-  console.log('✓ Static console: mobile save, explicit verification, storage failure, bidirectional multi-bot assignment, simulator setup feedback and honest readiness');
+  const legacyState = JSON.parse(read('default-state.json'));
+  legacyState.campaigns[0].presenceCheckText = 'Old presence prompt';
+  legacyState.campaigns[0].deadAirTimeoutSec = 3;
+  legacyState.campaigns[0].deadAirDisposition = 'DAIR';
+  legacyState.campaigns[0].deadAirDispositionVerified = false;
+  const retired = await fixture({ state: legacyState, tab: 'campaigns' });
+  const migratedCampaign = retired.state().campaigns[0];
+  for (const key of ['presenceCheckText', 'deadAirTimeoutSec', 'deadAirDisposition', 'deadAirDispositionVerified']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(migratedCampaign, key), false, `Static migration removes ${key}`);
+  }
+  assert.equal(retired.d.querySelector('[data-p="c.presenceCheckText"], [data-p="c.deadAirTimeoutSec"], [data-p="c.deadAirDisposition"], [data-p="c.deadAirDispositionVerified"]'), null);
+  assert.doesNotMatch(retired.d.getElementById('m')!.textContent || '', /dead-air|presence-check/i);
+  assert.deepEqual(retired.errors, []);
+  retired.w.close();
+
+  console.log('✓ Static console: mobile save, explicit verification, storage failure, bidirectional multi-bot assignment, simulator setup feedback, honest readiness and retired silence-setting migration');
 }
 run().catch((error) => { console.error(error); process.exit(1); });

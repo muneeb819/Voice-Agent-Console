@@ -88,10 +88,6 @@ export interface Campaign {
   disclosure: string;
   dispos: string;
   complianceRules: string;
-  presenceCheckText: string;
-  deadAirTimeoutSec: number;
-  deadAirDisposition: string;
-  deadAirDispositionVerified: boolean;
 }
 
 export interface ViciConfig {

@@ -196,6 +196,7 @@
   "tests/bridge-opening-verify.ts",
   "tests/greetings-verify.ts",
   "tests/live-bot-verify.ts",
+  "tests/mock-audio-verify.ts",
   "tests/offline-fetch.cjs",
   "tests/opening-verify.ts",
   "tests/security-verify.ts",
