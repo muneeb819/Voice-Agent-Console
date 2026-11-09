@@ -608,9 +608,10 @@ function createApp(viciBridge) {
     // Step 2: Simulator call log history endpoints
     app.get('/api/simulator/logs', (req, res) => {
         const agentId = typeof req.query.agentId === 'string' ? req.query.agentId : undefined;
+        const campaignId = typeof req.query.campaignId === 'string' ? req.query.campaignId : undefined;
         const requested = typeof req.query.limit === 'string' ? Number(req.query.limit) : 20;
         const limit = Number.isFinite(requested) && requested > 0 ? Math.max(1, Math.min(100, Math.floor(requested))) : 20;
-        const logs = (0, db_1.listSimulatorCallLogs)(agentId, limit);
+        const logs = (0, db_1.listSimulatorCallLogs)(agentId, limit).filter((row) => !campaignId || row.campaignId === campaignId);
         res.setHeader('Cache-Control', 'private, no-store');
         res.json({ ok: true, count: logs.length, logs });
     });
@@ -743,8 +744,12 @@ function createApp(viciBridge) {
             logs: (0, db_1.listBridgeCallLogs)(20),
         });
     });
-    app.get('/api/vici/logs', (_req, res) => {
-        const logs = (0, db_1.listBridgeCallLogs)(25);
+    app.get('/api/vici/logs', (req, res) => {
+        const requested = typeof req.query.limit === 'string' ? Number(req.query.limit) : 25;
+        const limit = Number.isFinite(requested) && requested > 0 ? Math.max(1, Math.min(200, Math.floor(requested))) : 25;
+        const campaignId = typeof req.query.campaignId === 'string' ? req.query.campaignId : undefined;
+        const logs = (0, db_1.listBridgeCallLogs)(limit).filter((row) => !campaignId || row.campaignId === campaignId);
+        res.setHeader('Cache-Control', 'private, no-store');
         res.json({ ok: true, count: logs.length, logs });
     });
     app.delete('/api/vici/logs', (_req, res) => {

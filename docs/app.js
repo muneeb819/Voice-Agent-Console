@@ -46,9 +46,7 @@
   let revisions = [];
   let secretsStatus = {};
   let latestRevisionId = null;
-  let autoSaveTimer = null;
-  let autoSaveInFlight = null;
-  let autoSaveError = '';
+  let saveError = '';
   let manualSaveInFlight = false;
   const STATE_DRAFT_KEY = 'vac_console_unsaved_draft_v1';
 
@@ -262,9 +260,9 @@
                 window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
               } catch {}
             } else {
-              // Keep the persisted baseline intact; the debounced save below
-              // commits client-side migrations instead of silently dropping them.
-              queueAutoSave(250);
+              // Keep the persisted baseline intact. The migration stays an
+              // unsaved draft until the operator explicitly saves it.
+              persistDraftLocally();
             }
           }
         }
@@ -1991,18 +1989,16 @@
   function persistDraftLocally() {
     if (!S) return;
     try {
-      if (serverlessCloudMode) {
-        if (!window.localStorage) throw new Error('Browser storage is unavailable. Enable site storage or export a JSON backup.');
-        window.localStorage.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
-      } else {
-        window.localStorage?.setItem(STATE_DRAFT_KEY, JSON.stringify({
-          baseSnapshot: snap,
-          savedAt: new Date().toISOString(),
-          state: S,
-        }));
-      }
+      // User edits are recoverable drafts, not committed saves. Save & Verify
+      // is the explicit commit path; boot compatibility migrations may still
+      // normalize the bundled baseline before the first edit.
+      window.localStorage?.setItem(STATE_DRAFT_KEY, JSON.stringify({
+        baseSnapshot: snap,
+        savedAt: new Date().toISOString(),
+        state: S,
+      }));
     } catch (err) {
-      if (serverlessCloudMode) autoSaveError = err?.message || 'Browser storage is unavailable';
+      if (serverlessCloudMode) saveError = err?.message || 'Browser storage is unavailable';
     }
   }
 
@@ -2010,48 +2006,23 @@
     try { window.localStorage?.removeItem(STATE_DRAFT_KEY); } catch {}
   }
 
-  function queueAutoSave(delayMs) {
-    if (!S) return;
-    persistDraftLocally();
-    if (serverlessCloudMode) {
-      try {
-        if (!window.localStorage) throw new Error('Browser storage is unavailable. Enable site storage or export a JSON backup.');
-        S.updatedAt = new Date().toISOString();
-        window.localStorage.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
-        if (window.localStorage.getItem(CLOUD_STATE_KEY) !== JSON.stringify(S)) throw new Error('Browser storage did not confirm the saved configuration.');
-        snap = comparableSnapshot(S);
-        autoSaveError = '';
-      } catch (err) {
-        autoSaveError = err?.message || 'Browser storage is unavailable';
-      }
-      return;
-    }
-    if (autoSaveInFlight) return;
-    if (autoSaveTimer) clearTimeout(autoSaveTimer);
-    const delay = Number.isFinite(delayMs) ? delayMs : (autoSaveError ? 3500 : 900);
-    autoSaveTimer = setTimeout(() => {
-      autoSaveTimer = null;
-      void autoSaveState();
-    }, Math.max(100, delay));
-  }
-
   function updateHeaderStatus() {
     if (!S) return;
-    if (isDirty()) queueAutoSave();
+    if (isDirty()) persistDraftLocally();
     const dirty = isDirty();
-    const st = document.getElementById('st');
-    if (dirty) {
-      st.textContent = autoSaveError ? '● Save pending — retrying' : autoSaveInFlight ? '◌ Saving…' : '● Saving automatically…';
-      st.className = 'd';
-      if (autoSaveError) st.title = `Changes are preserved in this browser draft. Last save failed: ${autoSaveError}`;
-    } else {
-      st.textContent = serverlessCloudMode ? '✓ Saved in this browser' : latestRevisionId ? `✓ Saved (Rev #${latestRevisionId})` : '✓ All changes saved';
-      st.className = '';
-      st.title = '';
+    const dock = document.getElementById('save-dock');
+    const saveBtn = document.getElementById('sv');
+    const discardBtn = document.getElementById('dc');
+    const label = document.getElementById('save-dock-lbl');
+    const visible = dirty || manualSaveInFlight || Boolean(saveError);
+    if (dock) dock.hidden = !visible;
+    document.body.classList.toggle('has-unsaved-changes', visible);
+    if (label) label.textContent = manualSaveInFlight ? 'Saving…' : saveError ? 'Save failed — retry' : 'Unsaved changes';
+    if (saveBtn) {
+      saveBtn.disabled = !S || manualSaveInFlight || (!dirty && !saveError);
+      saveBtn.title = dirty ? 'Save changes and run verification' : 'No unsaved changes';
     }
-    document.getElementById('sv').disabled = !S || manualSaveInFlight;
-    document.getElementById('sv').title = dirty ? 'Save changes and run verification' : 'Run verification and confirm the saved configuration';
-    document.getElementById('dc').disabled = !dirty || Boolean(autoSaveInFlight);
+    if (discardBtn) discardBtn.disabled = !dirty || manualSaveInFlight;
 
     const dgKey = secretsStatus?.DEEPGRAM_API_KEY?.configured;
     const btnKeys = document.getElementById('btn-keys');
@@ -3564,7 +3535,7 @@
         if (attemptId !== sim.sessionAttemptId) return;
         sim.micEnabled = false;
         const iframeHint = isInIframe
-          ? ' (Embedded preview iframe blocked mic — click "↗ Open in Tab" in the top bar for physical mic, or continue right here using Speaker + Text below!)'
+          ? ' (Embedded preview iframe blocked mic — click "↗ Open in Tab" in the side panel for physical mic, or continue right here using Speaker + Text below!)'
           : '';
         sim.events.push({
           kind: 'msg',
@@ -3781,7 +3752,7 @@
     const dgKey = readCloudSecrets().DEEPGRAM_API_KEY || '';
     if (mode === 'deepgram' && !dgKey) {
       sim.connecting = false;
-      sim.lastError = 'Click "🔑 API Keys" in the top bar and paste your DEEPGRAM_API_KEY to talk live with Deepgram STT + TTS.';
+      sim.lastError = 'Click "🔑 API Keys" in the side panel and paste your DEEPGRAM_API_KEY to talk live with Deepgram STT + TTS.';
       cleanupSimulatorMedia();
       if (tab === 'test') render();
       return;
@@ -4271,6 +4242,7 @@
       };
       viciMon.loaded = true;
       if (tab === 'vici' || tab === 'wallboard') render();
+      else if (tab === 'dashboard') renderExecutiveCommandDeck();
       return;
     }
     try {
@@ -4289,6 +4261,7 @@
         viciMon.analytics = anaData.analytics || null;
       }
       if (tab === 'vici' || tab === 'wallboard') render();
+      else if (tab === 'dashboard') renderExecutiveCommandDeck();
     } catch {}
   }
 
@@ -4313,6 +4286,10 @@
               if (msg.type === 'call_ended') loadViciBridgeStatus();
               else render();
             }
+          } else if (tab === 'dashboard' && (msg.type === 'call_ended' || msg.type === 'call_started')) {
+            if (msg.type === 'call_ended') loadViciBridgeStatus();
+            else renderExecutiveCommandDeck();
+            if (cmdDeckState.fleetCampaignId) loadFleetCampaignStats(cmdDeckState.fleetCampaignId);
           }
         } catch {}
       };
@@ -4718,6 +4695,11 @@
     publicDemoUrl: null,
     tunnelStarting: false,
     syncing: false,
+    fleetCampaignId: null,
+    fleetStats: null,
+    fleetStatsLoading: false,
+    fleetStatsError: '',
+    fleetStatsToken: 0,
     compact: (() => {
       try {
         return window.localStorage?.getItem(CMD_DECK_COMPACT_KEY) === '1';
@@ -4877,7 +4859,7 @@
       { id: 'realtime_ux', label: 'Campaign routing', score: passed(routingChecks), max: routingChecks.length, detail: `${campaigns.length} campaigns; telephone audio remains 8 kHz` },
       { id: 'telephony', label: 'Campaign safety configuration', score: passed(safetyChecks), max: safetyChecks.length, detail: `${discCount}/${campaigns.length} disclosures; operator verification still required` },
       { id: 'qa_readiness', label: 'QA evidence (not scored)', score: testsPassed, max: testsTotal, detail: `${testsPassed}/${testsTotal} passed · ${testsPending} pending · ${testsFailed} failed; excluded from readiness score` },
-      { id: 'ops_security', label: 'Storage & access (not scored)', score: serverlessCloudMode ? (autoSaveError ? 0 : 1) : (latestRevisionId ? 1 : 0), max: 1, detail: serverlessCloudMode ? 'Browser-local storage; not server authentication' : `${authRequired ? 'Server auth enabled' : 'Local bootstrap'} · ${usersCount} users; excluded from readiness score` },
+      { id: 'ops_security', label: 'Storage & access (not scored)', score: serverlessCloudMode ? (saveError ? 0 : 1) : (latestRevisionId ? 1 : 0), max: 1, detail: serverlessCloudMode ? 'Browser-local storage; not server authentication' : `${authRequired ? 'Server auth enabled' : 'Local bootstrap'} · ${usersCount} users; excluded from readiness score` },
     ];
     const issues = [
       ...agents.flatMap((agent) => validateAgentLocal(agent).filter((item) => item[0] !== 'ok').map((item) => ({ level: item[0], scope: agent.name, message: item[2], tab: 'agents' }))),
@@ -4965,6 +4947,187 @@
     };
   }
 
+  function campaignCallBlockersLocal(campaign) {
+    const blockers = validateCampaignLocal(campaign)
+      .filter((item) => item[0] === 'er')
+      .map((item) => `Campaign: ${item[2]}`);
+    const assigned = campaignAgentIds(campaign)
+      .map((id) => S.agents.find((agent) => agent.id === id))
+      .filter(Boolean);
+    if (!assigned.length) blockers.push('Assign at least one existing bot to this campaign.');
+    for (const agent of assigned) {
+      for (const item of validateAgentLocal(agent)) {
+        if (item[0] === 'er') blockers.push(`${agent.name}: ${item[2]}`);
+      }
+    }
+    return [...new Set(blockers)];
+  }
+
+  function summarizeCallRecords(records) {
+    const total = records.length;
+    const durationMs = records.reduce((sum, row) => sum + Math.max(0, Number(row.durationMs) || 0), 0);
+    const ttfb = records.map((row) => Number(row.avgTtfbMs)).filter((value) => Number.isFinite(value) && value > 0);
+    const transfers = records.filter((row) => Boolean(row.transferredTo) || row.disposition === 'XFER').length;
+    const dncs = records.filter((row) => row.dncAdded || row.disposition === 'DNC' || row.disposition === 'DNCL').length;
+    const recordings = records.filter((row) => Boolean(row.recordingFile)).length;
+    const turns = records.reduce((sum, row) => sum + Math.max(0, Number(row.turns) || 0), 0);
+    const dispositions = {};
+    for (const row of records) {
+      const code = String(row.disposition || 'UNSET').toUpperCase();
+      dispositions[code] = (dispositions[code] || 0) + 1;
+    }
+    return {
+      total,
+      avgDurationSec: total ? Number((durationMs / total / 1000).toFixed(1)) : 0,
+      avgTtfbMs: ttfb.length ? Math.round(ttfb.reduce((sum, value) => sum + value, 0) / ttfb.length) : null,
+      transfers,
+      transferRatePct: total ? Number(((transfers / total) * 100).toFixed(1)) : 0,
+      dncs,
+      recordings,
+      turns,
+      dispositions,
+    };
+  }
+
+  async function loadFleetCampaignStats(campaignId) {
+    const token = ++cmdDeckState.fleetStatsToken;
+    cmdDeckState.fleetStatsError = '';
+    if (serverlessCloudMode) {
+      cmdDeckState.fleetStatsLoading = false;
+      cmdDeckState.fleetStats = { campaignId, bridgeLogs: [], simulatorLogs: [], fetchedAt: null };
+      renderExecutiveCommandDeck();
+      return;
+    }
+    cmdDeckState.fleetStatsLoading = true;
+    renderExecutiveCommandDeck();
+    try {
+      const query = `campaignId=${encodeURIComponent(campaignId)}`;
+      const [bridgeRes, simulatorRes] = await Promise.all([
+        fetch(`/api/vici/logs?limit=200&${query}`, { credentials: 'same-origin' }),
+        fetch(`/api/simulator/logs?limit=100&${query}`, { credentials: 'same-origin' }),
+      ]);
+      const bridgeData = await bridgeRes.json();
+      const simulatorData = await simulatorRes.json();
+      if (!bridgeRes.ok || !bridgeData.ok || !simulatorRes.ok || !simulatorData.ok) {
+        throw new Error(bridgeData.error || simulatorData.error || 'Campaign history could not be loaded.');
+      }
+      if (token !== cmdDeckState.fleetStatsToken || cmdDeckState.fleetCampaignId !== campaignId) return;
+      cmdDeckState.fleetStats = {
+        campaignId,
+        bridgeLogs: (bridgeData.logs || []).filter((row) => row.campaignId === campaignId),
+        simulatorLogs: (simulatorData.logs || []).filter((row) => row.campaignId === campaignId),
+        fetchedAt: new Date().toISOString(),
+      };
+    } catch (err) {
+      if (token !== cmdDeckState.fleetStatsToken) return;
+      cmdDeckState.fleetStatsError = err?.message || 'Campaign history could not be loaded.';
+    } finally {
+      if (token === cmdDeckState.fleetStatsToken) {
+        cmdDeckState.fleetStatsLoading = false;
+        renderExecutiveCommandDeck();
+      }
+    }
+  }
+
+  function renderFleetMatrix() {
+    const campaigns = S.campaigns || [];
+    const selected = campaigns.find((campaign) => campaign.id === cmdDeckState.fleetCampaignId);
+    if (!selected) {
+      return `<section class="cmd-fleet-layer" aria-label="Fleet Matrix campaigns">
+        <div class="cmd-fleet-heading"><h2>Fleet Matrix</h2><span class="note">Select a campaign to open its live status, assigned bots and retained-call analytics.</span></div>
+        ${campaigns.length ? `<div class="fleet-campaign-list">${campaigns.map((campaign) =>
+          `<button type="button" class="fleet-campaign-name" data-fleet-campaign="${esc(campaign.id)}">${esc(campaign.name || 'Untitled Campaign')}</button>`
+        ).join('')}</div>` : '<div class="note">No campaigns yet. Create one in Campaigns to see it here.</div>'}
+      </section>`;
+    }
+
+    const status = viciMon.status;
+    const activeCalls = (status?.activeCalls || []).filter((call) => call.campaignId === selected.id);
+    const liveKnown = !serverlessCloudMode && Boolean(status && Array.isArray(status.activeCalls) && !status.cloudModeNotice);
+    const activityLabel = activeCalls.length ? 'Active' : liveKnown ? 'Inactive' : 'Status unavailable';
+    const activityClass = activeCalls.length ? 'ok' : liveKnown ? '' : 'wn';
+    const activityNote = activeCalls.length
+      ? `${activeCalls.length} live bridge call${activeCalls.length === 1 ? '' : 's'} right now.`
+      : liveKnown
+        ? 'The connected bridge reports no live call for this campaign. This is call activity, not an on/off switch.'
+        : 'No live bridge feed is connected. Static demos cannot verify production campaign activity.';
+    const blockers = campaignCallBlockersLocal(selected);
+    const assigned = campaignAgentIds(selected).map((id) => S.agents.find((agent) => agent.id === id)).filter(Boolean);
+    const stats = cmdDeckState.fleetStats?.campaignId === selected.id ? cmdDeckState.fleetStats : null;
+    const bridgeLogs = stats?.bridgeLogs || [];
+    const simulatorLogs = stats?.simulatorLogs || [];
+    const allLogs = [...bridgeLogs, ...simulatorLogs];
+    const summary = summarizeCallRecords(allLogs);
+    const bridgeSummary = summarizeCallRecords(bridgeLogs);
+    const simulatorSummary = summarizeCallRecords(simulatorLogs);
+    const loading = cmdDeckState.fleetStatsLoading;
+    const historyNote = serverlessCloudMode
+      ? 'This static demo has no server call history. Zeros below mean “no retained server records available”, not proof that no calls occurred.'
+      : 'Analytics cover retained records only: up to 200 bridge calls and 100 browser tests across the console, filtered to this campaign. They are not lifetime totals.';
+    const dispositionEntries = Object.entries(summary.dispositions).sort((a, b) => b[1] - a[1]);
+    const maxDisposition = Math.max(1, ...dispositionEntries.map(([, count]) => count));
+
+    const botRows = assigned.map((agent) => {
+      const records = allLogs.filter((row) => row.agentId === agent.id);
+      const botSummary = summarizeCallRecords(records);
+      const liveCount = activeCalls.filter((call) => call.agentId === agent.id || (!call.agentId && call.agentName === agent.name)).length;
+      const agentErrors = validateAgentLocal(agent).filter((item) => item[0] === 'er').length;
+      return `<tr>
+        <td><button type="button" class="fleet-bot-link" data-fleet-agent="${esc(agent.id)}">${esc(agent.name)}</button>${agent.id === selected.agentId ? ' <span class="pill">Primary</span>' : ''}</td>
+        <td>${liveCount}</td>
+        <td>${botSummary.total}</td>
+        <td>${botSummary.total ? `${botSummary.avgDurationSec}s` : '—'}</td>
+        <td>${botSummary.avgTtfbMs === null ? '—' : `${botSummary.avgTtfbMs} ms`}</td>
+        <td>${botSummary.transfers}</td>
+        <td><span class="pill ${agentErrors ? 'er' : 'ok'}">${agentErrors ? `${agentErrors} setup error${agentErrors === 1 ? '' : 's'}` : 'Ready'}</span></td>
+      </tr>`;
+    }).join('');
+
+    return `<section class="cmd-fleet-layer fleet-detail" aria-label="Fleet Matrix campaign detail">
+      <div class="fleet-detail-head">
+        <button type="button" class="g" id="btn-fleet-back">← All campaigns</button>
+        <div class="fleet-detail-title">
+          <h2>${esc(selected.name || 'Untitled Campaign')}</h2>
+          <div class="fleet-badge-row">
+            <span class="pill ${activityClass}" id="fleet-activity-badge">${activityLabel}</span>
+            <span class="pill ${blockers.length ? 'wn' : 'ok'}">${blockers.length ? 'Needs setup' : 'Configuration ready'}</span>
+            <span class="note">${assigned.length} assigned bot${assigned.length === 1 ? '' : 's'}</span>
+          </div>
+        </div>
+        <button type="button" class="g" data-cmd-campaign="${esc(selected.id)}">Open campaign setup</button>
+      </div>
+      <div class="note">${esc(activityNote)} Configuration readiness is checked separately from live call activity.</div>
+      ${blockers.length ? `<details class="fleet-blockers"><summary>${blockers.length} configuration blocker${blockers.length === 1 ? '' : 's'}</summary><ul>${blockers.map((item) => `<li>${esc(item)}</li>`).join('')}</ul></details>` : ''}
+      ${cmdDeckState.fleetStatsError ? `<div class="note er" role="alert">${esc(cmdDeckState.fleetStatsError)} <button type="button" class="g" data-fleet-campaign="${esc(selected.id)}">Retry</button></div>` : ''}
+      <div class="fleet-stats-grid" aria-label="Campaign statistics">
+        <div class="fleet-stat"><span>Live calls</span><strong>${liveKnown ? activeCalls.length : '—'}</strong></div>
+        <div class="fleet-stat"><span>Retained calls</span><strong>${loading && !stats ? '…' : summary.total}</strong></div>
+        <div class="fleet-stat"><span>Avg duration</span><strong>${summary.total ? `${summary.avgDurationSec}s` : '—'}</strong></div>
+        <div class="fleet-stat"><span>Avg TTFB</span><strong>${summary.avgTtfbMs === null ? '—' : `${summary.avgTtfbMs} ms`}</strong></div>
+        <div class="fleet-stat"><span>Transfers</span><strong>${summary.transfers}</strong></div>
+        <div class="fleet-stat"><span>Recordings</span><strong>${summary.recordings}</strong></div>
+      </div>
+      <div class="note">${esc(historyNote)}${stats?.fetchedAt ? ` Last refreshed ${esc(new Date(stats.fetchedAt).toLocaleTimeString())}.` : ''}</div>
+      <div class="fleet-analytics-grid">
+        <div class="fleet-panel">
+          <h3>Campaign analytics</h3>
+          <div class="ck"><span>Bridge calls</span><b>${bridgeSummary.total}</b></div>
+          <div class="ck"><span>Browser tests</span><b>${simulatorSummary.total}</b></div>
+          <div class="ck"><span>Conversation turns</span><b>${summary.turns}</b></div>
+          <div class="ck"><span>Transfer rate</span><b>${summary.total ? `${summary.transferRatePct}%` : '—'}</b></div>
+          <div class="ck"><span>DNC outcomes</span><b>${summary.dncs}</b></div>
+          <h3>Dispositions</h3>
+          ${dispositionEntries.length ? dispositionEntries.map(([code, count]) => `<div class="fleet-disposition"><span>${esc(code)}</span><div class="fleet-disposition-bar"><i style="width:${Math.round((count / maxDisposition) * 100)}%"></i></div><b>${count}</b></div>`).join('') : '<div class="note">No retained disposition records for this campaign.</div>'}
+        </div>
+        <div class="fleet-panel">
+          <h3>Assigned bots</h3>
+          ${assigned.length ? `<div class="fleet-table-wrap"><table class="fleet-bot-table"><thead><tr><th>Bot</th><th>Live</th><th>Calls</th><th>Avg time</th><th>Avg TTFB</th><th>Xfers</th><th>Setup</th></tr></thead><tbody>${botRows}</tbody></table></div>` : '<div class="note">No bots are assigned. Open campaign setup and assign at least one bot.</div>'}
+          <div class="note">Per-bot figures use the same retained campaign records. “Ready” means local configuration checks passed, not that a provider or telephone call was verified.</div>
+        </div>
+      </div>
+    </section>`;
+  }
+
   function renderExecutiveCommandDeck() {
     const wrap = document.getElementById('cmd-deck');
     if (!wrap || !S) return;
@@ -5018,7 +5181,7 @@
         title: 'AI & Speech Stack',
         main: `${T.dgConfigured ? 'Key Configured' : 'Key Needed'}`,
         sub: `STT ${T.sttModel || 'not selected'} · LLM ${T.llmModel || 'not selected'} · ${T.providers.length} Plug-ins · ${T.functions.length} Tools`,
-        foot: `${T.dgConfigured ? 'Connection not verified' : 'Set Key in Header'} →`,
+        foot: `${T.dgConfigured ? 'Connection not verified' : 'Set Key in Side Panel'} →`,
       },
       {
         tab: 'campaigns',
@@ -5188,34 +5351,9 @@
                  ${T.issues.map((issue) => `<div class="ck"><span class="${issue.level}">${issue.level === 'er' ? '✗' : '!'}</span><span><b>${esc(issue.scope)}:</b> ${esc(issue.message)} <button class="g" type="button" data-cmd-tab="${issue.tab}">Open setup</button></span></div>`).join('')}
                  <div class="note">QA: ${T.testsPassed}/${T.testsTotal} passed, ${T.testsPending} pending. <button class="g" type="button" data-cmd-tab="test">Open Live Bot</button></div>
                </div>` : ''}
-               <div class="cmd-fleet-strip">
-                 <span class="cmd-fleet-lbl">Fleet Matrix:</span>
-                 ${T.agentMatrix
-                   .map(
-                     (ag) => `<button type="button" class="cmd-fleet-chip ${
-                       tab === 'agents' && cur.a === ag.id ? 'sel' : ''
-                     }" data-cmd-agent="${esc(ag.id)}" title="Agent ${esc(ag.name)} — ${
-                       ag.er ? `${ag.er} errors` : ag.wn ? `${ag.wn} warnings` : '0 errors · 0 warnings'
-                     }">
-                       <span class="cmd-fleet-dot ${ag.status === 'ok' ? '' : ag.status}"></span>
-                       <span>🤖 ${esc(ag.name)}</span>
-                       <span class="cmd-fleet-ext">${esc(ag.mode)}</span>
-                     </button>`
-                   )
-                   .join('')}
-                 ${T.campaignMatrix
-                   .map(
-                     (cp) => `<button type="button" class="cmd-fleet-chip ${
-                       tab === 'campaigns' && cur.c === cp.id ? 'sel' : ''
-                     }" data-cmd-campaign="${esc(cp.id)}" title="Campaign ${esc(cp.name)} — VICIdial ID ${esc(cp.viciCampaign)} (live status not checked)">
-                       <span class="cmd-fleet-dot ${cp.status === 'ok' ? '' : cp.status}"></span>
-                       <span>📣 ${esc(cp.name)}</span>
-                       <span class="cmd-fleet-ext">${esc(cp.viciCampaign)}</span>
-                     </button>`
-                   )
-                   .join('')}
-               </div>`
+             `
         }
+        ${renderFleetMatrix()}
       </div>
     `;
   }
@@ -5256,6 +5394,11 @@
 
     if (tab === 'dashboard') {
       m.innerHTML = '<section id="cmd-deck" class="cmd-deck-wrap" aria-label="Executive Command and Console Quality Dashboard"></section>';
+      ensureViciMonitorWs();
+      if (!viciMon.loaded) {
+        viciMon.loaded = true;
+        loadViciBridgeStatus();
+      }
     } else if (tab === 'agents') {
       const tp = globalServiceProvider('tts') || {};
       const isFluxTts = tp.type === 'deepgram' && String(S.services?.tts?.model || '').startsWith('flux');
@@ -6029,7 +6172,7 @@
             ${F('AMI Username', 'v.amiUser')}
           </div>
           <div class="note">
-            Passwords (<code>VICI_API_PASS</code>, <code>AMI_SECRET</code>, <code>DEEPGRAM_API_KEY</code>) live exclusively in the server <code>.env</code> file — click <b>🔑 API Keys</b> in the top bar to manage them safely.
+            Passwords (<code>VICI_API_PASS</code>, <code>AMI_SECRET</code>, <code>DEEPGRAM_API_KEY</code>) live exclusively in the server <code>.env</code> file — click <b>🔑 API Keys</b> in the side panel to manage them safely.
           </div>
         </div>
         <div class="card sticky">
@@ -6374,9 +6517,20 @@
       snap = comparableSnapshot(S);
       revisions = [{ id: 1, saved_at: S.updatedAt || new Date().toISOString(), summary: 'Cloud Direct Browser Session' }];
       secretsStatus = buildCloudSecretsStatus();
+      try {
+        const draft = JSON.parse(window.localStorage?.getItem(STATE_DRAFT_KEY) || 'null');
+        if (draft?.state && draft.baseSnapshot === snap && comparableSnapshot(draft.state) !== snap) {
+          S = draft.state;
+          enforceDeepgramOnlyLlms(S);
+          upgradeRealtimeAgentFeatures(S);
+        } else if (draft) {
+          clearLocalDraft();
+        }
+      } catch {}
       if (!S.agents.some((x) => x.id === cur.a)) cur.a = S.agents[0]?.id || '';
       if (!S.campaigns.some((x) => x.id === cur.c)) cur.c = S.campaigns[0]?.id || '';
       render();
+      updateHeaderStatus();
       syncDeepgramManagedLlms(true).then((ok) => {
         if (ok) render();
       });
@@ -6384,7 +6538,6 @@
     }
     if (res.status === 401) {
       document.getElementById('auth-modal').hidden = false;
-      document.getElementById('st').textContent = '🔒 Locked — Sign in required';
       return;
     }
     const data = await res.json();
@@ -6415,7 +6568,7 @@
           enforceDeepgramOnlyLlms(S);
           upgradeRealtimeAgentFeatures(S);
           snap = serverSnapshot;
-          queueAutoSave(250);
+          persistDraftLocally();
         } else {
           clearLocalDraft();
         }
@@ -6449,45 +6602,6 @@
     render();
   }
 
-  async function autoSaveState() {
-    if (!S || serverlessCloudMode || autoSaveInFlight || !isDirty()) return;
-    const submittedSnapshot = comparableSnapshot(S);
-    const submittedState = JSON.parse(JSON.stringify(S));
-    submittedState.updatedAt = new Date().toISOString();
-    autoSaveError = '';
-
-    const pending = (async () => {
-      const res = await fetch('/api/state', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ state: submittedState }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.error || `Auto-save failed (HTTP ${res.status})`);
-
-      const savedState = data.state || submittedState;
-      snap = comparableSnapshot(savedState);
-      if (comparableSnapshot(S) === submittedSnapshot) S = savedState;
-      revisions = data.revisions || revisions;
-      latestRevisionId = data.revisionId || latestRevisionId;
-      secretsStatus = data.secrets || secretsStatus;
-      if (data.telemetry) cmdDeckState.serverTelemetry = data.telemetry;
-      if (isDirty()) persistDraftLocally();
-      else clearLocalDraft();
-    })();
-    autoSaveInFlight = pending;
-    updateHeaderStatus();
-    try {
-      await pending;
-    } catch (err) {
-      autoSaveError = err?.message || 'Automatic save failed';
-      persistDraftLocally();
-    } finally {
-      autoSaveInFlight = null;
-      updateHeaderStatus();
-    }
-  }
-
   function showSaveReport({ ok, wn, er, items = [], storage, revisionId, changes = [] }) {
     const nonOk = items.filter((item) => (item.level || item[0]) !== 'ok');
     const color = er ? 'var(--er)' : wn ? 'var(--wn)' : 'var(--ok)';
@@ -6503,10 +6617,9 @@
   }
 
   async function commitSave() {
-    if (!S || manualSaveInFlight) return false;
-    if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
-    if (autoSaveInFlight) await autoSaveInFlight;
+    if (!S || manualSaveInFlight || (!isDirty() && !saveError)) return false;
     manualSaveInFlight = true;
+    updateHeaderStatus();
     const btn = document.getElementById('sv');
     btn.disabled = true;
     btn.textContent = 'Saving…';
@@ -6540,7 +6653,7 @@
       snap = comparableSnapshot(savedState);
       if (comparableSnapshot(S) === submittedSnapshot) S = savedState;
       clearLocalDraft();
-      autoSaveError = '';
+      saveError = '';
       const counts = data.counts || {
         ok: data.items.filter((item) => (item.level || item[0]) === 'ok').length,
         wn: data.items.filter((item) => (item.level || item[0]) === 'wn').length,
@@ -6550,10 +6663,10 @@
       if (!isDirty()) render(); else { updateLivePreview(); updateTestSummary(); }
       return true;
     } catch (err) {
-      autoSaveError = err?.message || 'Save failed';
+      saveError = err?.message || 'Save failed';
       persistDraftLocally();
       const report = document.getElementById('vr');
-      report.innerHTML = `<div class="card save-report er" role="alert"><b>Save not confirmed</b><div>${esc(autoSaveError)}</div><div class="note">Your edits remain in this tab. Retry Save & Verify, or download a JSON backup from Export before closing it.</div></div>`;
+      report.innerHTML = `<div class="card save-report er" role="alert"><b>Save not confirmed</b><div>${esc(saveError)}</div><div class="note">Your edits remain in this tab. Retry Save & Verify, or download a JSON backup from Export before closing it.</div></div>`;
       report.scrollIntoView?.({ block: 'nearest' });
       return false;
     } finally {
@@ -6655,7 +6768,7 @@
         } else {
           const dgKey = readCloudSecrets().DEEPGRAM_API_KEY || '';
           if (!dgKey) {
-            throw new Error('Click "🔑 API Keys" in the top bar and save your DEEPGRAM_API_KEY first.');
+            throw new Error('Click "🔑 API Keys" in the side panel and save your DEEPGRAM_API_KEY first.');
           }
           const isFlux = String(model).startsWith('flux-');
           const params = new URLSearchParams({
@@ -7042,8 +7155,22 @@
     if (tab === 'test' && !sim.active) render();
   }
 
-  document.getElementById('btn-create-account')?.addEventListener('click', (event) => {
-    if (isDirty() && !window.confirm('You have unsaved changes. Leave without saving them?')) event.preventDefault();
+  document.addEventListener('click', (e) => {
+    const pop = document.getElementById('account-popover');
+    const trigger = document.getElementById('btn-account-menu');
+    if (pop && !pop.hidden && !e.target.closest('.side-utility-dock')) {
+      pop.hidden = true;
+      trigger?.setAttribute('aria-expanded', 'false');
+    }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const pop = document.getElementById('account-popover');
+      if (pop && !pop.hidden) {
+        pop.hidden = true;
+        document.getElementById('btn-account-menu')?.setAttribute('aria-expanded', 'false');
+      }
+    }
   });
 
   // Click delegation
@@ -7066,6 +7193,15 @@
 
     if (b.id === 'btn-sidebar-toggle') {
       toggleSidebar();
+      return;
+    }
+
+    if (b.id === 'btn-account-menu') {
+      const pop = document.getElementById('account-popover');
+      if (pop) {
+        pop.hidden = !pop.hidden;
+        b.setAttribute('aria-expanded', pop.hidden ? 'false' : 'true');
+      }
       return;
     }
 
@@ -7108,6 +7244,24 @@
       render();
       return;
     }
+    if (d.fleetCampaign) {
+      cmdDeckState.fleetCampaignId = d.fleetCampaign;
+      renderExecutiveCommandDeck();
+      loadFleetCampaignStats(d.fleetCampaign);
+      return;
+    }
+    if (b.id === 'btn-fleet-back') {
+      cmdDeckState.fleetCampaignId = null;
+      renderExecutiveCommandDeck();
+      return;
+    }
+    if (d.fleetAgent) {
+      stopAllAudio();
+      if (S.agents.some((x) => x.id === d.fleetAgent)) cur.a = d.fleetAgent;
+      tab = 'agents';
+      render();
+      return;
+    }
     if (b.id === 'btn-cmd-compact') {
       cmdDeckState.compact = !cmdDeckState.compact;
       try {
@@ -7117,7 +7271,11 @@
       return;
     }
     if (b.id === 'btn-cmd-refresh') {
-      await refreshTelemetryOverview(false);
+      await Promise.all([
+        refreshTelemetryOverview(false),
+        loadViciBridgeStatus(),
+        cmdDeckState.fleetCampaignId ? loadFleetCampaignStats(cmdDeckState.fleetCampaignId) : Promise.resolve(),
+      ]);
       return;
     }
     if (d.cmdCopyDemo) {
@@ -7173,7 +7331,6 @@
 
     if (b.id === 'dc') {
       clearLocalDraft();
-      if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
       await loadFromServer();
       document.getElementById('vr').innerHTML = '';
       return;
@@ -7909,9 +8066,7 @@
 
     if (b.id === 'rs') {
       if (!confirm('Reset the entire console to factory defaults?')) return;
-      if (autoSaveInFlight) await autoSaveInFlight;
       clearLocalDraft();
-      if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
       if (serverlessCloudMode) {
         try { window.localStorage?.removeItem(CLOUD_STATE_KEY); } catch {}
         await loadFromServer();

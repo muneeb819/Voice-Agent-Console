@@ -255,7 +255,13 @@ async function main() {
     assert.strictEqual((await defaultHistory.json() as any).count, 20);
     assert.strictEqual((await (await fetch(`${base}/api/simulator/logs?agentId=old&limit=100`, { headers: auth })).json() as any).count, 100);
     assert.strictEqual((await (await fetch(`${base}/api/simulator/logs?agentId=old&limit=999999`, { headers: auth })).json() as any).count, 100);
-    console.log('✓ History retention removes audio for evicted test logs and exposes at most 100 retained entries');
+    saveSimulatorCallLog({ ...record, id: 'fleet-filter', campaignId: 'fleet-campaign', startedAt: new Date().toISOString(),
+      recordingRequested: false, recordingStatus: 'not_requested', recordingFile: null, recordingMime: null, recordingBytes: 0 });
+    const fleetHistory = await fetch(`${base}/api/simulator/logs?limit=100&campaignId=fleet-campaign`, { headers: auth });
+    const fleetHistoryJson = (await fleetHistory.json()) as any;
+    assert.strictEqual(fleetHistoryJson.count, 1);
+    assert.strictEqual(fleetHistoryJson.logs[0].campaignId, 'fleet-campaign');
+    console.log('✓ History retention removes audio for evicted test logs, exposes at most 100 retained entries and filters campaign analytics');
   } finally {
     if (old.key === undefined) delete process.env.DEEPGRAM_API_KEY; else process.env.DEEPGRAM_API_KEY = old.key;
     if (old.url === undefined) delete process.env.DEEPGRAM_AGENT_URL; else process.env.DEEPGRAM_AGENT_URL = old.url;

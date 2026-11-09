@@ -146,6 +146,7 @@ async function run() {
     await inventory(page, 'admin-login');
     await page.fill('#admin-password', 'dummy-browser-admin');
     await page.click('#admin-submit');
+    await page.evaluate(() => { const pop = document.getElementById('account-popover'); if (pop?.hidden) document.getElementById('btn-account-menu')?.click(); });
     await page.waitForSelector('#btn-create-account:visible');
     await page.click('#btn-create-account');
     await page.waitForSelector('#signup-form:not([hidden])');
@@ -154,6 +155,7 @@ async function run() {
     await page.fill('#signup-email', 'operator@example.test');
     await page.fill('#signup-password', 'dummy-browser-password-123');
     await page.click('#signup-submit');
+    await page.evaluate(() => { const pop = document.getElementById('account-popover'); if (pop?.hidden) document.getElementById('btn-account-menu')?.click(); });
     await page.waitForSelector('#btn-logout:visible');
     await page.waitForTimeout(500);
   });
@@ -165,6 +167,7 @@ async function run() {
     await page.fill('#signin-email', 'operator@example.test');
     await page.fill('#signin-password', 'dummy-browser-password-123');
     await page.click('#signin-submit');
+    await page.evaluate(() => { const pop = document.getElementById('account-popover'); if (pop?.hidden) document.getElementById('btn-account-menu')?.click(); });
     await page.waitForSelector('#btn-logout:visible');
     await page.waitForTimeout(500);
     assert.equal(new URL(page.url()).searchParams.has('vac_token'), false, 'handoff token should be removed from the address bar');
@@ -193,17 +196,19 @@ async function run() {
     await page.goto(`${base}/?tab=agents`);
     await page.waitForSelector('[data-p="a.name"]');
   });
-  await check('Agent field is labelled, edited and discarded', async () => {
+  await check('Agent field is labelled, navigation keeps drafts, and discard restores saved state', async () => {
     const field = page.locator('[data-p="a.name"]').first();
     const original = await field.inputValue();
     assert(await field.evaluate((el) => Boolean(el.labels?.length)));
+    assert.equal(await page.locator('#save-dock').isVisible(), false, 'Clean state hides the save dock');
     await field.fill('Browser discarded agent');
-    const confirm = new Promise((resolve) => page.once('dialog', async (dialog) => { const message = dialog.message(); await dialog.dismiss(); resolve(message); }));
-    await page.click('#btn-create-account');
-    assert.match(await confirm, /unsaved changes/i);
-    assert.equal(await field.inputValue(), 'Browser discarded agent', 'Canceling account navigation preserves unsaved edits');
+    assert.equal(await page.locator('#save-dock').isVisible(), true, 'Dirty state opens the bottom-right save dock');
+    await page.locator('#nav [data-t="campaigns"]').click();
+    await page.locator('#nav [data-t="agents"]').click();
+    assert.equal(await field.inputValue(), 'Browser discarded agent', 'Section navigation preserves unsaved edits without a save prompt');
     await page.click('#dc');
     await page.waitForFunction((value) => document.querySelector('[data-p="a.name"]')?.value === value, original);
+    assert.equal(await page.locator('#save-dock').isVisible(), false);
   });
   await check('Save and reload an isolated agent edit', async () => {
     await page.locator('[data-p="a.name"]').first().fill('Browser saved agent');

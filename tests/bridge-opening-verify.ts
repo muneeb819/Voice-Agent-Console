@@ -256,6 +256,7 @@ async function main() {
           assert.equal(current.injected.length, 1, 'The configured opening is sent once before function validation');
         }
         const active = bridge.getStatus().activeCalls[0];
+        assert.equal(active?.agentId, agent.id, 'Active call summaries identify the assigned bot for per-bot analytics');
         assert.ok(active && bridge.forceHangupCall(active.callId));
       }
       if (mode !== 'silent_wait') {

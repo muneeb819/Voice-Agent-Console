@@ -50,28 +50,50 @@ async function fixture(options: { state?: any; storageFails?: boolean; tab?: str
 async function run() {
   const f = await fixture();
   const { d, w, change, click } = f;
-  assert(!(d.getElementById('sv') as HTMLButtonElement).disabled, 'Save & Verify remains available after autosave');
+  assert.equal((d.getElementById('sv') as HTMLButtonElement).disabled, true, 'Clean configuration must not offer an active save');
+  assert.equal(d.getElementById('save-dock')!.hidden, true, 'Save dock stays hidden until an edit needs saving');
+  assert.equal(d.getElementById('st'), null, 'The saved-in-browser header pill is removed');
+  assert.equal(d.querySelector('.console-header h1, .console-header .brand-copy, .console-header .brand-sub'), null, 'Header keeps only the centered logo');
+  assert(d.querySelector('.side-rail-footer #btn-theme'), 'Theme control lives in the side-rail footer');
+  assert(d.querySelector('.side-rail-footer #btn-keys') && d.querySelector('.side-rail-footer #btn-account-menu'), 'Keys and account controls live in the side-rail footer');
+  click(d.getElementById('btn-account-menu')!);
+  assert.equal(d.getElementById('account-popover')!.hidden, false, 'Account links open from the rail footer');
+  assert.notEqual((d.getElementById('btn-logout') as HTMLElement).style.display, 'none');
+  click(d.getElementById('btn-account-menu')!);
+  assert.equal(d.getElementById('account-popover')!.hidden, true);
+  const savedBeforeEdit = JSON.stringify(f.state());
   const name = d.querySelector('[data-p="a.name"]') as HTMLInputElement;
   name.value = 'Mobile edited bot'; change(name, 'input'); await tick();
-  assert.equal(f.state().agents.find((a:any)=>a.id==='a_nova').name, 'Mobile edited bot', 'Mobile input events persist without blur');
+  assert.equal(JSON.stringify(f.state()), savedBeforeEdit, 'Typing must not auto-commit the saved browser state');
+  assert.equal(d.getElementById('save-dock')!.hidden, false);
+  assert.equal((d.getElementById('sv') as HTMLButtonElement).disabled, false);
+  const draft = JSON.parse(w.localStorage.getItem('vac_console_unsaved_draft_v1') || 'null');
+  assert.equal(draft.state.agents.find((a:any)=>a.id==='a_nova').name, 'Mobile edited bot', 'Unsaved edits are recoverable as a draft');
+  // Section navigation must not force a save or discard the dirty draft.
+  click(d.querySelector('[data-t="campaigns"]')!);
+  click(d.querySelector('[data-t="agents"]')!);
+  assert.equal((d.querySelector('[data-p="a.name"]') as HTMLInputElement).value, 'Mobile edited bot');
+  assert.equal(d.getElementById('save-dock')!.hidden, false);
   click(d.getElementById('sv')!); await tick();
   assert.match(d.getElementById('vr')!.textContent || '', /Saved in this browser.*Verification Report/s);
-  assert.equal((d.getElementById('sv') as HTMLButtonElement).disabled, false);
+  assert.equal(f.state().agents.find((a:any)=>a.id==='a_nova').name, 'Mobile edited bot', 'Explicit Save & Verify commits the edit');
+  assert.equal(d.getElementById('save-dock')!.hidden, true, 'Successful save closes the dock');
+  assert.equal((d.getElementById('sv') as HTMLButtonElement).disabled, true);
   // Agent -> campaign assignment, then campaign -> multiple bots.
   const agentSelect = d.getElementById('sel-a') as HTMLSelectElement;
   agentSelect.value = 'a_jessica'; change(agentSelect);
   const campaignCheck = d.querySelector('[data-agent-campaign="c_medicare"]') as HTMLInputElement;
   campaignCheck.checked = true; change(campaignCheck);
-  assert(f.state().campaigns.find((c: any) => c.id === 'c_medicare').agentIds.includes('a_jessica'));
+  assert.equal(d.getElementById('save-dock')!.hidden, false, 'Assignment edits open the explicit save dock');
   click(d.querySelector('[data-t="campaigns"]')!);
   const campaignSelect = d.getElementById('sel-c') as HTMLSelectElement;
   campaignSelect.value = 'c_medicare'; change(campaignSelect);
   const botCheck = d.querySelector('[data-campaign-agent="a_nova"]') as HTMLInputElement;
   botCheck.checked = true; change(botCheck);
-  const campaign = f.state().campaigns.find((c: any) => c.id === 'c_medicare');
-  assert(campaign.agentIds.includes('a_nova') && campaign.agentIds.includes('a_jessica'));
   assert.equal((d.getElementById('campaign-primary-agent') as HTMLSelectElement).value, 'a_medicare');
   click(d.getElementById('sv')!); await tick();
+  const campaign = f.state().campaigns.find((c: any) => c.id === 'c_medicare');
+  assert(campaign.agentIds.includes('a_nova') && campaign.agentIds.includes('a_jessica'));
   // Shared campaign appears for a non-primary bot and retains explicit selection.
   click(d.querySelector('[data-t="test"]')!);
   (d.getElementById('sel-a') as HTMLSelectElement).value = 'a_nova'; change(d.getElementById('sel-a')!);
@@ -100,7 +122,9 @@ async function run() {
   failed.click(failed.d.getElementById('sv')!); await tick();
   assert.match(failed.d.getElementById('vr')!.textContent || '', /Save not confirmed.*Quota exceeded/s);
   assert.equal((failed.d.querySelector('[data-p="a.name"]') as HTMLInputElement).value, 'Do not lose me');
-  assert.match(failed.d.getElementById('st')!.textContent || '', /Save pending/);
+  assert.equal(failed.d.getElementById('save-dock')!.hidden, false, 'Failed save keeps the retry dock visible');
+  assert.match(failed.d.getElementById('save-dock-lbl')!.textContent || '', /Save failed/);
+  assert.equal((failed.d.getElementById('sv') as HTMLButtonElement).disabled, false);
   assert.deepEqual(failed.errors, []);
   failed.w.close();
 
@@ -110,6 +134,19 @@ async function run() {
   assert.match(text, /no score is a 99\.999% reliability guarantee/);
   assert.match(text, /What still needs attention|All configuration checks passed/);
   assert(!/GRADE D/.test(text), 'Valid shipped examples must not receive an arbitrary failing grade');
+  const fleetButtons = [...dashboard.d.querySelectorAll('[data-fleet-campaign]')];
+  assert(fleetButtons.length >= 1, 'Fleet Matrix first layer lists campaigns');
+  assert.equal(dashboard.d.querySelector('[data-cmd-agent], [data-cmd-campaign], .fleet-detail'), null, 'First layer must not mix in bot chips or campaign detail');
+  for (const button of fleetButtons) assert.match(button.textContent || '', /\S/);
+  dashboard.click(fleetButtons[0]); await tick();
+  assert(dashboard.d.getElementById('fleet-activity-badge'), 'Campaign click opens the second layer');
+  assert.match(dashboard.d.getElementById('fleet-activity-badge')!.textContent || '', /Status unavailable/, 'Static demo must not invent live Active/Inactive status');
+  assert.match(dashboard.d.getElementById('m')!.textContent || '', /Assigned bots/);
+  assert.match(dashboard.d.getElementById('m')!.textContent || '', /Campaign analytics/);
+  assert.match(dashboard.d.getElementById('m')!.textContent || '', /static demo has no server call history/i);
+  dashboard.click(dashboard.d.getElementById('btn-fleet-back')!);
+  assert.equal(dashboard.d.querySelector('.fleet-detail'), null, 'Back returns to the campaign-name layer');
+  assert.deepEqual(dashboard.errors, []);
   dashboard.w.close();
   const legacyState = JSON.parse(read('default-state.json'));
   legacyState.campaigns[0].presenceCheckText = 'Old presence prompt';
@@ -126,6 +163,6 @@ async function run() {
   assert.deepEqual(retired.errors, []);
   retired.w.close();
 
-  console.log('✓ Static console: mobile save, explicit verification, storage failure, bidirectional multi-bot assignment, simulator setup feedback, honest readiness and retired silence-setting migration');
+  console.log('✓ Static console: logo-only header, rail utilities, explicit save dock, free section navigation, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
 }
 run().catch((error) => { console.error(error); process.exit(1); });
