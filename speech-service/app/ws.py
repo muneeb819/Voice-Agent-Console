@@ -30,10 +30,19 @@ async def _open(ws: WebSocket, kind: str):
     if p is None or not rt.ready:
         await ws.close(code=4401 if p is None else 1013)
         return None
+    if not rt.auth.check_ws_handshake(p):
+        await ws.close(code=4429, reason="handshake rate exceeded")
+        return None
     if not rt.auth.ws_acquire(p):
         await ws.close(code=4429)
         return None
-    await ws.accept()
+    try:
+        await ws.accept()
+    except Exception:  # noqa: BLE001
+        # A client that vanishes mid-handshake must not leak a concurrency slot;
+        # leaked slots eventually lock the key out at max_ws_per_key.
+        rt.auth.ws_release(p)
+        raise
     metrics.WS_ACTIVE.labels(kind).inc()
     return p, rt
 

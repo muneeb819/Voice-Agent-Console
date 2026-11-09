@@ -18,7 +18,9 @@ export interface SignupInput {
 }
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const MIN_PASSWORD_LENGTH = 8;
+// Password-only administrative access needs length, not composition rules.
+// Existing shorter hashes keep working; only new/changed passwords are gated.
+const MIN_PASSWORD_LENGTH = 15;
 const MAX_PASSWORD_LENGTH = 200;
 const MAX_NAME_LENGTH = 80;
 
@@ -302,4 +304,130 @@ export function revokeAdminSession(token: string, expiresAt: number): void {
   getDb()
     .prepare('INSERT OR REPLACE INTO revoked_admin_sessions (token_hash, expires_at) VALUES (?, ?)')
     .run(sessionTokenHash(token), new Date(expiresAt).toISOString());
+}
+
+// ------------------------------------------------- account & session lifecycle
+
+/** Lists accounts newest-last for the administrator account screen. */
+export function listUsers(): PublicUser[] {
+  ensureSchema();
+  const rows = getDb().prepare('SELECT * FROM users ORDER BY created_at ASC, id ASC').all() as any[];
+  return rows.map(rowToUser);
+}
+
+/** Counts unexpired sessions per account so revocation can be verified in the UI. */
+export function countUserSessions(userId: string): number {
+  ensureSchema();
+  const row: any = getDb()
+    .prepare('SELECT COUNT(*) AS n FROM user_sessions WHERE user_id = ? AND expires_at > ?')
+    .get(userId, new Date().toISOString());
+  return Number(row?.n || 0);
+}
+
+function countActiveOwners(): number {
+  const row: any = getDb()
+    .prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'owner' AND active = 1")
+    .get();
+  return Number(row?.n || 0);
+}
+
+/**
+ * Deletes every session for an account, optionally keeping the caller's own
+ * session so a password change does not sign out the tab that performed it.
+ * Returns the number of sessions removed.
+ */
+export function destroyUserSessions(userId: string, keepToken?: string | null): number {
+  ensureSchema();
+  const db = getDb();
+  if (keepToken && !keepToken.includes('.')) {
+    const result = db
+      .prepare('DELETE FROM user_sessions WHERE user_id = ? AND token != ?')
+      .run(userId, userSessionHash(keepToken));
+    return Number(result.changes || 0);
+  }
+  const result = db.prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
+  return Number(result.changes || 0);
+}
+
+export interface AccountChangeResult {
+  ok: boolean;
+  error?: string;
+  field?: 'currentPassword' | 'newPassword' | 'role' | 'active';
+  revokedSessions?: number;
+  user?: PublicUser;
+}
+
+/**
+ * Changes an account password after verifying the current one, then revokes
+ * every other session so a stolen session cannot outlive the change.
+ */
+export async function changeUserPassword(
+  userId: string,
+  currentPassword: string,
+  newPassword: string,
+  keepToken?: string | null
+): Promise<AccountChangeResult> {
+  ensureSchema();
+  const row: any = getDb().prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!row) return { ok: false, error: 'Account not found.' };
+  if (Number(row.active ?? 1) !== 1) return { ok: false, error: 'This account is disabled.' };
+  if (!(await verifyPassword(String(currentPassword ?? ''), String(row.password_hash)))) {
+    return { ok: false, field: 'currentPassword', error: 'Current password is incorrect.' };
+  }
+  const validation = validatePassword(newPassword);
+  if (validation) return { ok: false, field: 'newPassword', error: validation };
+  if (String(currentPassword ?? '') === String(newPassword ?? '')) {
+    return { ok: false, field: 'newPassword', error: 'Choose a different password from the current one.' };
+  }
+  const passwordHash = await hashPassword(String(newPassword));
+  const db = getDb();
+  // Re-read under the write lock: the account may have been disabled or the
+  // password changed by another tab while hashing was in flight.
+  const revoked = db.transactionImmediate(() => {
+    const current: any = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!current || Number(current.active ?? 1) !== 1) return null;
+    if (String(current.password_hash) !== String(row.password_hash)) return null;
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, userId);
+    return destroyUserSessions(userId, keepToken);
+  })();
+  if (revoked === null) {
+    return { ok: false, error: 'The account changed while updating the password. Sign in again and retry.' };
+  }
+  return { ok: true, revokedSessions: revoked, user: getUserById(userId) || undefined };
+}
+
+/** Enables or disables an account. Disabling immediately revokes its sessions. */
+export function setUserActive(userId: string, active: boolean): AccountChangeResult {
+  ensureSchema();
+  const db = getDb();
+  return db.transactionImmediate(() => {
+    const row: any = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!row) return { ok: false, error: 'Account not found.' };
+    if (!active && String(row.role) === 'owner' && Number(row.active ?? 1) === 1 && countActiveOwners() <= 1) {
+      return { ok: false, field: 'active' as const, error: 'The last active owner cannot be disabled.' };
+    }
+    db.prepare('UPDATE users SET active = ? WHERE id = ?').run(active ? 1 : 0, userId);
+    const revokedSessions = active ? 0 : destroyUserSessions(userId);
+    return { ok: true, revokedSessions, user: getUserById(userId) || undefined };
+  })();
+}
+
+/** Changes an account role. The last active owner cannot be demoted. */
+export function setUserRole(userId: string, role: PublicUser['role']): AccountChangeResult {
+  ensureSchema();
+  if (!['owner', 'admin', 'operator', 'qa', 'viewer'].includes(role)) {
+    return { ok: false, field: 'role', error: 'Unknown role.' };
+  }
+  const db = getDb();
+  return db.transactionImmediate(() => {
+    const row: any = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+    if (!row) return { ok: false, error: 'Account not found.' };
+    if (String(row.role) === 'owner' && role !== 'owner' && Number(row.active ?? 1) === 1 && countActiveOwners() <= 1) {
+      return { ok: false, field: 'role' as const, error: 'The last active owner cannot be demoted.' };
+    }
+    db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, userId);
+    // A demotion must not leave a live session with the previous privileges.
+    const revokedSessions = role === 'viewer' || role === 'qa' ? destroyUserSessions(userId) : 0;
+    return { ok: true, revokedSessions, user: getUserById(userId) || undefined };
+  })();
 }

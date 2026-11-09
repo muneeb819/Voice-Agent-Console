@@ -6309,6 +6309,102 @@
     } catch {}
   }
 
+  // Account security (password change / session revocation). Only populated for
+  // cookie-authenticated server accounts, never for the static browser demo.
+  let accountSecurityUser = null;
+
+  function setAccountSecurityMsg(text, isError) {
+    const el = document.getElementById('account-security-msg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.classList.toggle('er', Boolean(isError));
+  }
+
+  function openAccountSecurity() {
+    const modal = document.getElementById('account-security-modal');
+    if (!modal) return;
+    const who = document.getElementById('account-security-who');
+    if (who) {
+      who.textContent = accountSecurityUser
+        ? `Signed in as ${accountSecurityUser.fullName || accountSecurityUser.email} (${accountSecurityUser.email || ''}) · role: ${accountSecurityUser.role || 'operator'}`
+        : 'Sign in with an email account to manage its password and sessions.';
+    }
+    for (const id of ['account-current-password', 'account-new-password']) {
+      const input = document.getElementById(id);
+      if (input) input.value = '';
+    }
+    setAccountSecurityMsg('');
+    modal.hidden = false;
+    document.getElementById('account-current-password')?.focus();
+  }
+
+  function closeAccountSecurity() {
+    const modal = document.getElementById('account-security-modal');
+    if (modal) modal.hidden = true;
+    for (const id of ['account-current-password', 'account-new-password']) {
+      const input = document.getElementById(id);
+      if (input) input.value = '';
+    }
+  }
+
+  async function submitPasswordChange() {
+    const current = document.getElementById('account-current-password')?.value || '';
+    const next = document.getElementById('account-new-password')?.value || '';
+    if (!current) { setAccountSecurityMsg('Enter your current password.', true); return; }
+    if (next.length < 15) { setAccountSecurityMsg('New password must be at least 15 characters.', true); return; }
+    const btn = document.getElementById('btn-change-password');
+    if (btn) btn.disabled = true;
+    setAccountSecurityMsg('Updating password…');
+    try {
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword: current, newPassword: next }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok || !out.ok) {
+        setAccountSecurityMsg(out.error || 'Unable to update the password.', true);
+        return;
+      }
+      for (const id of ['account-current-password', 'account-new-password']) {
+        const input = document.getElementById(id);
+        if (input) input.value = '';
+      }
+      const revoked = Number(out.revokedSessions || 0);
+      setAccountSecurityMsg(`Password updated. ${revoked} other session${revoked === 1 ? '' : 's'} signed out.`);
+    } catch {
+      setAccountSecurityMsg('Network error. The password was not changed.', true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function revokeOtherSessions() {
+    const btn = document.getElementById('btn-revoke-sessions');
+    if (btn) btn.disabled = true;
+    setAccountSecurityMsg('Signing out other devices…');
+    try {
+      const res = await fetch('/api/auth/revoke-sessions', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keepCurrent: true }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok || !out.ok) {
+        setAccountSecurityMsg(out.error || 'Unable to revoke sessions.', true);
+        return;
+      }
+      const revoked = Number(out.revokedSessions || 0);
+      setAccountSecurityMsg(`${revoked} other session${revoked === 1 ? '' : 's'} signed out. This tab stays signed in.`);
+    } catch {
+      setAccountSecurityMsg('Network error. No sessions were revoked.', true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   async function loadFromServer() {
     const authRes = await fetch('./api/auth/status', { credentials: 'same-origin' }).catch(() => null);
     if (authRes && authRes.ok && (authRes.headers.get('content-type') || '').includes('application/json')) {
@@ -6323,6 +6419,11 @@
       }
       const createAccountBtn = document.getElementById('btn-create-account');
       if (createAccountBtn && authJson.signupOpen) createAccountBtn.style.display = 'inline-flex';
+      // Password rotation and session revocation need an account row; the
+      // legacy ADMIN_PASSWORD session is managed in server .env instead.
+      accountSecurityUser = authJson.user || null;
+      const securityBtn = document.getElementById('btn-account-security');
+      if (securityBtn) securityBtn.style.display = accountSecurityUser ? 'inline-flex' : 'none';
       if (logoutBtn) {
         logoutBtn.style.display = 'inline-flex';
         if (authJson.user && (authJson.user.fullName || authJson.user.email)) {
@@ -7042,6 +7143,8 @@
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      const security = document.getElementById('account-security-modal');
+      if (security && !security.hidden) closeAccountSecurity();
       const pop = document.getElementById('account-popover');
       if (pop && !pop.hidden) {
         pop.hidden = true;
@@ -7617,6 +7720,25 @@
       } catch {
         window.prompt('Copy this public HTTPS link for your client:', demoUrl);
       }
+      return;
+    }
+    if (b.id === 'btn-account-security') {
+      const pop = document.getElementById('account-popover');
+      if (pop) pop.hidden = true;
+      document.getElementById('btn-account-menu')?.setAttribute('aria-expanded', 'false');
+      openAccountSecurity();
+      return;
+    }
+    if (b.id === 'account-security-close' || b.id === 'account-security-close-x') {
+      closeAccountSecurity();
+      return;
+    }
+    if (b.id === 'btn-change-password') {
+      await submitPasswordChange();
+      return;
+    }
+    if (b.id === 'btn-revoke-sessions') {
+      await revokeOtherSessions();
       return;
     }
     if (b.id === 'btn-logout') {

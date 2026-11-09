@@ -13,11 +13,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=elite-2.34" />
-  <link rel="stylesheet" href="./brand-logos.css?v=elite-2.34" />
+  <link rel="stylesheet" href="./styles.css?v=elite-2.35" />
+  <link rel="stylesheet" href="./brand-logos.css?v=elite-2.35" />
   <script>
     (function () {
-      var CURRENT_BUILD = 'elite-2.34';
+      var CURRENT_BUILD = 'elite-2.35';
       // Discard legacy token handoffs; browser authentication uses HttpOnly cookies.
       try {
         sessionStorage.removeItem('vac_auth_token');
@@ -89,6 +89,7 @@
           </button>
           <div class="account-popover" id="account-popover" hidden>
             <a class="g" id="btn-create-account" href="/signup" style="display:none;text-decoration:none">Create Account</a>
+            <button class="g" id="btn-account-security" type="button" style="display:none">Password &amp; Sessions</button>
             <button class="g" id="btn-logout" type="button" style="display:none">Sign Out</button>
             <button class="g" id="btn-share-demo" type="button" style="display:none">Copy Client Link</button>
             <a class="g" id="btn-newtab" href="./" target="_blank" rel="noopener" style="display:none;text-decoration:none">Open Tab</a>
@@ -158,6 +159,28 @@
     </div>
   </div>
 
+  <!-- Account security: password rotation and session revocation -->
+  <div class="modal-backdrop" id="account-security-modal" hidden>
+    <div class="modal" style="max-width:460px">
+      <div class="modal-head">
+        <h3>Password &amp; Sessions</h3>
+        <button class="g" id="account-security-close-x" type="button" aria-label="Close password and sessions">✕</button>
+      </div>
+      <div class="note" id="account-security-who" style="margin-bottom:10px"></div>
+      <label for="account-current-password">Current password</label>
+      <input type="password" id="account-current-password" autocomplete="current-password" />
+      <label for="account-new-password" style="margin-top:8px">New password</label>
+      <input type="password" id="account-new-password" autocomplete="new-password" minlength="15" placeholder="At least 15 characters" />
+      <div class="note" style="margin-top:6px">Changing your password signs out every other device. Use a multi-word passphrase.</div>
+      <div class="note" id="account-security-msg" role="status" aria-live="polite" style="margin-top:8px;white-space:pre-line"></div>
+      <div class="bar" style="margin-top:14px;justify-content:flex-end">
+        <button class="g" id="btn-revoke-sessions" type="button" style="margin-right:auto">Sign Out Other Devices</button>
+        <button class="g" id="account-security-close" type="button">Close</button>
+        <button class="b" id="btn-change-password" type="button">Update Password</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Server-side .env API Keys Modal -->
   <div class="modal-backdrop" id="keys-modal" hidden>
     <div class="modal">
@@ -180,9 +203,9 @@
   </div>
 
   <input type="file" id="import-file" accept="application/json,.json" hidden />
-  <script src="./opening.js?v=elite-2.34"></script>
-  <script src="./persona.js?v=elite-2.34"></script>
-  <script src="./brand-logos.js?v=elite-2.34"></script>
-  <script src="./app.js?v=elite-2.34"></script>
+  <script src="./opening.js?v=elite-2.35"></script>
+  <script src="./persona.js?v=elite-2.35"></script>
+  <script src="./brand-logos.js?v=elite-2.35"></script>
+  <script src="./app.js?v=elite-2.35"></script>
 </body>
 </html>

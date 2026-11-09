@@ -31,6 +31,10 @@ class Authenticator:
         self._ws_max = s.max_ws_per_key
         self._ws_buckets: dict[str, tuple[float, float]] = {}
         self._ws_rate = max(600, s.rate_limit_per_min * 20)
+        # Message-rate tokens do not bound connection churn: a client can open
+        # and immediately close sockets without ever sending a frame.
+        self._handshake_buckets: dict[str, tuple[float, float]] = {}
+        self._handshake_rate = float(s.ws_handshake_per_min)
 
     def verify(self, token: str | None) -> Principal | None:
         if self.disabled:
@@ -60,6 +64,17 @@ class Authenticator:
         tokens = min(float(self._ws_rate), tokens + (now - last) * self._ws_rate / 60.0)
         allowed = tokens >= 1
         self._ws_buckets[p.key_id] = (tokens - 1 if allowed else tokens, now)
+        return allowed
+
+    def check_ws_handshake(self, p: Principal) -> bool:
+        """Token bucket for WebSocket connection attempts, per API key."""
+        tokens, last = self._handshake_buckets.get(
+            p.key_id, (self._handshake_rate, time.monotonic())
+        )
+        now = time.monotonic()
+        tokens = min(self._handshake_rate, tokens + (now - last) * self._handshake_rate / 60.0)
+        allowed = tokens >= 1
+        self._handshake_buckets[p.key_id] = (tokens - 1 if allowed else tokens, now)
         return allowed
 
     def ws_acquire(self, p: Principal) -> bool:

@@ -201,8 +201,8 @@
     pw.addEventListener('input', function () {
       var v = pw.value;
       var score = 0;
-      if (v.length >= 8) score++;
-      if (v.length >= 12) score++;
+      if (v.length >= 15) score++;
+      if (v.length >= 20) score++;
       if (/[A-Z]/.test(v) && /[a-z]/.test(v)) score++;
       if (/[0-9]/.test(v)) score++;
       if (/[^A-Za-z0-9]/.test(v)) score++;
@@ -428,8 +428,8 @@
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailVal)) {
       markInvalid(email, true); setMsg(msg, 'Enter a valid email address.'); email.focus(); return;
     }
-    if (pwVal.length < 8) {
-      markInvalid(password, true); setMsg(msg, 'Password must be at least 8 characters.'); password.focus(); return;
+    if (pwVal.length < 15) {
+      markInvalid(password, true); setMsg(msg, 'Password must be at least 15 characters. A short passphrase works well.'); password.focus(); return;
     }
 
     submit.disabled = true;

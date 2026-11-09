@@ -97,7 +97,11 @@ npm start
 # Or simply run ./start.sh (Linux/macOS) or start.bat (Windows)
 ```
 
-Open **`http://127.0.0.1:533`**. With no admin password or users, create the first account directly on loopback; proxied bootstrap is intentionally blocked. Once authentication is enabled, only a signed-in operator can create another account. All accounts currently have full operator privileges; there is no role separation.
+Open **`http://127.0.0.1:533`**. With no admin password or users, create the first account directly on loopback; proxied bootstrap is intentionally blocked. Once authentication is enabled, only a signed-in **owner or admin** can create another account. Accounts carry a role (`owner`, `admin`, `operator`, `qa`, `viewer`) and an active flag: privileged routes (secrets, state reset, release bundle, deploy script, provider verification, account administration, live-call hangup/transfer) require owner/admin, and `viewer` accounts are read-only. Roles gate actions, **not records** — all accounts still share one console state.
+
+Passwords for new or changed accounts must be at least 15 characters; existing shorter passwords keep working. Under **Account → Password & Sessions**, a signed-in account can rotate its password (which signs out every other device) or revoke its other sessions. Owners/admins can list accounts, change roles, disable accounts and revoke their sessions under `/api/users`; the last active owner cannot be disabled or demoted, and an `admin` cannot manage owner accounts or grant ownership. Disabling an account or demoting it to `viewer`/`qa` revokes its live sessions immediately.
+
+Troubleshooting: **[`docs/BACKEND-TROUBLESHOOTING.md`](./docs/BACKEND-TROUBLESHOOTING.md)** maps every real error code to its cause and fix. Security status: **[`docs/security/BACKEND-AUDIT-2026-11-09.md`](./docs/security/BACKEND-AUDIT-2026-11-09.md)**.
 
 ### Imported greetings and call rotation
 

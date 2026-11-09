@@ -272,6 +272,147 @@ function createApp(viciBridge) {
         res.json({ ok: true, authEnabled: true, authenticated: false });
     });
     app.use('/api', auth_guard_1.apiAuthMiddleware);
+    // ---------------- account security: password change and session revocation
+    // Registered after apiAuthMiddleware. /api/auth/* is intentionally reachable
+    // before authentication, so each handler below re-resolves the account from
+    // the session itself; no client supplied identifier can act on another
+    // account. /api/users/* additionally passes the middleware adminOnly check.
+    app.post('/api/auth/change-password', asyncRoute(async (req, res) => {
+        const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+        if (!account) {
+            res.status(403).json({
+                ok: false,
+                code: 'ACCOUNT_REQUIRED',
+                error: 'Sign in with an email account to change a password. The server ADMIN_PASSWORD is changed in .env.',
+            });
+            return;
+        }
+        const ip = req.socket?.remoteAddress || 'unknown';
+        const key = `${ip}:password-change:${account.id}`;
+        const gate = rateLimited(key, loginAttempts);
+        if (gate.limited) {
+            res.setHeader('Retry-After', String(gate.retryAfter));
+            res.status(429).json({ ok: false, code: 'RATE_LIMITED', error: 'Too many attempts. Try again later.' });
+            return;
+        }
+        const result = await (0, user_store_1.changeUserPassword)(account.id, String(req.body?.currentPassword ?? ''), String(req.body?.newPassword ?? ''), (0, auth_guard_1.getRequestSessionToken)(req));
+        if (!result.ok) {
+            if (result.field === 'currentPassword')
+                noteFailure(key, loginAttempts);
+            res.status(result.field ? 400 : 409).json({
+                ok: false,
+                code: 'PASSWORD_CHANGE_FAILED',
+                field: result.field || null,
+                error: result.error || 'Unable to change the password.',
+            });
+            return;
+        }
+        loginAttempts.delete(key);
+        res.json({
+            ok: true,
+            user: result.user,
+            revokedSessions: result.revokedSessions ?? 0,
+            message: 'Password updated. Other devices were signed out.',
+        });
+    }));
+    app.post('/api/auth/revoke-sessions', (req, res) => {
+        const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+        if (!account) {
+            res.status(403).json({ ok: false, code: 'ACCOUNT_REQUIRED', error: 'Sign in with an email account first.' });
+            return;
+        }
+        const keepCurrent = req.body?.keepCurrent !== false;
+        const revoked = (0, user_store_1.destroyUserSessions)(account.id, keepCurrent ? (0, auth_guard_1.getRequestSessionToken)(req) : null);
+        if (!keepCurrent)
+            (0, auth_guard_1.clearAuthCookie)(res, req);
+        res.json({ ok: true, revokedSessions: revoked, authenticated: keepCurrent });
+    });
+    app.get('/api/auth/sessions', (req, res) => {
+        const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+        if (!account) {
+            res.status(403).json({ ok: false, code: 'ACCOUNT_REQUIRED', error: 'Sign in with an email account first.' });
+            return;
+        }
+        res.json({ ok: true, activeSessions: (0, user_store_1.countUserSessions)(account.id) });
+    });
+    // ---------------- owner/admin account administration
+    const requireAccountAdmin = (req, res) => {
+        const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+        // A legacy ADMIN_PASSWORD session has no account row and stays owner-equivalent.
+        if (account && account.role !== 'owner' && account.role !== 'admin') {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Administrator permission required.' });
+            return false;
+        }
+        return true;
+    };
+    /**
+     * Owner accounts are managed only by another owner (or the legacy
+     * ADMIN_PASSWORD recovery session). Without this, an admin could disable the
+     * owner or grant itself ownership and escape the intended privilege boundary.
+     */
+    const mayManageTarget = (req, res, targetRole, grantingOwner = false) => {
+        const actor = (0, auth_guard_1.getAuthenticatedUser)(req);
+        if (!actor)
+            return true; // legacy ADMIN_PASSWORD session is owner-equivalent
+        if (actor.role === 'owner')
+            return true;
+        if (targetRole === 'owner' || grantingOwner) {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Only an owner can manage owner accounts or grant ownership.' });
+            return false;
+        }
+        return true;
+    };
+    app.get('/api/users', (req, res) => {
+        if (!requireAccountAdmin(req, res))
+            return;
+        res.json({
+            ok: true,
+            users: (0, user_store_1.listUsers)().map((user) => ({ ...user, activeSessions: (0, user_store_1.countUserSessions)(user.id) })),
+        });
+    });
+    app.post('/api/users/:id/status', (req, res) => {
+        if (!requireAccountAdmin(req, res))
+            return;
+        const active = req.body?.active;
+        if (typeof active !== 'boolean') {
+            res.status(400).json({ ok: false, code: 'INVALID_BODY', error: 'active must be a boolean.' });
+            return;
+        }
+        const target = (0, user_store_1.listUsers)().find((user) => user.id === String(req.params.id));
+        if (target && !mayManageTarget(req, res, target.role))
+            return;
+        const result = (0, user_store_1.setUserActive)(String(req.params.id), active);
+        if (!result.ok) {
+            res.status(result.field ? 409 : 404).json({ ok: false, code: 'ACCOUNT_UPDATE_FAILED', error: result.error });
+            return;
+        }
+        (0, auth_guard_1.invalidateUserCountCache)();
+        res.json({ ok: true, user: result.user, revokedSessions: result.revokedSessions ?? 0 });
+    });
+    app.post('/api/users/:id/role', (req, res) => {
+        if (!requireAccountAdmin(req, res))
+            return;
+        const role = String(req.body?.role ?? '');
+        const target = (0, user_store_1.listUsers)().find((user) => user.id === String(req.params.id));
+        if (target && !mayManageTarget(req, res, target.role, role === 'owner'))
+            return;
+        const result = (0, user_store_1.setUserRole)(String(req.params.id), role);
+        if (!result.ok) {
+            res.status(result.field === 'role' && result.error === 'Unknown role.' ? 400 : result.field ? 409 : 404)
+                .json({ ok: false, code: 'ACCOUNT_UPDATE_FAILED', error: result.error });
+            return;
+        }
+        res.json({ ok: true, user: result.user, revokedSessions: result.revokedSessions ?? 0 });
+    });
+    app.post('/api/users/:id/revoke-sessions', (req, res) => {
+        if (!requireAccountAdmin(req, res))
+            return;
+        const target = (0, user_store_1.listUsers)().find((user) => user.id === String(req.params.id));
+        if (target && !mayManageTarget(req, res, target.role))
+            return;
+        const revoked = (0, user_store_1.destroyUserSessions)(String(req.params.id));
+        res.json({ ok: true, revokedSessions: revoked });
+    });
     const buildTelemetryOverview = (state = (0, db_1.getConsoleState)(), validations = (0, settings_builder_1.validateState)(state), publicDemoUrl = (0, demo_tunnel_1.getCachedTunnelUrlSync)()) => {
         const okChecks = validations.filter((v) => v.level === 'ok').length;
         const wnChecks = validations.filter((v) => v.level === 'wn').length;
