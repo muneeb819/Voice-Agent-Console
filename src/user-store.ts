@@ -283,6 +283,14 @@ export function destroyUserSession(token?: string | null): void {
   getDb().prepare('DELETE FROM user_sessions WHERE token = ? OR token = ?').run(userSessionHash(token), token);
 }
 
+/** Immediately revokes every active browser/API session belonging to one user. */
+export function revokeAllUserSessions(userId: string): number {
+  if (!userId) return 0;
+  ensureSchema();
+  const result = getDb().prepare('DELETE FROM user_sessions WHERE user_id = ?').run(userId);
+  return Number(result.changes || 0);
+}
+
 export function purgeExpiredSessions(): void {
   ensureSchema();
   const now = new Date().toISOString();

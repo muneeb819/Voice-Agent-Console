@@ -183,6 +183,11 @@ async function run() {
     assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Cookie: operatorCookie } })).status, 200, 'The first-party account cookie remains valid');
     assert.strictEqual((await fetch(`${base}/api/secrets`, { headers: { Cookie: operatorCookie } })).status, 403, 'Operators cannot read administrator secrets');
     assert.strictEqual((await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Cookie: operatorCookie }, body: account('third@example.test') })).status, 403, 'Operators cannot provision additional accounts');
+    const weakPassword = await fetch(`${base}/api/auth/signup`, { method: 'POST', headers: { ...json, Cookie: firstCookie }, body: JSON.stringify({ email: 'weak@example.test', fullName: 'Weak Password', password: 'short123' }) });
+    assert.strictEqual(weakPassword.status, 400, 'Passwords shorter than 15 characters must be rejected');
+    const revokeAll = await fetch(`${base}/api/auth/logout-all`, { method: 'POST', headers: { Cookie: operatorCookie } });
+    assert.strictEqual(revokeAll.status, 200, 'A user can revoke all of their own sessions');
+    assert.strictEqual((await fetch(`${base}/api/state`, { headers: { Cookie: operatorCookie } })).status, 401, 'Revoke-all invalidates the current session immediately');
     const signupPage = await fetch(`${base}/signup`, { headers: { Cookie: firstCookie }, redirect: 'manual' });
     assert.strictEqual(signupPage.status, 200);
     assert.strictEqual((await fetch(`${base}/api/vici/register-call`)).status, 503, 'Direct local PBX hook reaches handler');
