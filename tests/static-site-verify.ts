@@ -100,7 +100,27 @@ async function run() {
   const brandCss = read('public/brand-logos.css');
   assert(/\.mma-brand-icon\s*\{[^}]*width:\s*36px[^}]*height:\s*36px/s.test(brandCss), 'Brand icon needs explicit dimensions');
   const brandJs = read('public/brand-logos.js').replace(/\/\*[\s\S]*?\*\//g, '');
-  assert(!/mma-wave|sheen|bars\(/i.test(brandJs), 'Transparent logo renderer must not add decorative overlays');
+  assert(!/sheen|logo-plate|exposure/i.test(brandJs), 'Transparent logo renderer must not restore plate/sheen overlays');
+  // The baked-in waveform is masked out and replaced with live CSS bars.
+  assert(/mma-wave-l/.test(brandJs) && /mma-wave-r/.test(brandJs), 'Banner must render both live wave flanks');
+  assert(/WAVE_BARS\s*=\s*24/.test(brandJs), 'Live wave bar count is pinned');
+  assert(!/requestAnimationFrame|setInterval/.test(brandJs), 'Live waves must be CSS-driven, not a JS animation loop');
+  const brandCssLive = read('public/brand-logos.css');
+  assert(/@keyframes mmaLiveWave/.test(brandCssLive), 'Live wave keyframes must exist');
+  assert(/animation-name: mmaLiveWave/.test(brandCssLive), 'Bars must use the live wave animation');
+  assert(/transform: scaleY/.test(brandCssLive), 'Waves must animate transform (compositor), not height (layout)');
+  assert(/prefers-reduced-motion: reduce/.test(brandCssLive), 'Reduced motion must be honored');
+  const motionBlock = brandCssLive.slice(brandCssLive.indexOf('@media (prefers-reduced-motion: reduce)'));
+  assert(/\.mma-wave\s*\{\s*display: none/.test(motionBlock), 'Reduced motion hides the live bars');
+  assert(/mask-image: none/.test(motionBlock), 'Reduced motion restores the original baked-in artwork');
+  assert(/data-energy="speaking"/.test(brandCssLive) && /data-energy="listening"/.test(brandCssLive), 'Call state must drive wave amplitude');
+  // The three mask bands must tile the box exactly, or the frame gets erased.
+  const band = (name: string) => Number(brandCssLive.match(new RegExp('--mma-wave-' + name + ':\\s*([\\d.]+)%'))?.[1]);
+  assert.equal(band('top') + band('height') + band('tail'), 100, 'Mask bands must tile the banner exactly');
+  // The one banner with an opaque waveform panel must repaint it, or the masked
+  // window shows the page through the logo on light themes.
+  assert(/--mma-wave-panel-r: rgb\(13, 7, 1\)/.test(brandCssLive), 'Opaque crimson panel must be repainted behind the live bars');
+  assert(/data-theme="crimson"[\s\S]{0,120}data-theme="sakura"/.test(brandCssLive), 'Both themes mapped to mma-gold-crimson need the panel fill');
   for (const theme of ['mma-cyan-signal', 'mma-blue-ultraviolet', 'mma-cyan-field', 'mma-gold-ember', 'mma-ice-obsidian', 'mma-cyan-emerald', 'mma-cyan-aurora', 'mma-gold-crimson']) {
     assert(fs.existsSync(path.join(publicDir, 'assets', 'brand', `${theme}.webp`)), `Missing transparent banner ${theme}`);
     assert(!fs.existsSync(path.join(publicDir, 'assets', 'brand', `${theme}.jpg`)), `Full-banner JPEG master must stay out of public/: ${theme}`);
