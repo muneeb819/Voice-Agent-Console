@@ -18,15 +18,16 @@ INCLUDED LATEST FEATURES & ARCHITECTURE:
    - Scrypt password hashing, HttpOnly session cookies, multi-user SQLite store,
      and Active 24-Channel Playing Soundwave Acoustic Plaque SVG across all
      10 Theme Studio worlds.
-3. Strategic 3-Zone Precision Command Header:
-   - Bounded responsive layout, recessed Utility Dock (Theme Studio, API Keys,
-     Sign Out), live Client Link share pill, and Transaction Commit Dock.
-4. Global Executive Command & Console Quality Dashboard (#cmd-deck):
-   - Rendered at the top of all 8 workspace pages (Agents, Plug-Ins, Campaigns,
-     Voice, QA & Call Sim, VICIdial Bridge, Wallboard, Export & Revisions).
-   - Real-time 0-100 Console Quality Index radial gauge (S+/A+ certification),
-     6 weighted quality pillars, 8 clickable subsystem KPI cards, live Fleet
-     Readiness Matrix, and Full vs. Compact strip toggle.
+3. Logo-Only Header, Side-Rail Utilities & Explicit Save Dock:
+   - Centered theme logo only; Theme Studio icon at the side panel's bottom-left,
+     API Keys and account/session links at its bottom-right.
+   - Save & Verify appears at the page's bottom-right only for unsaved changes or
+     a failed save; section navigation preserves drafts without forcing a save.
+4. Executive Command & Console Quality Dashboard (#cmd-deck):
+   - Dedicated default Dashboard page with configuration-readiness gauge,
+     subsystem KPI cards, and Full vs. Compact toggle.
+   - Two-layer Fleet Matrix: campaign names first, then live activity,
+     assigned bots and retained-call analytics for the selected campaign.
 5. External Internet Client Demo HTTPS Link (Cloudflare Quick-Tunnel):
    - Run `npm run demo` (or double-click `start-demo.bat` on Windows) OR click
      "Launch Public Client HTTPS Link" directly inside the top Command Dashboard.

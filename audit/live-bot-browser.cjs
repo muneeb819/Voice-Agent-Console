@@ -146,6 +146,7 @@ async function run() {
   await page.click('#admin-toggle');
   await page.fill('#admin-password', 'synthetic-browser-admin');
   await page.click('#admin-submit');
+  await page.evaluate(() => { const pop = document.getElementById('account-popover'); if (pop?.hidden) document.getElementById('btn-account-menu')?.click(); });
   await page.waitForSelector('#btn-logout:visible');
   await page.evaluate(async () => {
     const data = await (await fetch('/api/state')).json();

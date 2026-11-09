@@ -71,6 +71,7 @@ export interface ActiveBridgeCallSummary {
   phone: string;
   campaignName: string;
   viciCampaign: string;
+  agentId: string;
   agentName: string;
   remoteAgentUser: string;
   state: string;
@@ -1143,6 +1144,7 @@ export class VicidialBridgeService {
       phone: parsedCaller.phone,
       campaignName: campaign?.name || 'Default',
       viciCampaign: campaign?.viciCampaign || '',
+      agentId: agent.id,
       agentName: agent.name,
       remoteAgentUser,
       state: 'hydrating_lead',

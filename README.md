@@ -136,6 +136,12 @@ Scripted sandbox responses and the fake local-speech conversation have been remo
 
 The **Dashboard** is the first navigation item and the default page; existing `?tab=` links to individual sections still work. Its scores are configuration estimates, not certifications or proof of live connectivity.
 
+### Console layout, saving and Fleet Matrix
+
+- The header keeps only the centered theme logo. Theme Studio is the small icon at the bottom-left of the side panel; API Keys and account/session links are at the bottom-right.
+- Configuration edits are explicit-save. Moving between sections does not force a save or discard the draft; the bottom-right **Save & Verify** dock appears only while changes need saving or a failed save needs retry. **Discard** restores the last saved state. Browser drafts are recoverable, but static-demo saved settings still live only in that browser profile.
+- **Fleet Matrix** starts with campaign names only. Selecting a campaign opens its live activity badge, configuration readiness, assigned bots, and retained-call analytics. **Active** means the connected bridge currently reports a live call for that campaign; **Inactive** means it reports none. Static demos show **Status unavailable** rather than inventing production activity. Analytics cover retained records only (up to 200 bridge calls and 100 browser tests across the console), not lifetime totals.
+
 See [opening test results](OPENING-TEST-RESULTS.md) for this release's commands, results and limitations. The tests use temporary data and environment files, loopback ports, synthetic credentials and mocked services. External `fetch` calls are blocked by default and the live Deepgram test is reported as skipped. A live run may incur provider charges and requires explicit opt-in with `VAC_TEST_LIVE=1` and a test key:
 
 ```bash
