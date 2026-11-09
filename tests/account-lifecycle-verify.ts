@@ -194,6 +194,25 @@ async function main() {
       'an admin still manages non-owner accounts');
     assert.equal((await call(`/api/users/${owner.user!.id}/role`, 'POST', ownerCookie, { role: 'owner' })).status, 200);
     console.log('✓ Admins manage non-owner accounts but cannot disable, demote or become an owner');
+
+    // ------------------------------- logout-all alias shares one implementation
+    // PR #25 added /api/auth/logout-all alongside the newer /api/auth/revoke-sessions.
+    // Both must work, and logout-all must not survive as a second implementation
+    // that can drift from destroyUserSessions().
+    const aliasToken = createUserSession(operator.user!.id);
+    const aliasOther = createUserSession(operator.user!.id);
+    const aliasRes = await call('/api/auth/logout-all', 'POST', `vac_session=${aliasToken}`, {});
+    assert.equal(aliasRes.status, 200, 'logout-all accepts a signed-in account');
+    const aliasBody = await aliasRes.json() as any;
+    assert.equal(aliasBody.authenticated, false);
+    assert.ok(aliasBody.revokedSessions >= 2, 'logout-all revokes every session for the account');
+    assert.match(String(aliasRes.headers.get('set-cookie')), /Max-Age=0/, 'logout-all clears the cookie');
+    assert.equal(getUserBySessionToken(aliasToken), null);
+    assert.equal(getUserBySessionToken(aliasOther), null);
+    assert.equal((await call('/api/state', 'GET', `vac_session=${aliasToken}`)).status, 401);
+    assert.equal((await call('/api/auth/logout-all', 'POST', '', {})).status, 401,
+      'logout-all still requires an account session');
+    console.log('✓ logout-all and revoke-sessions both revoke sessions through one code path');
   } finally {
     await new Promise<void>((r) => server.close(() => r()));
     fs.rmSync(dataDir, { recursive: true, force: true });

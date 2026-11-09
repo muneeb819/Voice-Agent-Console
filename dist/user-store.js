@@ -16,6 +16,7 @@ exports.getUserById = getUserById;
 exports.createUserSession = createUserSession;
 exports.getUserBySessionToken = getUserBySessionToken;
 exports.destroyUserSession = destroyUserSession;
+exports.revokeAllUserSessions = revokeAllUserSessions;
 exports.purgeExpiredSessions = purgeExpiredSessions;
 exports.isAdminSessionRevoked = isAdminSessionRevoked;
 exports.revokeAdminSession = revokeAdminSession;
@@ -273,6 +274,16 @@ function destroyUserSession(token) {
         return;
     ensureSchema();
     (0, db_1.getDb)().prepare('DELETE FROM user_sessions WHERE token = ? OR token = ?').run(userSessionHash(token), token);
+}
+/**
+ * Revokes every session for one user. Retained as the name used by
+ * POST /api/auth/logout-all; it delegates to destroyUserSessions so session
+ * revocation has a single implementation rather than two that can drift.
+ */
+function revokeAllUserSessions(userId) {
+    if (!userId)
+        return 0;
+    return destroyUserSessions(userId);
 }
 function purgeExpiredSessions() {
     ensureSchema();

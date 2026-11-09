@@ -93,6 +93,7 @@ import {
   destroyUserSessions,
   listUsers,
   purgeExpiredSessions,
+  revokeAllUserSessions,
   setUserActive,
   setUserRole,
 } from './user-store';
