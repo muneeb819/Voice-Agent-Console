@@ -582,19 +582,15 @@
       const saved = JSON.parse(window.localStorage?.getItem(APPEARANCE_STORAGE_KEY) || '{}');
       return {
         theme: APPEARANCE_THEMES.some((t) => t.id === saved.theme) ? saved.theme : 'cyan_signal',
-        exposure: ['minimal', 'studio', 'cinema'].includes(saved.exposure) ? saved.exposure : 'studio',
-        glass: ['solid', 'frosted', 'crystal'].includes(saved.glass) ? saved.glass : 'frosted',
       };
     } catch {
-      return { theme: 'cyan_signal', exposure: 'studio', glass: 'frosted' };
+      return { theme: 'cyan_signal' };
     }
   })();
 
   function applyAppearance(save = true) {
     const root = document.documentElement;
     root.dataset.theme = appearance.theme;
-    root.dataset.exposure = appearance.exposure;
-    root.dataset.glass = appearance.glass;
     if (save) {
       try {
         window.localStorage?.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(appearance));
@@ -657,7 +653,6 @@
           <div class="theme-hero-tags">
             <span class="pill" style="font-size:10.5px">🎨 ${esc(activeMeta.sub)}</span>
             <span class="pill ok" style="font-size:10.5px">〰 ${esc(activeMeta.motif || BRAND_PACKAGES[activeMeta.id]?.label || 'Studio')}</span>
-            <span class="pill" style="font-size:10.5px">✨ ${esc(appearance.exposure.toUpperCase())} · ${esc(appearance.glass.toUpperCase())}</span>
           </div>
         </div>
         <div class="theme-hero-actions">
@@ -696,12 +691,6 @@
         `
       ).join('');
     }
-    document.querySelectorAll('#exposure-seg button').forEach((btn) => {
-      btn.classList.toggle('on', btn.dataset.exp === appearance.exposure);
-    });
-    document.querySelectorAll('#glass-seg button').forEach((btn) => {
-      btn.classList.toggle('on', btn.dataset.gls === appearance.glass);
-    });
   }
 
   applyAppearance(false);
@@ -992,19 +981,11 @@
 
   const VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'];
   function defaultSelfIntroForClient(id, name) {
-    if (id === 'a_nova' || /nova|concierge|general/i.test(name || '')) {
-      return "Hi there! I'm Nova, a live Customer Support & Concierge Specialist here on the line. I'm happy to chat naturally and help answer any general knowledge, everyday, or support question you have!";
-    }
-    if (id === 'a_medicare' || /medicare/i.test(name || '')) {
-      return "Hi! I'm Haley, a live Benefits Advisor calling from the Benefits Department. I help Medicare beneficiaries check their Food and OTC allowance eligibility, and I'm happy to answer any questions you have along the way!";
-    }
-    if (id === 'a1' || /final expense|sarah/i.test(name || '')) {
-      return "Hi! I'm Sarah, a live Senior Coverage Coordinator. I help folks explore final expense options and connect with our licensed specialists, and I'm always happy to answer your questions too!";
-    }
-    return `Hi! I'm ${name || 'Alex'}, a live specialist here on the line, happy to chat naturally and help with any questions you have!`;
+    return window.VacPersona.defaultSelfIntro(id, name);
   }
 
-  function upgradeRealtimeAgentFeatures(state) {
+
+  function upgradeRealtimeAgentFeatures(state, shippedState = null) {
     if (!state || !Array.isArray(state.agents)) return false;
     let mutated = false;
 
@@ -1252,7 +1233,7 @@
           expressionStyle: ag.id === 'a_nova' ? 'energetic_upbeat' : 'warm_empathetic',
           vocalGestures: true,
           allowGeneralQa: true,
-          selfIntro: defaultSelfIntroForClient(ag.id, ag.name),
+          selfIntro: window.VacPersona.migrateLegacySelfIntro(ag.behavior?.selfIntro, ag.id, ag.name),
         };
         // Upgrade sluggish v2.4/v2.5 defaults to ultra-low latency & expressive Flux v2 prosody
         if (ag.stt && ag.stt.eot >= 0.65 && ag.stt.eotms >= 2000) {
@@ -1274,9 +1255,8 @@
         }
         if (ag.behavior.vocalGestures === undefined) ag.behavior.vocalGestures = true;
         if (ag.behavior.allowGeneralQa === undefined) ag.behavior.allowGeneralQa = true;
-        if (!ag.behavior.selfIntro || !String(ag.behavior.selfIntro).trim()) {
-          ag.behavior.selfIntro = defaultSelfIntroForClient(ag.id, ag.name);
-        }
+        const migratedIntro = window.VacPersona.migrateLegacySelfIntro(ag.behavior.selfIntro, ag.id, ag.name);
+        if (migratedIntro !== ag.behavior.selfIntro) { ag.behavior.selfIntro = migratedIntro; mutated = true; }
       }
     }
 
@@ -1311,6 +1291,10 @@
         if (typeof cp.complianceRules !== 'string') {
           cp.complianceRules = MISSING_CAMPAIGN_RULES;
           mutated = true;
+        } else {
+          const stockRules = shippedState?.campaigns?.find((entry) => entry.id === cp.id)?.complianceRules || '';
+          const migratedRules = window.VacPersona.migrateLegacyCampaignRules(cp.complianceRules, stockRules, cp.id);
+          if (migratedRules !== cp.complianceRules) { cp.complianceRules = migratedRules; mutated = true; }
         }
         // Remove retired automatic-silence settings from saved browser state.
         // The operator's general disposition list and all other fields stay intact.
@@ -1355,76 +1339,6 @@
     }
 
     return mutated;
-  }
-
-  function composeBehavioralPromptClient(agent, campaign) {
-    const basePrompt = (agent.prompt || '').trim();
-    const b = agent.behavior;
-    const toneMap = {
-      warm_empathetic: 'Warm, caring, empathetic, and reassuring — sound genuinely attentive and human.',
-      energetic_upbeat: 'Bright, upbeat, friendly, and enthusiastic — speak with a natural smile in your voice.',
-      charismatic_closer: 'Confident, poised, articulate, and high-trust — crisp executive advisor energy.',
-      calm_concierge: 'Calm, composed, clear, and soothing — smooth concierge presence.',
-    };
-
-    const lines = [];
-    if (b) {
-      lines.push(
-        '',
-        '=== REAL-TIME VOICE ASSISTANT, BARGE-IN, EXPRESSIONS & GENERAL Q&A ===',
-        '- Be honest about being an AI assistant if asked. Do not claim an external action succeeded unless its tool result confirms success.'
-      );
-      if ((b.selfIntro || '').trim()) {
-        lines.push(
-          `- SELF-INTRODUCTION: Whenever greeted casually or asked "Who are you?", "What is your name?", "Introduce yourself", or "What can you do?", warmly introduce yourself in 1–2 natural spoken sentences based on: "${b.selfIntro.trim()}"`
-        );
-      }
-      if (b.allowGeneralQa !== false) {
-        lines.push(
-          '- GENERAL KNOWLEDGE & OPEN Q&A: If the caller asks ANY general question (science, math, geography, technology, definitions, advice, trivia, or everyday small talk), answer it directly, accurately, and warmly in 1–2 concise spoken sentences instead of deflecting. Always honor the assigned campaign rules, DNC, language barriers, and eligibility gates first.'
-        );
-      }
-      if (b.bargeIn !== 'off') {
-        lines.push(
-          '- LIVE BARGE-IN AWARENESS: The caller can interrupt you mid-sentence at any time. If interrupted, never repeat cut-off sentences — pivot immediately and naturally to their latest question or remark.'
-        );
-      }
-      lines.push(`- VOCAL EXPRESSION STYLE: ${toneMap[b.expressionStyle] || toneMap.warm_empathetic}`);
-      if (b.vocalGestures !== false) {
-        lines.push(
-          '- NATURAL VOCAL GESTURES: Use subtle, authentic spoken micro-gestures when natural (e.g., "Oh, great question!", "Gotcha —", "Mm-hmm, I hear you.", "Right, so—", light warmth) and natural conversational pauses ("—"). NEVER output bracketed or asterisk tags like [laughs], [smiles], (sighs), or *waves* because TTS speaks brackets literally.'
-        );
-      }
-      if (b.latencyProfile === 'ultra') {
-        lines.push(
-          '- ULTRA-LOW LATENCY STREAMING: Begin every reply immediately with the core answer or reaction in the first 4–6 words. Keep turns crisp (1–2 spoken sentences, ~15–35 words unless asked for detail) in plain spoken words with zero markdown (*, #, bullets).'
-        );
-      }
-    }
-    if (campaign) {
-      lines.push(
-        '',
-        '=== MANDATORY CAMPAIGN-SPECIFIC COMPLIANCE & RULES ===',
-        `- The only campaign assigned to this call is ${JSON.stringify(campaign.name)} (VICIdial campaign ${JSON.stringify(campaign.viciCampaign)}). Do not use another campaign’s rules.`,
-        '- The rules below are mandatory and override any conflicting persona, sales script, saved agent prompt, or general-answer instruction. Follow them throughout the call.',
-        `- Campaign rules:\n${String(campaign.complianceRules || '').trim() || '[NO CAMPAIGN RULES CONFIGURED — do not start a live call.]'}`,
-        '- After the one-second listen, a silent caller receives the configured opening once. Silence alone never ends the call or applies a disposition; continue listening for the caller.'
-      );
-      if (campaign.disclosure && campaign.disclosure.trim()) {
-        lines.push(
-          `- Campaign disclosure text is ${JSON.stringify(campaign.disclosure.trim())}. It is prepended to the opening only when this agent’s campaign-disclosure setting is enabled; never claim a recording or practice that is not actually in effect.`
-        );
-      }
-    }
-    const suffix = lines.join('\n').trim();
-    if (!suffix) return basePrompt;
-    const maxPromptLength = 24950;
-    const availableBaseLength = Math.max(0, maxPromptLength - suffix.length - 1);
-    const safeBase = basePrompt.slice(0, availableBaseLength);
-    const truncationNote = basePrompt.length > safeBase.length
-      ? '\n[Agent prompt shortened to preserve the mandatory campaign rules below.]'
-      : '';
-    return `${safeBase}${truncationNote}\n${suffix}`.trim();
   }
 
   // The server exposes its SQLite catalog; static hosting ships the same
@@ -1617,7 +1531,6 @@
     turns: 0,
     bargeInCount: 0,
     bargeInSuppressAudio: false,
-    bargeInFlashUntil: 0,
     vadConsecutiveFrames: 0,
     lastLocalBargeInAt: 0,
     lastTtfbMs: null,
@@ -1641,14 +1554,6 @@
     micPeakPct: 0,
     micResampler: {},
     playCtx: null,
-    playAnalyser: null,
-    lipRaf: null,
-    botMouthLevel: 0,
-    expression: 'smile',
-    expressionLabel: '😊 Warm & Ready',
-    gesture: 'wave',
-    gestureIcon: '👋',
-    gestureLabel: 'Greeting Wave',
     scheduledSources: [],
     nextPlayTime: 0,
     sampleRateIn: 16000,
@@ -2237,7 +2142,7 @@
         return o;
       });
 
-    const think = { provider: thinkProvider, prompt: composeBehavioralPromptClient(agent, linkedCampaign), functions: fns };
+    const think = { provider: thinkProvider, prompt: window.VacPersona.composeBehavioralPrompt(agent, linkedCampaign), functions: fns };
 
     const ttsModel = String(S.services?.tts?.model || '').trim();
     const speakProvider = { type: tp.type || '' };
@@ -2876,133 +2781,30 @@
     return samples.buffer.slice(0, count * 2);
   }
 
-  function startPersonaLipSyncLoop() {
-    if (sim.lipRaf) return;
-    const data = new Uint8Array(64);
-    const tick = () => {
-      if (!sim.active && !sim.connecting) {
-        sim.lipRaf = null;
-        return;
-      }
-      let mouthOpen = 0;
-      if (sim.playAnalyser && sim.scheduledSources.length > 0 && !sim.bargeInSuppressAudio) {
-        sim.playAnalyser.getByteTimeDomainData(data);
-        let sum = 0;
-        for (let i = 0; i < data.length; i++) {
-          const v = (data[i] - 128) / 128;
-          sum += v * v;
-        }
-        const rms = Math.sqrt(sum / data.length);
-        mouthOpen = Math.min(1, rms * 5.2);
-      }
-      sim.botMouthLevel = mouthOpen;
-      const mouthEl = document.getElementById('persona-mouth');
-      const ringEl = document.getElementById('persona-ring');
-      if (mouthEl) {
-        if (sim.expression === 'surprised') {
-          mouthEl.setAttribute('d', 'M35 53 Q41 61 47 53 Q41 60 35 53 Z');
-        } else if (mouthOpen > 0.08) {
-          const openPx = Math.round(3 + mouthOpen * 10);
-          mouthEl.setAttribute(
-            'd',
-            `M32 52 Q41 ${52 + openPx} 50 52 Q41 ${52 + Math.round(openPx * 0.45)} 32 52 Z`
-          );
-        } else if (sim.expression === 'empathy') {
-          mouthEl.setAttribute('d', 'M33 53 Q41 57 49 53');
-        } else {
-          mouthEl.setAttribute('d', 'M31 51 Q41 59 51 51');
-        }
-      }
-      if (ringEl && sim.scheduledSources.length > 0) {
-        const sc = (1 + mouthOpen * 0.14).toFixed(3);
-        ringEl.style.transform = `scale(${sc})`;
-      } else if (ringEl) {
-        ringEl.style.transform = '';
-      }
-      sim.lipRaf = requestAnimationFrame(tick);
-    };
-    sim.lipRaf = requestAnimationFrame(tick);
-  }
-
-  function applyPersonaExpressionAndGesture(expr, exprLabel, gesture, gestureIcon, gestureLabel) {
-    sim.expression = expr;
-    sim.expressionLabel = exprLabel;
-    sim.gesture = gesture;
-    sim.gestureIcon = gestureIcon;
-    sim.gestureLabel = gestureLabel;
-    updatePersonaStageDom();
-  }
-
-  function classifyBotUtteranceExpression(text) {
-    const t = String(text || '');
-    if (/\b(i'm |i am |my name is|hey there|hi there|welcome|nice to meet|introduce)\b/i.test(t)) {
-      applyPersonaExpressionAndGesture('smile', '😊 Warm Self-Intro Smile', 'wave', '👋', 'Friendly Greeting Wave');
-    } else if (/\b(sorry|apologize|understand|hear you|exhausting|tough|completely understand)\b/i.test(t)) {
-      applyPersonaExpressionAndGesture('empathy', '🥰 Empathetic & Caring', 'empathy', '🤝', 'Reassuring Nod');
-    } else if (/\b(wonderful|awesome|great question|love that|everything looks good|connect you|congratulations)\b/i.test(t)) {
-      applyPersonaExpressionAndGesture('celebrate', '🤩 Upbeat & Expressive', 'celebrate', '👍', 'Enthusiastic Thumbs-Up');
-    } else if (/\b(because|capital|speed|miles|million|actually|means|works|equals|\d+)\b/i.test(t)) {
-      applyPersonaExpressionAndGesture('explain', '🤓 Articulate & Clear', 'explain', '🤲', 'Open-Palm Explain');
-    } else {
-      applyPersonaExpressionAndGesture('smile', '😊 Expressive Speaking', 'speak', '💬', 'Conversational Gesture');
-    }
-  }
-
+  // The old avatar inferred "emotions" from transcript text and animated a face
+  // on every animation frame. That was decorative, not provider-observed, and it
+  // competed with real audio work. The stage now shows only real call state.
   function updatePersonaStageDom() {
     const stage = document.getElementById('persona-stage');
     if (!stage) return;
-    const isBargeFlash = Date.now() < sim.bargeInFlashUntil;
     const isSpeaking = sim.agentState === 'speaking' || sim.scheduledSources.length > 0;
     const isListeningUser = sim.agentState === 'user_speaking';
-    stage.className = `persona-stage${isSpeaking ? ' speaking' : ''}${isListeningUser ? ' listening-user' : ''}${isBargeFlash ? ' barge-flash' : ''}`;
-
-    const svg = document.getElementById('persona-svg');
-    if (svg) {
-      const tiltMap = {
-        wave: 'tilt-wave',
-        listen: 'tilt-listen',
-        think: 'tilt-think',
-        yield: 'tilt-barge',
-        empathy: 'tilt-empathy',
-        celebrate: 'tilt-celebrate',
+    stage.className = `persona-stage${isSpeaking ? ' speaking' : ''}${isListeningUser ? ' listening-user' : ''}`;
+    const statePill = document.getElementById('persona-state-pill');
+    if (statePill) {
+      const labels = {
+        listening: 'Listening',
+        user_speaking: 'Caller speaking',
+        thinking: 'Thinking',
+        speaking: 'Speaking',
+        idle: 'Idle',
       };
-      svg.setAttribute('class', `persona-svg ${tiltMap[sim.gesture] || ''}`);
+      statePill.textContent = labels[sim.agentState] || sim.agentState || 'Idle';
     }
-
-    const browL = document.getElementById('persona-brow-l');
-    const browR = document.getElementById('persona-brow-r');
-    if (browL && browR) {
-      if (sim.expression === 'surprised') {
-        browL.setAttribute('d', 'M25 27 Q31 22 36 26');
-        browR.setAttribute('d', 'M46 26 Q51 22 57 27');
-      } else if (sim.expression === 'empathy') {
-        browL.setAttribute('d', 'M25 29 Q31 26 36 30');
-        browR.setAttribute('d', 'M46 30 Q51 26 57 29');
-      } else if (sim.expression === 'think') {
-        browL.setAttribute('d', 'M25 28 Q31 25 36 28');
-        browR.setAttribute('d', 'M46 30 Q51 28 57 30');
-      } else {
-        browL.setAttribute('d', 'M25 30 Q31 27 36 29');
-        browR.setAttribute('d', 'M46 29 Q51 27 57 30');
-      }
-    }
-
-    const badge = document.getElementById('persona-gesture-badge');
-    if (badge) {
-      badge.textContent = sim.gestureIcon || '👋';
-      badge.className = `persona-gesture-badge${sim.gesture === 'wave' ? ' wave-anim' : ''}`;
-    }
-
-    const exprPill = document.getElementById('persona-expr-pill');
-    if (exprPill) exprPill.textContent = sim.expressionLabel;
-    const gestPill = document.getElementById('persona-gest-pill');
-    if (gestPill) gestPill.textContent = `${sim.gestureIcon} ${sim.gestureLabel}`;
     const bargePill = document.getElementById('persona-barge-pill');
     if (bargePill) {
-      bargePill.textContent = isBargeFlash
-        ? `⚡ BARGE-IN INTERRUPTED (${sim.bargeInCount})`
-        : `🛑 Barge-Ins: ${sim.bargeInCount}`;
-      bargePill.className = `pill ${isBargeFlash ? 'wn' : sim.bargeInCount > 0 ? 'ok' : ''}`;
+      bargePill.textContent = `Interruptions: ${sim.bargeInCount}`;
+      bargePill.className = `pill ${sim.bargeInCount > 0 ? 'ok' : ''}`;
     }
   }
 
@@ -3016,20 +2818,6 @@
         : 'Local + server VAD';
     return `
       <div class="persona-stage" id="persona-stage">
-        <div class="persona-avatar-wrap">
-          <div class="persona-ring" id="persona-ring"></div>
-          <svg class="persona-svg ${sim.gesture === 'wave' ? 'tilt-wave' : ''}" id="persona-svg" viewBox="0 0 82 82" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <circle cx="41" cy="41" r="39" fill="rgba(255,255,255,0.08)" stroke="rgba(255,255,255,0.28)" stroke-width="1.5"/>
-            <path id="persona-brow-l" d="M25 30 Q31 27 36 29" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round"/>
-            <path id="persona-brow-r" d="M46 29 Q51 27 57 30" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round"/>
-            <g class="persona-eye"><ellipse cx="31" cy="37" rx="3.6" ry="4.2" fill="#ffffff"/><circle cx="31.8" cy="36.5" r="1.5" fill="#0f172a"/></g>
-            <g class="persona-eye"><ellipse cx="51" cy="37" rx="3.6" ry="4.2" fill="#ffffff"/><circle cx="51.8" cy="36.5" r="1.5" fill="#0f172a"/></g>
-            <circle cx="23.5" cy="45.5" r="3.8" fill="rgba(255,180,200,0.34)"/>
-            <circle cx="58.5" cy="45.5" r="3.8" fill="rgba(255,180,200,0.34)"/>
-            <path id="persona-mouth" d="M31 51 Q41 59 51 51" stroke="#ffffff" stroke-width="2.8" fill="rgba(15,23,42,0.32)" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
-          <div class="persona-gesture-badge ${sim.gesture === 'wave' ? 'wave-anim' : ''}" id="persona-gesture-badge" title="Decorative gesture inferred from transcript, not a provider event">${esc(sim.gestureIcon || '👋')}</div>
-        </div>
         <div class="persona-meta">
           <div class="persona-top-row">
             <div class="persona-title">
@@ -3042,12 +2830,8 @@
             </div>
           </div>
           <div class="persona-badges">
-            <span class="pill" id="persona-expr-pill">${esc(sim.expressionLabel)}</span>
-            <span class="pill" id="persona-gest-pill">${esc(sim.gestureIcon)} ${esc(sim.gestureLabel)}</span>
-            <span class="pill ${sim.bargeInCount > 0 ? 'ok' : ''}" id="persona-barge-pill">🛑 Barge-Ins: ${sim.bargeInCount}</span>
-          </div>
-          <div class="note" style="margin:0;font-size:11.4px">
-            Avatar expressions and gestures are decorative animations inferred from text, not provider-observed events. Interruptions clear browser playback; timing is not measured.
+            <span class="pill" id="persona-state-pill">Idle</span>
+            <span class="pill ${sim.bargeInCount > 0 ? 'ok' : ''}" id="persona-barge-pill">Interruptions: ${sim.bargeInCount}</span>
           </div>
         </div>
       </div>
@@ -3063,21 +2847,6 @@
     sim.lastLocalBargeInAt = Date.now();
     if (wasSpeaking || sourceLabel === 'Manual Button') {
       sim.bargeInCount += 1;
-      sim.bargeInFlashUntil = Date.now() + 1400;
-      applyPersonaExpressionAndGesture(
-        'surprised',
-        `⚡ Interrupted (${sourceLabel})`,
-        'yield',
-        '✋',
-        'Yielding Floor Instantly'
-      );
-      setTimeout(() => {
-        if (sim.active && sim.agentState === 'user_speaking') {
-          applyPersonaExpressionAndGesture('listen', '👂 Attentive Focus', 'listen', '🎧', 'Listening to Caller');
-        }
-      }, 950);
-    } else {
-      applyPersonaExpressionAndGesture('listen', '👂 Attentive Focus', 'listen', '🎧', 'Listening to Caller');
     }
     sim.agentState = 'user_speaking';
     sim.statusText = `⚡ Barge-In Active — Listening (${sourceLabel})`;
@@ -3110,16 +2879,6 @@
     if (sim.playCtx.state === 'suspended') {
       sim.playCtx.resume().catch(() => {});
     }
-    if (!sim.playAnalyser) {
-      try {
-        sim.playAnalyser = sim.playCtx.createAnalyser();
-        sim.playAnalyser.fftSize = 256;
-        sim.playAnalyser.smoothingTimeConstant = 0.55;
-        sim.playAnalyser.connect(sim.playCtx.destination);
-      } catch {
-        sim.playAnalyser = null;
-      }
-    }
     const int16 = new Int16Array(arrayBuf.slice(0, arrayBuf.byteLength - (arrayBuf.byteLength % 2)));
     const float32 = new Float32Array(int16.length);
     for (let i = 0; i < int16.length; i++) {
@@ -3131,7 +2890,7 @@
 
     const src = sim.playCtx.createBufferSource();
     src.buffer = audioBuffer;
-    src.connect(sim.playAnalyser || sim.playCtx.destination);
+    src.connect(sim.playCtx.destination);
     if (sim.recording?.started && sim.recording.recorder.state === 'recording') {
       src.connect(sim.recording.destination);
     }
@@ -3141,7 +2900,6 @@
     src.start(startAt);
     sim.nextPlayTime = startAt + audioBuffer.duration;
     sim.scheduledSources.push(src);
-    startPersonaLipSyncLoop();
 
     src.onended = () => {
       const idx = sim.scheduledSources.indexOf(src);
@@ -3407,11 +3165,12 @@
         const stateStr = sim.captureCtx ? sim.captureCtx.state : 'none';
         const silentTooLong =
           !sim.muted && Date.now() - captureStartedAt > 4000 && sim.micPeakPct < 1;
-        tel.innerHTML = silentTooLong
-          ? `<span class="wn">⚠ 0% audio coming from <b>${esc(sim.micActiveLabel)}</b> (${kb} KB queued) — check your hardware mute button or select a different microphone above!</span>`
-          : `🎙️ <b>${esc(sim.micActiveLabel)}</b> &bull; AudioCtx: <code>${esc(stateStr)}</code> &bull; ${sim.muted ? 'Muted · previously queued' : 'Queued to WebSocket'}: <b>${kb} KB</b> &bull; Peak since start: <b>${sim.micPeakPct}%</b>`;
+        tel.textContent = silentTooLong
+          ? `⚠ 0% audio from ${sim.micActiveLabel} (${kb} KB queued) — check hardware mute or select another microphone.`
+          : `🎙️ ${sim.micActiveLabel} · AudioCtx: ${stateStr} · ${sim.muted ? 'Muted' : 'Queued'}: ${kb} KB · Peak: ${sim.micPeakPct}%`;
+        tel.classList.toggle('wn', silentTooLong);
       }
-    }, 450);
+    }, 1000);
   }
 
   function cleanupSimulatorMedia() {
@@ -3422,17 +3181,12 @@
       clearInterval(sim.durationTimer);
       sim.durationTimer = null;
     }
-    if (sim.lipRaf) {
-      cancelAnimationFrame(sim.lipRaf);
-      sim.lipRaf = null;
-    }
     stopMicCaptureOnly();
     if (sim.captureCtx) {
       sim.captureCtx.close().catch(() => {});
       sim.captureCtx = null;
     }
     flushSimulatorSpeakerQueue();
-    sim.playAnalyser = null;
     if (sim.playCtx) {
       sim.playCtx.close().catch(() => {});
       sim.playCtx = null;
@@ -3575,7 +3329,6 @@
     sim.turns = 0;
     sim.bargeInCount = 0;
     sim.bargeInSuppressAudio = false;
-    sim.bargeInFlashUntil = 0;
     sim.vadConsecutiveFrames = 0;
     sim.lastLocalBargeInAt = 0;
     sim.lastTtfbMs = null;
@@ -3587,11 +3340,6 @@
     sim.elapsedSec = 0;
     sim.micTxBytes = 0;
     sim.micPeakPct = 0;
-    sim.expression = 'smile';
-    sim.expressionLabel = '😊 Greeting Ready';
-    sim.gesture = 'wave';
-    sim.gestureIcon = '👋';
-    sim.gestureLabel = 'Friendly Wave';
     sim.statusText = 'Preparing browser test…';
     sim.agentState = 'connecting';
 
@@ -3610,8 +3358,7 @@
     if (AudioCtx) {
       try {
         sim.playCtx = new AudioCtx({ latencyHint: 'interactive' });
-        sim.playAnalyser = null;
-        sim.nextPlayTime = 0;
+            sim.nextPlayTime = 0;
         sim.playCtx.resume().catch(() => {});
         if (withMic) {
           sim.captureCtx = new AudioCtx({ latencyHint: 'interactive' });
@@ -3743,7 +3490,7 @@
           sim.elapsedSec = Math.floor((Date.now() - sim.startedAtMs) / 1000);
           const durEl = document.getElementById('sim-kpi-dur');
           if (durEl) durEl.textContent = formatDuration(sim.elapsedSec);
-        }, 500);
+        }, 1000);
         if (tab === 'test') render();
       } else if (msg.type === 'barge_in') {
         if ((A()?.behavior?.bargeIn || 'instant') !== 'off') {
@@ -3756,17 +3503,8 @@
         }
       } else if (msg.type === 'agent_state') {
         sim.agentState = msg.state;
-        if (msg.state === 'thinking') {
+        if (msg.state === 'thinking' || msg.state === 'speaking') {
           sim.bargeInSuppressAudio = false;
-          applyPersonaExpressionAndGesture('think', '🧠 Agent processing', 'think', '💭', 'Decorative animation');
-        } else if (msg.state === 'speaking') {
-          sim.bargeInSuppressAudio = false;
-        } else if (msg.state === 'user_speaking') {
-          if (Date.now() >= sim.bargeInFlashUntil) {
-            applyPersonaExpressionAndGesture('listen', '👂 Attentive Focus', 'listen', '🎧', 'Listening to Caller');
-          }
-        } else if (msg.state === 'listening') {
-          applyPersonaExpressionAndGesture('smile', '🙂 Ready & Attentive', 'ready', '✨', 'Open Turn');
         }
         const labels = {
           listening: 'Listening for Caller…',
@@ -3781,8 +3519,6 @@
         sim.bargeInSuppressAudio = false;
         if (msg.role === 'user') {
           sim.turns += 1;
-        } else if (msg.role === 'assistant') {
-          classifyBotUtteranceExpression(msg.content);
         }
         sim.events.push({
           kind: 'msg',
@@ -3933,6 +3669,7 @@
     let keepAliveTimer = null;
     let endRequested = false;
     let pendingEndId = null;
+    const conversationMemory = window.VacPersona.createConversationMemory();
     const cancelledFunctionIds = new Set();
     let endTimer = null;
     const openingGate = window.VacOpening.createOpeningGate({
@@ -4045,7 +3782,7 @@
           sim.elapsedSec = Math.floor((Date.now() - sim.startedAtMs) / 1000);
           const durEl = document.getElementById('sim-kpi-dur');
           if (durEl) durEl.textContent = formatDuration(sim.elapsedSec);
-        }, 500);
+        }, 1000);
         const zeroFrame = new ArrayBuffer(Math.floor(sim.sampleRateIn * 0.05) * 2);
         silenceTimer = setInterval(() => {
           if (dgWs.readyState === WebSocket.OPEN && Date.now() - lastMicSendAt > 250) {
@@ -4072,7 +3809,6 @@
         sim.bargeInSuppressAudio = false;
         sim.agentState = 'thinking';
         sim.statusText = 'LLM Thinking…';
-        applyPersonaExpressionAndGesture('think', '🧠 Agent processing', 'think', '💭', 'Decorative animation');
         updateSimStatusDom();
       } else if (msg.type === 'AgentStartedSpeaking') {
         sim.bargeInSuppressAudio = false;
@@ -4086,18 +3822,21 @@
           if (endRequested) { endDirect('bot_end_call'); return; }
           sim.agentState = 'listening';
           sim.statusText = 'Listening for Caller…';
-          applyPersonaExpressionAndGesture('smile', '🙂 Ready & Attentive', 'ready', '✨', 'Open Turn');
           updateSimStatusDom();
+          updatePersonaStageDom();
         });
       } else if (msg.type === 'ConversationText') {
         sim.bargeInSuppressAudio = false;
+        if (msg.role === 'user') {
+          conversationMemory.addUserText(msg.content);
+        } else {
+          conversationMemory.addAssistantText(msg.content);
+        }
         if (msg.role === 'user') {
           openingGate.userTurn();
           sim.turns += 1;
           lastUserTurnAt = Date.now();
           awaitingFirstAudio = true;
-        } else if (msg.role === 'assistant') {
-          classifyBotUtteranceExpression(msg.content);
         }
         sim.events.push({ kind: 'msg', role: msg.role, content: msg.content });
         renderSimFeedDom();
@@ -4118,7 +3857,14 @@
           if (!enabled) {
             resp = { ok: false, error: 'Function is not enabled for this agent.' };
           } else if (fn.name === 'set_disposition' || fn.name === 'transfer_to_live_agent') {
-            resp = { ok: false, simulated: true, error: 'Browser tests have no VICIdial call. No record or transfer was changed.' };
+            if (fn.name === 'transfer_to_live_agent') {
+              const sanitized = conversationMemory.sanitizeTransferArgs(args);
+              args = sanitized.args;
+              const blockers = conversationMemory.qualificationBlockers(simulatorCampaign(agent.id));
+              resp = { ok: false, simulated: true, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}), error: blockers.length ? `Transfer blocked: ${blockers.join(' ')} No transfer was simulated.` : 'Browser tests have no VICIdial call. No record or transfer was changed.' };
+            } else {
+              resp = { ok: false, simulated: true, error: 'Browser tests have no VICIdial call. No record or transfer was changed.' };
+            }
           } else if (fn.name === 'end_call') {
             resp = { ok: true, action: 'end_browser_test_after_speech' };
             endRequested = true;
@@ -4262,41 +4008,48 @@
     }
   }
 
+  function simFeedEventHtml(ev) {
+    if (ev.kind === 'msg') {
+      if (ev.role === 'system') return `<div class="msg-sys">${esc(ev.content)}</div>`;
+      const cls = ev.role === 'user' ? 'msg-bubble msg-user' : 'msg-bubble msg-bot';
+      const who = ev.role === 'user' ? 'Caller' : A().name;
+      return `<div class="${cls}">
+        <div style="font-size:10.5px;opacity:0.75;margin-bottom:2px;font-weight:600">${esc(who)}</div>
+        <div>${esc(ev.content)}</div>
+      </div>`;
+    }
+    const outcome = ev.status === 'cancelled' ? 'Cancelled' :
+      ev.status === 'simulated' ? 'Not executed · browser test only' :
+      ev.status === 'failed' ? 'Not executed / failed' :
+      ev.status === 'server_side' ? 'Provider-reported server-side action · not verified here' :
+      ev.name === 'end_call' ? 'Browser test ending' : 'Webhook response received';
+    return `<div class="fn-event ${ev.status === 'cancelled' || ev.status === 'failed' || ev.status === 'simulated' ? 'cancelled' : ''}">
+      <div style="font-weight:700;margin-bottom:3px">${esc(outcome)}: <code>${esc(ev.name)}</code></div>
+      <div><b>Args:</b> <code>${esc(JSON.stringify(ev.args || {}))}</code></div>
+      ${ev.response ? `<div style="margin-top:2px"><b>Result:</b> <code>${esc(JSON.stringify(ev.response))}</code></div>` : ''}
+    </div>`;
+  }
+
   function renderSimFeedDom() {
     const feed = document.getElementById('sim-feed');
     if (!feed) return;
+    const agentName = A().name;
     if (sim.events.length === 0) {
       feed.innerHTML = `<div class="note" style="margin:auto;text-align:center">
-        Press <b>📞 Start Live Mic Call</b> (or <b>💬 Start Text+Audio Call</b>) above to talk to <b>${esc(A().name)}</b> and see provider transcripts, replies, and function outcomes here. This browser test is not a VICIdial call.
+        Press <b>📞 Start Live Mic Call</b> (or <b>💬 Start Text+Audio Call</b>) above to talk to <b>${esc(agentName)}</b> and see provider transcripts, replies, and function outcomes here. This browser test is not a VICIdial call.
       </div>`;
+      feed.dataset.renderedCount = '0';
+      feed.dataset.agentName = agentName;
       return;
     }
-
-    feed.innerHTML = sim.events
-      .map((ev) => {
-        if (ev.kind === 'msg') {
-          if (ev.role === 'system') {
-            return `<div class="msg-sys">${esc(ev.content)}</div>`;
-          }
-          const cls = ev.role === 'user' ? 'msg-bubble msg-user' : 'msg-bubble msg-bot';
-          const who = ev.role === 'user' ? 'Caller' : A().name;
-          return `<div class="${cls}">
-            <div style="font-size:10.5px;opacity:0.75;margin-bottom:2px;font-weight:600">${esc(who)}</div>
-            <div>${esc(ev.content)}</div>
-          </div>`;
-        }
-        const outcome = ev.status === 'cancelled' ? 'Cancelled' :
-          ev.status === 'simulated' ? 'Not executed · browser test only' :
-          ev.status === 'failed' ? 'Not executed / failed' :
-          ev.status === 'server_side' ? 'Provider-reported server-side action · not verified here' :
-          ev.name === 'end_call' ? 'Browser test ending' : 'Webhook response received';
-        return `<div class="fn-event ${ev.status === 'cancelled' || ev.status === 'failed' || ev.status === 'simulated' ? 'cancelled' : ''}">
-          <div style="font-weight:700;margin-bottom:3px">${esc(outcome)}: <code>${esc(ev.name)}</code></div>
-          <div><b>Args:</b> <code>${esc(JSON.stringify(ev.args || {}))}</code></div>
-          ${ev.response ? `<div style="margin-top:2px"><b>Result:</b> <code>${esc(JSON.stringify(ev.response))}</code></div>` : ''}
-        </div>`;
-      })
-      .join('');
+    const renderedCount = Number(feed.dataset.renderedCount || 0);
+    if (feed.dataset.agentName !== agentName || renderedCount > sim.events.length) {
+      feed.innerHTML = sim.events.map(simFeedEventHtml).join('');
+    } else if (renderedCount < sim.events.length) {
+      feed.insertAdjacentHTML('beforeend', sim.events.slice(renderedCount).map(simFeedEventHtml).join(''));
+    }
+    feed.dataset.renderedCount = String(sim.events.length);
+    feed.dataset.agentName = agentName;
     feed.scrollTop = feed.scrollHeight;
   }
 
@@ -4310,7 +4063,6 @@
   }
 
   function renderSimulatorDomOnly() {
-    renderSideNav();
     updateSelectedGreetingDom();
     updateSimStatusDom();
     updateSimKpisDom();
@@ -6165,7 +5917,9 @@
               <div>
                 <label for="vsim-scenario">Caller Scenario</label>
                 <select id="vsim-scenario" ${viciMon.simRunning ? 'disabled' : ''}>
-                  <option value="medicare_qualified_xfer" ${viciMon.simScenario === 'medicare_qualified_xfer' ? 'selected' : ''}>[MEDICARE] Part A&amp;B + Age 71 -> MED_CLOSERS Xfer (XFER)</option>
+                  <option value="medicare_qualified_xfer" ${viciMon.simScenario === 'medicare_qualified_xfer' ? 'selected' : ''}>[MEDICARE] Part A&amp;B + stated age 71 -> XFER</option>
+                  <option value="medicare_qualified_no_age_xfer" ${viciMon.simScenario === 'medicare_qualified_no_age_xfer' ? 'selected' : ''}>[MEDICARE] Part A&amp;B, no age stated -> XFER without age</option>
+                  <option value="medicare_fabricated_age_xfer" ${viciMon.simScenario === 'medicare_fabricated_age_xfer' ? 'selected' : ''}>[MEDICARE] Part A only, model invents age/Part B -> metadata guarded</option>
                   <option value="medicare_underage_dq" ${viciMon.simScenario === 'medicare_underage_dq' ? 'selected' : ''}>[MEDICARE] Underage 61 -> Hard Stop Disqualify (DQ)</option>
                   <option value="medicare_spanish_lang" ${viciMon.simScenario === 'medicare_spanish_lang' ? 'selected' : ''}>[MEDICARE] "Hablo español" -> Language Barrier (LANG)</option>
                   <option value="dnc_request" ${viciMon.simScenario === 'dnc_request' ? 'selected' : ''}>[ALL] Hostile / Stop Calling -> add_dnc_phone + Hangup (DNC)</option>
@@ -6609,8 +6363,10 @@
         if (localRaw) loadedState = JSON.parse(localRaw);
       } catch {}
       let shippedState = null;
-      if (!loadedState || loadedState.agents?.some((ag) =>
-        String(ag.prompt || '').includes('You already asked if they have Medicare Part A and B to release their Food & OTC card.'))) {
+      const needsShippedDefaults = !loadedState ||
+        loadedState.agents?.some((ag) => String(ag.prompt || '').includes('You already asked if they have Medicare Part A and B to release their Food & OTC card.') || /, a live (?:Customer Support|Benefits Advisor|Senior Coverage Coordinator)/.test(String(ag.behavior?.selfIntro || ''))) ||
+        loadedState.campaigns?.some((cp) => ['c_medicare', 'c_med_fronter'].includes(cp.id) && !String(cp.complianceRules || '').includes('caller-confirmed Medicare Part A or Part B satisfies the qualification step'));
+      if (needsShippedDefaults) {
         try {
           const staticRes = await fetch('./default-state.json', { cache: 'no-store' });
           if (staticRes.ok) shippedState = await staticRes.json();
@@ -6621,14 +6377,17 @@
         loadedState = shippedState;
       }
       S = loadedState;
-      const stockMedicarePrompt = shippedState?.agents?.find((ag) => ag.id === 'a_medicare')?.prompt || '';
       let mig3 = false;
       for (const ag of S.agents || []) {
-        const migrated = window.VacOpening.migrateStockMedicarePrompt(ag.prompt, stockMedicarePrompt);
+        const stockPrompt = shippedState?.agents?.find((entry) => entry.id === ag.id)?.prompt || '';
+        const migrated = window.VacPersona.migrateLegacyQualificationPrompt(
+          window.VacOpening.migrateStockMedicarePrompt(ag.prompt, stockPrompt),
+          stockPrompt
+        );
         if (migrated !== ag.prompt) { ag.prompt = migrated; mig3 = true; }
       }
       const mig1 = enforceDeepgramOnlyLlms(S);
-      const mig2 = upgradeRealtimeAgentFeatures(S);
+      const mig2 = upgradeRealtimeAgentFeatures(S, shippedState);
       if (mig1 || mig2 || mig3) {
         try {
           window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
@@ -7485,16 +7244,6 @@
       applyAppearance(true);
       renderSideNav();
       if (tab === 'agents') render();
-      return;
-    }
-    if (d.exp) {
-      appearance.exposure = d.exp;
-      applyAppearance(true);
-      return;
-    }
-    if (d.gls) {
-      appearance.glass = d.gls;
-      applyAppearance(true);
       return;
     }
     if (b.id === 'btn-manual-barge') {

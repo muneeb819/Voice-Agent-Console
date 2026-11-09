@@ -45,6 +45,7 @@ const opening_1 = require("./opening");
 const defaults_1 = require("./defaults");
 const env_store_1 = require("./env-store");
 const settings_builder_1 = require("./settings-builder");
+const persona_1 = require("./persona");
 const campaign_assignment_1 = require("./campaign-assignment");
 const webhook_executor_1 = require("./webhook-executor");
 function interpolateEnvPlaceholders(obj) {
@@ -176,6 +177,7 @@ function attachLiveSimulator(server, noServer = false) {
         let pendingEndFunctionId = null;
         let fatalErrorMessage = null;
         let suppressStaleAgentAudio = false;
+        const conversationMemory = (0, persona_1.createConversationMemory)();
         const cancelledFnIds = new Set();
         const activeFunctionAborts = new Map();
         const pendingPreSettingsAudio = [];
@@ -280,15 +282,22 @@ function attachLiveSimulator(server, noServer = false) {
                     };
             }
             else if (fnReq.name === 'transfer_to_live_agent') {
+                const sanitized = conversationMemory.sanitizeTransferArgs(parsedArgs);
+                parsedArgs = sanitized.args;
+                const blockers = conversationMemory.qualificationBlockers(activeCampaign);
                 const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(activeCampaign);
-                resultPayload = !allowedCodes.includes('XFER')
-                    ? { ok: false, error: 'XFER is not allowed by the explicitly selected campaign. No transfer was simulated.' }
-                    : {
-                        ok: false,
-                        simulated: true,
-                        requested_target: activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : null,
-                        error: 'Browser tests cannot transfer a real call. No VICIdial or PBX transfer was made.',
-                    };
+                resultPayload = blockers.length
+                    ? { ok: false, simulated: true, error: `Transfer blocked: ${blockers.join(' ')} No transfer was simulated.`, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}) }
+                    : !allowedCodes.includes('XFER')
+                        ? { ok: false, error: 'XFER is not allowed by the explicitly selected campaign. No transfer was simulated.' }
+                        : {
+                            ok: false,
+                            simulated: true,
+                            requested_target: activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : null,
+                            error: 'Browser tests cannot transfer a real call. No VICIdial or PBX transfer was made.',
+                            ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
+                            ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
+                        };
             }
             else if (fnReq.name === 'end_call') {
                 awaitingHangupAudioDone = true;
@@ -830,6 +839,7 @@ function attachLiveSimulator(server, noServer = false) {
                         case 'ConversationText': {
                             const role = evt.role === 'user' ? 'user' : 'assistant';
                             if (role === 'user') {
+                                conversationMemory.addUserText(String(evt.content || ''));
                                 openingGate?.userTurn();
                                 turns += 1;
                                 lastUserTurnTs = Date.now();
@@ -837,6 +847,7 @@ function attachLiveSimulator(server, noServer = false) {
                                 suppressStaleAgentAudio = false;
                             }
                             else {
+                                conversationMemory.addAssistantText(String(evt.content || ''));
                                 suppressStaleAgentAudio = false;
                             }
                             recordTranscript(role, String(evt.content || ''), {

@@ -41,6 +41,7 @@ async function fixture(options: { state?: any; storageFails?: boolean; tab?: str
   (w as any).WebSocket = class { readyState = 0; send() {} close() {} };
   (w as any).indexedDB = undefined;
   w.eval(read('opening.js'));
+  w.eval(read('persona.js'));
   w.eval(read('brand-logos.js'));
   w.eval(read('app.js'));
   for (let i = 0; i < 30 && !w.document.getElementById('m')?.children.length; i++) await tick();
@@ -158,13 +159,13 @@ async function run() {
   // Theme Studio must swap the supplied banner logo, favicon and loader preview.
   click(d.getElementById('btn-theme')!);
   const initialLogo = (d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src');
-  assert.match(initialLogo || '', /mma-cyan-signal\.jpg/);
+  assert.match(initialLogo || '', /mma-cyan-signal\.webp/);
   assert.doesNotMatch(initialLogo || '', /-icon\.jpg/, 'Header shows the full landscape banner, not the square icon');
   click(d.querySelector('[data-pick-theme="ember_pulse"]')!);
-  assert.match((d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src') || '', /mma-gold-ember\.jpg/);
+  assert.match((d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src') || '', /mma-gold-ember\.webp/);
   assert.doesNotMatch((d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src') || '', /-icon\.jpg/);
   assert.match((d.querySelector('link[rel="icon"]') as HTMLLinkElement).href, /mma-gold-ember-icon\.jpg/);
-  assert.match((d.querySelector('#theme-loader-logo img') as HTMLImageElement).getAttribute('src') || '', /mma-gold-ember\.jpg/);
+  assert.match((d.querySelector('#theme-loader-logo img') as HTMLImageElement).getAttribute('src') || '', /mma-gold-ember\.webp/);
   assert(d.querySelectorAll('#theme-swatch-grid .theme-preview-logo img').length >= 10);
   assert.deepEqual(f.errors, []);
   w.close();
@@ -217,6 +218,28 @@ async function run() {
   assert(fleetLink.d.getElementById('fleet-activity-badge'), 'Fleet detail links open the second layer directly');
   assert.equal(new URL(fleetLink.w.location.href).searchParams.get('fleetCampaign'), 'c_medicare');
   fleetLink.w.close();
+  // Exact stock persona/campaign migrations run on static load and preserve custom text.
+  const personaLegacy = JSON.parse(read('default-state.json'));
+  personaLegacy.agents.find((a: any) => a.id === 'a_jessica').behavior.selfIntro = "Hi! I'm Haley, a live Benefits Advisor calling from the Benefits Department. I help Medicare beneficiaries check their Food and OTC allowance eligibility, and I'm happy to answer any questions you have along the way!";
+  personaLegacy.campaigns.find((c: any) => c.id === 'c_medicare').complianceRules = 'Medicare campaign rules: never imply government affiliation or guarantee benefits, eligibility, funds or savings; use only approved campaign information and honor refusal or do-not-call requests immediately.';
+  personaLegacy.campaigns.find((c: any) => c.id === 'c_med_fronter').complianceRules = 'Medicare fronter campaign rules: identify accurately, never guarantee benefits or eligibility, do not request Medicare or Social Security numbers, and honor refusal or do-not-call requests immediately.';
+  const personaMigrated = await fixture({ state: personaLegacy });
+  const shippedDefaults = JSON.parse(read('default-state.json'));
+  assert(personaMigrated.state().agents.find((a: any) => a.id === 'a_jessica').behavior.selfIntro.includes("I'm Jessica"));
+  assert.equal(personaMigrated.state().campaigns.find((c: any) => c.id === 'c_medicare').complianceRules, shippedDefaults.campaigns.find((c: any) => c.id === 'c_medicare').complianceRules);
+  assert.equal(personaMigrated.state().campaigns.find((c: any) => c.id === 'c_med_fronter').complianceRules, shippedDefaults.campaigns.find((c: any) => c.id === 'c_med_fronter').complianceRules);
+  assert.deepEqual(personaMigrated.errors, []);
+  personaMigrated.w.close();
+  const customState = JSON.parse(read('default-state.json'));
+  customState.agents.find((a: any) => a.id === 'a_medicare').prompt = 'Custom operator Medicare script.';
+  customState.agents.find((a: any) => a.id === 'a_jessica').behavior.selfIntro = 'Custom Jessica introduction.';
+  customState.campaigns.find((c: any) => c.id === 'c_medicare').complianceRules = 'Custom operator campaign rules.';
+  const customLoaded = await fixture({ state: customState });
+  assert(customLoaded.state().agents.find((a: any) => a.id === 'a_medicare').prompt.startsWith('Custom operator Medicare script.'), 'Custom prompts are not replaced by stock text');
+  assert.equal(customLoaded.state().agents.find((a: any) => a.id === 'a_jessica').behavior.selfIntro, 'Custom Jessica introduction.');
+  assert.equal(customLoaded.state().campaigns.find((c: any) => c.id === 'c_medicare').complianceRules, 'Custom operator campaign rules.');
+  customLoaded.w.close();
+
   const legacyState = JSON.parse(read('default-state.json'));
   legacyState.campaigns[0].presenceCheckText = 'Old presence prompt';
   legacyState.campaigns[0].deadAirTimeoutSec = 3;

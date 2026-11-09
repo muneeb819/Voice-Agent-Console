@@ -6,7 +6,7 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-const allSteps = ['step1', 'step2', 'mock-audio', 'live-bot', 'simulator-recording', 'greetings', 'opening', 'bridge-opening', 'step3', 'step4', 'security', 'backend-audit', 'health', 'static-site', 'static-console'];
+const allSteps = ['step1', 'step2', 'mock-audio', 'live-bot', 'simulator-recording', 'greetings', 'opening', 'bridge-opening', 'persona', 'step3', 'step4', 'security', 'backend-audit', 'health', 'static-site', 'static-console'];
 const requestedSteps = process.argv.slice(2);
 const steps = requestedSteps.length ? requestedSteps : allSteps;
 

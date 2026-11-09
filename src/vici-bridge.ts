@@ -20,6 +20,7 @@ import {
   ulawToLinear16,
 } from './g711';
 import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCallReadinessBlockers } from './settings-builder';
+import { createConversationMemory } from './persona';
 import { primaryCampaignAgent } from './campaign-assignment';
 import { Agent, Campaign, ConsoleState } from './types';
 import {
@@ -1122,6 +1123,7 @@ export class VicidialBridgeService {
     } | null = null;
     let awaitingHangupAfterSpeech = false;
 
+    const conversationMemory = createConversationMemory();
     const cancelledFnIds = new Set<string>();
     const preSettingsAudioQueue: Buffer[] = [];
     const transcript: Array<{ ts: string; role: 'user' | 'assistant' | 'system'; content: string }> = [];
@@ -1555,7 +1557,10 @@ export class VicidialBridgeService {
               awaitingFirstAudioForTurn = true;
             }
             suppressStaleBotAudio = false;
-            addTranscript(role, String(evt.content || ''));
+            const content = String(evt.content || '');
+            if (role === 'user') conversationMemory.addUserText(content);
+            else conversationMemory.addAssistantText(content);
+            addTranscript(role, content);
             break;
           }
 
@@ -1619,8 +1624,11 @@ export class VicidialBridgeService {
               if (fnItem.name === 'set_disposition') {
                 const code = String(args.code || '').trim().toUpperCase();
                 const allowedCodes = allowedCampaignDispositionCodes(campaign);
+                const qualificationBlockers = code === 'XFER' ? conversationMemory.qualificationBlockers(campaign) : [];
                 if (!allowedCodes.includes(code)) {
                   resultPayload = { ok: false, error: `Disposition ${code || '(empty)'} is not allowed by selected campaign ${campaign.viciCampaign}. No VICIdial status was changed.` };
+                } else if (qualificationBlockers.length) {
+                  resultPayload = { ok: false, error: `XFER blocked: ${qualificationBlockers.join(' ')} No VICIdial status was changed.` };
                 } else {
                   disposition = code;
                   const upd = await viciClient.updateLeadDisposition({
@@ -1652,10 +1660,15 @@ export class VicidialBridgeService {
               } else if (fnItem.name === 'transfer_to_live_agent') {
                 const allowedCodes = allowedCampaignDispositionCodes(campaign);
                 const transferDisposition = disposition || 'XFER';
-                if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
+                const sanitized = conversationMemory.sanitizeTransferArgs(args);
+                const qualificationBlockers = conversationMemory.qualificationBlockers(campaign);
+                if (qualificationBlockers.length) {
+                  resultPayload = { ok: false, error: `Transfer blocked: ${qualificationBlockers.join(' ')} No transfer was scheduled.`, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}) };
+                } else if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
                   resultPayload = { ok: false, error: `Transfer requires the allowed XFER disposition for selected campaign ${campaign.viciCampaign}; current disposition is ${transferDisposition}. No transfer was scheduled.` };
                 } else {
                   if (!disposition) disposition = 'XFER';
+                  args = sanitized.args;
                   const reason = String(args.reason || 'Qualified & interested lead');
                 const metaParts = [
                   args.prospect_name ? `Name:${args.prospect_name}` : hydratedLead.first_name ? `Name:${hydratedLead.first_name}` : '',
@@ -1691,6 +1704,8 @@ export class VicidialBridgeService {
 
                 resultPayload = {
                   ok: true,
+                  ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
+                  ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
                   transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
                   closer_screen_pop_notes_saved: notesUpdate.ok,
                   metadata_passed: {

@@ -54,6 +54,7 @@ const env_store_1 = require("./env-store");
 const webhook_executor_1 = require("./webhook-executor");
 const g711_1 = require("./g711");
 const settings_builder_1 = require("./settings-builder");
+const persona_1 = require("./persona");
 const campaign_assignment_1 = require("./campaign-assignment");
 const vici_client_1 = require("./vici-client");
 function resolveSdpAdvertisedHost(peerAddress, configuredHost, bindHost) {
@@ -989,6 +990,7 @@ class VicidialBridgeService {
         let resolveTransferCompletion = null;
         let pendingTransferArgs = null;
         let awaitingHangupAfterSpeech = false;
+        const conversationMemory = (0, persona_1.createConversationMemory)();
         const cancelledFnIds = new Set();
         const preSettingsAudioQueue = [];
         const transcript = [];
@@ -1393,7 +1395,12 @@ class VicidialBridgeService {
                             awaitingFirstAudioForTurn = true;
                         }
                         suppressStaleBotAudio = false;
-                        addTranscript(role, String(evt.content || ''));
+                        const content = String(evt.content || '');
+                        if (role === 'user')
+                            conversationMemory.addUserText(content);
+                        else
+                            conversationMemory.addAssistantText(content);
+                        addTranscript(role, content);
                         break;
                     }
                     case 'AgentThinking': {
@@ -1459,8 +1466,12 @@ class VicidialBridgeService {
                             if (fnItem.name === 'set_disposition') {
                                 const code = String(args.code || '').trim().toUpperCase();
                                 const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(campaign);
+                                const qualificationBlockers = code === 'XFER' ? conversationMemory.qualificationBlockers(campaign) : [];
                                 if (!allowedCodes.includes(code)) {
                                     resultPayload = { ok: false, error: `Disposition ${code || '(empty)'} is not allowed by selected campaign ${campaign.viciCampaign}. No VICIdial status was changed.` };
+                                }
+                                else if (qualificationBlockers.length) {
+                                    resultPayload = { ok: false, error: `XFER blocked: ${qualificationBlockers.join(' ')} No VICIdial status was changed.` };
                                 }
                                 else {
                                     disposition = code;
@@ -1492,12 +1503,18 @@ class VicidialBridgeService {
                             else if (fnItem.name === 'transfer_to_live_agent') {
                                 const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(campaign);
                                 const transferDisposition = disposition || 'XFER';
-                                if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
+                                const sanitized = conversationMemory.sanitizeTransferArgs(args);
+                                const qualificationBlockers = conversationMemory.qualificationBlockers(campaign);
+                                if (qualificationBlockers.length) {
+                                    resultPayload = { ok: false, error: `Transfer blocked: ${qualificationBlockers.join(' ')} No transfer was scheduled.`, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}) };
+                                }
+                                else if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
                                     resultPayload = { ok: false, error: `Transfer requires the allowed XFER disposition for selected campaign ${campaign.viciCampaign}; current disposition is ${transferDisposition}. No transfer was scheduled.` };
                                 }
                                 else {
                                     if (!disposition)
                                         disposition = 'XFER';
+                                    args = sanitized.args;
                                     const reason = String(args.reason || 'Qualified & interested lead');
                                     const metaParts = [
                                         args.prospect_name ? `Name:${args.prospect_name}` : hydratedLead.first_name ? `Name:${hydratedLead.first_name}` : '',
@@ -1531,6 +1548,8 @@ class VicidialBridgeService {
                                     }, 9000);
                                     resultPayload = {
                                         ok: true,
+                                        ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
+                                        ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
                                         transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
                                         closer_screen_pop_notes_saved: notesUpdate.ok,
                                         metadata_passed: {

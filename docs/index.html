@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="cyan_signal" data-exposure="studio" data-glass="frosted">
+<html lang="en" data-theme="cyan_signal">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -13,11 +13,11 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="./styles.css?v=elite-2.33" />
-  <link rel="stylesheet" href="./brand-logos.css?v=elite-2.33" />
+  <link rel="stylesheet" href="./styles.css?v=elite-2.34" />
+  <link rel="stylesheet" href="./brand-logos.css?v=elite-2.34" />
   <script>
     (function () {
-      var CURRENT_BUILD = 'elite-2.33';
+      var CURRENT_BUILD = 'elite-2.34';
       // Discard legacy token handoffs; browser authentication uses HttpOnly cookies.
       try {
         sessionStorage.removeItem('vac_auth_token');
@@ -49,11 +49,6 @@
 </head>
 <body>
   <!-- GPU-Composited Ambient Light Exposure & Architectural Grid Canvas -->
-  <div class="ambient-canvas" aria-hidden="true">
-    <div class="ambient-orb orb-1"></div>
-    <div class="ambient-orb orb-2"></div>
-    <div class="ambient-orb orb-3"></div>
-    <div class="ambient-grid"></div>
   </div>
 
   <header class="console-header" role="banner">
@@ -144,24 +139,6 @@
       <h2 class="studio-sec-title">Choose an Identity — Click a card to re-skin the entire system</h2>
       <div class="theme-grid" id="theme-swatch-grid"></div>
 
-      <div class="row" style="margin-top:16px">
-        <div>
-          <label>✨ Ambient Light Exposure</label>
-          <div class="seg-group" id="exposure-seg">
-            <button type="button" data-exp="minimal">Matte Off</button>
-            <button type="button" data-exp="studio">Studio Glow</button>
-            <button type="button" data-exp="cinema">Vivid Cinema</button>
-          </div>
-        </div>
-        <div>
-          <label>💎 Surface Glass &amp; Specular Depth</label>
-          <div class="seg-group" id="glass-seg">
-            <button type="button" data-gls="solid">Crisp Solid</button>
-            <button type="button" data-gls="frosted">Frosted Glass</button>
-            <button type="button" data-gls="crystal">Ultra Crystal</button>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -203,8 +180,9 @@
   </div>
 
   <input type="file" id="import-file" accept="application/json,.json" hidden />
-  <script src="./opening.js?v=elite-2.33"></script>
-  <script src="./brand-logos.js?v=elite-2.33"></script>
-  <script src="./app.js?v=elite-2.33"></script>
+  <script src="./opening.js?v=elite-2.34"></script>
+  <script src="./persona.js?v=elite-2.34"></script>
+  <script src="./brand-logos.js?v=elite-2.34"></script>
+  <script src="./app.js?v=elite-2.34"></script>
 </body>
 </html>

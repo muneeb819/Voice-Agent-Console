@@ -1,8 +1,7 @@
-/* MMA Digital Labs — theme-bound animated logo assets.
+/* MMA Digital Labs — theme-bound transparent logo assets.
    The eight operator-supplied banners are the source of truth. Each theme maps
    to one banner; the two light themes reuse the closest supplied banner until
-   additional artwork is provided. Waves are a smooth CSS loop, not microphone
-   or audio-reactive. */
+   additional artwork is provided. The full banner is a transparent WebP cut; no decorative wave/sheen overlays are rendered. */
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -12,42 +11,42 @@
 
   const ASSETS = {
     'mma-cyan-signal': {
-      full: './assets/brand/mma-cyan-signal.jpg',
+      full: './assets/brand/mma-cyan-signal.webp',
       icon: './assets/brand/mma-cyan-signal-icon.jpg',
       label: 'MMA Cyan Signal',
     },
     'mma-blue-ultraviolet': {
-      full: './assets/brand/mma-blue-ultraviolet.jpg',
+      full: './assets/brand/mma-blue-ultraviolet.webp',
       icon: './assets/brand/mma-blue-ultraviolet-icon.jpg',
       label: 'MMA Blue Ultraviolet',
     },
     'mma-cyan-field': {
-      full: './assets/brand/mma-cyan-field.jpg',
+      full: './assets/brand/mma-cyan-field.webp',
       icon: './assets/brand/mma-cyan-field-icon.jpg',
       label: 'MMA Cyan Field',
     },
     'mma-gold-ember': {
-      full: './assets/brand/mma-gold-ember.jpg',
+      full: './assets/brand/mma-gold-ember.webp',
       icon: './assets/brand/mma-gold-ember-icon.jpg',
       label: 'MMA Gold Ember',
     },
     'mma-ice-obsidian': {
-      full: './assets/brand/mma-ice-obsidian.jpg',
+      full: './assets/brand/mma-ice-obsidian.webp',
       icon: './assets/brand/mma-ice-obsidian-icon.jpg',
       label: 'MMA Ice Obsidian',
     },
     'mma-cyan-emerald': {
-      full: './assets/brand/mma-cyan-emerald.jpg',
+      full: './assets/brand/mma-cyan-emerald.webp',
       icon: './assets/brand/mma-cyan-emerald-icon.jpg',
       label: 'MMA Cyan Emerald',
     },
     'mma-cyan-aurora': {
-      full: './assets/brand/mma-cyan-aurora.jpg',
+      full: './assets/brand/mma-cyan-aurora.webp',
       icon: './assets/brand/mma-cyan-aurora-icon.jpg',
       label: 'MMA Cyan Aurora',
     },
     'mma-gold-crimson': {
-      full: './assets/brand/mma-gold-crimson.jpg',
+      full: './assets/brand/mma-gold-crimson.webp',
       icon: './assets/brand/mma-gold-crimson-icon.jpg',
       label: 'MMA Gold Crimson',
     },
@@ -71,26 +70,12 @@
     return ASSETS[key] || ASSETS['mma-cyan-signal'];
   }
 
-  function bars(count, side) {
-    let html = '';
-    for (let i = 0; i < count; i += 1) {
-      const amp = (0.5 + 0.5 * Math.sin((i / Math.max(1, count - 1)) * Math.PI)).toFixed(3);
-      html += '<span class="eq-bar" data-ch="' + i + '" data-side="' + side + '" style="--i:' + i + ';--amp:' + amp + '"></span>';
-    }
-    return html;
-  }
-
   function fullHtml(themeId, opts) {
     const options = opts || {};
     const asset = assetFor(themeId);
     const alt = options.alt || 'MMA Digital Labs — Voice Agent Bots Console';
     const lazy = options.lazy ? ' loading="lazy"' : '';
-    return (
-      '<img class="mma-logo-art" src="' + asset.full + '" alt="' + alt + '" draggable="false"' + lazy + ' />' +
-      '<span class="mma-logo-waves mma-logo-waves-left" aria-hidden="true">' + bars(12, 'L') + '</span>' +
-      '<span class="mma-logo-waves mma-logo-waves-right" aria-hidden="true">' + bars(12, 'R') + '</span>' +
-      '<span class="mma-logo-sheen" aria-hidden="true"></span>'
-    );
+    return '<img class="mma-logo-art" src="' + asset.full + '" alt="' + alt + '" draggable="false"' + lazy + ' />';
   }
 
   function iconHtml(themeId, opts) {
@@ -100,8 +85,6 @@
     return (
       '<span class="mma-brand-icon">' +
       '<img class="mma-icon-art" src="' + asset.icon + '" alt="' + alt + '" draggable="false" />' +
-      '<span class="mma-icon-waves" aria-hidden="true">' + bars(7, 'C') + '</span>' +
-      '<span class="mma-logo-sheen" aria-hidden="true"></span>' +
       '</span>'
     );
   }

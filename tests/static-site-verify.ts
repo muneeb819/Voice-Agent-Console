@@ -88,14 +88,26 @@ async function run() {
     }
     assert(!html.includes("setItem('vac_auth_token'"), `${file} must not persist browser session tokens`);
   }
-  for (const file of ['app.js', 'login.js', 'opening.js', 'brand-logos.js']) {
+  for (const file of ['app.js', 'login.js', 'opening.js', 'persona.js', 'brand-logos.js']) {
     childProcess.execFileSync(process.execPath, ['--check', path.join(publicDir, file)]);
     assert(!/saveAuthToken|vacReadAuthToken|Bearer \$\{tok\}/.test(read(`public/${file}`)), `${file} retains a legacy bearer handoff`);
   }
   const workflow = read('.github/workflows/jekyll-gh-pages.yml');
   assert(workflow.includes('path: ./public'), 'Pages must upload only the public browser assets');
   assert(!workflow.includes('source: ./\n'), 'Pages must not publish the repository root');
-  console.log('✓ Static mirrors, asset versions, JavaScript syntax and publication boundary');
+  assert(workflow.includes('assets/brand/mma-gold-ember.webp'), 'Pages smoke check must request the transparent full banner');
+  assert(!workflow.includes('assets/brand/mma-gold-ember.jpg'), 'Pages must not depend on the retired full-banner JPEG');
+  const brandCss = read('public/brand-logos.css');
+  assert(/\.mma-brand-icon\s*\{[^}]*width:\s*36px[^}]*height:\s*36px/s.test(brandCss), 'Brand icon needs explicit dimensions');
+  const brandJs = read('public/brand-logos.js').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert(!/mma-wave|sheen|bars\(/i.test(brandJs), 'Transparent logo renderer must not add decorative overlays');
+  for (const theme of ['mma-cyan-signal', 'mma-blue-ultraviolet', 'mma-cyan-field', 'mma-gold-ember', 'mma-ice-obsidian', 'mma-cyan-emerald', 'mma-cyan-aurora', 'mma-gold-crimson']) {
+    assert(fs.existsSync(path.join(publicDir, 'assets', 'brand', `${theme}.webp`)), `Missing transparent banner ${theme}`);
+    assert(!fs.existsSync(path.join(publicDir, 'assets', 'brand', `${theme}.jpg`)), `Full-banner JPEG master must stay out of public/: ${theme}`);
+    assert(!fs.existsSync(path.join(root, 'docs', 'assets', 'brand', `${theme}.jpg`)), `Full-banner JPEG master must stay out of docs/: ${theme}`);
+    assert(fs.existsSync(path.join(root, 'brand-source', `${theme}.jpg`)), `Missing brand source master ${theme}`);
+  }
+  console.log('✓ Static mirrors, asset versions, JavaScript syntax, transparent brand assets and publication boundary');
 
   const staticLogin = loginFixture('/Voice-Agent-Console/login.html', {
     '/Voice-Agent-Console/api/auth/status': htmlResponse,

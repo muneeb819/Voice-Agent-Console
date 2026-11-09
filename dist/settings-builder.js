@@ -6,7 +6,6 @@ exports.parseJsonSchema = parseJsonSchema;
 exports.isValidFluxSpeed = isValidFluxSpeed;
 exports.normalizeFluxSpeed = normalizeFluxSpeed;
 exports.allowedCampaignDispositionCodes = allowedCampaignDispositionCodes;
-exports.composeBehavioralPrompt = composeBehavioralPrompt;
 exports.buildDeepgramSettings = buildDeepgramSettings;
 exports.validateAgent = validateAgent;
 exports.validateCampaign = validateCampaign;
@@ -18,6 +17,7 @@ exports.diffStates = diffStates;
 exports.generateViciConfig = generateViciConfig;
 const defaults_1 = require("./defaults");
 const opening_1 = require("./opening");
+const persona_1 = require("./persona");
 const campaign_assignment_1 = require("./campaign-assignment");
 function isPlainObject(val) {
     return typeof val === 'object' && val !== null && !Array.isArray(val);
@@ -82,53 +82,6 @@ function allowedCampaignDispositionCodes(campaign) {
         .map((code) => code.trim().toUpperCase())
         .filter(Boolean)
         .filter((code, index, all) => all.indexOf(code) === index);
-}
-function composeBehavioralPrompt(agent, campaign) {
-    const basePrompt = (agent.prompt || '').trim();
-    const b = agent.behavior;
-    const toneMap = {
-        warm_empathetic: 'Warm, caring, empathetic, and reassuring — sound genuinely attentive and human.',
-        energetic_upbeat: 'Bright, upbeat, friendly, and enthusiastic — speak with a natural smile in your voice.',
-        charismatic_closer: 'Confident, poised, articulate, and high-trust — crisp executive advisor energy.',
-        calm_concierge: 'Calm, composed, clear, and soothing — smooth concierge presence.',
-    };
-    const lines = [];
-    if (b) {
-        lines.push('', '=== REAL-TIME VOICE ASSISTANT, BARGE-IN, EXPRESSIONS & GENERAL Q&A ===', '- Be honest about being an AI assistant if asked. Do not claim an external action succeeded unless its tool result confirms success.');
-        if (b.selfIntro && b.selfIntro.trim()) {
-            lines.push(`- SELF-INTRODUCTION: Whenever greeted casually or asked "Who are you?", "What is your name?", "Introduce yourself", or "What can you do?", warmly introduce yourself in 1–2 natural spoken sentences based on: "${b.selfIntro.trim()}"`);
-        }
-        if (b.allowGeneralQa !== false) {
-            lines.push('- GENERAL KNOWLEDGE & OPEN Q&A: If the caller asks ANY general question (science, math, geography, technology, definitions, advice, trivia, or everyday small talk), answer it directly, accurately, and warmly in 1–2 concise spoken sentences instead of deflecting. Always honor the assigned campaign rules, DNC, language barriers, and eligibility gates first.');
-        }
-        if (b.bargeIn !== 'off') {
-            lines.push('- LIVE BARGE-IN AWARENESS: The caller can interrupt you mid-sentence at any time. If interrupted, never repeat cut-off sentences — pivot immediately and naturally to their latest question or remark.');
-        }
-        lines.push(`- VOCAL EXPRESSION STYLE: ${toneMap[b.expressionStyle] || toneMap.warm_empathetic}`);
-        if (b.vocalGestures !== false) {
-            lines.push('- NATURAL VOCAL GESTURES: Use subtle, authentic spoken micro-gestures when natural (e.g., "Oh, great question!", "Gotcha —", "Mm-hmm, I hear you.", "Right, so—", light warmth) and natural conversational pauses ("—"). NEVER output bracketed or asterisk tags like [laughs], [smiles], (sighs), or *waves* because TTS speaks brackets literally.');
-        }
-        if (b.latencyProfile === 'ultra') {
-            lines.push('- ULTRA-LOW LATENCY STREAMING: Begin every reply immediately with the core answer or reaction in the first 4–6 words. Keep turns crisp (1–2 spoken sentences, ~15–35 words unless asked for detail) in plain spoken words with zero markdown (*, #, bullets).');
-        }
-    }
-    if (campaign) {
-        const rules = String(campaign.complianceRules || '').trim().slice(0, 8000);
-        lines.push('', '=== MANDATORY CAMPAIGN-SPECIFIC COMPLIANCE & RULES ===', `- The only campaign assigned to this call is ${JSON.stringify(campaign.name)} (VICIdial campaign ${JSON.stringify(campaign.viciCampaign)}). Do not use another campaign’s rules.`, '- The rules below are mandatory and override any conflicting persona, sales script, saved agent prompt, or general-answer instruction. Follow them throughout the call.', `- Campaign rules:\n${rules || '[NO CAMPAIGN RULES CONFIGURED — do not start a live call.]'}`, '- After the one-second listen, a silent caller receives the configured opening once. Silence alone never ends the call or applies a disposition; continue listening for the caller.');
-        if (campaign.disclosure && campaign.disclosure.trim()) {
-            lines.push(`- Campaign disclosure text is ${JSON.stringify(campaign.disclosure.trim())}. It is prepended to the opening only when this agent’s campaign-disclosure setting is enabled; never claim a recording or practice that is not actually in effect.`);
-        }
-    }
-    const suffix = lines.join('\n').trim();
-    if (!suffix)
-        return basePrompt;
-    const maxPromptLength = 24950;
-    const availableBaseLength = Math.max(0, maxPromptLength - suffix.length - 1);
-    const safeBase = basePrompt.slice(0, availableBaseLength);
-    const truncationNote = basePrompt.length > safeBase.length
-        ? '\n[Agent prompt shortened to preserve the mandatory campaign rules below.]'
-        : '';
-    return `${safeBase}${truncationNote}\n${suffix}`.trim();
 }
 function buildDeepgramSettings(state, agent, explicitCampaign, options) {
     const sp = state.providers.find((p) => p.kind === 'stt' && p.id === state.services?.stt?.providerId) || {};
@@ -271,7 +224,7 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
     });
     const think = {
         provider: thinkProvider,
-        prompt: composeBehavioralPrompt(agent, linkedCampaign),
+        prompt: (0, persona_1.composeBehavioralPrompt)(agent, linkedCampaign),
         functions: fns,
     };
     // LLMs are Deepgram-managed only; do not expose per-plugin BYO endpoints to agents.

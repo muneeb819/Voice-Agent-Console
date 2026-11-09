@@ -244,6 +244,7 @@ async function browserMockPlayback() {
   };
 
   w.eval(read('opening.js'));
+  w.eval(read('persona.js'));
   w.eval(read('brand-logos.js'));
   w.eval(read('app.js'));
   const d = w.document;

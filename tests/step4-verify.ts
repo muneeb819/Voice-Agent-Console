@@ -545,6 +545,31 @@ async function run() {
       `Expected structured metadata (Name, Age, Medicare Status, Hook Type) in VICIdial update_lead comments, got: ${medUpdateLeadReq?.query.comments}`
     );
 
+    // Regression: Medicare confirmation alone qualifies; no age is asked or invented.
+    const medNoAgeRes = await fetch(`${httpBase}/api/vici/simulate-call`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transport: 'sip_rtp', campaignId: fixture.medicareCampaignId, scenario: 'medicare_qualified_no_age_xfer', upstream: 'mock_ai' }),
+    });
+    const medNoAge = (await medNoAgeRes.json()) as any;
+    assert(medNoAge.ok && medNoAge.cdr?.transferredTo === 'ingroup:MED_CLOSERS', `Expected no-age Medicare transfer, got ${JSON.stringify(medNoAge.cdr)}`);
+    const noAgeComments = ((medNoAge.viciRequestsReceived as any[]).filter((r) => r.query.function === 'update_lead').pop()?.query?.comments) || '';
+    assert(noAgeComments.includes('Medicare:Part A') && !noAgeComments.includes('Age:'), `No-age transfer must not invent an age: ${noAgeComments}`);
+    const noAgeXferFn = medNoAge.cdr?.functionCalls?.find((f: any) => f.name === 'transfer_to_live_agent');
+    assert(noAgeXferFn?.args?.confirmed_age === undefined, 'No-age transfer args must omit confirmed_age');
+
+    // Regression: a model-invented age and over-specific Medicare part are guarded.
+    const medGuardRes = await fetch(`${httpBase}/api/vici/simulate-call`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transport: 'audiosocket', campaignId: fixture.medicareCampaignId, scenario: 'medicare_fabricated_age_xfer', upstream: 'mock_ai' }),
+    });
+    const medGuard = (await medGuardRes.json()) as any;
+    assert(medGuard.ok && medGuard.cdr?.transferredTo === 'ingroup:MED_CLOSERS', `Expected guarded Medicare transfer, got ${JSON.stringify(medGuard.cdr)}`);
+    const guardComments = ((medGuard.viciRequestsReceived as any[]).filter((r) => r.query.function === 'update_lead').pop()?.query?.comments) || '';
+    assert(guardComments.includes('Medicare:Part A') && !guardComments.includes('Part A B') && !guardComments.includes('Part A & B') && !guardComments.includes('Age:'), `Fabricated metadata must be stripped/downgraded: ${guardComments}`);
+    const guardXferFn = medGuard.cdr?.functionCalls?.find((f: any) => f.name === 'transfer_to_live_agent');
+    assert(guardXferFn?.args?.confirmed_age === undefined && guardXferFn?.args?.medicare_status === 'Part A', `Unexpected guarded args: ${JSON.stringify(guardXferFn?.args)}`);
+    assert(guardXferFn?.response?.omitted_unverified_fields?.includes('confirmed_age') && guardXferFn?.response?.corrected_fields?.includes('medicare_status'), `Expected guard reporting: ${JSON.stringify(guardXferFn?.response)}`);
+
     // Test Medicare Spanish Language Barrier (LANG) & Underage 61 Hard Stop (DQ)
     const medLangRes = await fetch(`${httpBase}/api/vici/simulate-call`, {
       method: 'POST',
@@ -573,7 +598,7 @@ async function run() {
     assert(medDq.ok && medDq.cdr?.disposition === 'DQ', `Expected DQ disposition for age 61, got ${medDq.cdr?.disposition}`);
 
     console.log(
-      '✓ [9/10] Medicare Agent (a_medicare) & MEDICARE Campaign (88002 / RA 9002 -> MED_CLOSERS, LANG Spanish barrier, DQ <65 hard-stop & metadata handoff) verified'
+      '✓ [9/10] Medicare Agent & MEDICARE Campaign (explicit-age, no-age, fabricated-age guard, LANG and DQ) verified'
     );
 
     // 10. Verify Users SignUp / SignIn Entry Gate (/ -> /signup when 0 users, SignUp -> /, SignOut -> /login, SignIn -> /)
@@ -637,10 +662,10 @@ async function run() {
       '✓ [10/11] Users SignUp / SignIn First-Page Entry Gate (/ -> /signup, Create Account, Console unlock, Sign Out -> /login & Sign In) verified'
     );
 
-    // 11. Verify Executive Command & Console Quality Dashboard, logo-only header, rail utilities, save dock, login waves & demo tunnel API
+    // 11. Verify Executive Command & Console Quality Dashboard, logo-only header, rail utilities, save dock, transparent login logo & demo tunnel API
     assert(
-      signupHtml.includes('id="login-brand-plaque"') && signupHtml.includes('class="eq-bar"'),
-      'Expected login/signup page to include active playing soundwave logo plaque (#login-brand-plaque + .eq-bar)'
+      signupHtml.includes('id="login-brand-plaque"') && signupHtml.includes('mma-cyan-signal.webp'),
+      'Expected login/signup page to include the transparent MMA logo plaque (#login-brand-plaque + WebP)'
     );
     assert(
       authedRootHtml.includes('<main id="m"') &&

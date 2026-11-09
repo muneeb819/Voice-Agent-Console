@@ -8,6 +8,7 @@ import { createOpeningGate, OpeningGate, prepareDelayedOpening } from './opening
 import { normalizeState } from './defaults';
 import { getSecret, MANAGED_SECRET_KEYS } from './env-store';
 import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCallReadinessBlockers } from './settings-builder';
+import { createConversationMemory } from './persona';
 import { campaignHasAgent } from './campaign-assignment';
 import { Agent, Campaign, ConsoleState } from './types';
 import { executeCustomFunctionWebhook } from './webhook-executor';
@@ -163,6 +164,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
     let fatalErrorMessage: string | null = null;
     let suppressStaleAgentAudio = false;
 
+    const conversationMemory = createConversationMemory();
     const cancelledFnIds = new Set<string>();
     const activeFunctionAborts = new Map<string, AbortController>();
     const pendingPreSettingsAudio: Buffer[] = [];
@@ -273,14 +275,21 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
               error: 'Browser tests are not VICIdial calls. No disposition or do-not-call record was changed.',
             };
       } else if (fnReq.name === 'transfer_to_live_agent') {
+        const sanitized = conversationMemory.sanitizeTransferArgs(parsedArgs);
+        parsedArgs = sanitized.args;
+        const blockers = conversationMemory.qualificationBlockers(activeCampaign);
         const allowedCodes = allowedCampaignDispositionCodes(activeCampaign);
-        resultPayload = !allowedCodes.includes('XFER')
+        resultPayload = blockers.length
+          ? { ok: false, simulated: true, error: `Transfer blocked: ${blockers.join(' ')} No transfer was simulated.`, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}) }
+          : !allowedCodes.includes('XFER')
           ? { ok: false, error: 'XFER is not allowed by the explicitly selected campaign. No transfer was simulated.' }
           : {
               ok: false,
               simulated: true,
               requested_target: activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : null,
               error: 'Browser tests cannot transfer a real call. No VICIdial or PBX transfer was made.',
+              ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
+              ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
             };
       } else if (fnReq.name === 'end_call') {
         awaitingHangupAudioDone = true;
@@ -837,12 +846,14 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             case 'ConversationText': {
               const role = evt.role === 'user' ? 'user' : 'assistant';
               if (role === 'user') {
+                conversationMemory.addUserText(String(evt.content || ''));
                 openingGate?.userTurn();
                 turns += 1;
                 lastUserTurnTs = Date.now();
                 awaitingFirstAudioForTurn = true;
                 suppressStaleAgentAudio = false;
               } else {
+                conversationMemory.addAssistantText(String(evt.content || ''));
                 suppressStaleAgentAudio = false;
               }
               recordTranscript(role, String(evt.content || ''), {

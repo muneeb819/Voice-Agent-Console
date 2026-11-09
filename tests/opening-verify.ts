@@ -42,14 +42,10 @@ async function main() {
   const legacy = createDefaultState();
   const stockMed = legacy.agents.find((a) => a.id === 'a_medicare')!;
   const correctedPrompt = stockMed.prompt;
-  const oldPhase = '- Phase 1 (Delivered in Greeting — Food & OTC Card Hook):\n' +
-    '  You already asked if they have Medicare Part A and B to release their Food & OTC card.\n';
-  const newPhase = '- Phase 1 (After the opening):\n' +
-    '  If Medicare status has not been established, ask whether they have Medicare Part A or Part B; do not assume the opening asked this.\n';
-  assert.ok(correctedPrompt.includes(newPhase));
-  const oldPrompt = correctedPrompt.replace(newPhase, oldPhase);
-  assert.notEqual(oldPrompt, correctedPrompt);
-  stockMed.prompt = oldPrompt;
+  assert.ok(correctedPrompt.includes('NEVER ask the caller their age'), 'Current stock Medicare policy must not ask age after confirmation');
+  assert.ok(correctedPrompt.includes('Would you like me to connect you now?'), 'Current stock Medicare policy offers a consent handoff');
+  const customizedPrompt = `${correctedPrompt}\nAn operator customization.`;
+  stockMed.prompt = customizedPrompt;
   legacy.agents.find((a) => a.id === 'a_nova')!.greeting = oldNova;
   stockMed.greeting = oldMed;
   legacy.agents[0].greeting = custom;
@@ -57,17 +53,16 @@ async function main() {
   const normalized = normalizeState(legacy);
   assert.equal(normalized.agents.find((a) => a.id === 'a_nova')!.greeting, migrateStockOpening(oldNova));
   assert.equal(normalized.agents.find((a) => a.id === 'a_medicare')!.greeting, migrateStockOpening(oldMed));
-  assert.equal(normalized.agents.find((a) => a.id === 'a_medicare')!.prompt, correctedPrompt, 'The exact stock prompt no longer assumes a question was asked');
-  const customizedOldPrompt = `${oldPrompt}\nAn operator customization.`;
-  assert.equal(migrateStockMedicarePrompt(customizedOldPrompt, correctedPrompt), customizedOldPrompt, 'Customized prompts are not migrated');
-  assert.equal(migrateStockMedicarePrompt(oldPrompt, ''), oldPrompt, 'Never guess when the stock reference is unavailable');
+  assert.equal(normalized.agents.find((a) => a.id === 'a_medicare')!.prompt, customizedPrompt, 'Customized Medicare prompts are preserved');
+  assert.equal(migrateStockMedicarePrompt(customizedPrompt, correctedPrompt), customizedPrompt, 'Customized prompts are not migrated');
+  assert.equal(migrateStockMedicarePrompt(customizedPrompt, ''), customizedPrompt, 'Never guess when the stock reference is unavailable');
   assert.equal(normalized.agents[0].greeting, custom, 'Custom saved openings are never silently truncated');
   assert.equal(normalized.agents[0].injectCampaignDisclosure, true, 'Existing notice choice is preserved');
   assert.ok(createDefaultState().agents.every((a) => a.injectCampaignDisclosure === false));
   const missing: any = structuredClone(legacy);
   delete missing.agents[0].injectCampaignDisclosure;
   assert.equal(normalizeState(missing).agents[0].injectCampaignDisclosure, false);
-  console.log('✓ Exact stock openings and Medicare phase migrate; customized scripts and explicit notices remain intact');
+  console.log('✓ Exact stock openings migrate; current Medicare consent/no-age policy and customized scripts/explicit notices remain intact');
 
   const display = { type: 'Settings', agent: { greeting: selected, think: { prompt: 'Be helpful.' } } };
   const prepared = prepareDelayedOpening(display);
