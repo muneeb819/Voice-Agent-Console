@@ -103,7 +103,7 @@ async function run() {
   assert(!/sheen|logo-plate|exposure/i.test(brandJs), 'Transparent logo renderer must not restore plate/sheen overlays');
   // The baked-in waveform is masked out and replaced with live CSS bars.
   assert(/mma-wave-l/.test(brandJs) && /mma-wave-r/.test(brandJs), 'Banner must render both live wave flanks');
-  assert(/WAVE_BARS\s*=\s*24/.test(brandJs), 'Live wave bar count is pinned');
+  assert(/WAVE_BARS\s*=\s*12/.test(brandJs), 'Live wave bar count is pinned');
   assert(!/requestAnimationFrame|setInterval/.test(brandJs), 'Live waves must be CSS-driven, not a JS animation loop');
   const brandCssLive = read('public/brand-logos.css');
   assert(/@keyframes mmaLiveWave/.test(brandCssLive), 'Live wave keyframes must exist');
@@ -114,9 +114,17 @@ async function run() {
   assert(/\.mma-wave\s*\{\s*display: none/.test(motionBlock), 'Reduced motion hides the live bars');
   assert(/mask-image: none/.test(motionBlock), 'Reduced motion restores the original baked-in artwork');
   assert(/data-energy="speaking"/.test(brandCssLive) && /data-energy="listening"/.test(brandCssLive), 'Call state must drive wave amplitude');
-  // The three mask bands must tile the box exactly, or the frame gets erased.
+  // The wave strip must stay inside the banner.
   const band = (name: string) => Number(brandCssLive.match(new RegExp('--mma-wave-' + name + ':\\s*([\\d.]+)%'))?.[1]);
-  assert.equal(band('top') + band('height') + band('tail'), 100, 'Mask bands must tile the banner exactly');
+  assert(band('top') + band('height') <= 100, 'Wave strip must fit inside the banner');
+  // Regression guard: a mask layer sized to a fraction of the box cannot be
+  // placed with a plain percentage (CSS resolves it against box - layer), which
+  // silently erased a strip of the wordmark. Both layers must be full-size.
+  const maskBlock = brandCssLive.slice(brandCssLive.indexOf('.mma-brand-logo .mma-logo-art {'), brandCssLive.indexOf('.mma-brand-icon {'));
+  assert(/mask-image: var\(--mma-wave-vband\), var\(--mma-wave-hband\)/.test(maskBlock), 'Mask must union a vertical and a horizontal band');
+  assert(/mask-size: 100% 100%/.test(maskBlock), 'Mask layers must be full-size so percentage positioning cannot misplace them');
+  assert(!/mask-size:[^;]*var\(--mma-wave-(top|height|tail)\)/.test(maskBlock), 'Mask layers must not be sized from band fractions');
+  assert(/mask-composite: add/.test(maskBlock), 'Mask layers must be unioned, not intersected');
   // The one banner with an opaque waveform panel must repaint it, or the masked
   // window shows the page through the logo on light themes.
   assert(/--mma-wave-panel-r: rgb\(13, 7, 1\)/.test(brandCssLive), 'Opaque crimson panel must be repainted behind the live bars');

@@ -812,6 +812,18 @@ header::after {
    SIDE COLLAPSIBLE CONTROL PANEL & APP SHELL
    ============================================================================ */
 
+/* The desktop toggle lives in the side-rail footer utility row. Phones keep a
+   header opener because the rail itself slides off-canvas there. */
+.rail-toggle-btn.rail-toggle-mobile {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .rail-toggle-btn.rail-toggle-mobile {
+    display: inline-flex;
+  }
+}
+
 .rail-toggle-btn {
   width: 36px;
   height: 36px;
@@ -3772,7 +3784,7 @@ header.console-header {
 }
 
 .header-brand .brand-mark {
-  width: clamp(156px, 30vw, 216px);
+  width: clamp(190px, 26vw, 300px);
   height: auto;
   aspect-ratio: 2688 / 864;
   flex-shrink: 0;
@@ -3806,6 +3818,25 @@ a.fleet-bot-link:hover {
   padding: 10px;
   border-top: 1px solid var(--bd);
   background: var(--sf-solid);
+}
+
+/* Panel toggle shares the utility row with Theme, API Keys and Account.
+   It inherits .side-utility-btn sizing so all four line up exactly. */
+.side-rail-footer .rail-toggle-btn {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border-radius: 9px !important;
+}
+
+.side-rail-footer .rail-toggle-btn:hover {
+  /* No lift: neighbouring utilities stay put, so the row does not wobble. */
+  transform: none;
+}
+
+.side-rail-footer .rail-toggle-btn .btn-ico {
+  width: 17px;
+  height: 17px;
 }
 
 .side-utility-dock {
@@ -3900,6 +3931,12 @@ a.fleet-bot-link:hover {
 }
 
 .app-shell.rail-collapsed .side-utility-btn {
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+}
+
+.app-shell.rail-collapsed .side-rail-footer .rail-toggle-btn {
   width: 28px;
   height: 28px;
   min-width: 28px;
@@ -4137,7 +4174,7 @@ body.has-unsaved-changes .workspace-stage {
 
 @media (max-width: 520px) {
   .header-brand .brand-mark {
-    width: clamp(144px, 42vw, 184px);
+    width: clamp(168px, 46vw, 224px);
     height: auto;
   }
 

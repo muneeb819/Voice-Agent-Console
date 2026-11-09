@@ -74,8 +74,10 @@
     return ASSETS[key] || ASSETS['mma-cyan-signal'];
   }
 
-  // Bar count matches the density of the waveform in the supplied artwork.
-  const WAVE_BARS = 24;
+  // Fewer, bolder bars than the baked artwork: at header size 24 bars collapsed
+  // to ~1px each and read as a static smudge. 12 bars stay individually visible
+  // and the motion is actually perceptible.
+  const WAVE_BARS = 12;
 
   /**
    * Builds one flank of live bars. Heights follow a sine envelope so the group

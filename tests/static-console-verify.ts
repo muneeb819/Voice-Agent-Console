@@ -74,6 +74,18 @@ async function run() {
   assert.equal(d.querySelector('.console-header h1, .console-header .brand-copy, .console-header .brand-sub'), null, 'Header keeps only the centered logo');
   assert(d.querySelector('.side-rail-footer #btn-theme'), 'Theme control lives in the side-rail footer');
   assert(d.querySelector('.side-rail-footer #btn-keys') && d.querySelector('.side-rail-footer #btn-account-menu'), 'Keys and account controls live in the side-rail footer');
+  // The panel toggle belongs to the same utility row as Theme / Keys / Account.
+  assert(d.querySelector('.side-rail-footer .side-utility-dock #btn-sidebar-toggle'), 'Panel toggle lives in the rail footer utility row');
+  assert.equal(d.querySelector('.console-header #btn-sidebar-toggle'), null, 'Desktop panel toggle is no longer in the header');
+  const footerToggle = d.getElementById('btn-sidebar-toggle')!;
+  assert(footerToggle.classList.contains('side-utility-btn'), 'Panel toggle matches the sizing of its row neighbours');
+  assert.equal(footerToggle.getAttribute('aria-controls'), 'side-rail', 'Panel toggle must point at the rail it controls');
+  // Phones slide the rail off-canvas, so an in-rail toggle alone could never
+  // reopen it. The header keeps an opener that is CSS-hidden on desktop.
+  const mobileToggle = d.getElementById('btn-sidebar-toggle-mobile');
+  assert(mobileToggle && mobileToggle.closest('.console-header'), 'Phones keep a header opener outside the off-canvas rail');
+  assert(mobileToggle!.classList.contains('rail-toggle-mobile'), 'Phone opener must carry the desktop-hiding class');
+  assert.notEqual(mobileToggle!.id, footerToggle.id, 'The two toggles need distinct ids');
   click(d.getElementById('btn-account-menu')!);
   assert.equal(d.getElementById('account-popover')!.hidden, false, 'Account links open from the rail footer');
   assert.notEqual((d.getElementById('btn-logout') as HTMLElement).style.display, 'none');
@@ -277,18 +289,20 @@ async function run() {
   const left = brandMark.querySelector('.mma-wave-l');
   const right = brandMark.querySelector('.mma-wave-r');
   assert(left && right, 'Header banner renders both live wave flanks');
-  assert.equal(left!.querySelectorAll('i').length, 24, 'Left flank has the pinned bar count');
-  assert.equal(right!.querySelectorAll('i').length, 24, 'Right flank has the pinned bar count');
-  assert.equal(brandMark.querySelectorAll('.mma-wave i[style*="animation-duration"]').length, 48,
+  assert.equal(left!.querySelectorAll('i').length, 12, 'Left flank has the pinned bar count');
+  assert.equal(right!.querySelectorAll('i').length, 12, 'Right flank has the pinned bar count');
+  assert.equal(brandMark.querySelectorAll('.mma-wave i[style*="animation-duration"]').length, 24,
     'Every bar carries its own duration so the motion is not a uniform sweep');
   assert.equal(brandMark.querySelectorAll('.mma-wave[aria-hidden="true"]').length, 2,
     'Decorative waves are hidden from assistive tech');
   const heights = Array.from(left!.querySelectorAll('i')).map((b) => parseFloat((b as HTMLElement).style.height));
-  assert(heights[0] < heights[11] && heights[23] < heights[12], 'Wave envelope tapers at both ends like the supplied art');
+  const mid = heights.length >> 1;
+  assert(heights[0] < heights[mid - 1] && heights[heights.length - 1] < heights[mid],
+    'Wave envelope tapers at both ends like the supplied art');
   // Theme changes must keep the live bars rather than falling back to a static image.
   const brandApi = (waved.w as any).VACBrandLogos;
   brandApi.applyTo(brandMark, 'ember_pulse', 'full');
-  assert.equal(brandMark.querySelectorAll('.mma-wave i').length, 48, 'Switching theme keeps the live waves');
+  assert.equal(brandMark.querySelectorAll('.mma-wave i').length, 24, 'Switching theme keeps the live waves');
   brandApi.setEnergy(brandMark, 'speaking');
   assert.equal(brandMark.dataset.energy, 'speaking', 'Speaking state is exposed to CSS');
   brandApi.setEnergy(brandMark, '');

@@ -17,13 +17,12 @@
   background: none;
   --mma-wave-top: 25%;
   --mma-wave-height: 34%;
-  --mma-wave-tail: 41%;
   --mma-wave-left-x: 4.5%;
   --mma-wave-right-x: 74.5%;
   --mma-wave-width: 21%;
   --mma-wave-color: var(--ac, #46f6ff);
   --mma-wave-peak: 1;
-  --mma-wave-floor: 0.28;
+  --mma-wave-floor: 0.42;
   --mma-wave-speed: 1;
   /* Most flanks are transparent in the supplied art, so the masked window just
      shows the themed surface. One banner has an opaque dark panel behind its
@@ -33,37 +32,39 @@
   --mma-wave-panel-r: transparent;
 }
 
-/* Cut the baked-in waveform out of the banner. Two transparent stops in a
-   horizontal gradient would also erase the frame above and below, so the mask
-   is built from three stacked bands: the middle band alone carries the holes. */
+/* Cut the baked-in waveform out of the banner.
+
+   Two full-size layers are unioned:
+     1. a vertical gradient that is opaque everywhere EXCEPT the wave strip;
+     2. a horizontal gradient that punches the two wave windows.
+   Outside the strip layer 1 keeps the art; inside it layer 2 decides, so only
+   the two windows are removed and the frame stays intact.
+
+   Both layers are sized 100% 100% on purpose. Sizing a layer to a fraction of
+   the box and then positioning it with a percentage does NOT place it at that
+   percentage: CSS resolves mask-position against (box - layer), so a 34%-tall
+   layer at "25%" actually lands at 16.5% and leaves an unmasked gap that erases
+   a strip of the wordmark. Full-size layers make that class of bug impossible. */
 .mma-brand-logo .mma-logo-art {
-  -webkit-mask-image:
-    linear-gradient(#000 0 0),
-    linear-gradient(90deg,
-      #000 0 var(--mma-wave-left-x),
-      transparent var(--mma-wave-left-x) calc(var(--mma-wave-left-x) + var(--mma-wave-width)),
-      #000 calc(var(--mma-wave-left-x) + var(--mma-wave-width)) var(--mma-wave-right-x),
-      transparent var(--mma-wave-right-x) calc(var(--mma-wave-right-x) + var(--mma-wave-width)),
-      #000 calc(var(--mma-wave-right-x) + var(--mma-wave-width)) 100%),
-    linear-gradient(#000 0 0);
-  -webkit-mask-size: 100% var(--mma-wave-top), 100% var(--mma-wave-height), 100% var(--mma-wave-tail);
-  -webkit-mask-position: 0 0, 0 var(--mma-wave-top), 0 100%;
+  --mma-wave-vband: linear-gradient(180deg,
+    #000 0 var(--mma-wave-top),
+    transparent var(--mma-wave-top) calc(var(--mma-wave-top) + var(--mma-wave-height)),
+    #000 calc(var(--mma-wave-top) + var(--mma-wave-height)) 100%);
+  --mma-wave-hband: linear-gradient(90deg,
+    #000 0 var(--mma-wave-left-x),
+    transparent var(--mma-wave-left-x) calc(var(--mma-wave-left-x) + var(--mma-wave-width)),
+    #000 calc(var(--mma-wave-left-x) + var(--mma-wave-width)) var(--mma-wave-right-x),
+    transparent var(--mma-wave-right-x) calc(var(--mma-wave-right-x) + var(--mma-wave-width)),
+    #000 calc(var(--mma-wave-right-x) + var(--mma-wave-width)) 100%);
+  -webkit-mask-image: var(--mma-wave-vband), var(--mma-wave-hband);
+  -webkit-mask-size: 100% 100%;
+  -webkit-mask-position: 0 0;
   -webkit-mask-repeat: no-repeat;
-  -webkit-mask-composite: source-over, source-over, source-over;
-  mask-image:
-    linear-gradient(#000 0 0),
-    linear-gradient(90deg,
-      #000 0 var(--mma-wave-left-x),
-      transparent var(--mma-wave-left-x) calc(var(--mma-wave-left-x) + var(--mma-wave-width)),
-      #000 calc(var(--mma-wave-left-x) + var(--mma-wave-width)) var(--mma-wave-right-x),
-      transparent var(--mma-wave-right-x) calc(var(--mma-wave-right-x) + var(--mma-wave-width)),
-      #000 calc(var(--mma-wave-right-x) + var(--mma-wave-width)) 100%),
-    linear-gradient(#000 0 0);
-  mask-size: 100% var(--mma-wave-top), 100% var(--mma-wave-height), 100% var(--mma-wave-tail);
-  mask-position: 0 0, 0 var(--mma-wave-top), 0 100%;
+  -webkit-mask-composite: source-over;
+  mask-image: var(--mma-wave-vband), var(--mma-wave-hband);
+  mask-size: 100% 100%;
+  mask-position: 0 0;
   mask-repeat: no-repeat;
-  /* Top and bottom bands are painted first; the middle band is the only one
-     allowed to remove pixels, so the frame stays intact. */
   mask-composite: add;
 }
 
@@ -97,7 +98,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1px;
+  gap: 2px;
   pointer-events: none;
   /* Keeps the glow inside the banner box on very small renders. */
   contain: layout style;
@@ -115,12 +116,12 @@
 .mma-wave i {
   display: block;
   flex: 1 1 0;
-  min-width: 1px;
-  max-width: 4px;
+  min-width: 2px;
+  max-width: 7px;
   border-radius: 999px;
   background: var(--mma-wave-color);
-  box-shadow: 0 0 4px var(--mma-wave-color);
-  opacity: 0.9;
+  box-shadow: 0 0 6px var(--mma-wave-color);
+  opacity: 0.95;
   transform-origin: center;
   animation-name: mmaLiveWave;
   animation-timing-function: ease-in-out;
