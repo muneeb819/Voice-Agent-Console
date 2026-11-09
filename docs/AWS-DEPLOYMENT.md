@@ -155,8 +155,11 @@ sudo bash deploy/aws-deploy.sh --ip console.example.com \
 Use the VPC/subnet CIDRs your ALB runs in (ALB addresses are dynamic, so a single
 IP will not stay valid). This writes `set_real_ip_from` / `real_ip_header
 X-Forwarded-For` / `real_ip_recursive on`, so the client IP is accepted **only**
-from those CIDRs — never from arbitrary peers. The setting is preserved on
-re-runs that omit the flag. `TRUST_PROXY` stays `127.0.0.1`: nginx has already
+from those CIDRs — never from arbitrary peers. Values are validated as real
+addresses/CIDRs (so `192.0.2.1/33` is rejected, not just malformed characters),
+the file is replaced atomically, and if `nginx -t` then fails the previous
+working configuration is restored. The setting is preserved on re-runs that
+omit the flag. `TRUST_PROXY` stays `127.0.0.1`: nginx has already
 resolved the real client, so Node must trust only nginx.
 
 ## 5. Verify

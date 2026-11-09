@@ -101,6 +101,61 @@ case "$PUBLIC_IP" in
 esac
 [ "$(id -u)" -eq 0 ] || { echo "ERROR: run with sudo (needs systemd + nginx)." >&2; exit 1; }
 
+# nginx rejects a set_real_ip_from value it cannot parse, so a character-only
+# check is not enough: 192.0.2.1/33 would replace a working config and then fail
+# nginx -t. Validate the address and the prefix range before writing anything.
+# Accepts a bare address or CIDR, IPv4 or IPv6 (write IPv4-mapped addresses as
+# plain IPv4).
+valid_cidr() {
+  local value="$1" addr prefix
+  case "$value" in
+    */*) addr="${value%%/*}"; prefix="${value#*/}"
+         case "$prefix" in ''|*[!0-9]*) return 1 ;; esac
+         [ "${#prefix}" -le 3 ] || return 1 ;;
+    *)   addr="$value"; prefix="" ;;
+  esac
+  [ -n "$addr" ] || return 1
+  case "$addr" in
+    *:*)
+      case "$addr" in *[!0-9a-fA-F:]*|*:::*) return 1 ;; esac
+      local once="${addr/::/X}"
+      case "$once" in *::*) return 1 ;; esac
+      local groups=0 part
+      local rest="$addr"
+      while [ -n "$rest" ]; do
+        part="${rest%%:*}"
+        if [ -n "$part" ]; then
+          [ "${#part}" -le 4 ] || return 1
+          groups=$((groups + 1))
+        fi
+        case "$rest" in *:*) rest="${rest#*:}" ;; *) rest="" ;; esac
+      done
+      # "::" is the valid all-zeros address and yields no non-empty groups.
+      if [ "$groups" -gt 8 ]; then return 1; fi
+      if [ "$groups" -eq 0 ] && [ "$addr" != "::" ]; then return 1; fi
+      case "$addr" in *::*) [ "$groups" -le 7 ] || return 1 ;; *) [ "$groups" -eq 8 ] || return 1 ;; esac
+      case "$addr" in ::*|*::) : ;; *:) return 1 ;; esac
+      case "$addr" in :*) case "$addr" in ::*) : ;; *) return 1 ;; esac ;; esac
+      if [ -n "$prefix" ]; then [ "$prefix" -le 128 ] || return 1; fi
+      ;;
+    *)
+      case "$addr" in *[!0-9.]*|.*|*.|*..*) return 1 ;; esac
+      local octets=0 o rest="$addr"
+      while [ -n "$rest" ]; do
+        o="${rest%%.*}"
+        case "$o" in ''|*[!0-9]*) return 1 ;; esac
+        [ "${#o}" -le 3 ] || return 1
+        [ "$o" -le 255 ] || return 1
+        octets=$((octets + 1))
+        case "$rest" in *.*) rest="${rest#*.}" ;; *) rest="" ;; esac
+      done
+      [ "$octets" -eq 4 ] || return 1
+      if [ -n "$prefix" ]; then [ "$prefix" -le 32 ] || return 1; fi
+      ;;
+  esac
+  return 0
+}
+
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "=== [1/7] Checking prerequisites ==="
@@ -274,9 +329,10 @@ if [ "${#REAL_IP_FROM[@]}" -gt 0 ]; then
   # an empty config that later runs then "preserve", silently losing client-IP
   # restoration on the next nginx restart.
   for cidr in "${REAL_IP_FROM[@]}"; do
-    case "$cidr" in
-      ''|*[!0-9a-fA-F.:/:]*) echo "ERROR: invalid CIDR '${cidr}'." >&2; exit 2 ;;
-    esac
+    if ! valid_cidr "$cidr"; then
+      echo "ERROR: invalid address/CIDR '${cidr}' (expected e.g. 10.0.0.0/16 or 2600:1f00::/32)." >&2
+      exit 2
+    fi
   done
   REALIP_TMP="$(mktemp "${REALIP_CONF}.XXXXXX")"
   {
@@ -288,6 +344,11 @@ if [ "${#REAL_IP_FROM[@]}" -gt 0 ]; then
     echo "real_ip_recursive on;"
   } > "$REALIP_TMP"
   chmod 644 "$REALIP_TMP"
+  REALIP_BACKUP=""
+  if [ -f "$REALIP_CONF" ]; then
+    REALIP_BACKUP="$(mktemp "${REALIP_CONF}.bak.XXXXXX")"
+    cp -p "$REALIP_CONF" "$REALIP_BACKUP"
+  fi
   mv -f "$REALIP_TMP" "$REALIP_CONF"
   echo "Trusting client IPs from: ${REAL_IP_FROM[*]}"
 elif [ -f "$REALIP_CONF" ]; then
@@ -304,7 +365,20 @@ map $http_upgrade $connection_upgrade {
 WSMAP
 fi
 
-nginx -t
+# If the new configuration does not parse, put the previous one back rather
+# than leaving nginx unable to restart.
+if ! nginx -t; then
+  if [ -n "${REALIP_BACKUP:-}" ] && [ -f "${REALIP_BACKUP:-}" ]; then
+    mv -f "$REALIP_BACKUP" "$REALIP_CONF"
+    echo "nginx config test failed; restored the previous real-IP configuration." >&2
+  elif [ -f "$REALIP_CONF" ]; then
+    rm -f "$REALIP_CONF"
+    echo "nginx config test failed; removed the new real-IP configuration." >&2
+  fi
+  echo "ERROR: nginx -t failed; no changes were left active." >&2
+  exit 1
+fi
+[ -n "${REALIP_BACKUP:-}" ] && [ -f "${REALIP_BACKUP:-}" ] && rm -f "$REALIP_BACKUP"
 systemctl enable nginx
 systemctl reload nginx || systemctl restart nginx
 
