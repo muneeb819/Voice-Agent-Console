@@ -1076,7 +1076,7 @@ nav.side-nav {
   background: var(--bd);
 }
 
-nav.side-nav button.nav-item {
+nav.side-nav .nav-item {
   position: relative;
   display: flex;
   align-items: center;
@@ -1093,14 +1093,14 @@ nav.side-nav button.nav-item {
   transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease, transform 0.16s ease, box-shadow 0.2s ease;
 }
 
-nav.side-nav button.nav-item:hover:not(.on) {
+nav.side-nav .nav-item:hover:not(.on) {
   color: var(--tx);
   background: var(--sf2);
   border-color: var(--bd);
   transform: translateX(2px);
 }
 
-nav.side-nav button.nav-item.on {
+nav.side-nav .nav-item.on {
   background: var(--ac-grad);
   color: var(--ac-on);
   border-color: transparent;
@@ -1150,30 +1150,30 @@ nav.side-nav button.nav-item.on {
   transition: transform 0.2s cubic-bezier(.2,.8,.2,1);
 }
 
-nav.side-nav button.nav-item:hover:not(.on) .nav-ico {
+nav.side-nav .nav-item:hover:not(.on) .nav-ico {
   color: var(--ac);
   border-color: var(--bd-strong);
   box-shadow: 0 0 0 3px var(--ac-glow), 0 7px 15px rgba(15, 23, 42, 0.12);
   transform: translateY(-1px) scale(1.035);
 }
 
-nav.side-nav button.nav-item:hover:not(.on) .nav-ico::before {
+nav.side-nav .nav-item:hover:not(.on) .nav-ico::before {
   opacity: 0.42;
   transform: scale(1.2);
 }
 
-nav.side-nav button.nav-item:hover:not(.on) .nav-ico svg {
+nav.side-nav .nav-item:hover:not(.on) .nav-ico svg {
   transform: scale(1.08);
 }
 
-nav.side-nav button.nav-item.on .nav-ico {
+nav.side-nav .nav-item.on .nav-ico {
   color: var(--ac-on);
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.11));
   border-color: rgba(255, 255, 255, 0.34);
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15), 0 1px 0 rgba(255, 255, 255, 0.32) inset;
 }
 
-nav.side-nav button.nav-item.on .nav-ico::before {
+nav.side-nav .nav-item.on .nav-ico::before {
   opacity: 0.34;
 }
 
@@ -1205,7 +1205,7 @@ nav.side-nav button.nav-item.on .nav-ico::before {
   text-overflow: ellipsis;
 }
 
-nav.side-nav button.nav-item.on .nav-sub {
+nav.side-nav .nav-item.on .nav-sub {
   opacity: 0.9;
 }
 
@@ -1219,7 +1219,7 @@ nav.side-nav button.nav-item.on .nav-sub {
   animation: softPulse 1.5s ease-in-out infinite;
 }
 
-nav.side-nav button.nav-item.on .nav-live-dot {
+nav.side-nav .nav-item.on .nav-live-dot {
   background: #ffffff;
   box-shadow: 0 0 9px rgba(255, 255, 255, 0.95);
 }
@@ -1244,18 +1244,18 @@ nav.side-nav button.nav-item.on .nav-live-dot {
     align-items: center;
   }
 
-  .app-shell.rail-collapsed nav.side-nav button.nav-item {
+  .app-shell.rail-collapsed nav.side-nav .nav-item {
     justify-content: center;
     padding: 7px;
     width: 48px;
     height: 48px;
   }
 
-  .app-shell.rail-collapsed nav.side-nav button.nav-item:hover:not(.on) {
+  .app-shell.rail-collapsed nav.side-nav .nav-item:hover:not(.on) {
     transform: translateY(-1px);
   }
 
-  .app-shell.rail-collapsed nav.side-nav button.nav-item .nav-live-dot {
+  .app-shell.rail-collapsed nav.side-nav .nav-item .nav-live-dot {
     position: absolute;
     top: 6px;
     right: 6px;
@@ -3928,13 +3928,13 @@ header::after {
    Accent hues remain theme-specific; surfaces stay solid and low-gloss.
    ============================================================================ */
 :root[data-theme] .nav-ico,
-:root[data-theme] nav.side-nav button.nav-item.on .nav-ico {
+:root[data-theme] nav.side-nav .nav-item.on .nav-ico {
   background: var(--sf2-solid) !important;
   border-color: var(--bd) !important;
   box-shadow: none !important;
 }
 
-:root[data-theme] nav.side-nav button.nav-item.on {
+:root[data-theme] nav.side-nav .nav-item.on {
   background: var(--ac) !important;
   color: var(--ac-on);
   box-shadow: none !important;
@@ -3990,7 +3990,8 @@ header::after {
 
 .readiness-issues { margin-top: 14px; padding: 12px; border: 1px solid var(--bd); border-radius: 10px; }
 .readiness-issues h2 { margin-top: 0; }
-.readiness-issues .ck button { margin-left: 6px; padding: 3px 8px; font-size: 11px; }
+.readiness-issues .ck button,
+.readiness-issues .ck a.g { margin-left: 6px; padding: 3px 8px; font-size: 11px; }
 
 /* ============================================================================
    THEME-BOUND SUPPLIED MMA BANNER LOGOS
@@ -4014,7 +4015,7 @@ header.console-header {
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 12px;
-  min-height: 64px;
+  min-height: 88px;
   padding: 8px 16px;
 }
 
@@ -4038,8 +4039,27 @@ header.console-header {
 }
 
 .header-brand .brand-mark {
-  width: 42px;
-  height: 42px;
+  width: clamp(156px, 30vw, 216px);
+  height: auto;
+  aspect-ratio: 2688 / 864;
+  flex-shrink: 0;
+  border-radius: 10px;
+}
+
+.header-brand .mma-logo-art {
+  object-fit: contain;
+}
+
+nav.side-nav a.nav-item,
+a.cmd-kpi-card,
+a.cmd-compact-pill,
+a.fleet-campaign-name,
+a.fleet-bot-link {
+  text-decoration: none;
+}
+
+a.fleet-bot-link:hover {
+  text-decoration: underline;
 }
 
 .side-rail-footer {
@@ -4208,6 +4228,8 @@ body.has-unsaved-changes .workspace-stage {
 }
 
 .fleet-campaign-name {
+  display: flex;
+  align-items: center;
   min-height: 44px;
   padding: 10px 14px;
   border: 1px solid var(--bd);
@@ -4379,8 +4401,8 @@ body.has-unsaved-changes .workspace-stage {
 
 @media (max-width: 520px) {
   .header-brand .brand-mark {
-    width: 36px;
-    height: 36px;
+    width: clamp(144px, 42vw, 184px);
+    height: auto;
   }
 
   .save-dock {
