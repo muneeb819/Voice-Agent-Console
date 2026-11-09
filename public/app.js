@@ -49,17 +49,68 @@
   let saveError = '';
   let manualSaveInFlight = false;
   const STATE_DRAFT_KEY = 'vac_console_unsaved_draft_v1';
+  const DRAFT_OWNER_STATE_KEY = 'vacDraftOwner';
+  let draftOwnerId = '';
 
-  let tab = (() => {
+  // history.state survives a same-tab reload but is empty in a newly opened
+  // link, so new tabs read the last saved/shared state instead of adopting
+  // another tab's uncommitted draft. The draft itself stays in localStorage so
+  // the original tab can still recover it after an interruption.
+  function currentDraftOwnerId() {
     try {
-      const requested = new URLSearchParams(window.location.search).get('tab') || '';
-      const valid = ['dashboard', 'agents', 'plugins', 'campaigns', 'voice', 'test', 'vici', 'wallboard', 'export'];
-      return valid.includes(requested) ? requested : 'dashboard';
+      return String(window.history?.state?.[DRAFT_OWNER_STATE_KEY] || '');
     } catch {
-      return 'dashboard';
+      return '';
     }
-  })();
-  let cur = { a: 'a_nova', c: 'c_medicare' };
+  }
+
+  function ensureDraftOwnerId() {
+    if (draftOwnerId) return draftOwnerId;
+    draftOwnerId = currentDraftOwnerId();
+    if (!draftOwnerId) {
+      draftOwnerId = uid('tab');
+      try {
+        window.history?.replaceState({ ...(window.history.state || {}), [DRAFT_OWNER_STATE_KEY]: draftOwnerId }, '');
+      } catch {}
+    }
+    return draftOwnerId;
+  }
+
+  function readLocalDraft() {
+    try {
+      const draft = JSON.parse(window.localStorage?.getItem(STATE_DRAFT_KEY) || 'null');
+      return isPlainObject(draft) ? draft : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function draftBelongsToTab(draft) {
+    if (!draft) return false;
+    // Drafts written before per-tab ownership existed remain recoverable.
+    if (!draft.owner) return true;
+    const owner = currentDraftOwnerId();
+    return Boolean(owner) && draft.owner === owner;
+  }
+
+  const SECTION_TABS = ['dashboard', 'agents', 'plugins', 'campaigns', 'voice', 'test', 'vici', 'wallboard', 'export'];
+  function readViewLocation() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const requested = params.get('tab') || '';
+      return {
+        tab: SECTION_TABS.includes(requested) ? requested : 'dashboard',
+        agentId: params.get('agent') || '',
+        campaignId: params.get('campaign') || '',
+        fleetCampaignId: params.get('fleetCampaign') || '',
+      };
+    } catch {
+      return { tab: 'dashboard', agentId: '', campaignId: '', fleetCampaignId: '' };
+    }
+  }
+  const initialView = readViewLocation();
+  let tab = initialView.tab;
+  let cur = { a: initialView.agentId || 'a_nova', c: initialView.campaignId || 'c_medicare' };
 
   // Voice catalog state (Step 1)
   let voiceCatalog = {
@@ -512,7 +563,8 @@
     const el = document.getElementById('brand-mark');
     if (!el) return;
     const meta = THEME_BY_ID(appearance.theme);
-    el.innerHTML = brandIconHtml(meta);
+    el.classList.add('mma-brand-logo');
+    el.innerHTML = brandFullHtml(meta, { alt: '' });
     el.dataset.pkg = meta.id;
     el.title = `${meta.name} · ${BRAND_PACKAGES[meta.id]?.label || 'Brand'}`;
   }
@@ -679,6 +731,50 @@
     { key: 'export', icon: 'export', label: 'Export', sub: 'Settings JSON & Backup', group: 'Live & Operations' },
   ];
 
+  function sectionHref(target, selection = {}) {
+    const key = SECTION_TABS.includes(target) ? target : 'dashboard';
+    const params = new URLSearchParams({ tab: key });
+    const agentId = selection.agentId ?? (S?.agents.some((agent) => agent.id === cur.a) ? cur.a : '');
+    const campaignId = selection.campaignId ?? (S?.campaigns.some((campaign) => campaign.id === cur.c) ? cur.c : '');
+    if (agentId && ['agents', 'voice', 'test'].includes(key)) params.set('agent', agentId);
+    if (campaignId && key === 'campaigns') params.set('campaign', campaignId);
+    if (selection.fleetCampaignId && key === 'dashboard') params.set('fleetCampaign', selection.fleetCampaignId);
+    return `${window.location.pathname}?${params.toString()}`;
+  }
+
+  function rememberSectionUrl(target, selection = {}, replace = false) {
+    try {
+      const href = sectionHref(target, selection);
+      if (`${window.location.pathname}${window.location.search}` !== href) {
+        const owner = currentDraftOwnerId();
+        const entry = { vacSection: true, ...(owner ? { [DRAFT_OWNER_STATE_KEY]: owner } : {}) };
+        if (replace) window.history?.replaceState(entry, '', href);
+        else window.history?.pushState(entry, '', href);
+      }
+    } catch {}
+  }
+
+  function navigateSection(target, selection = {}) {
+    if (!S || !SECTION_TABS.includes(target)) return;
+    stopAllAudio();
+    if (selection.agentId && S.agents.some((agent) => agent.id === selection.agentId)) cur.a = selection.agentId;
+    if (selection.campaignId && S.campaigns.some((campaign) => campaign.id === selection.campaignId)) cur.c = selection.campaignId;
+    tab = target;
+    if (tab === 'dashboard') {
+      cmdDeckState.fleetCampaignId = S.campaigns.some((campaign) => campaign.id === selection.fleetCampaignId)
+        ? selection.fleetCampaignId : null;
+    }
+    if (mobileRailOpen) {
+      mobileRailOpen = false;
+      applySidebarState(false);
+    }
+    hideRailTooltip();
+    if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
+    rememberSectionUrl(tab, selection);
+    render();
+    if (tab === 'dashboard' && cmdDeckState.fleetCampaignId) loadFleetCampaignStats(cmdDeckState.fleetCampaignId);
+  }
+
   let sidebarCollapsed = (() => {
     try {
       return window.localStorage?.getItem(SIDEBAR_STORAGE_KEY) === '1';
@@ -761,14 +857,14 @@
       const isOn = tab === item.key;
       const showDot = item.key === 'test' && isLiveCall;
       html.push(`
-        <button type="button" data-t="${item.key}" class="nav-item ${isOn ? 'on' : ''}" data-tip-title="${esc(item.label)}" data-tip-sub="${esc(item.sub)}" aria-current="${isOn ? 'page' : 'false'}">
+        <a href="${esc(sectionHref(item.key))}" data-t="${item.key}" class="nav-item ${isOn ? 'on' : ''}" data-tip-title="${esc(item.label)}" data-tip-sub="${esc(item.sub)}" aria-current="${isOn ? 'page' : 'false'}">
           <span class="nav-ico" aria-hidden="true">${NAV_ICONS[item.icon] || NAV_ICONS.agents}</span>
           <span class="nav-txt">
             <span class="nav-lbl">${esc(item.label)}</span>
             <span class="nav-sub">${esc(item.sub)}</span>
           </span>
           ${showDot ? '<span class="nav-live-dot" title="Live Voice Session Active"></span>' : ''}
-        </button>
+        </a>
       `);
     }
     navEl.innerHTML = html.join('');
@@ -804,7 +900,7 @@
   const sideNavHoverEl = document.getElementById('nav');
   if (sideNavHoverEl) {
     sideNavHoverEl.addEventListener('mouseover', (e) => {
-      const btn = e.target.closest('button.nav-item');
+      const btn = e.target.closest('.nav-item');
       if (!btn || !sidebarCollapsed || (window.matchMedia && window.matchMedia('(max-width: 860px)').matches)) {
         hideRailTooltip();
         return;
@@ -1993,6 +2089,7 @@
       // is the explicit commit path; boot compatibility migrations may still
       // normalize the bundled baseline before the first edit.
       window.localStorage?.setItem(STATE_DRAFT_KEY, JSON.stringify({
+        owner: ensureDraftOwnerId(),
         baseSnapshot: snap,
         savedAt: new Date().toISOString(),
         state: S,
@@ -2002,8 +2099,11 @@
     }
   }
 
-  function clearLocalDraft() {
-    try { window.localStorage?.removeItem(STATE_DRAFT_KEY); } catch {}
+  function clearLocalDraft(force = false) {
+    try {
+      if (!force && !draftBelongsToTab(readLocalDraft())) return;
+      window.localStorage?.removeItem(STATE_DRAFT_KEY);
+    } catch {}
   }
 
   function updateHeaderStatus() {
@@ -4862,8 +4962,8 @@
       { id: 'ops_security', label: 'Storage & access (not scored)', score: serverlessCloudMode ? (saveError ? 0 : 1) : (latestRevisionId ? 1 : 0), max: 1, detail: serverlessCloudMode ? 'Browser-local storage; not server authentication' : `${authRequired ? 'Server auth enabled' : 'Local bootstrap'} · ${usersCount} users; excluded from readiness score` },
     ];
     const issues = [
-      ...agents.flatMap((agent) => validateAgentLocal(agent).filter((item) => item[0] !== 'ok').map((item) => ({ level: item[0], scope: agent.name, message: item[2], tab: 'agents' }))),
-      ...campaigns.flatMap((campaign) => validateCampaignLocal(campaign).filter((item) => item[0] !== 'ok').map((item) => ({ level: item[0], scope: campaign.name, message: item[2], tab: 'campaigns' }))),
+      ...agents.flatMap((agent) => validateAgentLocal(agent).filter((item) => item[0] !== 'ok').map((item) => ({ level: item[0], scope: agent.name, message: item[2], tab: 'agents', entityId: agent.id }))),
+      ...campaigns.flatMap((campaign) => validateCampaignLocal(campaign).filter((item) => item[0] !== 'ok').map((item) => ({ level: item[0], scope: campaign.name, message: item[2], tab: 'campaigns', entityId: campaign.id }))),
     ];
 
     const simCalls = Number(srv?.traffic?.totalSimulatorCalls ?? (sim?.callLogs?.length || 0));
@@ -5036,7 +5136,7 @@
       return `<section class="cmd-fleet-layer" aria-label="Fleet Matrix campaigns">
         <div class="cmd-fleet-heading"><h2>Fleet Matrix</h2><span class="note">Select a campaign to open its live status, assigned bots and retained-call analytics.</span></div>
         ${campaigns.length ? `<div class="fleet-campaign-list">${campaigns.map((campaign) =>
-          `<button type="button" class="fleet-campaign-name" data-fleet-campaign="${esc(campaign.id)}">${esc(campaign.name || 'Untitled Campaign')}</button>`
+          `<a class="fleet-campaign-name" href="${esc(sectionHref('dashboard', { fleetCampaignId: campaign.id }))}" data-fleet-campaign="${esc(campaign.id)}">${esc(campaign.name || 'Untitled Campaign')}</a>`
         ).join('')}</div>` : '<div class="note">No campaigns yet. Create one in Campaigns to see it here.</div>'}
       </section>`;
     }
@@ -5073,7 +5173,7 @@
       const liveCount = activeCalls.filter((call) => call.agentId === agent.id || (!call.agentId && call.agentName === agent.name)).length;
       const agentErrors = validateAgentLocal(agent).filter((item) => item[0] === 'er').length;
       return `<tr>
-        <td><button type="button" class="fleet-bot-link" data-fleet-agent="${esc(agent.id)}">${esc(agent.name)}</button>${agent.id === selected.agentId ? ' <span class="pill">Primary</span>' : ''}</td>
+        <td><a class="fleet-bot-link" href="${esc(sectionHref('agents', { agentId: agent.id }))}" data-fleet-agent="${esc(agent.id)}">${esc(agent.name)}</a>${agent.id === selected.agentId ? ' <span class="pill">Primary</span>' : ''}</td>
         <td>${liveCount}</td>
         <td>${botSummary.total}</td>
         <td>${botSummary.total ? `${botSummary.avgDurationSec}s` : '—'}</td>
@@ -5085,7 +5185,7 @@
 
     return `<section class="cmd-fleet-layer fleet-detail" aria-label="Fleet Matrix campaign detail">
       <div class="fleet-detail-head">
-        <button type="button" class="g" id="btn-fleet-back">← All campaigns</button>
+        <a class="g" id="btn-fleet-back" href="${esc(sectionHref('dashboard'))}">← All campaigns</a>
         <div class="fleet-detail-title">
           <h2>${esc(selected.name || 'Untitled Campaign')}</h2>
           <div class="fleet-badge-row">
@@ -5094,11 +5194,11 @@
             <span class="note">${assigned.length} assigned bot${assigned.length === 1 ? '' : 's'}</span>
           </div>
         </div>
-        <button type="button" class="g" data-cmd-campaign="${esc(selected.id)}">Open campaign setup</button>
+        <a class="g" href="${esc(sectionHref('campaigns', { campaignId: selected.id }))}" data-cmd-campaign="${esc(selected.id)}">Open campaign setup</a>
       </div>
       <div class="note">${esc(activityNote)} Configuration readiness is checked separately from live call activity.</div>
       ${blockers.length ? `<details class="fleet-blockers"><summary>${blockers.length} configuration blocker${blockers.length === 1 ? '' : 's'}</summary><ul>${blockers.map((item) => `<li>${esc(item)}</li>`).join('')}</ul></details>` : ''}
-      ${cmdDeckState.fleetStatsError ? `<div class="note er" role="alert">${esc(cmdDeckState.fleetStatsError)} <button type="button" class="g" data-fleet-campaign="${esc(selected.id)}">Retry</button></div>` : ''}
+      ${cmdDeckState.fleetStatsError ? `<div class="note er" role="alert">${esc(cmdDeckState.fleetStatsError)} <button type="button" class="g" data-fleet-retry="${esc(selected.id)}">Retry</button></div>` : ''}
       <div class="fleet-stats-grid" aria-label="Campaign statistics">
         <div class="fleet-stat"><span>Live calls</span><strong>${liveKnown ? activeCalls.length : '—'}</strong></div>
         <div class="fleet-stat"><span>Retained calls</span><strong>${loading && !stats ? '…' : summary.total}</strong></div>
@@ -5268,13 +5368,13 @@
         ${
           cmdDeckState.compact
             ? `<div class="cmd-compact-ribbon">
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="agents">Readiness: <b>${T.score}/100 (${esc(T.grade)})</b></button>
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="agents">Bots: <b>${T.agents.length}</b></button>
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="campaigns">Campaigns: <b>${T.campaigns.length} configured</b></button>
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="plugins">Stack: <b>${esc(T.sttModel || 'not selected')} / ${esc(T.llmModel || 'not selected')}</b></button>
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="test">QA &amp; Sim: <b>${T.testsPassed}/${T.testsTotal} · ${T.simCalls} calls</b></button>
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="wallboard">Vici Bridge: <b>${T.viciActive} live / ${T.viciTotal} retained</b></button>
-                 <button type="button" class="cmd-compact-pill" data-cmd-tab="export">Storage: <b>${serverlessCloudMode ? 'Browser-local only' : `Rev #${T.revNum} · ${T.usersCount} user${T.usersCount === 1 ? '' : 's'}`}</b></button>
+                 <a class="cmd-compact-pill" href="${esc(sectionHref('agents'))}" data-cmd-tab="agents">Readiness: <b>${T.score}/100 (${esc(T.grade)})</b></a>
+                 <a class="cmd-compact-pill" href="${esc(sectionHref('agents'))}" data-cmd-tab="agents">Bots: <b>${T.agents.length}</b></a>
+                 <a class="cmd-compact-pill" href="${esc(sectionHref('campaigns'))}" data-cmd-tab="campaigns">Campaigns: <b>${T.campaigns.length} configured</b></a>
+                 <a class="cmd-compact-pill" href="${esc(sectionHref('plugins'))}" data-cmd-tab="plugins">Stack: <b>${esc(T.sttModel || 'not selected')} / ${esc(T.llmModel || 'not selected')}</b></a>
+                 <a class="cmd-compact-pill" href="${esc(sectionHref('test'))}" data-cmd-tab="test">QA &amp; Sim: <b>${T.testsPassed}/${T.testsTotal} · ${T.simCalls} calls</b></a>
+                 <a class="cmd-compact-pill" href="${esc(sectionHref('wallboard'))}" data-cmd-tab="wallboard">Vici Bridge: <b>${T.viciActive} live / ${T.viciTotal} retained</b></a>
+                 <a class="cmd-compact-pill" href="${esc(sectionHref('export'))}" data-cmd-tab="export">Storage: <b>${serverlessCloudMode ? 'Browser-local only' : `Rev #${T.revNum} · ${T.usersCount} user${T.usersCount === 1 ? '' : 's'}`}</b></a>
                </div>`
             : `<div class="cmd-hero-grid">
                  <div class="cmd-quality-card">
@@ -5330,9 +5430,9 @@
                  <div class="cmd-kpi-grid">
                    ${kpiCards
                      .map(
-                       (k) => `<button type="button" class="cmd-kpi-card ${
+                       (k) => `<a class="cmd-kpi-card ${
                          tab === k.tab ? 'is-active-tab' : ''
-                       }" data-cmd-tab="${esc(k.tab)}">
+                       }" href="${esc(sectionHref(k.tab, { agentId: A()?.id, campaignId: C()?.id }))}" data-cmd-tab="${esc(k.tab)}">
                          <div class="cmd-kpi-top">
                            <span class="cmd-kpi-title">${esc(k.title)}</span>
                            <span class="cmd-kpi-ico">${k.ico}</span>
@@ -5340,7 +5440,7 @@
                          <div class="cmd-kpi-main">${esc(k.main)}</div>
                          <div class="cmd-kpi-sub">${esc(k.sub)}</div>
                          <div class="cmd-kpi-foot"><span>${esc(k.foot)}</span></div>
-                       </button>`
+                       </a>`
                      )
                      .join('')}
                  </div>
@@ -5348,8 +5448,8 @@
 
                ${!cmdDeckState.compact ? `<div class="readiness-issues"><h2>${T.issues.length ? 'What still needs attention' : 'All configuration checks passed'}</h2>
                  <div class="note">Readiness = passed checks ÷ applicable checks. Pending QA and live provider/telephone health are shown separately; no score is a 99.999% reliability guarantee.</div>
-                 ${T.issues.map((issue) => `<div class="ck"><span class="${issue.level}">${issue.level === 'er' ? '✗' : '!'}</span><span><b>${esc(issue.scope)}:</b> ${esc(issue.message)} <button class="g" type="button" data-cmd-tab="${issue.tab}">Open setup</button></span></div>`).join('')}
-                 <div class="note">QA: ${T.testsPassed}/${T.testsTotal} passed, ${T.testsPending} pending. <button class="g" type="button" data-cmd-tab="test">Open Live Bot</button></div>
+                 ${T.issues.map((issue) => `<div class="ck"><span class="${issue.level}">${issue.level === 'er' ? '✗' : '!'}</span><span><b>${esc(issue.scope)}:</b> ${esc(issue.message)} <a class="g" href="${esc(sectionHref(issue.tab, { agentId: issue.entityId, campaignId: issue.entityId }))}" data-cmd-tab="${issue.tab}">Open setup</a></span></div>`).join('')}
+                 <div class="note">QA: ${T.testsPassed}/${T.testsTotal} passed, ${T.testsPending} pending. <a class="g" href="${esc(sectionHref('test', { agentId: A()?.id }))}" data-cmd-tab="test">Open Live Bot</a></div>
                </div>` : ''}
              `
         }
@@ -5480,7 +5580,7 @@
             </div>
           </div>
 
-          <h2>Text-to-Speech (Speak) <button class="g" data-t="voice" style="font-size:11px;padding:3px 8px;text-transform:none">🎧 Open Real Voice Lab →</button></h2>
+          <h2>Text-to-Speech (Speak) <a class="g" href="${esc(sectionHref('voice', { agentId: a.id }))}" data-t="voice" style="font-size:11px;padding:3px 8px;text-transform:none">🎧 Open Real Voice Lab →</a></h2>
           <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · Model: <code>${esc(S.services?.tts?.model || 'not selected')}</code>. Change the voice in the Voice Lab or in Plug-Ins; this agent’s speed and expression controls remain independent.</div>
           <div class="row">
             ${F(
@@ -5738,7 +5838,7 @@
               : simCampaigns.length ? 'Select the campaign for this call. No campaign will be chosen automatically.' : 'No campaign is assigned. Create a campaign and explicitly assign this bot before testing or deployment.'}</div>
           </div>
           <div id="sim-call-setup" class="note ${simCampaignBlockers.length ? 'wn' : 'ok'}" style="margin-top:6px">${simCampaignBlockers.length
-            ? `<b>Before starting:</b> ${esc(simCampaignBlockers.join('; '))} <button class="g" type="button" data-cmd-tab="campaigns">Open Campaign setup</button> <button class="g" type="button" data-cmd-tab="agents">Assign campaigns to this bot</button>`
+            ? `<b>Before starting:</b> ${esc(simCampaignBlockers.join('; '))} <a class="g" href="${esc(sectionHref('campaigns', { campaignId: simCampaign?.id }))}" data-cmd-tab="campaigns">Open Campaign setup</a> <a class="g" href="${esc(sectionHref('agents', { agentId: a.id }))}" data-cmd-tab="agents">Assign campaigns to this bot</a>`
             : 'Campaign and bot configuration checks passed. Starting still requires a live provider connection.'}</div>
 
           ${
@@ -6346,6 +6446,26 @@
     }
   }
 
+  function renderLinkedView() {
+    const requested = readViewLocation();
+    tab = requested.tab;
+    if (S.agents.some((agent) => agent.id === requested.agentId)) cur.a = requested.agentId;
+    if (S.campaigns.some((campaign) => campaign.id === requested.campaignId)) cur.c = requested.campaignId;
+    if (!S.agents.some((agent) => agent.id === cur.a)) cur.a = S.agents[0]?.id || '';
+    if (!S.campaigns.some((campaign) => campaign.id === cur.c)) cur.c = S.campaigns[0]?.id || '';
+    cmdDeckState.fleetCampaignId = tab === 'dashboard' && S.campaigns.some((campaign) => campaign.id === requested.fleetCampaignId)
+      ? requested.fleetCampaignId : null;
+    render();
+    if (cmdDeckState.fleetCampaignId) loadFleetCampaignStats(cmdDeckState.fleetCampaignId);
+  }
+
+  window.addEventListener('popstate', () => {
+    if (!S) return;
+    stopAllAudio();
+    hideRailTooltip();
+    renderLinkedView();
+  });
+
   function buildExportBundle() {
     const settingsByCampaignId = Object.fromEntries(
       S.campaigns.map((campaign) => {
@@ -6518,18 +6638,18 @@
       revisions = [{ id: 1, saved_at: S.updatedAt || new Date().toISOString(), summary: 'Cloud Direct Browser Session' }];
       secretsStatus = buildCloudSecretsStatus();
       try {
-        const draft = JSON.parse(window.localStorage?.getItem(STATE_DRAFT_KEY) || 'null');
-        if (draft?.state && draft.baseSnapshot === snap && comparableSnapshot(draft.state) !== snap) {
-          S = draft.state;
-          enforceDeepgramOnlyLlms(S);
-          upgradeRealtimeAgentFeatures(S);
-        } else if (draft) {
-          clearLocalDraft();
+        const draft = readLocalDraft();
+        if (draftBelongsToTab(draft)) {
+          if (draft.state && draft.baseSnapshot === snap && comparableSnapshot(draft.state) !== snap) {
+            S = draft.state;
+            enforceDeepgramOnlyLlms(S);
+            upgradeRealtimeAgentFeatures(S);
+          } else {
+            clearLocalDraft();
+          }
         }
       } catch {}
-      if (!S.agents.some((x) => x.id === cur.a)) cur.a = S.agents[0]?.id || '';
-      if (!S.campaigns.some((x) => x.id === cur.c)) cur.c = S.campaigns[0]?.id || '';
-      render();
+      renderLinkedView();
       updateHeaderStatus();
       syncDeepgramManagedLlms(true).then((ok) => {
         if (ok) render();
@@ -6557,8 +6677,8 @@
     // Recover an unsaved local browser draft instead of silently replacing it
     // with the last server snapshot after a tab or network interruption.
     try {
-      const draft = JSON.parse(window.localStorage?.getItem(STATE_DRAFT_KEY) || 'null');
-      if (draft?.state && typeof draft.baseSnapshot === 'string') {
+      const draft = readLocalDraft();
+      if (draftBelongsToTab(draft) && draft.state && typeof draft.baseSnapshot === 'string') {
         const serverSnapshot = comparableSnapshot(S);
         const draftSnapshot = comparableSnapshot(draft.state);
         if (draftSnapshot === serverSnapshot) {
@@ -6597,9 +6717,7 @@
       } catch {}
     }
 
-    if (!S.agents.some((x) => x.id === cur.a)) cur.a = S.agents[0]?.id || '';
-    if (!S.campaigns.some((x) => x.id === cur.c)) cur.c = S.campaigns[0]?.id || '';
-    render();
+    renderLinkedView();
   }
 
   function showSaveReport({ ok, wn, er, items = [], storage, revisionId, changes = [] }) {
@@ -7175,8 +7293,9 @@
 
   // Click delegation
   document.addEventListener('click', async (e) => {
-    const b = e.target.closest('button');
+    const b = e.target.closest('button, a');
     if (!b) return;
+    if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
     const d = b.dataset;
 
     if (b.id === 'retry-greeting-catalog') {
@@ -7205,61 +7324,35 @@
       return;
     }
 
-    if (d.t) {
-      stopAllAudio();
-      tab = d.t;
-      if (mobileRailOpen) {
-        mobileRailOpen = false;
-        applySidebarState(false);
-      }
-      hideRailTooltip();
-      if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
-      render();
+    if (d.t || d.cmdTab) {
+      e.preventDefault();
+      navigateSection(d.t || d.cmdTab, { agentId: A()?.id, campaignId: C()?.id });
       return;
     }
 
-    // Executive Command & Console Quality Dashboard interactive controls
-    if (d.cmdTab) {
-      stopAllAudio();
-      tab = d.cmdTab;
-      if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
-      render();
-      return;
-    }
-    if (d.cmdAgent) {
-      stopAllAudio();
-      if (S.agents.some((x) => x.id === d.cmdAgent)) {
-        cur.a = d.cmdAgent;
-      }
-      tab = 'agents';
-      render();
+    // Executive Command & Console Quality Dashboard interactive controls.
+    if (d.cmdAgent || d.fleetAgent) {
+      e.preventDefault();
+      navigateSection('agents', { agentId: d.cmdAgent || d.fleetAgent });
       return;
     }
     if (d.cmdCampaign) {
-      stopAllAudio();
-      if (S.campaigns.some((x) => x.id === d.cmdCampaign)) {
-        cur.c = d.cmdCampaign;
-      }
-      tab = 'campaigns';
-      render();
+      e.preventDefault();
+      navigateSection('campaigns', { campaignId: d.cmdCampaign });
       return;
     }
     if (d.fleetCampaign) {
-      cmdDeckState.fleetCampaignId = d.fleetCampaign;
-      renderExecutiveCommandDeck();
-      loadFleetCampaignStats(d.fleetCampaign);
+      e.preventDefault();
+      navigateSection('dashboard', { fleetCampaignId: d.fleetCampaign });
+      return;
+    }
+    if (d.fleetRetry) {
+      loadFleetCampaignStats(d.fleetRetry);
       return;
     }
     if (b.id === 'btn-fleet-back') {
-      cmdDeckState.fleetCampaignId = null;
-      renderExecutiveCommandDeck();
-      return;
-    }
-    if (d.fleetAgent) {
-      stopAllAudio();
-      if (S.agents.some((x) => x.id === d.fleetAgent)) cur.a = d.fleetAgent;
-      tab = 'agents';
-      render();
+      e.preventDefault();
+      navigateSection('dashboard');
       return;
     }
     if (b.id === 'btn-cmd-compact') {
@@ -8066,7 +8159,7 @@
 
     if (b.id === 'rs') {
       if (!confirm('Reset the entire console to factory defaults?')) return;
-      clearLocalDraft();
+      clearLocalDraft(true);
       if (serverlessCloudMode) {
         try { window.localStorage?.removeItem(CLOUD_STATE_KEY); } catch {}
         await loadFromServer();
@@ -8173,7 +8266,7 @@
       const nextState = parsed.console || parsed;
       if (serverlessCloudMode) {
         S = nextState;
-        clearLocalDraft();
+        clearLocalDraft(true);
         enforceDeepgramOnlyLlms(S);
         S.updatedAt = new Date().toISOString();
         try {
@@ -8192,7 +8285,7 @@
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.error || 'Import failed');
       S = data.state;
-      clearLocalDraft();
+      clearLocalDraft(true);
       enforceDeepgramOnlyLlms(S);
       snap = comparableSnapshot(S);
       revisions = data.revisions || [];
@@ -8225,6 +8318,7 @@
         sim.campaignId = ''; sim.campaignAgentId = '';
       }
       if (tab === 'voice') voiceCatalog.previewText = buildSettings(A()).agent.greeting || A().greeting;
+      rememberSectionUrl(tab, { agentId: cur.a, campaignId: cur.c }, true);
       if (kind === 'a') {
         for (const log of sim.callLogs) revokeRecordingUrl(log.id);
         sim.logsLoadedForAgent = null;

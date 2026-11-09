@@ -8,17 +8,22 @@ const publicDir = path.join(root, 'public');
 const read = (file: string) => fs.readFileSync(path.join(publicDir, file), 'utf8');
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 30));
 
-async function fixture(options: { state?: any; storageFails?: boolean; tab?: string } = {}) {
+async function fixture(options: { state?: any; storageFails?: boolean; tab?: string; query?: string; draft?: any; historyState?: any } = {}) {
   const html = read('index.html').replace(/<script[\s\S]*?<\/script>/g, '');
   const errors: string[] = [];
   const vc = new VirtualConsole();
-  vc.on('jsdomError', (error) => errors.push(error.message));
-  const dom = new JSDOM(html, { url: `https://console.example/Voice-Agent-Console/?tab=${options.tab || 'agents'}`, runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: vc });
+  // JSDOM cannot follow real anchor navigations; modified/middle clicks are
+  // intentionally left to the browser, so ignore only that stub limitation.
+  vc.on('jsdomError', (error) => { if (!/Not implemented: navigation/.test(error.message)) errors.push(error.message); });
+  const search = options.query ?? `?tab=${options.tab || 'agents'}`;
+  const dom = new JSDOM(html, { url: `https://console.example/Voice-Agent-Console/${search}`, runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: vc });
   const w = dom.window;
   (w as any).Response = Response;
   w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} } as any);
   w.localStorage.setItem('vac_cloud_session_v1', JSON.stringify({ user: { id: 'test', fullName: 'Test Operator', email: 'operator@example.test' } }));
   if (options.state) w.localStorage.setItem('vac_cloud_state_v1', JSON.stringify(options.state));
+  if (options.draft) w.localStorage.setItem('vac_console_unsaved_draft_v1', JSON.stringify(options.draft));
+  if (options.historyState) w.history.replaceState(options.historyState, '');
   if (options.storageFails) {
     const storageProto = Object.getPrototypeOf(w.localStorage);
     const original = storageProto.setItem;
@@ -42,7 +47,7 @@ async function fixture(options: { state?: any; storageFails?: boolean; tab?: str
   assert.deepStrictEqual(errors, [], 'Console boot must not throw');
   assert(w.document.getElementById('m')?.children.length, 'Static console must finish loading');
   const change = (el: Element, event = 'change') => el.dispatchEvent(new w.Event(event, { bubbles: true }));
-  const click = (el: Element) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+  const click = (el: Element, init: MouseEventInit = {}) => el.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true, button: 0, ...init }));
   const state = () => JSON.parse(w.localStorage.getItem('vac_cloud_state_v1') || 'null');
   return { w, d: w.document, requests, errors, change, click, state };
 }
@@ -74,6 +79,52 @@ async function run() {
   click(d.querySelector('[data-t="agents"]')!);
   assert.equal((d.querySelector('[data-p="a.name"]') as HTMLInputElement).value, 'Mobile edited bot');
   assert.equal(d.getElementById('save-dock')!.hidden, false);
+
+  // Navigation entries are real anchors with project-relative section URLs.
+  const navLinks = [...d.querySelectorAll('#nav a.nav-item')] as HTMLAnchorElement[];
+  assert.equal(navLinks.length, 9, 'Every side-rail section is a link');
+  for (const link of navLinks) {
+    const href = link.getAttribute('href') || '';
+    assert(href.startsWith('/Voice-Agent-Console/?tab='), `Link keeps the GitHub Pages subpath: ${href}`);
+    assert.equal(link.target, '', 'Links stay in the tab unless the browser opens a new one');
+    assert(!link.hasAttribute('download'), 'Section links are not downloads');
+  }
+  // The browser context menu must remain native; nothing may cancel contextmenu.
+  const contextEvent = new w.MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 });
+  navLinks[1].dispatchEvent(contextEvent);
+  assert.equal(contextEvent.defaultPrevented, false, 'Right-click keeps the native Open link in new tab menu');
+  // Modified and middle clicks are left to the browser instead of SPA navigation.
+  const currentTab = d.querySelector('#nav a.nav-item.on')?.getAttribute('data-t');
+  for (const init of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }, { button: 1 }]) {
+    const evt = new w.MouseEvent('click', { bubbles: true, cancelable: true, button: 0, ...init });
+    d.querySelector('#nav a[data-t="campaigns"]')!.dispatchEvent(evt);
+    assert.equal(evt.defaultPrevented, false, 'Modified/middle click must not be intercepted');
+    assert.equal(d.querySelector('#nav a.nav-item.on')?.getAttribute('data-t'), currentTab, 'Modified/middle click must not switch the current tab');
+  }
+  // Plain left click still navigates in-app and preserves the dirty draft.
+  const plainEvt = new w.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 });
+  d.querySelector('#nav a[data-t="campaigns"]')!.dispatchEvent(plainEvt);
+  assert.equal(plainEvt.defaultPrevented, true, 'Plain left click stays in-app');
+  assert.equal(d.querySelector('#nav a.nav-item.on')?.getAttribute('data-t'), 'campaigns');
+  assert.equal(new URL(w.location.href).searchParams.get('tab'), 'campaigns', 'Address bar reflects the active section');
+  click(d.querySelector('#nav a[data-t="agents"]')!);
+  assert.equal((d.querySelector('[data-p="a.name"]') as HTMLInputElement).value, 'Mobile edited bot');
+
+  // A newly opened link reads the last saved state, not another tab's draft.
+  const savedState = f.state();
+  const sharedDraft = JSON.parse(w.localStorage.getItem('vac_console_unsaved_draft_v1') || 'null');
+  assert(sharedDraft?.owner, 'Draft records its owning tab');
+  const newTab = await fixture({ state: savedState, draft: sharedDraft, query: '?tab=agents&agent=a_nova' });
+  assert.equal((newTab.d.querySelector('[data-p="a.name"]') as HTMLInputElement).value, savedState.agents.find((a:any)=>a.id==='a_nova').name, 'New tab shows saved configuration');
+  assert.equal(newTab.d.getElementById('save-dock')!.hidden, true, 'New tab does not adopt the other tab’s unsaved dock');
+  assert(newTab.w.localStorage.getItem('vac_console_unsaved_draft_v1'), 'New tab leaves the original draft intact');
+  newTab.w.close();
+  // The original tab can still recover its draft after a reload.
+  const reloaded = await fixture({ draft: sharedDraft, query: '?tab=agents', historyState: { vacDraftOwner: sharedDraft.owner } });
+  assert.equal((reloaded.d.querySelector('[data-p="a.name"]') as HTMLInputElement).value, 'Mobile edited bot', 'Same-tab reload recovers its own draft');
+  assert.equal(reloaded.d.getElementById('save-dock')!.hidden, false);
+  reloaded.w.close();
+
   click(d.getElementById('sv')!); await tick();
   assert.match(d.getElementById('vr')!.textContent || '', /Saved in this browser.*Verification Report/s);
   assert.equal(f.state().agents.find((a:any)=>a.id==='a_nova').name, 'Mobile edited bot', 'Explicit Save & Verify commits the edit');
@@ -107,9 +158,11 @@ async function run() {
   // Theme Studio must swap the supplied banner logo, favicon and loader preview.
   click(d.getElementById('btn-theme')!);
   const initialLogo = (d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src');
-  assert.match(initialLogo || '', /mma-cyan-signal-icon\.jpg/);
+  assert.match(initialLogo || '', /mma-cyan-signal\.jpg/);
+  assert.doesNotMatch(initialLogo || '', /-icon\.jpg/, 'Header shows the full landscape banner, not the square icon');
   click(d.querySelector('[data-pick-theme="ember_pulse"]')!);
-  assert.match((d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src') || '', /mma-gold-ember-icon\.jpg/);
+  assert.match((d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src') || '', /mma-gold-ember\.jpg/);
+  assert.doesNotMatch((d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src') || '', /-icon\.jpg/);
   assert.match((d.querySelector('link[rel="icon"]') as HTMLLinkElement).href, /mma-gold-ember-icon\.jpg/);
   assert.match((d.querySelector('#theme-loader-logo img') as HTMLImageElement).getAttribute('src') || '', /mma-gold-ember\.jpg/);
   assert(d.querySelectorAll('#theme-swatch-grid .theme-preview-logo img').length >= 10);
@@ -134,6 +187,10 @@ async function run() {
   assert.match(text, /no score is a 99\.999% reliability guarantee/);
   assert.match(text, /What still needs attention|All configuration checks passed/);
   assert(!/GRADE D/.test(text), 'Valid shipped examples must not receive an arbitrary failing grade');
+  for (const shortcut of [...dashboard.d.querySelectorAll('[data-cmd-tab], [data-fleet-campaign]')]) {
+    assert.equal(shortcut.tagName, 'A', 'Dashboard and Fleet shortcuts are real links');
+    assert((shortcut.getAttribute('href') || '').startsWith('/Voice-Agent-Console/?tab='), 'Shortcut URL keeps the Pages subpath');
+  }
   const fleetButtons = [...dashboard.d.querySelectorAll('[data-fleet-campaign]')];
   assert(fleetButtons.length >= 1, 'Fleet Matrix first layer lists campaigns');
   assert.equal(dashboard.d.querySelector('[data-cmd-agent], [data-cmd-campaign], .fleet-detail'), null, 'First layer must not mix in bot chips or campaign detail');
@@ -144,10 +201,22 @@ async function run() {
   assert.match(dashboard.d.getElementById('m')!.textContent || '', /Assigned bots/);
   assert.match(dashboard.d.getElementById('m')!.textContent || '', /Campaign analytics/);
   assert.match(dashboard.d.getElementById('m')!.textContent || '', /static demo has no server call history/i);
+  assert.equal(dashboard.d.getElementById('btn-fleet-back')!.tagName, 'A', 'Fleet back control is a link');
+  assert.equal(dashboard.d.querySelector('[data-cmd-campaign]')!.tagName, 'A', 'Campaign setup shortcut is a link');
+  assert.equal(dashboard.d.querySelector('[data-fleet-agent]')!.tagName, 'A', 'Assigned bot shortcut is a link');
   dashboard.click(dashboard.d.getElementById('btn-fleet-back')!);
   assert.equal(dashboard.d.querySelector('.fleet-detail'), null, 'Back returns to the campaign-name layer');
+  assert.equal(new URL(dashboard.w.location.href).searchParams.has('fleetCampaign'), false, 'Back clears the Fleet detail URL');
   assert.deepEqual(dashboard.errors, []);
   dashboard.w.close();
+  const deepLink = await fixture({ query: '?tab=agents&agent=a_jessica' });
+  assert.equal((deepLink.d.getElementById('sel-a') as HTMLSelectElement).value, 'a_jessica', 'Section links can select a saved bot');
+  assert.equal(deepLink.d.querySelector('#nav a.nav-item.on')?.getAttribute('data-t'), 'agents');
+  deepLink.w.close();
+  const fleetLink = await fixture({ query: '?tab=dashboard&fleetCampaign=c_medicare' });
+  assert(fleetLink.d.getElementById('fleet-activity-badge'), 'Fleet detail links open the second layer directly');
+  assert.equal(new URL(fleetLink.w.location.href).searchParams.get('fleetCampaign'), 'c_medicare');
+  fleetLink.w.close();
   const legacyState = JSON.parse(read('default-state.json'));
   legacyState.campaigns[0].presenceCheckText = 'Old presence prompt';
   legacyState.campaigns[0].deadAirTimeoutSec = 3;
@@ -163,6 +232,6 @@ async function run() {
   assert.deepEqual(retired.errors, []);
   retired.w.close();
 
-  console.log('✓ Static console: logo-only header, rail utilities, explicit save dock, free section navigation, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
+  console.log('✓ Static console: full landscape header logo, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
 }
 run().catch((error) => { console.error(error); process.exit(1); });
