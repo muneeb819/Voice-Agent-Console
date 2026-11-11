@@ -5053,7 +5053,7 @@
         </div>
 
         <div class="cmd-score-card">
-          <div class="cmd-score-main"><strong>${T.score}</strong><span>/100 · Grade ${esc(T.grade)}</span></div>
+          <div class="cmd-score-main"><strong>${T.score}</strong><span>/100</span></div>
           <div class="cmd-score-bar"><i style="width:${T.score}%"></i></div>
           <div class="note">Readiness = passed checks ÷ applicable checks. Pending QA and live provider/telephone health are shown separately; no score is a 99.999% reliability guarantee.</div>
           <div class="cmd-score-stats">
