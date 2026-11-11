@@ -5116,7 +5116,6 @@
       }
     } else if (tab === 'agents') {
       const tp = globalServiceProvider('tts') || {};
-      const isFluxTts = tp.type === 'deepgram' && String(S.services?.tts?.model || '').startsWith('flux');
 
       m.innerHTML = `
         <div class="card">
@@ -5190,27 +5189,7 @@
           </div>
 
           <h2>Text-to-Speech (Speak) <a class="g" href="${esc(sectionHref('voice', { agentId: a.id }))}" data-t="voice" style="font-size:11px;padding:3px 8px;text-transform:none">🎧 Open Real Voice Lab →</a></h2>
-          <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · <code>${esc(S.services?.tts?.model || 'not selected')}</code> (Plug-Ins)</div>
-          <div class="row">
-            ${F(
-              isFluxTts ? 'Speed (0.5–1.5, 0.05 steps)' : 'Speed (0.7–1.5)',
-              'a.tts.speed',
-              'number',
-              [],
-              `min="${isFluxTts ? '0.5' : '0.7'}" max="1.5" step="0.05"`
-            )}
-            ${
-              isFluxTts
-                ? F('Expressivity (Flux v2 integer)', 'a.tts.expr', 'sel', [
-                    [-2, '-2 (Calmest)'],
-                    [-1, '-1 (Calm)'],
-                    [0, '0 (Default Production)'],
-                    [1, '+1 (Animated)'],
-                    [2, '+2 (Most Expressive)'],
-                  ])
-                : `<div><label>Expressivity</label><input aria-label="Expressivity" disabled value="Flux v2 voices only"></div>`
-            }
-          </div>
+          <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · <code>${esc(S.services?.tts?.model || 'not selected')}</code> (Plug-Ins). Voice selection is global; per-bot speed/expression are not sent to Deepgram and were removed.</div>
 
           <h2>Telephony Audio Stream</h2>
           <div class="row">
