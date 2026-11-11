@@ -7927,6 +7927,9 @@
             delete S.tests[currentObj.id];
             if (sim.campaignAgentId === currentObj.id) { sim.campaignId = ''; sim.campaignAgentId = ''; }
           } else if (sim.campaignId === currentObj.id) { sim.campaignId = ''; sim.campaignAgentId = ''; }
+          render();
+          updateHeaderStatus();
+          updateLivePreview();
         }
       } else if (kind === 'a' && act === 'new') {
         // New bot: blank identity/script on a usable structure — never a copy
