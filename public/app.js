@@ -2698,67 +2698,6 @@
     </div>`;
   };
 
-  function renderPluginCard(idx) {
-    const p = S.providers[idx];
-    const sameKindCount = S.providers.filter((x) => x.kind === p.kind).length;
-    const isStt = p.kind === 'stt';
-    const isLlm = p.kind === 'llm';
-    if (isLlm) {
-      const dgModels = dgLlmEntriesForType(p.type);
-      return `<div class="t">
-        <div class="row">
-          ${F('Display name', `p.${idx}.name`)}
-          ${F('Deepgram Managed LLM Provider', `p.${idx}.type`, 'sel', DG_LLM_PROVIDER_TYPES)}
-        </div>
-        <label>Deepgram-Provided Models (${dgModels.length} managed via <code>DEEPGRAM_API_KEY</code>)</label>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px">
-          ${dgModels
-            .map(
-              (m) =>
-                `<span class="pill" title="${esc(m.name)}" style="font-size:11px;padding:3px 8px"><b>${esc(m.name)}</b> <span style="opacity:.7">(${esc(m.id)})</span></span>`
-            )
-            .join('')}
-        </div>
-        <div class="note ok" style="margin:4px 0 8px">✓ Natively hosted &amp; billed through Deepgram Voice Agent API — no third-party LLM endpoint or separate API key needed.</div>
-        <div class="bar" style="margin-top:8px;margin-bottom:0">
-          <button class="g danger" data-del="p:${idx}" ${sameKindCount <= 1 ? 'disabled title="At least one provider of each type is required"' : ''}>Remove</button>
-        </div>
-      </div>`;
-    }
-    return `<div class="t">
-      <div class="row">
-        ${F('Display name', `p.${idx}.name`)}
-        ${
-          isStt
-            ? F('Provider type', `p.${idx}.type`, 'sel', [
-                ['deepgram', 'deepgram (Cloud Voice Agent)'],
-                ['speech_service', 'speech_service (Local Faster-Whisper)'],
-              ])
-            : F('Provider type', `p.${idx}.type`, 'sel', [
-                'deepgram',
-                'speech_service',
-                'eleven_labs',
-                'cartesia',
-                'open_ai',
-                'aws_polly',
-              ])
-        }
-      </div>
-      ${
-        isStt && p.type !== 'speech_service'
-          ? '<div class="note">Voice Agent STT models: <code>nova-3</code> (Nova baseline), <code>flux-general-en</code>, and <code>flux-general-multi</code> (Flux v2).</div>'
-          : F('Models (comma-separated)', `p.${idx}.models`)
-      }
-      ${p.kind === 'tts' ? F('Model field key sent to API', `p.${idx}.mk`, 'sel', ['model', 'model_id']) : ''}
-      ${F('Custom / BYO Endpoint URL (leave blank for Deepgram-managed)', `p.${idx}.endpoint`)}
-      ${F('Headers JSON object (use {{ENV_VAR}} placeholders — keep real keys in server .env)', `p.${idx}.headers`)}
-      ${F('Extra provider fields JSON object (voice, language_code…)', `p.${idx}.extra`)}
-      <div class="bar" style="margin-top:8px;margin-bottom:0">
-        <button class="g danger" data-del="p:${idx}" ${sameKindCount <= 1 ? 'disabled title="At least one provider of each type is required"' : ''}>Remove</button>
-      </div>
-    </div>`;
-  }
-
   function renderFunctionCard(idx) {
     const f = S.functions[idx];
     const schemaCheck = parseJsonSchema(f.params);
