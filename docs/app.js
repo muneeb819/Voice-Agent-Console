@@ -5037,220 +5037,37 @@
         ? `✓ ${T.okCount}/${T.totalChecks} PASSED · 0 WARN · 0 ERR`
         : `${T.okCount} OK · ${T.wnCount} WARN · ${T.erCount} ERR`;
 
-    const demoBase = cmdDeckState.publicDemoUrl;
-    const demoLoginUrl = demoBase ? `${demoBase}/login` : '';
-
-    const demoControlHtml = demoBase
-      ? `<div class="cmd-demo-pill live" title="External internet HTTPS link active — share with clients on any network!">
-           <span>🌐</span>
-           <a class="cmd-demo-url" href="${esc(demoLoginUrl)}" target="_blank" rel="noopener">${esc(
-             demoBase.replace(/^https?:\/\//i, '')
-           )}/login</a>
-           <button type="button" class="b cmd-mini-btn" data-cmd-copy-demo="${esc(demoLoginUrl)}">📋 Copy Link</button>
-         </div>`
-      : !serverlessCloudMode
-      ? `<button type="button" class="g cmd-mini-btn" id="btn-cmd-start-tunnel" ${
-          cmdDeckState.tunnelStarting ? 'disabled' : ''
-        } title="Launch a free Cloudflare HTTPS Quick-Tunnel so external clients on any internet connection can access /login">
-           ${cmdDeckState.tunnelStarting ? '⏳ Starting HTTPS Tunnel…' : '🚀 Launch Public Client HTTPS Link'}
-         </button>`
-      : '';
-
-    const radius = 47;
-    const circumference = 2 * Math.PI * radius;
-    const dashOffset = circumference - (T.score / 100) * circumference;
-
-    const outboundCount = T.agents.filter((x) => x.mode === 'outbound').length;
-    const inboundCount = T.agents.filter((x) => x.mode === 'inbound').length;
-    const blendedCount = T.agents.filter((x) => x.mode === 'both').length;
-
-    const kpiCards = [
-      {
-        tab: 'agents',
-        ico: '🤖',
-        title: 'Agent Fleet',
-        main: `${T.agents.length} Configured Agent${T.agents.length === 1 ? '' : 's'}`,
-        sub: `${outboundCount} Out · ${inboundCount} In · ${blendedCount} Blend · ${T.instantCount}/${T.agents.length} Local VAD Configured`,
-        foot: `Selected: ${(A()?.name || 'Agent').slice(0, 20)} →`,
-      },
-      {
-        tab: 'plugins',
-        ico: '🧩',
-        title: 'AI & Speech Stack',
-        main: `${T.dgConfigured ? 'Key Configured' : 'Key Needed'}`,
-        sub: `STT ${T.sttModel || 'not selected'} · LLM ${T.llmModel || 'not selected'} · ${T.providers.length} Plug-ins · ${T.functions.length} Tools`,
-        foot: `${T.dgConfigured ? 'Connection not verified' : 'Set Key in Side Panel'} →`,
-      },
-      {
-        tab: 'campaigns',
-        ico: '📣',
-        title: 'Campaigns & DNC',
-        main: `${T.campaigns.length} Configured Campaign${T.campaigns.length === 1 ? '' : 's'}`,
-        sub: `${T.discCount}/${T.campaigns.length} Disclosures Configured · ${
-          T.campaigns.filter((c) => c.dnc).length
-        }/${T.campaigns.length} DNC Settings Enabled`,
-        foot: `VICIdial ID ${C()?.viciCampaign || 'not set'} · status not checked →`,
-      },
-      {
-        tab: 'voice',
-        ico: '🎙️',
-        title: 'Voice & Latency',
-        main: T.avgTtfb > 0 ? `${T.avgTtfb}ms Avg TTFB` : 'No latency sample',
-        sub: `TTS ${T.ttsModel || 'not selected'} · Speed ${A()?.tts?.speed || 1}x · ${A()?.audio?.inEnc || 'linear16'}`,
-        foot: `Retained session means; may include bridge tests · Open Voice Studio →`,
-      },
-      {
-        tab: 'test',
-        ico: '🧪',
-        title: 'QA & Simulator',
-        main: `${T.testsPassed}/${T.testsTotal} QA Marked Pass`,
-        sub: `${T.simCalls} Retained Tests · ${T.simTurns} All Channels · ${T.testsPending} Pending · ${T.testsFailed} Fail`,
-        foot: `Open Browser Test →`,
-      },
-      {
-        tab: 'vici',
-        ico: '☎️',
-        title: 'VICIdial Bridge',
-        main: !T.bridgeStatusAvailable ? 'Listener status unavailable' : T.bridgeListening ? `TCP :${T.bridgePort} Listening` : `TCP :${T.bridgePort} Not Listening`,
-        sub: `Listener status is not PBX connectivity · ${T.viciTotal} retained bridge calls`,
-        foot: `Host ${T.boundHost} →`,
-      },
-      {
-        tab: 'wallboard',
-        ico: '📺',
-        title: 'Live Wallboard',
-        main: T.hasTelemetry ? `${T.viciActive} Active Bridge Call${T.viciActive === 1 ? '' : 's'}` : 'Bridge status unavailable',
-        sub: `${T.viciRecs} WAV Recording${T.viciRecs === 1 ? '' : 's'} · ${formatDurationCompact(
-          T.viciTalkSec
-        )} Approx. Call Duration`,
-        foot: `Supervisor Controls →`,
-      },
-      {
-        tab: 'export',
-        ico: '🛡️',
-        title: 'Runtime, Auth & DB',
-        main: serverlessCloudMode ? 'Browser-local demo' : `Rev #${T.revNum} · ${T.usersCount} User${T.usersCount === 1 ? '' : 's'}`,
-        sub: `${T.boundHost}:${T.boundPort} · ${T.memMb ? `${T.memMb}MB RAM · ` : ''}Up ${formatDurationCompact(
-          T.uptimeSec
-        )}`,
-        foot: serverlessCloudMode ? 'Server unavailable →' : `${T.totalRevs} SQLite Snapshots →`,
-      },
-    ];
-
     wrap.innerHTML = `
       <div class="cmd-deck-shell">
         <div class="cmd-topbar">
           <div class="cmd-brand-cluster">
             <span class="cmd-radar-dot ${healthClass === 'ok' ? '' : healthClass}"></span>
-            <h1 class="cmd-eyebrow">Executive Command <span>&amp; Configuration Readiness</span></h1>
+            <h1 class="cmd-eyebrow">Configuration Readiness</h1>
             <span class="cmd-cert-badge ${healthClass === 'ok' ? '' : healthClass}">${esc(certText)}</span>
-            <span class="cmd-sys-meta">
-              <span>${esc(String(T.boundHost))}:${esc(String(T.boundPort))}</span>
-              <span>·</span>
-              <span>Bridge :${esc(String(T.bridgePort))}</span>
-              <span>·</span>
-              <span>Theme: ${esc(T.activeThemeLabel)}</span>
-            </span>
           </div>
           <div class="cmd-actions-cluster">
-            ${demoControlHtml}
             <button type="button" class="g cmd-mini-btn" id="btn-cmd-refresh" title="Refresh live server, simulator &amp; VICIdial telemetry">
               ${cmdDeckState.syncing ? '↻ Syncing…' : '↻ Sync'}
-            </button>
-            <button type="button" class="g cmd-mini-btn" id="btn-cmd-compact" title="Toggle between Full Executive Dashboard and Compact Telemetry Strip">
-              ${cmdDeckState.compact ? '⊞ Full Dashboard' : '⊟ Compact'}
             </button>
           </div>
         </div>
 
-        ${
-          cmdDeckState.compact
-            ? `<div class="cmd-compact-ribbon">
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('agents'))}" data-cmd-tab="agents">Readiness: <b>${T.score}/100 (${esc(T.grade)})</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('agents'))}" data-cmd-tab="agents">Bots: <b>${T.agents.length}</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('campaigns'))}" data-cmd-tab="campaigns">Campaigns: <b>${T.campaigns.length} configured</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('plugins'))}" data-cmd-tab="plugins">Stack: <b>${esc(T.sttModel || 'not selected')} / ${esc(T.llmModel || 'not selected')}</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('test'))}" data-cmd-tab="test">QA &amp; Sim: <b>${T.testsPassed}/${T.testsTotal} · ${T.simCalls} calls</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('wallboard'))}" data-cmd-tab="wallboard">Vici Bridge: <b>${T.viciActive} live / ${T.viciTotal} retained</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('export'))}" data-cmd-tab="export">Storage: <b>${serverlessCloudMode ? 'Browser-local only' : `Rev #${T.revNum} · ${T.usersCount} user${T.usersCount === 1 ? '' : 's'}`}</b></a>
-               </div>`
-            : `<div class="cmd-hero-grid">
-                 <div class="cmd-quality-card">
-                   <div class="cmd-quality-top">
-                     <div class="cmd-gauge-box">
-                       <svg class="cmd-gauge-svg" viewBox="0 0 118 118" aria-hidden="true">
-                         <defs>
-                           <linearGradient id="cmdGaugeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                             <stop offset="0%" stop-color="var(--ac)" />
-                             <stop offset="55%" stop-color="var(--ac-2)" />
-                             <stop offset="100%" stop-color="var(--ok)" />
-                           </linearGradient>
-                         </defs>
-                         <circle class="cmd-gauge-track" cx="59" cy="59" r="${radius}" />
-                         <circle
-                           class="cmd-gauge-arc"
-                           cx="59"
-                           cy="59"
-                           r="${radius}"
-                           stroke="url(#cmdGaugeGrad)"
-                           stroke-dasharray="${circumference.toFixed(2)}"
-                           stroke-dashoffset="${dashOffset.toFixed(2)}"
-                         />
-                       </svg>
-                       <div class="cmd-gauge-center">
-                         <div class="cmd-gauge-score">${T.score}</div>
-                         <div class="cmd-gauge-grade">GRADE ${esc(T.grade)}</div>
-                       </div>
-                     </div>
-                     <div class="cmd-pillars">
-                       ${T.pillars
-                         .map((p) => {
-                           const pct = Math.max(0, Math.min(100, Math.round((p.score / Math.max(1, p.max)) * 100)));
-                           return `<div class="cmd-pillar-row" title="${esc(p.detail)}">
-                             <div class="cmd-pillar-hdr">
-                               <span class="cmd-pillar-lbl">${esc(p.label)}</span>
-                               <span class="cmd-pillar-val">${p.score}/${p.max}</span>
-                             </div>
-                             <div class="cmd-pillar-bar"><div class="cmd-pillar-fill" style="width:${pct}%"></div></div>
-                           </div>`;
-                         })
-                         .join('')}
-                     </div>
-                   </div>
-                   <div class="cmd-quality-foot">
-                     <span>Passed configuration checks (not measured call quality, uptime, security or compliance): <b style="color:var(--tx)">${T.score}/100 (${esc(T.grade)})</b></span>
-                     <span>${serverlessCloudMode ? 'Browser-local demo' : `SQLite WAL · Rev #${T.revNum}`} · ${
-                       comparableSnapshot(S) === snap ? '✓ Synced' : '● Unsaved Edits'
-                     }</span>
-                   </div>
-                 </div>
+        <div class="cmd-score-card">
+          <div class="cmd-score-main"><strong>${T.score}</strong><span>/100 · Grade ${esc(T.grade)}</span></div>
+          <div class="cmd-score-bar"><i style="width:${T.score}%"></i></div>
+          <div class="note">Readiness = passed checks ÷ applicable checks. Pending QA and live provider/telephone health are shown separately; no score is a 99.999% reliability guarantee.</div>
+          <div class="cmd-score-stats">
+            <span><b>${T.agents.length}</b> bots</span>
+            <span><b>${T.campaigns.length}</b> campaigns</span>
+            <span><b>${T.okCount}/${T.totalChecks}</b> checks passed</span>
+            <span><b>${T.viciActive}</b> live calls</span>
+          </div>
+        </div>
 
-                 <div class="cmd-kpi-grid">
-                   ${kpiCards
-                     .map(
-                       (k) => `<a class="cmd-kpi-card ${
-                         tab === k.tab ? 'is-active-tab' : ''
-                       }" href="${esc(sectionHref(k.tab, { agentId: A()?.id, campaignId: C()?.id }))}" data-cmd-tab="${esc(k.tab)}">
-                         <div class="cmd-kpi-top">
-                           <span class="cmd-kpi-title">${esc(k.title)}</span>
-                           <span class="cmd-kpi-ico">${k.ico}</span>
-                         </div>
-                         <div class="cmd-kpi-main">${esc(k.main)}</div>
-                         <div class="cmd-kpi-sub">${esc(k.sub)}</div>
-                         <div class="cmd-kpi-foot"><span>${esc(k.foot)}</span></div>
-                       </a>`
-                     )
-                     .join('')}
-                 </div>
-               </div>
-
-               ${!cmdDeckState.compact ? `<div class="readiness-issues"><h2>${T.issues.length ? 'What still needs attention' : 'All configuration checks passed'}</h2>
-                 <div class="note">Readiness = passed checks ÷ applicable checks. Pending QA and live provider/telephone health are shown separately; no score is a 99.999% reliability guarantee.</div>
-                 ${T.issues.map((issue) => `<div class="ck"><span class="${issue.level}">${issue.level === 'er' ? '✗' : '!'}</span><span><b>${esc(issue.scope)}:</b> ${esc(issue.message)} <a class="g" href="${esc(sectionHref(issue.tab, { agentId: issue.entityId, campaignId: issue.entityId }))}" data-cmd-tab="${issue.tab}">Open setup</a></span></div>`).join('')}
-                 <div class="note">QA: ${T.testsPassed}/${T.testsTotal} passed, ${T.testsPending} pending. <a class="g" href="${esc(sectionHref('test', { agentId: A()?.id }))}" data-cmd-tab="test">Open Live Bot</a></div>
-               </div>` : ''}
-             `
-        }
+        <div class="readiness-issues"><h2>${T.issues.length ? 'What still needs attention' : 'All configuration checks passed'}</h2>
+          ${T.issues.map((issue) => `<div class="ck"><span class="${issue.level}">${issue.level === 'er' ? '✗' : '!'}</span><span><b>${esc(issue.scope)}:</b> ${esc(issue.message)} <a class="g" href="${esc(sectionHref(issue.tab, { agentId: issue.entityId, campaignId: issue.entityId }))}" data-cmd-tab="${issue.tab}">Open setup</a></span></div>`).join('')}
+          <div class="note">QA: ${T.testsPassed}/${T.testsTotal} passed, ${T.testsPending} pending. <a class="g" href="${esc(sectionHref('test', { agentId: A()?.id }))}" data-cmd-tab="test">Open Live Bot</a></div>
+        </div>
         ${renderFleetMatrix()}
       </div>
     `;
@@ -5313,16 +5130,14 @@
           ])}
           ${F('Bridge VICIdial call-connect & automatic lead hydration (recommended — replaces hallucinated LLM accept tool)', 'a.acceptViciCalls', 'chk')}
           ${F('Include the linked campaign recording notice (optional)', 'a.injectCampaignDisclosure', 'chk')}
-          <div class="note wn">This controls the spoken campaign notice only; it does not turn off recording. Obtain any consent required for your calls. Existing notice settings are preserved. Notice text written inside the saved opening is not removed.</div>
+          <div class="note wn">Spoken campaign notice only — does not turn off recording.</div>
           ${F('Saved opening and identity (keep it brief)', 'a.greeting', 'ta')}
           ${F('Vary this opening using the imported greeting library', 'a.randomGreetingEnabled', 'chk')}
-          <div class="note" style="margin:5px 0">Each call listens for caller speech for 1 second. A silent line then receives the configured opening once; an early caller turn takes priority. Silence alone never hangs up or applies a disposition. A library entry varies the saved opening without inventing an identity. The 1,100 original entries remain below.</div>
-          <div id="greeting-catalog-panel">${renderGreetingCatalog()}</div>
           ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
-          <div class="note wn">Before calling, verify your identity and every factual or benefit claim. Example Medicare / Food &amp; OTC scripts are unverified; review them and any required consent or disclosures for your campaign.</div>
+          <div class="note wn">Verify every factual claim before calling.</div>
 
           <h2>⚡ Barge-In, Expressions, Gestures, Speed &amp; General Q&amp;A</h2>
-          <div class="note">Service provider and model are controlled globally from Plug-Ins. This agent can tune its conversation behavior, while all agents use the same saved LLM, STT, and TTS channels.</div>
+          <div class="note">Providers/models are global (Plug-Ins). Behavior below is per-bot.</div>
 
           <div class="row r3">
             ${F('🛑 Barge-In Interruption Mode', 'a.behavior.bargeIn', 'sel', [
@@ -5356,7 +5171,7 @@
           ${F('👋 Self-Introduction Bio (spoken naturally when asked "Who are you?" or "Introduce yourself")', 'a.behavior.selfIntro', 'ta')}
 
           <h2>Speech-to-Text (Listen)</h2>
-          <div class="note">Global STT: <b>${esc(globalServiceProvider('stt')?.name || 'Not selected')}</b> · Model: <code>${esc(S.services?.stt?.model || 'not selected')}</code>. Configure the single shared provider/model in Plug-Ins. Per-agent language hints, keyterms, and turn detection remain configurable here.</div>
+          <div class="note">Global STT: <b>${esc(globalServiceProvider('stt')?.name || 'Not selected')}</b> · <code>${esc(S.services?.stt?.model || 'not selected')}</code> (Plug-Ins)</div>
           <div class="row">
             ${F('Language / BCP-47 hints', 'a.language')}
             ${F('Keyterms (comma-separated phrases)', 'a.stt.keyterms')}
@@ -5368,18 +5183,14 @@
           </div>
 
           <h2>Language Model (Think — Deepgram Managed)</h2>
-          <div class="note">Global LLM: <b>${esc(globalServiceProvider('llm')?.name || 'Not selected')}</b> · Model: <code>${esc(S.services?.llm?.model || 'not selected')}</code>. The saved Plug-Ins selection is shared by every bot; each agent may still have its own response temperature and reasoning preferences.</div>
-          <div class="row r3">
+          <div class="note">Global LLM: <b>${esc(globalServiceProvider('llm')?.name || 'Not selected')}</b> · <code>${esc(S.services?.llm?.model || 'not selected')}</code> (Plug-Ins)</div>
+          <div class="row">
             ${F('Temperature (0–2)', 'a.llm.temp', 'number', [], 'min="0" max="2" step="0.05"')}
             ${F('Reasoning (gpt-5*)', 'a.llm.reasoning', 'sel', ['low', 'medium', 'high'])}
-            <div>
-              <label>Routing &amp; key ownership</label>
-              <div class="note ok" style="padding:8px 10px;border:1px solid var(--bd);border-radius:8px;background:var(--sf2);margin:0">The Console owns the provider connection and server-side <code>DEEPGRAM_API_KEY</code>; bots do not connect to provider accounts.</div>
-            </div>
           </div>
 
           <h2>Text-to-Speech (Speak) <a class="g" href="${esc(sectionHref('voice', { agentId: a.id }))}" data-t="voice" style="font-size:11px;padding:3px 8px;text-transform:none">🎧 Open Real Voice Lab →</a></h2>
-          <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · Model: <code>${esc(S.services?.tts?.model || 'not selected')}</code>. Change the voice in the Voice Lab or in Plug-Ins; this agent’s speed and expression controls remain independent.</div>
+          <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · <code>${esc(S.services?.tts?.model || 'not selected')}</code> (Plug-Ins)</div>
           <div class="row">
             ${F(
               isFluxTts ? 'Speed (0.5–1.5, 0.05 steps)' : 'Speed (0.7–1.5)',
@@ -6241,9 +6052,6 @@
 
     updateLivePreview();
     updateHeaderStatus();
-    if (tab === 'agents' && !greetingCatalog.loaded && !greetingCatalog.pending && !greetingCatalog.error) {
-      void ensureGreetingCatalogLoaded();
-    }
   }
 
   function renderLinkedView() {

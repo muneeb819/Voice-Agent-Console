@@ -409,12 +409,51 @@ header.console-header {
   gap: 14px;
   min-height: 62px;
   padding: 8px 18px;
-  background: var(--sf);
+  /* Aurora mesh: theme accents wash in from both edges, surface in the middle. */
+  background:
+    radial-gradient(420px 90px at 8% 50%, color-mix(in srgb, var(--ac) 16%, transparent), transparent 70%),
+    radial-gradient(420px 90px at 92% 50%, color-mix(in srgb, var(--ac-2) 16%, transparent), transparent 70%),
+    var(--sf);
   border-bottom: 1px solid var(--bd);
   box-shadow:
     0 1px 0 var(--spec-top) inset,
     0 8px 30px -10px rgba(0, 0, 0, 0.34);
   transition: background-color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+/* Soft halo behind the centered logo. */
+header .header-brand {
+  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--ac) 38%, transparent));
+}
+
+/* Decorative live soundwave bars (right zone). Pure CSS, no data. */
+.hdr-waves {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  opacity: 0.9;
+}
+.hdr-waves i {
+  display: block;
+  width: 3px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--ac-2), var(--ac));
+  animation: hdrWave 1.6s ease-in-out infinite;
+}
+.hdr-waves i:nth-child(1) { height: 8px; animation-delay: 0s; }
+.hdr-waves i:nth-child(2) { height: 16px; animation-delay: 0.15s; }
+.hdr-waves i:nth-child(3) { height: 22px; animation-delay: 0.3s; }
+.hdr-waves i:nth-child(4) { height: 14px; animation-delay: 0.45s; }
+.hdr-waves i:nth-child(5) { height: 20px; animation-delay: 0.6s; }
+.hdr-waves i:nth-child(6) { height: 10px; animation-delay: 0.75s; }
+.hdr-waves i:nth-child(7) { height: 6px; animation-delay: 0.9s; }
+@keyframes hdrWave {
+  0%, 100% { transform: scaleY(0.55); opacity: 0.65; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hdr-waves i { animation: none; }
 }
 
 /* Animated luminous horizon hairline along bottom of header */
@@ -3735,6 +3774,16 @@ header::after {
 
 .readiness-issues { margin-top: 14px; padding: 12px; border: 1px solid var(--bd); border-radius: 10px; }
 .readiness-issues h2 { margin-top: 0; }
+
+/* Simplified dashboard score card (replaces gauge + KPI grid). */
+.cmd-score-card { margin-top: 14px; padding: 16px; border: 1px solid var(--bd); border-radius: 12px; background: var(--sf); }
+.cmd-score-main { display: flex; align-items: baseline; gap: 8px; }
+.cmd-score-main strong { font-size: 34px; line-height: 1; }
+.cmd-score-main span { color: var(--tx-2, #9aa); font-size: 13px; }
+.cmd-score-bar { margin: 10px 0 8px; height: 8px; border-radius: 6px; background: color-mix(in srgb, var(--bd) 60%, transparent); overflow: hidden; }
+.cmd-score-bar i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--ac), var(--ac-2)); }
+.cmd-score-stats { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; font-size: 13px; }
+.cmd-score-stats b { font-size: 15px; }
 .readiness-issues .ck button,
 .readiness-issues .ck a.g { margin-left: 6px; padding: 3px 8px; font-size: 11px; }
 
