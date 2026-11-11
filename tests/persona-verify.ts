@@ -59,6 +59,18 @@ function run() {
   assert(wire.agent.think.prompt.endsWith(integrity[integrity.length - 1]), 'Integrity rules must be appended last');
   assert(wire.agent.think.prompt.length <= MAX_PROMPT_LENGTH);
 
+  // Ambiguous multi-campaign previews must not silently choose a campaign;
+  // the caller must pass an explicit campaign (live paths always do).
+  const multiState = configuredState();
+  const multiMedicare = multiState.agents.find((a) => a.id === 'a_medicare')!;
+  const secondCampaign = multiState.campaigns.find((c) => c.id === 'c_nova')!;
+  secondCampaign.agentId = 'a_medicare';
+  secondCampaign.agentIds = ['a_medicare'];
+  const multiPreview = buildDeepgramSettings(multiState, multiMedicare);
+  assert(!multiPreview.agent.think.prompt.includes('MANDATORY CAMPAIGN-SPECIFIC COMPLIANCE'), 'Ambiguous preview must not silently choose a campaign');
+  const explicitSecond = buildDeepgramSettings(multiState, multiMedicare, secondCampaign);
+  assert(explicitSecond.agent.think.prompt.includes(secondCampaign.complianceRules.slice(0, 80)), 'Explicit campaign must inject its own rules');
+
   // Disabled persona options need explicit negative instructions, not silence.
   const restricted = { ...medicare, behavior: { ...medicare.behavior, allowGeneralQa: false, vocalGestures: false } };
   const restrictedPrompt = composeBehavioralPrompt(restricted, campaign);

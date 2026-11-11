@@ -41,6 +41,9 @@
     return typeof v === 'object' && v !== null && !Array.isArray(v);
   }
 
+  // Must match MISSING_CAMPAIGN_RULES in src/defaults.ts (backend normalizer).
+  const MISSING_CAMPAIGN_RULES = 'REVIEW REQUIRED: Add and review campaign-specific compliance and call rules before deployment.';
+
   let S = null;
   let snap = '';
   let revisions = [];
@@ -2091,9 +2094,13 @@
     const sp = globalServiceProvider('stt') || {};
     const lp = globalServiceProvider('llm') || {};
     const tp = globalServiceProvider('tts') || {};
+    // Live calls always pass an explicit campaign. For preview, fall back to
+    // the simulator selection, then the bot's first assigned campaign, so the
+    // composed prompt truthfully includes that campaign's rules (mirrors the
+    // backend buildDeepgramSettings fallback).
     const linkedCampaign = campaign
       ? campaignHasAgent(campaign, agent.id) ? campaign : undefined
-      : agent.id === A()?.id ? simulatorCampaign(agent.id) : campaignsForAgent(agent.id)[0];
+      : (agent.id === A()?.id ? simulatorCampaign(agent.id) : null) || campaignsForAgent(agent.id)[0];
 
     const isSpeechServiceStt = sp.type === 'speech_service';
     const spModels = String(sp.models || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -2690,67 +2697,6 @@
       <button class="g danger" id="del-${kind}" ${arr.length <= 1 || locked ? 'disabled title="At least one required"' : ''}>Delete</button>
     </div>`;
   };
-
-  function renderPluginCard(idx) {
-    const p = S.providers[idx];
-    const sameKindCount = S.providers.filter((x) => x.kind === p.kind).length;
-    const isStt = p.kind === 'stt';
-    const isLlm = p.kind === 'llm';
-    if (isLlm) {
-      const dgModels = dgLlmEntriesForType(p.type);
-      return `<div class="t">
-        <div class="row">
-          ${F('Display name', `p.${idx}.name`)}
-          ${F('Deepgram Managed LLM Provider', `p.${idx}.type`, 'sel', DG_LLM_PROVIDER_TYPES)}
-        </div>
-        <label>Deepgram-Provided Models (${dgModels.length} managed via <code>DEEPGRAM_API_KEY</code>)</label>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 8px">
-          ${dgModels
-            .map(
-              (m) =>
-                `<span class="pill" title="${esc(m.name)}" style="font-size:11px;padding:3px 8px"><b>${esc(m.name)}</b> <span style="opacity:.7">(${esc(m.id)})</span></span>`
-            )
-            .join('')}
-        </div>
-        <div class="note ok" style="margin:4px 0 8px">✓ Natively hosted &amp; billed through Deepgram Voice Agent API — no third-party LLM endpoint or separate API key needed.</div>
-        <div class="bar" style="margin-top:8px;margin-bottom:0">
-          <button class="g danger" data-del="p:${idx}" ${sameKindCount <= 1 ? 'disabled title="At least one provider of each type is required"' : ''}>Remove</button>
-        </div>
-      </div>`;
-    }
-    return `<div class="t">
-      <div class="row">
-        ${F('Display name', `p.${idx}.name`)}
-        ${
-          isStt
-            ? F('Provider type', `p.${idx}.type`, 'sel', [
-                ['deepgram', 'deepgram (Cloud Voice Agent)'],
-                ['speech_service', 'speech_service (Local Faster-Whisper)'],
-              ])
-            : F('Provider type', `p.${idx}.type`, 'sel', [
-                'deepgram',
-                'speech_service',
-                'eleven_labs',
-                'cartesia',
-                'open_ai',
-                'aws_polly',
-              ])
-        }
-      </div>
-      ${
-        isStt && p.type !== 'speech_service'
-          ? '<div class="note">Voice Agent STT models: <code>nova-3</code> (Nova baseline), <code>flux-general-en</code>, and <code>flux-general-multi</code> (Flux v2).</div>'
-          : F('Models (comma-separated)', `p.${idx}.models`)
-      }
-      ${p.kind === 'tts' ? F('Model field key sent to API', `p.${idx}.mk`, 'sel', ['model', 'model_id']) : ''}
-      ${F('Custom / BYO Endpoint URL (leave blank for Deepgram-managed)', `p.${idx}.endpoint`)}
-      ${F('Headers JSON object (use {{ENV_VAR}} placeholders — keep real keys in server .env)', `p.${idx}.headers`)}
-      ${F('Extra provider fields JSON object (voice, language_code…)', `p.${idx}.extra`)}
-      <div class="bar" style="margin-top:8px;margin-bottom:0">
-        <button class="g danger" data-del="p:${idx}" ${sameKindCount <= 1 ? 'disabled title="At least one provider of each type is required"' : ''}>Remove</button>
-      </div>
-    </div>`;
-  }
 
   function renderFunctionCard(idx) {
     const f = S.functions[idx];
@@ -5030,220 +4976,37 @@
         ? `✓ ${T.okCount}/${T.totalChecks} PASSED · 0 WARN · 0 ERR`
         : `${T.okCount} OK · ${T.wnCount} WARN · ${T.erCount} ERR`;
 
-    const demoBase = cmdDeckState.publicDemoUrl;
-    const demoLoginUrl = demoBase ? `${demoBase}/login` : '';
-
-    const demoControlHtml = demoBase
-      ? `<div class="cmd-demo-pill live" title="External internet HTTPS link active — share with clients on any network!">
-           <span>🌐</span>
-           <a class="cmd-demo-url" href="${esc(demoLoginUrl)}" target="_blank" rel="noopener">${esc(
-             demoBase.replace(/^https?:\/\//i, '')
-           )}/login</a>
-           <button type="button" class="b cmd-mini-btn" data-cmd-copy-demo="${esc(demoLoginUrl)}">📋 Copy Link</button>
-         </div>`
-      : !serverlessCloudMode
-      ? `<button type="button" class="g cmd-mini-btn" id="btn-cmd-start-tunnel" ${
-          cmdDeckState.tunnelStarting ? 'disabled' : ''
-        } title="Launch a free Cloudflare HTTPS Quick-Tunnel so external clients on any internet connection can access /login">
-           ${cmdDeckState.tunnelStarting ? '⏳ Starting HTTPS Tunnel…' : '🚀 Launch Public Client HTTPS Link'}
-         </button>`
-      : '';
-
-    const radius = 47;
-    const circumference = 2 * Math.PI * radius;
-    const dashOffset = circumference - (T.score / 100) * circumference;
-
-    const outboundCount = T.agents.filter((x) => x.mode === 'outbound').length;
-    const inboundCount = T.agents.filter((x) => x.mode === 'inbound').length;
-    const blendedCount = T.agents.filter((x) => x.mode === 'both').length;
-
-    const kpiCards = [
-      {
-        tab: 'agents',
-        ico: '🤖',
-        title: 'Agent Fleet',
-        main: `${T.agents.length} Configured Agent${T.agents.length === 1 ? '' : 's'}`,
-        sub: `${outboundCount} Out · ${inboundCount} In · ${blendedCount} Blend · ${T.instantCount}/${T.agents.length} Local VAD Configured`,
-        foot: `Selected: ${(A()?.name || 'Agent').slice(0, 20)} →`,
-      },
-      {
-        tab: 'plugins',
-        ico: '🧩',
-        title: 'AI & Speech Stack',
-        main: `${T.dgConfigured ? 'Key Configured' : 'Key Needed'}`,
-        sub: `STT ${T.sttModel || 'not selected'} · LLM ${T.llmModel || 'not selected'} · ${T.providers.length} Plug-ins · ${T.functions.length} Tools`,
-        foot: `${T.dgConfigured ? 'Connection not verified' : 'Set Key in Side Panel'} →`,
-      },
-      {
-        tab: 'campaigns',
-        ico: '📣',
-        title: 'Campaigns & DNC',
-        main: `${T.campaigns.length} Configured Campaign${T.campaigns.length === 1 ? '' : 's'}`,
-        sub: `${T.discCount}/${T.campaigns.length} Disclosures Configured · ${
-          T.campaigns.filter((c) => c.dnc).length
-        }/${T.campaigns.length} DNC Settings Enabled`,
-        foot: `VICIdial ID ${C()?.viciCampaign || 'not set'} · status not checked →`,
-      },
-      {
-        tab: 'voice',
-        ico: '🎙️',
-        title: 'Voice & Latency',
-        main: T.avgTtfb > 0 ? `${T.avgTtfb}ms Avg TTFB` : 'No latency sample',
-        sub: `TTS ${T.ttsModel || 'not selected'} · Speed ${A()?.tts?.speed || 1}x · ${A()?.audio?.inEnc || 'linear16'}`,
-        foot: `Retained session means; may include bridge tests · Open Voice Studio →`,
-      },
-      {
-        tab: 'test',
-        ico: '🧪',
-        title: 'QA & Simulator',
-        main: `${T.testsPassed}/${T.testsTotal} QA Marked Pass`,
-        sub: `${T.simCalls} Retained Tests · ${T.simTurns} All Channels · ${T.testsPending} Pending · ${T.testsFailed} Fail`,
-        foot: `Open Browser Test →`,
-      },
-      {
-        tab: 'vici',
-        ico: '☎️',
-        title: 'VICIdial Bridge',
-        main: !T.bridgeStatusAvailable ? 'Listener status unavailable' : T.bridgeListening ? `TCP :${T.bridgePort} Listening` : `TCP :${T.bridgePort} Not Listening`,
-        sub: `Listener status is not PBX connectivity · ${T.viciTotal} retained bridge calls`,
-        foot: `Host ${T.boundHost} →`,
-      },
-      {
-        tab: 'wallboard',
-        ico: '📺',
-        title: 'Live Wallboard',
-        main: T.hasTelemetry ? `${T.viciActive} Active Bridge Call${T.viciActive === 1 ? '' : 's'}` : 'Bridge status unavailable',
-        sub: `${T.viciRecs} WAV Recording${T.viciRecs === 1 ? '' : 's'} · ${formatDurationCompact(
-          T.viciTalkSec
-        )} Approx. Call Duration`,
-        foot: `Supervisor Controls →`,
-      },
-      {
-        tab: 'export',
-        ico: '🛡️',
-        title: 'Runtime, Auth & DB',
-        main: serverlessCloudMode ? 'Browser-local demo' : `Rev #${T.revNum} · ${T.usersCount} User${T.usersCount === 1 ? '' : 's'}`,
-        sub: `${T.boundHost}:${T.boundPort} · ${T.memMb ? `${T.memMb}MB RAM · ` : ''}Up ${formatDurationCompact(
-          T.uptimeSec
-        )}`,
-        foot: serverlessCloudMode ? 'Server unavailable →' : `${T.totalRevs} SQLite Snapshots →`,
-      },
-    ];
-
     wrap.innerHTML = `
       <div class="cmd-deck-shell">
         <div class="cmd-topbar">
           <div class="cmd-brand-cluster">
             <span class="cmd-radar-dot ${healthClass === 'ok' ? '' : healthClass}"></span>
-            <h1 class="cmd-eyebrow">Executive Command <span>&amp; Configuration Readiness</span></h1>
+            <h1 class="cmd-eyebrow">Configuration Readiness</h1>
             <span class="cmd-cert-badge ${healthClass === 'ok' ? '' : healthClass}">${esc(certText)}</span>
-            <span class="cmd-sys-meta">
-              <span>${esc(String(T.boundHost))}:${esc(String(T.boundPort))}</span>
-              <span>·</span>
-              <span>Bridge :${esc(String(T.bridgePort))}</span>
-              <span>·</span>
-              <span>Theme: ${esc(T.activeThemeLabel)}</span>
-            </span>
           </div>
           <div class="cmd-actions-cluster">
-            ${demoControlHtml}
             <button type="button" class="g cmd-mini-btn" id="btn-cmd-refresh" title="Refresh live server, simulator &amp; VICIdial telemetry">
               ${cmdDeckState.syncing ? '↻ Syncing…' : '↻ Sync'}
-            </button>
-            <button type="button" class="g cmd-mini-btn" id="btn-cmd-compact" title="Toggle between Full Executive Dashboard and Compact Telemetry Strip">
-              ${cmdDeckState.compact ? '⊞ Full Dashboard' : '⊟ Compact'}
             </button>
           </div>
         </div>
 
-        ${
-          cmdDeckState.compact
-            ? `<div class="cmd-compact-ribbon">
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('agents'))}" data-cmd-tab="agents">Readiness: <b>${T.score}/100 (${esc(T.grade)})</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('agents'))}" data-cmd-tab="agents">Bots: <b>${T.agents.length}</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('campaigns'))}" data-cmd-tab="campaigns">Campaigns: <b>${T.campaigns.length} configured</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('plugins'))}" data-cmd-tab="plugins">Stack: <b>${esc(T.sttModel || 'not selected')} / ${esc(T.llmModel || 'not selected')}</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('test'))}" data-cmd-tab="test">QA &amp; Sim: <b>${T.testsPassed}/${T.testsTotal} · ${T.simCalls} calls</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('wallboard'))}" data-cmd-tab="wallboard">Vici Bridge: <b>${T.viciActive} live / ${T.viciTotal} retained</b></a>
-                 <a class="cmd-compact-pill" href="${esc(sectionHref('export'))}" data-cmd-tab="export">Storage: <b>${serverlessCloudMode ? 'Browser-local only' : `Rev #${T.revNum} · ${T.usersCount} user${T.usersCount === 1 ? '' : 's'}`}</b></a>
-               </div>`
-            : `<div class="cmd-hero-grid">
-                 <div class="cmd-quality-card">
-                   <div class="cmd-quality-top">
-                     <div class="cmd-gauge-box">
-                       <svg class="cmd-gauge-svg" viewBox="0 0 118 118" aria-hidden="true">
-                         <defs>
-                           <linearGradient id="cmdGaugeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                             <stop offset="0%" stop-color="var(--ac)" />
-                             <stop offset="55%" stop-color="var(--ac-2)" />
-                             <stop offset="100%" stop-color="var(--ok)" />
-                           </linearGradient>
-                         </defs>
-                         <circle class="cmd-gauge-track" cx="59" cy="59" r="${radius}" />
-                         <circle
-                           class="cmd-gauge-arc"
-                           cx="59"
-                           cy="59"
-                           r="${radius}"
-                           stroke="url(#cmdGaugeGrad)"
-                           stroke-dasharray="${circumference.toFixed(2)}"
-                           stroke-dashoffset="${dashOffset.toFixed(2)}"
-                         />
-                       </svg>
-                       <div class="cmd-gauge-center">
-                         <div class="cmd-gauge-score">${T.score}</div>
-                         <div class="cmd-gauge-grade">GRADE ${esc(T.grade)}</div>
-                       </div>
-                     </div>
-                     <div class="cmd-pillars">
-                       ${T.pillars
-                         .map((p) => {
-                           const pct = Math.max(0, Math.min(100, Math.round((p.score / Math.max(1, p.max)) * 100)));
-                           return `<div class="cmd-pillar-row" title="${esc(p.detail)}">
-                             <div class="cmd-pillar-hdr">
-                               <span class="cmd-pillar-lbl">${esc(p.label)}</span>
-                               <span class="cmd-pillar-val">${p.score}/${p.max}</span>
-                             </div>
-                             <div class="cmd-pillar-bar"><div class="cmd-pillar-fill" style="width:${pct}%"></div></div>
-                           </div>`;
-                         })
-                         .join('')}
-                     </div>
-                   </div>
-                   <div class="cmd-quality-foot">
-                     <span>Passed configuration checks (not measured call quality, uptime, security or compliance): <b style="color:var(--tx)">${T.score}/100 (${esc(T.grade)})</b></span>
-                     <span>${serverlessCloudMode ? 'Browser-local demo' : `SQLite WAL · Rev #${T.revNum}`} · ${
-                       comparableSnapshot(S) === snap ? '✓ Synced' : '● Unsaved Edits'
-                     }</span>
-                   </div>
-                 </div>
+        <div class="cmd-score-card">
+          <div class="cmd-score-main"><strong>${T.score}</strong><span>/100</span></div>
+          <div class="cmd-score-bar"><i style="width:${T.score}%"></i></div>
+          <div class="note">Readiness = passed checks ÷ applicable checks. Pending QA and live provider/telephone health are shown separately; no score is a 99.999% reliability guarantee.</div>
+          <div class="cmd-score-stats">
+            <span><b>${T.agents.length}</b> bots</span>
+            <span><b>${T.campaigns.length}</b> campaigns</span>
+            <span><b>${T.okCount}/${T.totalChecks}</b> checks passed</span>
+            <span><b>${T.viciActive}</b> live calls</span>
+          </div>
+        </div>
 
-                 <div class="cmd-kpi-grid">
-                   ${kpiCards
-                     .map(
-                       (k) => `<a class="cmd-kpi-card ${
-                         tab === k.tab ? 'is-active-tab' : ''
-                       }" href="${esc(sectionHref(k.tab, { agentId: A()?.id, campaignId: C()?.id }))}" data-cmd-tab="${esc(k.tab)}">
-                         <div class="cmd-kpi-top">
-                           <span class="cmd-kpi-title">${esc(k.title)}</span>
-                           <span class="cmd-kpi-ico">${k.ico}</span>
-                         </div>
-                         <div class="cmd-kpi-main">${esc(k.main)}</div>
-                         <div class="cmd-kpi-sub">${esc(k.sub)}</div>
-                         <div class="cmd-kpi-foot"><span>${esc(k.foot)}</span></div>
-                       </a>`
-                     )
-                     .join('')}
-                 </div>
-               </div>
-
-               ${!cmdDeckState.compact ? `<div class="readiness-issues"><h2>${T.issues.length ? 'What still needs attention' : 'All configuration checks passed'}</h2>
-                 <div class="note">Readiness = passed checks ÷ applicable checks. Pending QA and live provider/telephone health are shown separately; no score is a 99.999% reliability guarantee.</div>
-                 ${T.issues.map((issue) => `<div class="ck"><span class="${issue.level}">${issue.level === 'er' ? '✗' : '!'}</span><span><b>${esc(issue.scope)}:</b> ${esc(issue.message)} <a class="g" href="${esc(sectionHref(issue.tab, { agentId: issue.entityId, campaignId: issue.entityId }))}" data-cmd-tab="${issue.tab}">Open setup</a></span></div>`).join('')}
-                 <div class="note">QA: ${T.testsPassed}/${T.testsTotal} passed, ${T.testsPending} pending. <a class="g" href="${esc(sectionHref('test', { agentId: A()?.id }))}" data-cmd-tab="test">Open Live Bot</a></div>
-               </div>` : ''}
-             `
-        }
+        <div class="readiness-issues"><h2>${T.issues.length ? 'What still needs attention' : 'All configuration checks passed'}</h2>
+          ${T.issues.map((issue) => `<div class="ck"><span class="${issue.level}">${issue.level === 'er' ? '✗' : '!'}</span><span><b>${esc(issue.scope)}:</b> ${esc(issue.message)} <a class="g" href="${esc(sectionHref(issue.tab, { agentId: issue.entityId, campaignId: issue.entityId }))}" data-cmd-tab="${issue.tab}">Open setup</a></span></div>`).join('')}
+          <div class="note">QA: ${T.testsPassed}/${T.testsTotal} passed, ${T.testsPending} pending. <a class="g" href="${esc(sectionHref('test', { agentId: A()?.id }))}" data-cmd-tab="test">Open Live Bot</a></div>
+        </div>
         ${renderFleetMatrix()}
       </div>
     `;
@@ -5253,21 +5016,21 @@
     const assigned = campaignsForAgent(agent.id);
     return `<fieldset class="assignment-box"><legend>Assigned campaigns</legend>
       <details class="assignment-dropdown"><summary>${assigned.length ? `${assigned.length} campaign${assigned.length === 1 ? '' : 's'} selected` : 'Choose campaigns for this bot…'}</summary>
-        <div class="assignment-options">${S.campaigns.length ? S.campaigns.map((campaign) => `<label class="chk-label"><input type="checkbox" data-agent-campaign="${esc(campaign.id)}" ${campaignHasAgent(campaign, agent.id) ? 'checked' : ''}> <span>${esc(campaign.name)} <small>${esc(campaign.viciCampaign || 'No VICIdial ID')}</small></span></label>`).join('') : '<div class="note">Create a campaign first, then assign this bot here or in Campaigns.</div>'}</div>
-      </details><div class="note">Select one or more campaigns. Changes apply to both Agents and Campaigns. The first assigned bot is the telephone route; browser tests can use any assigned bot.</div>
+        <div class="assignment-options">${S.campaigns.length ? S.campaigns.map((campaign) => `<label class="chk-label"><input type="checkbox" data-agent-campaign="${esc(campaign.id)}" ${campaignHasAgent(campaign, agent.id) ? 'checked' : ''}> <span>${esc(campaign.name)} <small>${esc(campaign.viciCampaign || 'No VICIdial ID')}</small></span></label>`).join('') : '<div class="note">Create a campaign first, then assign this bot here.</div>'}</div>
+      </details><div class="note">This Agents tab is the only place where campaign assignment is changed. The bot strictly follows the selected campaign’s rules on each call. The first assigned bot is the telephone route; browser tests can use any assigned bot.</div>
     </fieldset>`;
   }
 
+  // Single assignment point: bots are assigned to campaigns ONLY in the
+  // Agents tab (renderAgentCampaignAssignment). Campaigns shows the result
+  // read-only so there is one place to change it — no duplicate controls.
   function renderCampaignAgentAssignment(campaign) {
     const ids = campaignAgentIds(campaign);
     const names = ids.map((id) => S.agents.find((agent) => agent.id === id)?.name || id);
-    return `<fieldset class="assignment-box"><legend>Assigned bots — multiple selection</legend>
-      <details class="assignment-dropdown"><summary>${names.length ? esc(names.join(', ')) : 'Select bots for this campaign…'}</summary>
-        <div class="assignment-options">${S.agents.map((agent) => `<label class="chk-label"><input type="checkbox" data-campaign-agent="${esc(agent.id)}" ${ids.includes(agent.id) ? 'checked' : ''}> <span>${esc(agent.name)}</span></label>`).join('') || '<div class="note">Create a bot in Agents first.</div>'}</div>
-      </details>
-      <label for="campaign-primary-agent">Primary bot for telephone calls</label>
-      <select id="campaign-primary-agent" ${!ids.length ? 'disabled' : ''}>${ids.length ? ids.map((id) => `<option value="${esc(id)}" ${campaign.agentId === id ? 'selected' : ''}>${esc(S.agents.find((agent) => agent.id === id)?.name || id)}</option>`).join('') : '<option>No bots assigned</option>'}</select>
-      <div class="note">All selected bots share this campaign’s rules and dispositions and can be chosen in Live Bot. A VICIdial extension has one deterministic route, so its primary bot is selected separately.</div>
+    const primaryName = S.agents.find((agent) => agent.id === campaign.agentId)?.name || '—';
+    return `<fieldset class="assignment-box"><legend>Assigned bots (read-only)</legend>
+      <div class="note">${names.length ? esc(names.join(', ')) : 'No bots assigned.'} Primary for telephone calls: <b>${esc(primaryName)}</b></div>
+      <div class="note">All assigned bots share this campaign’s rules and dispositions. To assign or unassign bots, open the <a class="g" href="${esc(sectionHref('agents', { agentId: campaign.agentId || undefined }))}" data-cmd-tab="agents">Agents tab</a> — it is the only place where campaign assignment is changed.</div>
     </fieldset>`;
   }
 
@@ -5292,7 +5055,6 @@
       }
     } else if (tab === 'agents') {
       const tp = globalServiceProvider('tts') || {};
-      const isFluxTts = tp.type === 'deepgram' && String(S.services?.tts?.model || '').startsWith('flux');
 
       m.innerHTML = `
         <div class="card">
@@ -5306,16 +5068,14 @@
           ])}
           ${F('Bridge VICIdial call-connect & automatic lead hydration (recommended — replaces hallucinated LLM accept tool)', 'a.acceptViciCalls', 'chk')}
           ${F('Include the linked campaign recording notice (optional)', 'a.injectCampaignDisclosure', 'chk')}
-          <div class="note wn">This controls the spoken campaign notice only; it does not turn off recording. Obtain any consent required for your calls. Existing notice settings are preserved. Notice text written inside the saved opening is not removed.</div>
+          <div class="note wn">Spoken campaign notice only — does not turn off recording.</div>
           ${F('Saved opening and identity (keep it brief)', 'a.greeting', 'ta')}
           ${F('Vary this opening using the imported greeting library', 'a.randomGreetingEnabled', 'chk')}
-          <div class="note" style="margin:5px 0">Each call listens for caller speech for 1 second. A silent line then receives the configured opening once; an early caller turn takes priority. Silence alone never hangs up or applies a disposition. A library entry varies the saved opening without inventing an identity. The 1,100 original entries remain below.</div>
-          <div id="greeting-catalog-panel">${renderGreetingCatalog()}</div>
           ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
-          <div class="note wn">Before calling, verify your identity and every factual or benefit claim. Example Medicare / Food &amp; OTC scripts are unverified; review them and any required consent or disclosures for your campaign.</div>
+          <div class="note wn">Verify every factual claim before calling.</div>
 
           <h2>⚡ Barge-In, Expressions, Gestures, Speed &amp; General Q&amp;A</h2>
-          <div class="note">Service provider and model are controlled globally from Plug-Ins. This agent can tune its conversation behavior, while all agents use the same saved LLM, STT, and TTS channels.</div>
+          <div class="note">Providers/models are global (Plug-Ins). Behavior below is per-bot.</div>
 
           <div class="row r3">
             ${F('🛑 Barge-In Interruption Mode', 'a.behavior.bargeIn', 'sel', [
@@ -5349,7 +5109,7 @@
           ${F('👋 Self-Introduction Bio (spoken naturally when asked "Who are you?" or "Introduce yourself")', 'a.behavior.selfIntro', 'ta')}
 
           <h2>Speech-to-Text (Listen)</h2>
-          <div class="note">Global STT: <b>${esc(globalServiceProvider('stt')?.name || 'Not selected')}</b> · Model: <code>${esc(S.services?.stt?.model || 'not selected')}</code>. Configure the single shared provider/model in Plug-Ins. Per-agent language hints, keyterms, and turn detection remain configurable here.</div>
+          <div class="note">Global STT: <b>${esc(globalServiceProvider('stt')?.name || 'Not selected')}</b> · <code>${esc(S.services?.stt?.model || 'not selected')}</code> (Plug-Ins)</div>
           <div class="row">
             ${F('Language / BCP-47 hints', 'a.language')}
             ${F('Keyterms (comma-separated phrases)', 'a.stt.keyterms')}
@@ -5361,38 +5121,14 @@
           </div>
 
           <h2>Language Model (Think — Deepgram Managed)</h2>
-          <div class="note">Global LLM: <b>${esc(globalServiceProvider('llm')?.name || 'Not selected')}</b> · Model: <code>${esc(S.services?.llm?.model || 'not selected')}</code>. The saved Plug-Ins selection is shared by every bot; each agent may still have its own response temperature and reasoning preferences.</div>
-          <div class="row r3">
+          <div class="note">Global LLM: <b>${esc(globalServiceProvider('llm')?.name || 'Not selected')}</b> · <code>${esc(S.services?.llm?.model || 'not selected')}</code> (Plug-Ins)</div>
+          <div class="row">
             ${F('Temperature (0–2)', 'a.llm.temp', 'number', [], 'min="0" max="2" step="0.05"')}
             ${F('Reasoning (gpt-5*)', 'a.llm.reasoning', 'sel', ['low', 'medium', 'high'])}
-            <div>
-              <label>Routing &amp; key ownership</label>
-              <div class="note ok" style="padding:8px 10px;border:1px solid var(--bd);border-radius:8px;background:var(--sf2);margin:0">The Console owns the provider connection and server-side <code>DEEPGRAM_API_KEY</code>; bots do not connect to provider accounts.</div>
-            </div>
           </div>
 
           <h2>Text-to-Speech (Speak) <a class="g" href="${esc(sectionHref('voice', { agentId: a.id }))}" data-t="voice" style="font-size:11px;padding:3px 8px;text-transform:none">🎧 Open Real Voice Lab →</a></h2>
-          <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · Model: <code>${esc(S.services?.tts?.model || 'not selected')}</code>. Change the voice in the Voice Lab or in Plug-Ins; this agent’s speed and expression controls remain independent.</div>
-          <div class="row">
-            ${F(
-              isFluxTts ? 'Speed (0.5–1.5, 0.05 steps)' : 'Speed (0.7–1.5)',
-              'a.tts.speed',
-              'number',
-              [],
-              `min="${isFluxTts ? '0.5' : '0.7'}" max="1.5" step="0.05"`
-            )}
-            ${
-              isFluxTts
-                ? F('Expressivity (Flux v2 integer)', 'a.tts.expr', 'sel', [
-                    [-2, '-2 (Calmest)'],
-                    [-1, '-1 (Calm)'],
-                    [0, '0 (Default Production)'],
-                    [1, '+1 (Animated)'],
-                    [2, '+2 (Most Expressive)'],
-                  ])
-                : `<div><label>Expressivity</label><input aria-label="Expressivity" disabled value="Flux v2 voices only"></div>`
-            }
-          </div>
+          <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · <code>${esc(S.services?.tts?.model || 'not selected')}</code> (Plug-Ins). Voice selection is global; per-bot speed/expression are not sent to Deepgram and were removed.</div>
 
           <h2>Telephony Audio Stream</h2>
           <div class="row">
@@ -5445,7 +5181,7 @@
           <h2>No campaigns configured</h2>
           <div class="note er">Calls, loopback tests, and deployment stay blocked until you create a campaign, write its rules, configure allowed dispositions, and assign a bot agent.</div>
         </div>
-        <div class="card sticky"><h2>Campaign Readiness</h2><div id="ck">${renderCheckList(validateCampaignLocal(null))}</div><h2>Campaign JSON</h2><pre id="pv"></pre></div>`;
+        <div class="card sticky"><h2>Campaign Readiness</h2><div id="ck">${renderCheckList(validateCampaignLocal(null))}</div><h2>Composed Bot Prompt</h2><pre id="pv"></pre></div>`;
       } else {
         m.innerHTML = `
         <div class="card">
@@ -5486,7 +5222,7 @@
         <div class="card sticky">
           <h2>Campaign Readiness</h2>
           <div id="ck"></div>
-          <h2>Campaign JSON</h2>
+          <h2>Composed Bot Prompt (primary bot + this campaign’s rules)</h2>
           <pre id="pv"></pre>
         </div>
       `;
@@ -5510,8 +5246,8 @@
                 <span class="pill ok">Model: <code>${esc(S.services?.tts?.model || 'not selected')}</code></span>
               </div>
               <div class="row">
-                ${F('Speed (0.5–1.5, 0.05 steps)', 'a.tts.speed', 'number', [], 'min="0.5" max="1.5" step="0.05"')}
-                ${F('Flux v2 Expressivity (-2..+2)', 'a.tts.expr', 'sel', [
+                ${F('Preview speed (0.5–1.5, Speak Text only)', 'a.tts.speed', 'number', [], 'min="0.5" max="1.5" step="0.05"')}
+                ${F('Preview expressivity, Flux v2 (−2..+2, Speak Text only)', 'a.tts.expr', 'sel', [
                   [-2, '-2 (Calmest)'],
                   [-1, '-1 (Calm)'],
                   [0, '0 (Default)'],
@@ -5534,7 +5270,7 @@
               <h2>Active Agent <code>agent.speak</code> Payload</h2>
               <pre id="pv">${esc(JSON.stringify(settingsSpeak, null, 2))}</pre>
               <div class="note">
-                Pick a voice below with <b>✓ Use This Voice</b> — it is saved immediately and becomes the shared TTS voice for every bot. Speed and expressivity stay per-agent.
+                Pick a voice below with <b>✓ Use This Voice</b> — it is saved immediately and becomes the shared TTS voice for every bot. <b>Speed and expressivity apply to the 🔊 Speak Text preview only</b> (Deepgram speak API). They are not sent on live Voice Agent calls — the live speak channel accepts only {type, version, model}.
               </div>
             </div>
           </div>
@@ -6234,9 +5970,6 @@
 
     updateLivePreview();
     updateHeaderStatus();
-    if (tab === 'agents' && !greetingCatalog.loaded && !greetingCatalog.pending && !greetingCatalog.error) {
-      void ensureGreetingCatalogLoaded();
-    }
   }
 
   function renderLinkedView() {
@@ -6302,7 +6035,15 @@
     if (pv) {
       if (tab === 'agents') pv.textContent = JSON.stringify(buildSettings(A()), null, 2);
       else if (tab === 'voice') pv.textContent = JSON.stringify(buildSettings(A()).agent.speak, null, 2);
-      else if (tab === 'campaigns') pv.textContent = JSON.stringify(C(), null, 2);
+      else if (tab === 'campaigns') {
+        // Show the real composed prompt (bot prompt + this campaign's rules)
+        // for the primary assigned bot, not raw campaign JSON.
+        const campaign = C();
+        const primary = campaign ? S.agents.find((agent) => agent.id === campaign.agentId) : null;
+        pv.textContent = primary && campaignHasAgent(campaign, primary.id)
+          ? JSON.stringify(buildSettings(primary, '', campaign), null, 2)
+          : JSON.stringify(campaign, null, 2);
+      }
       else if (tab === 'vici') pv.textContent = buildViciConfigLocal();
       else if (tab === 'export') pv.textContent = JSON.stringify(buildExportBundle(), null, 2);
     }
@@ -8104,38 +7845,85 @@
             delete S.tests[currentObj.id];
             if (sim.campaignAgentId === currentObj.id) { sim.campaignId = ''; sim.campaignAgentId = ''; }
           } else if (sim.campaignId === currentObj.id) { sim.campaignId = ''; sim.campaignAgentId = ''; }
+          render();
+          updateHeaderStatus();
+          updateLivePreview();
         }
-      } else {
-        const template = act === 'dup' ? currentObj : kind === 'c' ? null : arr[0];
-        const blankCampaign = {
-          id: '', name: '', agentId: '', agentIds: [], viciCampaign: '', lists: '', start: '09:00', end: '20:00',
-          tz: 'America/New_York', attempts: 3, retry: 120, maxCalls: 10, xferType: 'ingroup',
-          xferTarget: '', fallback: '', dnc: true, disclosure: '', dispos: '',
-          complianceRules: MISSING_CAMPAIGN_RULES,
+      } else if (kind === 'a' && act === 'new') {
+        // New bot: blank identity/script on a usable structure — never a copy
+        // of another bot's prompt. Structure comes from the first bot (or
+        // minimal defaults) so the form renders; the operator writes the script.
+        const structure = arr[0] || {
+          mode: 'outbound', language: 'en', acceptViciCalls: true,
+          behavior: { bargeIn: 'instant', bargeInSensitivity: 'balanced', latencyProfile: 'ultra', expressionStyle: 'warm_empathetic', vocalGestures: true, allowGeneralQa: true, selfIntro: '' },
+          stt: { keyterms: '', eot: 0.55, eager: 0.35, eotms: 2000, smartFormat: false },
+          llm: { temp: 0.7, reasoning: 'low' },
+          tts: { speed: 1, expr: 0 },
+          audio: { inEnc: 'linear16', inRate: 8000, outEnc: 'linear16', outRate: 8000 },
+          fnIds: [],
         };
-        const clone = JSON.parse(JSON.stringify(template || (kind === 'c' ? blankCampaign : {})));
-        clone.id = uid(kind === 'a' ? 'ag' : 'cp');
-        if (kind === 'a' && act === 'new') {
-          clone.randomGreetingEnabled = true;
-          clone.injectCampaignDisclosure = false;
-        }
-        if (kind === 'c' && (act === 'new' || act === 'dup')) {
-          // A campaign is a safety boundary: never carry another campaign’s
-          // VICIdial ID, agent assignment, disposition confirmation or rules into it.
-          Object.assign(clone, {
-            agentId: '', agentIds: [], viciCampaign: '', lists: '', xferTarget: '', fallback: '', dnc: true,
-            disclosure: '', dispos: '', complianceRules: MISSING_CAMPAIGN_RULES,
-          });
-        }
-        const nextNum = arr.length + 1;
-        clone.name = act === 'dup' ? `${currentObj.name} (Copy)` : `Untitled ${kind === 'a' ? 'Agent' : 'Campaign'} ${nextNum}`;
+        const clone = JSON.parse(JSON.stringify(structure));
+        clone.id = uid('ag');
+        clone.name = `Untitled Agent ${arr.length + 1}`;
+        clone.greeting = '';
+        clone.prompt = '';
+        clone.randomGreetingEnabled = true;
+        clone.injectCampaignDisclosure = false;
         arr.push(clone);
-        cur[kind] = clone.id;
-        if (kind === 'a') {
-          S.tests[clone.id] = JSON.parse(JSON.stringify(S.tests[currentObj.id] || []));
-        }
+        cur.a = clone.id;
+        S.tests[clone.id] = [];
+        render();
+        updateHeaderStatus();
+        updateLivePreview();
+        const nameInput = document.querySelector('[data-p="a.name"]');
+        if (nameInput) { nameInput.focus(); nameInput.select(); }
+      } else if (kind === 'a' && act === 'dup') {
+        // Duplicate bot: full copy of the selected bot (prompt, behavior,
+        // tuning, functions) under a new ID. Campaign assignment lives on
+        // campaigns, so the copy starts unassigned — assign it in Agents.
+        const clone = JSON.parse(JSON.stringify(currentObj));
+        clone.id = uid('ag');
+        clone.name = `${currentObj.name} (Copy)`;
+        arr.push(clone);
+        cur.a = clone.id;
+        S.tests[clone.id] = JSON.parse(JSON.stringify(S.tests[currentObj.id] || []));
+        render();
+        updateHeaderStatus();
+        updateLivePreview();
+        const nameInput = document.querySelector('[data-p="a.name"]');
+        if (nameInput) { nameInput.focus(); nameInput.select(); }
+      } else if (kind === 'c' && act === 'new') {
+        // New campaign: blank. Rules must be written and reviewed; routing
+        // identity (VICIdial ID, bots, transfer target) starts empty.
+        const clone = {
+          id: uid('cp'), name: `Untitled Campaign ${arr.length + 1}`, agentId: '', agentIds: [],
+          viciCampaign: '', lists: '', start: '09:00', end: '20:00', tz: 'America/New_York',
+          attempts: 3, retry: 120, maxCalls: 10, xferType: 'ingroup', xferTarget: '', fallback: '',
+          dnc: true, disclosure: '', dispos: '', complianceRules: MISSING_CAMPAIGN_RULES,
+        };
+        arr.push(clone);
+        cur.c = clone.id;
+        render();
+        updateHeaderStatus();
+        updateLivePreview();
+        const nameInput = document.querySelector('[data-p="c.name"]');
+        if (nameInput) { nameInput.focus(); nameInput.select(); }
+      } else if (kind === 'c' && act === 'dup') {
+        // Duplicate campaign: copy rules, dispositions and settings so the
+        // copy is a real duplicate; clear only routing identity (VICIdial ID,
+        // bot assignment, transfer target) which must be re-entered.
+        const clone = JSON.parse(JSON.stringify(currentObj));
+        clone.id = uid('cp');
+        clone.name = `${currentObj.name} (Copy)`;
+        Object.assign(clone, { agentId: '', agentIds: [], viciCampaign: '', xferTarget: '', fallback: '' });
+        arr.push(clone);
+        cur.c = clone.id;
+        render();
+        updateHeaderStatus();
+        updateLivePreview();
+        const nameInput = document.querySelector('[data-p="c.name"]');
+        if (nameInput) { nameInput.focus(); nameInput.select(); }
       }
-      render();
     }
   });
 
@@ -8249,23 +8037,9 @@
       updateLivePreview(); updateHeaderStatus();
       return;
     }
-    if (t.dataset.campaignAgent) {
-      assignCampaignAgent(C(), t.dataset.campaignAgent, t.checked);
-      const ids = campaignAgentIds(C());
-      const details = t.closest('details');
-      if (details) details.querySelector('summary').textContent = ids.map((id) => S.agents.find((agent) => agent.id === id)?.name || id).join(', ') || 'Select bots for this campaign…';
-      const primary = document.getElementById('campaign-primary-agent');
-      primary.disabled = !ids.length;
-      primary.innerHTML = ids.length ? ids.map((id) => `<option value="${esc(id)}" ${C().agentId === id ? 'selected' : ''}>${esc(S.agents.find((agent) => agent.id === id)?.name || id)}</option>`).join('') : '<option>No bots assigned</option>';
-      updateLivePreview(); updateHeaderStatus();
-      return;
-    }
-    if (t.id === 'campaign-primary-agent') {
-      const campaign = C();
-      if (campaignHasAgent(campaign, t.value)) { campaign.agentId = t.value; campaign.agentIds = campaignAgentIds(campaign); }
-      updateLivePreview(); updateHeaderStatus();
-      return;
-    }
+    // Campaign assignment is edited only in the Agents tab (data-agent-campaign).
+    // The Campaigns tab shows it read-only, so there are no campaign-side
+    // assignment handlers here.
     if (t.id === 'sim-campaign') {
       setSimulatorCampaign(t.value);
       render();

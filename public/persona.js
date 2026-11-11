@@ -81,6 +81,14 @@
         lines.push(
           '- ULTRA-LOW LATENCY STREAMING: Begin every reply immediately with the core answer or reaction in the first 4–6 words. Keep turns crisp (1–2 spoken sentences, ~15–35 words unless asked for detail) in plain spoken words with zero markdown (*, #, bullets).'
         );
+      } else if (b.latencyProfile === 'balanced') {
+        lines.push(
+          '- BALANCED CONVERSATIONAL STREAMING: Keep turns natural (2–3 spoken sentences, ~25–50 words unless asked for detail) in plain spoken words with zero markdown (*, #, bullets).'
+        );
+      } else if (b.latencyProfile === 'quality') {
+        lines.push(
+          '- DETAILED RESPONSE STREAMING: Give complete, thorough answers (3–5 spoken sentences unless asked for brevity) in plain spoken words with zero markdown (*, #, bullets).'
+        );
       }
     }
 
