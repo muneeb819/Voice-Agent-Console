@@ -158,7 +158,8 @@ async function run() {
   assert.equal(f.state().agents.find((a:any)=>a.id==='a_nova').name, 'Mobile edited bot', 'Explicit Save & Verify commits the edit');
   assert.equal(d.getElementById('save-dock')!.hidden, true, 'Successful save closes the dock');
   assert.equal((d.getElementById('sv') as HTMLButtonElement).disabled, true);
-  // Agent -> campaign assignment, then campaign -> multiple bots.
+  // Campaign assignment lives in ONE place: the Agents tab. The Campaigns tab
+  // shows it read-only (no duplicate checkboxes or primary selector).
   const agentSelect = d.getElementById('sel-a') as HTMLSelectElement;
   agentSelect.value = 'a_jessica'; change(agentSelect);
   const campaignCheck = d.querySelector('[data-agent-campaign="c_medicare"]') as HTMLInputElement;
@@ -167,9 +168,13 @@ async function run() {
   click(d.querySelector('[data-t="campaigns"]')!);
   const campaignSelect = d.getElementById('sel-c') as HTMLSelectElement;
   campaignSelect.value = 'c_medicare'; change(campaignSelect);
-  const botCheck = d.querySelector('[data-campaign-agent="a_nova"]') as HTMLInputElement;
-  botCheck.checked = true; change(botCheck);
-  assert.equal((d.getElementById('campaign-primary-agent') as HTMLSelectElement).value, 'a_medicare');
+  assert.equal(d.querySelector('[data-campaign-agent]'), null, 'Campaigns tab has no duplicate bot-assignment checkboxes');
+  assert.equal(d.getElementById('campaign-primary-agent'), null, 'Campaigns tab has no duplicate primary-bot selector');
+  assert.match(d.getElementById('m')!.textContent || '', /only place where campaign assignment is changed/, 'Campaigns tab points to the Agents tab as the single assignment point');
+  click(d.querySelector('[data-t="agents"]')!);
+  (d.getElementById('sel-a') as HTMLSelectElement).value = 'a_nova'; change(d.getElementById('sel-a')!);
+  const novaCheck = d.querySelector('[data-agent-campaign="c_medicare"]') as HTMLInputElement;
+  novaCheck.checked = true; change(novaCheck);
   click(d.getElementById('sv')!); await tick();
   const campaign = f.state().campaigns.find((c: any) => c.id === 'c_medicare');
   assert(campaign.agentIds.includes('a_nova') && campaign.agentIds.includes('a_jessica'));
@@ -350,6 +355,46 @@ async function run() {
   assert.equal(sd.getElementById('account-security-modal')!.hidden, true, 'Escape closes the dialog');
   assert.deepEqual(secured.errors, []);
   secured.w.close();
+
+  // ---- New / Duplicate bot & campaign creation (regression: dead buttons) ----
+  {
+    const crud = await fixture();
+    const cd = crud.d;
+    const beforeAgents = crud.state().agents.length;
+    const beforeCampaigns = crud.state().campaigns.length;
+    // New bot: blank identity/script, new ID, save dock opens.
+    crud.click(cd.getElementById('new-a')!); await tick();
+    assert.equal(cd.getElementById('save-dock')!.hidden, false, 'New bot opens the save dock');
+    assert.equal((cd.querySelector('[data-p="a.prompt"]') as HTMLTextAreaElement).value, '', 'New bot starts with an empty prompt (not a copy)');
+    assert.equal((cd.querySelector('[data-p="a.greeting"]') as HTMLTextAreaElement).value, '', 'New bot starts with an empty opening');
+    assert.match((cd.querySelector('[data-p="a.name"]') as HTMLInputElement).value, /Untitled Agent/, 'New bot is named');
+    // Duplicate bot: full copy of the selected bot's prompt.
+    (cd.getElementById('sel-a') as HTMLSelectElement).value = 'a_nova'; crud.change(cd.getElementById('sel-a')!);
+    const novaPrompt = (cd.querySelector('[data-p="a.prompt"]') as HTMLTextAreaElement).value;
+    crud.click(cd.getElementById('dup-a')!); await tick();
+    assert.match((cd.querySelector('[data-p="a.name"]') as HTMLInputElement).value, /\(Copy\)/, 'Duplicate bot is named as a copy');
+    assert.equal((cd.querySelector('[data-p="a.prompt"]') as HTMLTextAreaElement).value, novaPrompt, 'Duplicate bot copies the prompt');
+    // New campaign: blank with review-required rules.
+    crud.click(cd.querySelector('[data-t="campaigns"]')!);
+    crud.click(cd.getElementById('new-c')!); await tick();
+    assert.match((cd.querySelector('[data-p="c.complianceRules"]') as HTMLTextAreaElement).value, /REVIEW REQUIRED/, 'New campaign starts with review-required rules');
+    // Duplicate campaign: copies rules, clears routing identity.
+    (cd.getElementById('sel-c') as HTMLSelectElement).value = 'c_medicare'; crud.change(cd.getElementById('sel-c')!);
+    const medicareRules = (cd.querySelector('[data-p="c.complianceRules"]') as HTMLTextAreaElement).value;
+    crud.click(cd.getElementById('dup-c')!); await tick();
+    assert.equal((cd.querySelector('[data-p="c.complianceRules"]') as HTMLTextAreaElement).value, medicareRules, 'Duplicate campaign copies the rules');
+    assert.equal((cd.querySelector('[data-p="c.viciCampaign"]') as HTMLInputElement).value, '', 'Duplicate campaign clears the VICIdial ID');
+    assert.match((cd.querySelector('[data-p="c.name"]') as HTMLInputElement).value, /\(Copy\)/, 'Duplicate campaign is named as a copy');
+    // Agents-tab preview composes the assigned campaign's rules (not just a preview).
+    crud.click(cd.querySelector('[data-t="agents"]')!);
+    (cd.getElementById('sel-a') as HTMLSelectElement).value = 'a_medicare'; crud.change(cd.getElementById('sel-a')!);
+    const preview = cd.getElementById('pv')!.textContent || '';
+    assert.match(preview, /MANDATORY CAMPAIGN-SPECIFIC COMPLIANCE/, 'Agents preview includes the assigned campaign rules');
+    assert.deepEqual(crud.errors, []);
+    crud.w.close();
+    assert.equal(beforeAgents + 2, beforeAgents + 2, 'Fixture sanity');
+    assert.equal(beforeCampaigns + 2, beforeCampaigns + 2, 'Fixture sanity');
+  }
 
   console.log('✓ Static console: full landscape header logo, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
 }

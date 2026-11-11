@@ -41,6 +41,9 @@
     return typeof v === 'object' && v !== null && !Array.isArray(v);
   }
 
+  // Must match MISSING_CAMPAIGN_RULES in src/defaults.ts (backend normalizer).
+  const MISSING_CAMPAIGN_RULES = 'REVIEW REQUIRED: Add and review campaign-specific compliance and call rules before deployment.';
+
   let S = null;
   let snap = '';
   let revisions = [];
@@ -2091,9 +2094,13 @@
     const sp = globalServiceProvider('stt') || {};
     const lp = globalServiceProvider('llm') || {};
     const tp = globalServiceProvider('tts') || {};
+    // Live calls always pass an explicit campaign. For preview, fall back to
+    // the simulator selection, then the bot's first assigned campaign, so the
+    // composed prompt truthfully includes that campaign's rules (mirrors the
+    // backend buildDeepgramSettings fallback).
     const linkedCampaign = campaign
       ? campaignHasAgent(campaign, agent.id) ? campaign : undefined
-      : agent.id === A()?.id ? simulatorCampaign(agent.id) : campaignsForAgent(agent.id)[0];
+      : (agent.id === A()?.id ? simulatorCampaign(agent.id) : null) || campaignsForAgent(agent.id)[0];
 
     const isSpeechServiceStt = sp.type === 'speech_service';
     const spModels = String(sp.models || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -5253,21 +5260,21 @@
     const assigned = campaignsForAgent(agent.id);
     return `<fieldset class="assignment-box"><legend>Assigned campaigns</legend>
       <details class="assignment-dropdown"><summary>${assigned.length ? `${assigned.length} campaign${assigned.length === 1 ? '' : 's'} selected` : 'Choose campaigns for this bot…'}</summary>
-        <div class="assignment-options">${S.campaigns.length ? S.campaigns.map((campaign) => `<label class="chk-label"><input type="checkbox" data-agent-campaign="${esc(campaign.id)}" ${campaignHasAgent(campaign, agent.id) ? 'checked' : ''}> <span>${esc(campaign.name)} <small>${esc(campaign.viciCampaign || 'No VICIdial ID')}</small></span></label>`).join('') : '<div class="note">Create a campaign first, then assign this bot here or in Campaigns.</div>'}</div>
-      </details><div class="note">Select one or more campaigns. Changes apply to both Agents and Campaigns. The first assigned bot is the telephone route; browser tests can use any assigned bot.</div>
+        <div class="assignment-options">${S.campaigns.length ? S.campaigns.map((campaign) => `<label class="chk-label"><input type="checkbox" data-agent-campaign="${esc(campaign.id)}" ${campaignHasAgent(campaign, agent.id) ? 'checked' : ''}> <span>${esc(campaign.name)} <small>${esc(campaign.viciCampaign || 'No VICIdial ID')}</small></span></label>`).join('') : '<div class="note">Create a campaign first, then assign this bot here.</div>'}</div>
+      </details><div class="note">This Agents tab is the only place where campaign assignment is changed. The bot strictly follows the selected campaign’s rules on each call. The first assigned bot is the telephone route; browser tests can use any assigned bot.</div>
     </fieldset>`;
   }
 
+  // Single assignment point: bots are assigned to campaigns ONLY in the
+  // Agents tab (renderAgentCampaignAssignment). Campaigns shows the result
+  // read-only so there is one place to change it — no duplicate controls.
   function renderCampaignAgentAssignment(campaign) {
     const ids = campaignAgentIds(campaign);
     const names = ids.map((id) => S.agents.find((agent) => agent.id === id)?.name || id);
-    return `<fieldset class="assignment-box"><legend>Assigned bots — multiple selection</legend>
-      <details class="assignment-dropdown"><summary>${names.length ? esc(names.join(', ')) : 'Select bots for this campaign…'}</summary>
-        <div class="assignment-options">${S.agents.map((agent) => `<label class="chk-label"><input type="checkbox" data-campaign-agent="${esc(agent.id)}" ${ids.includes(agent.id) ? 'checked' : ''}> <span>${esc(agent.name)}</span></label>`).join('') || '<div class="note">Create a bot in Agents first.</div>'}</div>
-      </details>
-      <label for="campaign-primary-agent">Primary bot for telephone calls</label>
-      <select id="campaign-primary-agent" ${!ids.length ? 'disabled' : ''}>${ids.length ? ids.map((id) => `<option value="${esc(id)}" ${campaign.agentId === id ? 'selected' : ''}>${esc(S.agents.find((agent) => agent.id === id)?.name || id)}</option>`).join('') : '<option>No bots assigned</option>'}</select>
-      <div class="note">All selected bots share this campaign’s rules and dispositions and can be chosen in Live Bot. A VICIdial extension has one deterministic route, so its primary bot is selected separately.</div>
+    const primaryName = S.agents.find((agent) => agent.id === campaign.agentId)?.name || '—';
+    return `<fieldset class="assignment-box"><legend>Assigned bots (read-only)</legend>
+      <div class="note">${names.length ? esc(names.join(', ')) : 'No bots assigned.'} Primary for telephone calls: <b>${esc(primaryName)}</b></div>
+      <div class="note">All assigned bots share this campaign’s rules and dispositions. To assign or unassign bots, open the <a class="g" href="${esc(sectionHref('agents', { agentId: campaign.agentId || undefined }))}" data-cmd-tab="agents">Agents tab</a> — it is the only place where campaign assignment is changed.</div>
     </fieldset>`;
   }
 
@@ -5445,7 +5452,7 @@
           <h2>No campaigns configured</h2>
           <div class="note er">Calls, loopback tests, and deployment stay blocked until you create a campaign, write its rules, configure allowed dispositions, and assign a bot agent.</div>
         </div>
-        <div class="card sticky"><h2>Campaign Readiness</h2><div id="ck">${renderCheckList(validateCampaignLocal(null))}</div><h2>Campaign JSON</h2><pre id="pv"></pre></div>`;
+        <div class="card sticky"><h2>Campaign Readiness</h2><div id="ck">${renderCheckList(validateCampaignLocal(null))}</div><h2>Composed Bot Prompt</h2><pre id="pv"></pre></div>`;
       } else {
         m.innerHTML = `
         <div class="card">
@@ -5486,7 +5493,7 @@
         <div class="card sticky">
           <h2>Campaign Readiness</h2>
           <div id="ck"></div>
-          <h2>Campaign JSON</h2>
+          <h2>Composed Bot Prompt (primary bot + this campaign’s rules)</h2>
           <pre id="pv"></pre>
         </div>
       `;
@@ -6302,7 +6309,15 @@
     if (pv) {
       if (tab === 'agents') pv.textContent = JSON.stringify(buildSettings(A()), null, 2);
       else if (tab === 'voice') pv.textContent = JSON.stringify(buildSettings(A()).agent.speak, null, 2);
-      else if (tab === 'campaigns') pv.textContent = JSON.stringify(C(), null, 2);
+      else if (tab === 'campaigns') {
+        // Show the real composed prompt (bot prompt + this campaign's rules)
+        // for the primary assigned bot, not raw campaign JSON.
+        const campaign = C();
+        const primary = campaign ? S.agents.find((agent) => agent.id === campaign.agentId) : null;
+        pv.textContent = primary && campaignHasAgent(campaign, primary.id)
+          ? JSON.stringify(buildSettings(primary, '', campaign), null, 2)
+          : JSON.stringify(campaign, null, 2);
+      }
       else if (tab === 'vici') pv.textContent = buildViciConfigLocal();
       else if (tab === 'export') pv.textContent = JSON.stringify(buildExportBundle(), null, 2);
     }
@@ -8105,37 +8120,81 @@
             if (sim.campaignAgentId === currentObj.id) { sim.campaignId = ''; sim.campaignAgentId = ''; }
           } else if (sim.campaignId === currentObj.id) { sim.campaignId = ''; sim.campaignAgentId = ''; }
         }
-      } else {
-        const template = act === 'dup' ? currentObj : kind === 'c' ? null : arr[0];
-        const blankCampaign = {
-          id: '', name: '', agentId: '', agentIds: [], viciCampaign: '', lists: '', start: '09:00', end: '20:00',
-          tz: 'America/New_York', attempts: 3, retry: 120, maxCalls: 10, xferType: 'ingroup',
-          xferTarget: '', fallback: '', dnc: true, disclosure: '', dispos: '',
-          complianceRules: MISSING_CAMPAIGN_RULES,
+      } else if (kind === 'a' && act === 'new') {
+        // New bot: blank identity/script on a usable structure — never a copy
+        // of another bot's prompt. Structure comes from the first bot (or
+        // minimal defaults) so the form renders; the operator writes the script.
+        const structure = arr[0] || {
+          mode: 'outbound', language: 'en', acceptViciCalls: true,
+          behavior: { bargeIn: 'instant', bargeInSensitivity: 'balanced', latencyProfile: 'ultra', expressionStyle: 'warm_empathetic', vocalGestures: true, allowGeneralQa: true, selfIntro: '' },
+          stt: { keyterms: '', eot: 0.55, eager: 0.35, eotms: 2000, smartFormat: false },
+          llm: { temp: 0.7, reasoning: 'low' },
+          tts: { speed: 1, expr: 0 },
+          audio: { inEnc: 'linear16', inRate: 8000, outEnc: 'linear16', outRate: 8000 },
+          fnIds: [],
         };
-        const clone = JSON.parse(JSON.stringify(template || (kind === 'c' ? blankCampaign : {})));
-        clone.id = uid(kind === 'a' ? 'ag' : 'cp');
-        if (kind === 'a' && act === 'new') {
-          clone.randomGreetingEnabled = true;
-          clone.injectCampaignDisclosure = false;
-        }
-        if (kind === 'c' && (act === 'new' || act === 'dup')) {
-          // A campaign is a safety boundary: never carry another campaign’s
-          // VICIdial ID, agent assignment, disposition confirmation or rules into it.
-          Object.assign(clone, {
-            agentId: '', agentIds: [], viciCampaign: '', lists: '', xferTarget: '', fallback: '', dnc: true,
-            disclosure: '', dispos: '', complianceRules: MISSING_CAMPAIGN_RULES,
-          });
-        }
-        const nextNum = arr.length + 1;
-        clone.name = act === 'dup' ? `${currentObj.name} (Copy)` : `Untitled ${kind === 'a' ? 'Agent' : 'Campaign'} ${nextNum}`;
+        const clone = JSON.parse(JSON.stringify(structure));
+        clone.id = uid('ag');
+        clone.name = `Untitled Agent ${arr.length + 1}`;
+        clone.greeting = '';
+        clone.prompt = '';
+        clone.randomGreetingEnabled = true;
+        clone.injectCampaignDisclosure = false;
         arr.push(clone);
-        cur[kind] = clone.id;
-        if (kind === 'a') {
-          S.tests[clone.id] = JSON.parse(JSON.stringify(S.tests[currentObj.id] || []));
-        }
+        cur.a = clone.id;
+        S.tests[clone.id] = [];
+        render();
+        updateHeaderStatus();
+        updateLivePreview();
+        const nameInput = document.querySelector('[data-p="a.name"]');
+        if (nameInput) { nameInput.focus(); nameInput.select(); }
+      } else if (kind === 'a' && act === 'dup') {
+        // Duplicate bot: full copy of the selected bot (prompt, behavior,
+        // tuning, functions) under a new ID. Campaign assignment lives on
+        // campaigns, so the copy starts unassigned — assign it in Agents.
+        const clone = JSON.parse(JSON.stringify(currentObj));
+        clone.id = uid('ag');
+        clone.name = `${currentObj.name} (Copy)`;
+        arr.push(clone);
+        cur.a = clone.id;
+        S.tests[clone.id] = JSON.parse(JSON.stringify(S.tests[currentObj.id] || []));
+        render();
+        updateHeaderStatus();
+        updateLivePreview();
+        const nameInput = document.querySelector('[data-p="a.name"]');
+        if (nameInput) { nameInput.focus(); nameInput.select(); }
+      } else if (kind === 'c' && act === 'new') {
+        // New campaign: blank. Rules must be written and reviewed; routing
+        // identity (VICIdial ID, bots, transfer target) starts empty.
+        const clone = {
+          id: uid('cp'), name: `Untitled Campaign ${arr.length + 1}`, agentId: '', agentIds: [],
+          viciCampaign: '', lists: '', start: '09:00', end: '20:00', tz: 'America/New_York',
+          attempts: 3, retry: 120, maxCalls: 10, xferType: 'ingroup', xferTarget: '', fallback: '',
+          dnc: true, disclosure: '', dispos: '', complianceRules: MISSING_CAMPAIGN_RULES,
+        };
+        arr.push(clone);
+        cur.c = clone.id;
+        render();
+        updateHeaderStatus();
+        updateLivePreview();
+        const nameInput = document.querySelector('[data-p="c.name"]');
+        if (nameInput) { nameInput.focus(); nameInput.select(); }
+      } else if (kind === 'c' && act === 'dup') {
+        // Duplicate campaign: copy rules, dispositions and settings so the
+        // copy is a real duplicate; clear only routing identity (VICIdial ID,
+        // bot assignment, transfer target) which must be re-entered.
+        const clone = JSON.parse(JSON.stringify(currentObj));
+        clone.id = uid('cp');
+        clone.name = `${currentObj.name} (Copy)`;
+        Object.assign(clone, { agentId: '', agentIds: [], viciCampaign: '', xferTarget: '', fallback: '' });
+        arr.push(clone);
+        cur.c = clone.id;
+        render();
+        updateHeaderStatus();
+        updateLivePreview();
+        const nameInput = document.querySelector('[data-p="c.name"]');
+        if (nameInput) { nameInput.focus(); nameInput.select(); }
       }
-      render();
     }
   });
 
@@ -8249,23 +8308,9 @@
       updateLivePreview(); updateHeaderStatus();
       return;
     }
-    if (t.dataset.campaignAgent) {
-      assignCampaignAgent(C(), t.dataset.campaignAgent, t.checked);
-      const ids = campaignAgentIds(C());
-      const details = t.closest('details');
-      if (details) details.querySelector('summary').textContent = ids.map((id) => S.agents.find((agent) => agent.id === id)?.name || id).join(', ') || 'Select bots for this campaign…';
-      const primary = document.getElementById('campaign-primary-agent');
-      primary.disabled = !ids.length;
-      primary.innerHTML = ids.length ? ids.map((id) => `<option value="${esc(id)}" ${C().agentId === id ? 'selected' : ''}>${esc(S.agents.find((agent) => agent.id === id)?.name || id)}</option>`).join('') : '<option>No bots assigned</option>';
-      updateLivePreview(); updateHeaderStatus();
-      return;
-    }
-    if (t.id === 'campaign-primary-agent') {
-      const campaign = C();
-      if (campaignHasAgent(campaign, t.value)) { campaign.agentId = t.value; campaign.agentIds = campaignAgentIds(campaign); }
-      updateLivePreview(); updateHeaderStatus();
-      return;
-    }
+    // Campaign assignment is edited only in the Agents tab (data-agent-campaign).
+    // The Campaigns tab shows it read-only, so there are no campaign-side
+    // assignment handlers here.
     if (t.id === 'sim-campaign') {
       setSimulatorCampaign(t.value);
       render();
