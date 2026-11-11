@@ -5246,8 +5246,8 @@
                 <span class="pill ok">Model: <code>${esc(S.services?.tts?.model || 'not selected')}</code></span>
               </div>
               <div class="row">
-                ${F('Speed (0.5–1.5, 0.05 steps)', 'a.tts.speed', 'number', [], 'min="0.5" max="1.5" step="0.05"')}
-                ${F('Flux v2 Expressivity (-2..+2)', 'a.tts.expr', 'sel', [
+                ${F('Preview speed (0.5–1.5, Speak Text only)', 'a.tts.speed', 'number', [], 'min="0.5" max="1.5" step="0.05"')}
+                ${F('Preview expressivity, Flux v2 (−2..+2, Speak Text only)', 'a.tts.expr', 'sel', [
                   [-2, '-2 (Calmest)'],
                   [-1, '-1 (Calm)'],
                   [0, '0 (Default)'],
@@ -5270,7 +5270,7 @@
               <h2>Active Agent <code>agent.speak</code> Payload</h2>
               <pre id="pv">${esc(JSON.stringify(settingsSpeak, null, 2))}</pre>
               <div class="note">
-                Pick a voice below with <b>✓ Use This Voice</b> — it is saved immediately and becomes the shared TTS voice for every bot. Speed and expressivity stay per-agent.
+                Pick a voice below with <b>✓ Use This Voice</b> — it is saved immediately and becomes the shared TTS voice for every bot. <b>Speed and expressivity apply to the 🔊 Speak Text preview only</b> (Deepgram speak API). They are not sent on live Voice Agent calls — the live speak channel accepts only {type, version, model}.
               </div>
             </div>
           </div>
