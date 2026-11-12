@@ -18,8 +18,13 @@
    ============================================================================ */
 
 :root {
-  --fx-display: "Plus Jakarta Sans", "Segoe UI", system-ui, sans-serif;
-  --fx-mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  /* One family for the whole project. styles.css defines --ui-font on the
+     console; the auth shell never loads it, so the literal stack is repeated
+     as the fallback. --fx-mono keeps its name because ~40 rules reference it,
+     but it now resolves to the same face: live figures stay column-aligned
+     through tabular numerals, not through a second typeface. */
+  --fx-display: var(--ui-font, "Plus Jakarta Sans", "Segoe UI", system-ui, -apple-system, sans-serif);
+  --fx-mono: var(--fx-display);
 
   --bp-surface: color-mix(in srgb, var(--bg, #0b0f14) 52%, #03101c);
   --bp-surface-2: color-mix(in srgb, var(--bg, #0b0f14) 74%, #04121f);
@@ -553,7 +558,7 @@ header::after {
   position: relative;
   z-index: 1;
   font-family: var(--fx-mono);
-  font-size: calc(var(--bp-d) * 0.2);
+  font-size: calc(var(--bp-d) * 0.185);
   font-weight: 500;
   line-height: 1;
   letter-spacing: -0.04em;
@@ -1453,9 +1458,10 @@ body {
   color: #ffffff;
 }
 
-/* styles.css ends with `:root[data-theme] * { font-family: … !important }`,
-   which would erase every monospace readout. The schematic subtrees keep
-   their technical face; form fields keep the display face. */
+/* styles.css ends with `:root[data-theme] * { font-family: … !important }`.
+   This block re-asserts the family on the schematic subtrees so the rule is
+   explicit rather than relying on source order. It resolves to the same face
+   as the rest of the console — the only difference is numeric styling. */
 :root[data-theme] .cmd-deck-shell *,
 :root[data-theme] .bp-panel *,
 :root[data-theme] .bp-strip *,
