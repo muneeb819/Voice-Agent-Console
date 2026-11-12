@@ -1,0 +1,1157 @@
+/* ============================================================================
+   MMA DIGITAL LABS — INSTRUMENT PANEL LAYER  (build nova-3.1)
+
+   Loaded after styles.css / login.css / brand-logos.css, so every theme keeps
+   working: all colours are mixed from the active theme tokens (--ac, --ac-2,
+   --ac-3, --ok, --wn, --er, --tx, --bg, --sf, --bd).
+
+   Design language
+   ---------------
+   The dashboard is drawn as a measurement instrument, not a neon storefront:
+
+     · every panel is a 1 px hairline with an inset second rule and corner
+       node dots — outline, not fill, so the data is the brightest thing
+     · the readiness score sits inside a segmented 44-tick dial; the live
+       telemetry board and the signal panel sit either side of it, joined by
+       hairlines
+     · labels are uppercase mono at 9–10 px with wide tracking; measured values
+       are the only heavy type
+     · motion is limited to the dial reveal, the live pulse and the sparkline
+       redraw, and is removed under prefers-reduced-motion
+
+   What this layer does NOT do
+   ---------------------------
+   It does not change the dashboard markup or the readiness maths. The score,
+   the stats, the check list and the fleet matrix all remain app.js work; this
+   file only changes how they look, plus the two telemetry panels injected by
+   future-board.js.
+   ============================================================================ */
+
+:root {
+  --fx-font-display: "Space Grotesk", "Plus Jakarta Sans", system-ui, sans-serif;
+  --fx-font-mono: ui-monospace, "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+
+  --hud-line: color-mix(in srgb, var(--ac) 28%, color-mix(in srgb, var(--tx) 24%, transparent));
+  --hud-line-2: color-mix(in srgb, var(--ac) 14%, color-mix(in srgb, var(--tx) 11%, transparent));
+  --hud-node: color-mix(in srgb, var(--ac) 60%, var(--tx));
+  --hud-ice: color-mix(in srgb, var(--ac) 20%, var(--tx) 80%);
+  --hud-dim: color-mix(in srgb, var(--hud-ice) 55%, transparent);
+  --hud-fill: color-mix(in srgb, var(--ac) 5%, transparent);
+  --hud-fill-2: color-mix(in srgb, var(--ac) 9%, transparent);
+  --hud-score: 0;
+}
+
+/* ------------------------------------------------------------- deck frame */
+
+.cmd-deck-shell {
+  position: relative;
+  overflow: visible;
+  border: 1px solid var(--hud-line);
+  border-radius: 4px;
+  padding: 18px 20px 20px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  box-shadow: none;
+  transition: none;
+  animation: fxPanelIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* The accent bar along the top edge is replaced by a machined double frame. */
+.cmd-deck-shell::before {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border: 1px solid var(--hud-line-2);
+  border-radius: 2px;
+  background: none;
+  opacity: 1;
+  pointer-events: none;
+}
+
+/* Four corner node dots on the outer frame. */
+.cmd-deck-shell::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  pointer-events: none;
+  background-image:
+    radial-gradient(circle, var(--hud-node) 0 2px, transparent 2.4px),
+    radial-gradient(circle, var(--hud-node) 0 2px, transparent 2.4px),
+    radial-gradient(circle, var(--hud-node) 0 2px, transparent 2.4px),
+    radial-gradient(circle, var(--hud-node) 0 2px, transparent 2.4px);
+  background-position: 0 0, 100% 0, 0 100%, 100% 100%;
+  background-size: 6px 6px;
+  background-repeat: no-repeat;
+}
+
+@keyframes fxPanelIn {
+  from { opacity: 0; transform: translate3d(0, 8px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* ---------------------------------------------------------------- topbar */
+
+.cmd-topbar {
+  gap: 10px 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--hud-line-2);
+}
+
+.cmd-radar-dot {
+  width: 7px;
+  height: 7px;
+  box-shadow: none;
+  position: relative;
+  animation: none;
+}
+
+.cmd-radar-dot::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  opacity: 0;
+  animation: fxRadar 3s ease-out infinite;
+}
+
+.cmd-radar-dot.wn::after,
+.cmd-radar-dot.er::after { animation: none; }
+
+@keyframes fxRadar {
+  0%   { transform: scale(0.35); opacity: 0.7; }
+  75%  { transform: scale(1.6); opacity: 0; }
+  100% { transform: scale(1.6); opacity: 0; }
+}
+
+.cmd-eyebrow {
+  font-family: var(--fx-font-display);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--hud-ice);
+}
+
+.cmd-eyebrow span {
+  background: none;
+  -webkit-background-clip: initial;
+  background-clip: initial;
+  color: var(--ac);
+  font-weight: 600;
+}
+
+.cmd-cert-badge {
+  font-family: var(--fx-font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  padding: 3px 9px;
+  border-radius: 2px;
+  border: 1px solid color-mix(in srgb, var(--ok) 32%, transparent);
+  background: transparent;
+  color: color-mix(in srgb, var(--ok) 76%, var(--tx));
+  box-shadow: none;
+}
+
+.cmd-cert-badge.wn {
+  border-color: color-mix(in srgb, var(--wn) 36%, transparent);
+  color: color-mix(in srgb, var(--wn) 76%, var(--tx));
+}
+
+.cmd-cert-badge.er {
+  border-color: color-mix(in srgb, var(--er) 40%, transparent);
+  color: color-mix(in srgb, var(--er) 78%, var(--tx));
+}
+
+.cmd-mini-btn {
+  border-radius: 2px !important;
+  border: 1px solid var(--hud-line);
+  background: transparent !important;
+  color: var(--hud-ice);
+  font-family: var(--fx-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  box-shadow: none;
+  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+
+.cmd-mini-btn:hover {
+  border-color: var(--ac);
+  color: var(--ac);
+  background: var(--hud-fill) !important;
+  transform: none;
+}
+
+/* ------------------------------------------------------- readiness dial */
+
+.cmd-score-card {
+  position: relative;
+  margin-top: 14px;
+  padding: 18px 16px 16px;
+  border: 1px solid var(--hud-line);
+  border-radius: 4px;
+  background: transparent;
+  overflow: visible;
+  animation: fxPanelIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.cmd-score-card::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 1px solid var(--hud-line-2);
+  border-radius: 2px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle, var(--hud-node) 0 1.5px, transparent 1.9px) 0 0 / 5px 5px no-repeat,
+    radial-gradient(circle, var(--hud-node) 0 1.5px, transparent 1.9px) 100% 0 / 5px 5px no-repeat,
+    radial-gradient(circle, var(--hud-node) 0 1.5px, transparent 1.9px) 0 100% / 5px 5px no-repeat,
+    radial-gradient(circle, var(--hud-node) 0 1.5px, transparent 1.9px) 100% 100% / 5px 5px no-repeat;
+}
+
+/* The dial is drawn around the score that app.js prints. future-board.js lights
+   the ticks that correspond to that same number, so the ornament can never
+   show a score the text does not. */
+.cmd-score-main {
+  --fx-ring-d: 232px;
+  position: relative;
+  width: var(--fx-ring-d);
+  height: var(--fx-ring-d);
+  margin: 6px auto 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--tx);
+}
+
+.cmd-score-main::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--hud-line-2);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+/* Inner dashed hub ring, like a dial bezel. */
+.cmd-score-main::after {
+  content: "";
+  position: absolute;
+  inset: 30px;
+  border: 1px dashed color-mix(in srgb, var(--hud-line-2) 80%, transparent);
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.cmd-score-main strong {
+  font-family: var(--fx-font-display);
+  font-size: 68px;
+  font-weight: 500;
+  /* 1.2 clears the glyph ink box of the display face (measured ≈1.19 em with
+     the loaded web font), so the number is never reported as vertically
+     clipped at any of the sizes below. */
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Only the "/100" label. The selector is not a bare `span` because the dial
+   ring is also a span child, and inheriting the label's flex-end alignment and
+   bottom margin collapsed the ring's box to zero height. */
+.cmd-score-main > span:not(.fx-ring) {
+  align-self: flex-end;
+  margin-bottom: 18px;
+  font-family: var(--fx-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--hud-dim);
+}
+
+/* 44-tick dial, generated by future-board.js. Ticks are radial bars; `.on`
+   marks the ticks at or below the measured readiness score. */
+.fx-ring {
+  position: absolute;
+  inset: 0;
+  /* Pinned explicitly: as a flex child this span must not inherit any
+     alignment or margin from the label rules. */
+  margin: 0;
+  align-self: auto;
+  width: auto;
+  height: auto;
+  pointer-events: none;
+}
+
+.fx-ring i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 2px;
+  height: 9px;
+  margin: -4.5px 0 0 -1px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--tx) 12%, transparent);
+  transform: rotate(var(--a)) translateY(calc(var(--fx-ring-d) / -2 + 7px));
+  transform-origin: 50% 50%;
+  transition: background 0.4s ease, box-shadow 0.4s ease;
+}
+
+.fx-ring i.on {
+  background: color-mix(in srgb, var(--ac) 82%, var(--tx));
+  box-shadow: 0 0 4px color-mix(in srgb, var(--ac) 45%, transparent);
+}
+
+/* Segmented horizontal bar: kept because it is real markup and reads at a
+   glance on narrow screens where the dial shrinks. */
+.cmd-score-bar {
+  height: 3px;
+  margin: 10px 0 8px;
+  border-radius: 0;
+  background:
+    repeating-linear-gradient(90deg,
+      color-mix(in srgb, var(--tx) 9%, transparent) 0 6px,
+      transparent 6px 8px);
+  overflow: hidden;
+}
+
+.cmd-score-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 0;
+  background:
+    repeating-linear-gradient(90deg, var(--ac) 0 6px, transparent 6px 8px);
+  transform-origin: left center;
+  animation: fxBarIn 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes fxBarIn {
+  from { transform: scaleX(0); }
+}
+
+.cmd-score-card .note {
+  font-family: var(--fx-font-mono);
+  font-size: 9.5px;
+  line-height: 1.65;
+  letter-spacing: 0.03em;
+  color: var(--hud-dim);
+  margin-top: 6px;
+}
+
+.cmd-score-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin-top: 12px;
+  border-top: 1px solid var(--hud-line-2);
+  font-family: var(--fx-font-mono);
+}
+
+.cmd-score-stats > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 6px 8px 0;
+  border-bottom: 1px solid var(--hud-line-2);
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+}
+
+.cmd-score-stats > span:nth-child(2n) {
+  border-left: 1px solid var(--hud-line-2);
+  padding-left: 12px;
+}
+
+.cmd-score-stats > span:nth-last-child(-n+2) { border-bottom: 0; }
+
+.cmd-score-stats b {
+  order: -1;
+  font-family: var(--fx-font-display);
+  font-size: 19px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--tx);
+}
+
+/* -------------------------------------------------------- telemetry panels */
+
+.fx-board,
+.fx-aux {
+  position: relative;
+  margin-top: 16px;
+  border: 1px solid var(--hud-line);
+  border-radius: 4px;
+  background: transparent;
+  overflow: visible;
+  animation: fxPanelIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.fx-board::before,
+.fx-aux::before {
+  content: "";
+  position: absolute;
+  inset: 5px;
+  border: 1px solid var(--hud-line-2);
+  border-radius: 2px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle, var(--hud-node) 0 1.5px, transparent 1.9px) 0 0 / 5px 5px no-repeat,
+    radial-gradient(circle, var(--hud-node) 0 1.5px, transparent 1.9px) 100% 0 / 5px 5px no-repeat,
+    radial-gradient(circle, var(--hud-node) 0 1.5px, transparent 1.9px) 0 100% / 5px 5px no-repeat,
+    radial-gradient(circle, var(--hud-node) 0 1.5px, transparent 1.9px) 100% 100% / 5px 5px no-repeat;
+}
+
+.fx-board-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--hud-line-2);
+}
+
+.fx-board-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--fx-font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--hud-ice);
+}
+
+.fx-live-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--ok);
+  position: relative;
+  flex: none;
+}
+
+.fx-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  border: 1px solid var(--ok);
+  animation: fxRadar 2.6s ease-out infinite;
+}
+
+.fx-board.is-stale .fx-live-dot { background: var(--wn); }
+.fx-board.is-stale .fx-live-dot::after { border-color: var(--wn); animation: none; }
+.fx-board.is-offline .fx-live-dot { background: var(--er); }
+.fx-board.is-offline .fx-live-dot::after { border-color: var(--er); animation: none; }
+
+.fx-board-meta {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-family: var(--fx-font-mono);
+  font-size: 9px;
+  color: var(--hud-dim);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.fx-board-btn {
+  border: 1px solid var(--hud-line);
+  background: transparent;
+  color: var(--hud-ice);
+  font-family: var(--fx-font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease;
+}
+
+.fx-board-btn:hover {
+  border-color: var(--ac);
+  color: var(--ac);
+  background: var(--hud-fill);
+}
+
+/* Six readouts in a 2 x 3 grid; the value is the brightest type. */
+.fx-board-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+}
+
+.fx-tile {
+  padding: 12px 14px 10px;
+  border-right: 1px solid var(--hud-line-2);
+  border-bottom: 1px solid var(--hud-line-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.fx-tile:nth-child(2n) { border-right: 0; }
+.fx-tile:nth-last-child(-n+2) { border-bottom: 0; }
+
+.fx-tile-label {
+  font-family: var(--fx-font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fx-tile-value {
+  font-family: var(--fx-font-display);
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  color: var(--tx);
+  transition: color 0.35s ease;
+}
+
+.fx-tile-value small {
+  font-family: var(--fx-font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--hud-dim);
+  margin-left: 3px;
+}
+
+.fx-tile-sub {
+  font-family: var(--fx-font-mono);
+  font-size: 8.5px;
+  color: var(--hud-dim);
+  letter-spacing: 0.06em;
+}
+
+.fx-tile-value.is-tick { animation: fxTick 0.6s ease; }
+
+@keyframes fxTick {
+  0%   { color: var(--ac); }
+  100% { color: var(--tx); }
+}
+
+/* Sparklines: dashed stroke, faint fill, dotted grid. */
+.fx-charts {
+  display: grid;
+  grid-template-columns: 1fr;
+  border-top: 0;
+}
+
+.fx-chart {
+  padding: 11px 14px 6px;
+  border-bottom: 1px solid var(--hud-line-2);
+  min-width: 0;
+}
+
+.fx-chart:last-child { border-bottom: 0; }
+
+.fx-chart-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.fx-chart-title {
+  font-family: var(--fx-font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+}
+
+.fx-chart-now {
+  font-family: var(--fx-font-mono);
+  font-size: 10px;
+  color: var(--hud-ice);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.fx-spark {
+  display: block;
+  width: 100%;
+  height: 62px;
+  overflow: visible;
+}
+
+.fx-spark-grid {
+  stroke: var(--hud-line-2);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  fill: none;
+}
+
+.fx-spark-area { stroke: none; opacity: 0.16; }
+
+.fx-spark-line {
+  fill: none;
+  stroke: color-mix(in srgb, var(--ac) 78%, var(--tx));
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  stroke-dasharray: 2 2.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.fx-spark-dot {
+  fill: var(--ac);
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--ac) 70%, transparent));
+}
+
+/* Signal panel: leader rails + one-line ticker. */
+.fx-rails {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid var(--hud-line-2);
+}
+
+.fx-rail-lbl {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-family: var(--fx-font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+  margin-bottom: 5px;
+}
+
+.fx-rail-lbl span:last-child { color: var(--hud-ice); letter-spacing: 0.04em; }
+
+.fx-rail-track {
+  height: 2px;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--tx) 8%, transparent);
+  overflow: hidden;
+}
+
+.fx-rail-fill {
+  display: block;
+  height: 100%;
+  border-radius: 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ac) 52%, transparent), var(--ac));
+  transform-origin: left center;
+  transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.fx-ticker {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 14px 14px;
+  font-family: var(--fx-font-mono);
+  font-size: 9px;
+  line-height: 1.6;
+  letter-spacing: 0.04em;
+  color: var(--hud-dim);
+  overflow: hidden;
+}
+
+.fx-ticker-tag {
+  flex: none;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ac);
+  opacity: 0.85;
+}
+
+.fx-ticker-line {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.fx-ticker-line b { color: var(--hud-ice); font-weight: 500; }
+
+/* Panels are wired to the dial with the same hairline used inside them. */
+@media (min-width: 1180px) {
+  .fx-board::after,
+  .fx-aux::after {
+    content: "";
+    position: absolute;
+    height: 1px;
+    background: linear-gradient(90deg, var(--hud-line-2), var(--hud-line-2));
+    pointer-events: none;
+  }
+
+  .fx-board::after { top: 50%; right: -23px; width: 23px; }
+  .fx-aux::after { top: 50%; left: -23px; width: 23px; }
+}
+
+/* ------------------------------------------------------------- check list */
+
+.readiness-issues {
+  position: relative;
+  margin-top: 20px;
+  padding: 14px 16px;
+  border: 1px solid var(--hud-line-2);
+  border-radius: 4px;
+  background: transparent;
+}
+
+.readiness-issues h2 {
+  font-family: var(--fx-font-mono);
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--hud-ice);
+  margin: 0 0 8px;
+}
+
+.readiness-issues .ck {
+  border-bottom: 1px solid var(--hud-line-2);
+  padding: 6px 0;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--hud-dim);
+}
+
+.readiness-issues .ck:last-of-type { border-bottom: 0; }
+
+.readiness-issues .note,
+.cmd-deck-shell > .note {
+  font-family: var(--fx-font-mono);
+  font-size: 9.5px;
+  line-height: 1.65;
+  letter-spacing: 0.03em;
+  color: var(--hud-dim);
+}
+
+.readiness-issues .ck a.g {
+  font-family: var(--fx-font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 1px solid var(--hud-line);
+  border-radius: 2px;
+  padding: 2px 7px;
+  color: var(--hud-ice);
+}
+
+.readiness-issues .ck a.g:hover {
+  border-color: var(--ac);
+  color: var(--ac);
+  background: var(--hud-fill);
+}
+
+/* ------------------------------------------------------------ fleet matrix */
+
+.cmd-fleet-layer {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--hud-line-2);
+}
+
+.cmd-fleet-heading h2,
+.cmd-fleet-layer h2 {
+  font-family: var(--fx-font-mono);
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--hud-ice);
+  margin: 0;
+}
+
+.cmd-fleet-heading .note,
+.cmd-fleet-layer .note {
+  font-family: var(--fx-font-mono);
+  font-size: 9.5px;
+  line-height: 1.65;
+  color: var(--hud-dim);
+}
+
+.fleet-campaign-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.fleet-campaign-name {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-height: 68px;
+  padding: 14px 16px;
+  border: 1px solid var(--hud-line-2);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--hud-ice);
+  font-family: var(--fx-font-mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  line-height: 1.4;
+  transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+}
+
+.fleet-campaign-name::before {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--hud-node);
+}
+
+.fleet-campaign-name::after {
+  content: "";
+  position: absolute;
+  bottom: 10px;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--ac), transparent);
+  transform: scaleX(0.12);
+  transform-origin: left;
+  opacity: 0.5;
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease;
+}
+
+.fleet-campaign-name:hover {
+  border-color: var(--hud-line);
+  color: var(--tx);
+  background: var(--hud-fill);
+  transform: none;
+}
+
+.fleet-campaign-name:hover::after { transform: scaleX(1); opacity: 0.9; }
+
+.fleet-stats-grid {
+  gap: 0;
+  margin-top: 12px;
+  border-top: 1px solid var(--hud-line-2);
+}
+
+.fleet-stat {
+  position: relative;
+  border: 0;
+  border-bottom: 1px solid var(--hud-line-2);
+  border-radius: 0;
+  padding: 9px 0;
+  background: transparent;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.fleet-stat span {
+  font-family: var(--fx-font-mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+}
+
+.fleet-stat strong {
+  font-family: var(--fx-font-display);
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--tx);
+}
+
+.fleet-analytics-grid { gap: 16px; margin-top: 16px; }
+
+.fleet-panel {
+  border: 1px solid var(--hud-line-2);
+  border-radius: 4px;
+  padding: 12px 14px;
+  background: transparent;
+}
+
+.fleet-panel h3 {
+  font-family: var(--fx-font-mono);
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+  margin: 0 0 8px;
+}
+
+.fleet-panel .ck {
+  border-bottom: 1px solid var(--hud-line-2);
+  padding: 6px 0;
+  font-size: 11.5px;
+  color: var(--hud-dim);
+}
+
+.fleet-panel .ck b {
+  color: var(--hud-ice);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
+.fleet-disposition-bar {
+  background: color-mix(in srgb, var(--tx) 8%, transparent);
+  border-radius: 0;
+  height: 2px;
+}
+
+.fleet-disposition-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ac) 55%, transparent), var(--ac));
+  transform-origin: left center;
+  animation: fxBarIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.fleet-bot-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.fleet-bot-table th {
+  font-family: var(--fx-font-mono);
+  font-size: 8.5px;
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--hud-line);
+  white-space: nowrap;
+}
+
+.fleet-bot-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--hud-line-2);
+  font-variant-numeric: tabular-nums;
+  color: var(--hud-ice);
+}
+
+.fleet-bot-table tbody tr { transition: background 0.18s ease; }
+.fleet-bot-table tbody tr:hover { background: var(--hud-fill); }
+
+.fleet-table-wrap { overflow-x: auto; }
+
+/* ----------------------------------------------------------------- layout */
+
+@media (min-width: 1180px) {
+  .cmd-deck-shell {
+    display: grid;
+    grid-template-columns: minmax(0, 1.04fr) minmax(300px, 0.94fr) minmax(0, 1fr);
+    grid-template-areas:
+      "top    top    top"
+      "board  score  aux"
+      "wide   wide   wide"
+      "wide2  wide2  wide2";
+    gap: 16px 22px;
+    align-items: start;
+  }
+
+  .cmd-topbar { grid-area: top; padding-bottom: 0; border-bottom: 0; }
+
+  .cmd-score-card {
+    grid-area: score;
+    margin-top: 0;
+    align-self: stretch;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+
+  .fx-board { grid-area: board; margin-top: 0; }
+  .fx-aux { grid-area: aux; margin-top: 0; align-self: stretch; }
+  .readiness-issues { grid-area: wide; margin-top: 0; }
+  .cmd-fleet-layer { grid-area: wide2; margin-top: 0; }
+}
+
+/* Below the instrument breakpoint the three panels stack: dial first, then the
+   live board, then the signal rails. */
+@media (max-width: 1179px) {
+  .cmd-score-main { --fx-ring-d: 208px; }
+  .cmd-score-main strong { font-size: 58px; }
+  .cmd-score-card .note { max-width: 62ch; }
+  .fx-board-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .fx-tile:nth-child(2n) { border-right: 1px solid var(--hud-line-2); }
+  .fx-tile:nth-child(3n) { border-right: 0; }
+  .fx-tile:nth-last-child(-n+3) { border-bottom: 0; }
+}
+
+@media (max-width: 720px) {
+  .cmd-deck-shell { padding: 14px 12px 16px; }
+  .cmd-score-main { --fx-ring-d: 186px; }
+  .cmd-score-main strong { font-size: 50px; }
+  .cmd-score-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fx-board-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fx-tile:nth-child(3n) { border-right: 1px solid var(--hud-line-2); }
+  .fx-tile:nth-child(2n) { border-right: 0; }
+  .fx-tile:nth-last-child(-n+3) { border-bottom: 1px solid var(--hud-line-2); }
+  .fx-tile:nth-last-child(-n+2) { border-bottom: 0; }
+  .fx-board-meta { width: 100%; margin-left: 0; }
+  .fx-tile-value { font-size: 22px; }
+  .fx-spark { height: 52px; }
+  .cmd-eyebrow { font-size: 11px; letter-spacing: 0.1em; }
+}
+
+@media (max-width: 460px) {
+  .cmd-cert-badge { font-size: 9px; }
+  .fx-tile { padding: 10px 11px 9px; }
+  .fx-tile-value { font-size: 20px; }
+  .cmd-score-main { --fx-ring-d: 168px; }
+  .cmd-score-main strong { font-size: 44px; }
+}
+
+/* ==================================================================== AUTH
+   The sign-in card uses the same frame language so the first screen and the
+   console do not look like two different products. */
+.auth-shell .card {
+  position: relative;
+  border: 1px solid var(--hud-line);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  box-shadow: none;
+  overflow: visible;
+  animation: fxPanelIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.auth-shell .card::before {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border: 1px solid var(--hud-line-2);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.auth-shell .tabs {
+  border: 1px solid var(--hud-line);
+  border-radius: 2px;
+  padding: 2px;
+  background: transparent;
+  gap: 2px;
+}
+
+.auth-shell .tab {
+  border: 0;
+  border-radius: 0;
+  font-family: var(--fx-font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+  padding: 9px 10px;
+  background: transparent;
+  box-shadow: none;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+
+.auth-shell .tab.active {
+  color: var(--ac-on, var(--bg));
+  background: var(--ac);
+}
+
+.auth-shell .tab:hover:not(.active) { color: var(--hud-ice); }
+
+.auth-shell label {
+  font-family: var(--fx-font-mono);
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--hud-dim);
+}
+
+.auth-shell input[type="text"],
+.auth-shell input[type="email"],
+.auth-shell input[type="password"] {
+  border: 1px solid var(--hud-line-2);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--tx);
+  transition: border-color 0.18s ease;
+}
+
+.auth-shell input:focus {
+  border-color: var(--ac);
+  box-shadow: none;
+  outline: none;
+}
+
+.auth-shell .btn-primary {
+  border-radius: 2px;
+  font-family: var(--fx-font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  background: var(--ac);
+  color: var(--ac-on, var(--bg));
+  box-shadow: none;
+  transition: filter 0.18s ease;
+}
+
+.auth-shell .btn-primary:hover {
+  transform: none;
+  filter: brightness(1.08);
+  box-shadow: none;
+}
+
+/* --------------------------------------------------------- reduced motion */
+
+@media (prefers-reduced-motion: reduce) {
+  .cmd-deck-shell,
+  .cmd-score-card,
+  .cmd-score-bar i,
+  .fx-board,
+  .fx-aux,
+  .fx-live-dot::after,
+  .cmd-radar-dot::after,
+  .auth-shell .card,
+  .fleet-disposition-bar i {
+    animation: none !important;
+  }
+
+  .cmd-mini-btn,
+  .fx-board-btn,
+  .fx-ring i,
+  .fleet-campaign-name,
+  .fx-tile-value,
+  .auth-shell .btn-primary {
+    transition: none !important;
+  }
+
+  .fx-tile-value.is-tick { animation: none !important; }
+}
+
+/* Light themes need more contrast on hairlines and less on accents. */
+:root[data-theme="pearl"],
+:root[data-theme="sakura"] {
+  --hud-line: color-mix(in srgb, var(--tx) 30%, transparent);
+  --hud-line-2: color-mix(in srgb, var(--tx) 16%, transparent);
+  --hud-node: color-mix(in srgb, var(--ac-2) 70%, var(--tx));
+  --hud-ice: color-mix(in srgb, var(--tx) 92%, transparent);
+  --hud-dim: color-mix(in srgb, var(--tx) 58%, transparent);
+}
