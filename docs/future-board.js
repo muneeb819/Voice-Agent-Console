@@ -1,25 +1,25 @@
 /* ============================================================================
-   MMA DIGITAL LABS — LIVE TELEMETRY PANELS   (build nova-3.1)
+   MMA DIGITAL LABS — SCHEMATIC TELEMETRY  (build nova-3.2)
    ----------------------------------------------------------------------------
-   Adds two real-time panels to the dashboard and lights the readiness dial.
+   Builds the eight numbered readout panels, the scored dial rings and the two
+   bar traces, and keeps them fed from /api/telemetry/overview.
 
-   Honesty rules this module follows:
-     · Every number comes from a real source: /api/telemetry/overview, or the
-       browser's own frame timing. Nothing is synthesised to look busy.
-     · When the server is unreachable (static demo, signed-out, tunnel down) the
-       board says so and shows only measurements it can actually take.
-     · Samples older than the stale threshold are labelled stale rather than
-       continuing to pulse as if live.
-     · The rolling charts plot only samples collected in this page session, and
-       say so, so nobody mistakes them for lifetime analytics.
-     · The dial ticks are lit from the score app.js already printed on screen,
-       never from a second, independent calculation.
+   Honesty rules
+   -------------
+   · Every number is a measured value from the telemetry payload. Nothing is
+     synthesised, and a missing field renders as "—", never as zero.
+   · The dial is lit from the readiness score app.js already printed on screen;
+     this module never computes a second score.
+   · Samples older than the stale threshold are labelled stale, the offline
+     state says so in the ticker, and pause stops the polling outright.
+   · The bar traces plot only samples taken in this page session, and the label
+     says "this session" so they cannot be mistaken for lifetime analytics.
 
-   Failure rules:
-     · Never throws into the host app; all work is wrapped and the panels
-       simply stay absent if the dashboard is not mounted.
-     · Values are written with textContent/dataset only — no HTML interpolation
-       of server strings.
+   Safety
+   ------
+   · Never throws into the host app; if the dashboard is not mounted the module
+     does nothing.
+   · Values are written with textContent only — no HTML interpolation.
    ============================================================================ */
 (function (root) {
   'use strict';
@@ -29,7 +29,7 @@
   var MAX_SAMPLES = 36;
   var STALE_MS = 16000;
   var API_URL = '/api/telemetry/overview';
-  var RING_TICKS = 44;
+  var TICKS = 72;
 
   var state = {
     timer: null,
@@ -41,12 +41,20 @@
     lastError: '',
     samples: [],
     prev: null,
-    fps: null,
-    fpsUnavailable: false,
-    board: null,
-    aux: null,
+    status: 'connecting',
     visible: true,
   };
+
+  var PANELS = [
+    { n: 1, side: 'l', key: 'active', label: 'Active bridge calls', sub: 'bridge listener' },
+    { n: 2, side: 'l', key: 'ttfb', label: 'Avg TTFB', sub: 'p95 latency', meter: true },
+    { n: 3, side: 'l', key: 'xfer', label: 'Transfer rate', sub: 'closer transfers', meter: true },
+    { n: 4, side: 'l', key: 'dnc', label: 'DNC blocked', sub: 'suppressed outcomes' },
+    { n: 5, side: 'r', key: 'calls', label: 'Retained calls', sub: 'bridge / browser', meter: true },
+    { n: 6, side: 'r', key: 'uptime', label: 'Server uptime', sub: 'process uptime' },
+    { n: 7, side: 'r', key: 'qa', label: 'QA checks passed', sub: 'configuration tests', meter: true },
+    { n: 8, side: 'r', key: 'rss', label: 'Server RSS', sub: 'heap / rss', meter: true }
+  ];
 
   // ---------------------------------------------------------------- helpers
 
@@ -55,6 +63,10 @@
     if (cls) node.className = cls;
     if (text !== undefined && text !== null) node.textContent = String(text);
     return node;
+  }
+
+  function byId(id) {
+    return root.document.getElementById(id);
   }
 
   function num(value) {
@@ -100,334 +112,230 @@
     }
   }
 
-  function tickValue(node, text, changed) {
-    if (!node) return;
-    if (node.textContent === text) return;
-    node.textContent = text;
-    if (changed) {
-      node.classList.remove('is-tick');
-      void node.offsetWidth; // restart the animation on consecutive updates
-      node.classList.add('is-tick');
-    }
+  function setText(id, text) {
+    var node = byId(id);
+    if (node && node.textContent !== text) node.textContent = text;
   }
 
-  /** The readiness score as app.js printed it. Null when not on the dashboard. */
+  function setMeter(key, ratio) {
+    var node = byId('bp-m-' + key);
+    if (!node) return;
+    var r = Math.max(0, Math.min(1, num(ratio) || 0));
+    node.style.transform = 'scaleX(' + r.toFixed(3) + ')';
+  }
+
+  /** The readiness score exactly as app.js printed it. */
   function readinessScore() {
-    var node = document.querySelector('#cmd-deck .cmd-score-main strong');
+    var node = root.document.querySelector('#cmd-deck .cmd-score-main strong');
     if (!node) return null;
     var value = parseInt(String(node.textContent).replace(/[^0-9-]/g, ''), 10);
     if (!isFinite(value)) return null;
     return Math.max(0, Math.min(100, value));
   }
 
-  // ------------------------------------------------------- dial + score sync
+  // ------------------------------------------------------------- dial build
 
-  /**
-   * Lights the dial ticks for the score that is already on screen and mirrors
-   * it into --hud-score for any CSS that wants it. Called on mount and on every
-   * deck re-render, because app.js rewrites the dashboard markup.
-   */
-  function syncDial() {
-    var ring = document.querySelector('#cmd-deck .fx-ring');
-    if (!ring) {
-      injectRing();
-      ring = document.querySelector('#cmd-deck .fx-ring');
+  function injectDial() {
+    var main = root.document.querySelector('#cmd-deck .cmd-score-main');
+    if (!main) return null;
+
+    // Tag the "/100" label. Without this, any generic span rule would also
+    // apply to the ring spans and collapse their layout box.
+    var spans = main.querySelectorAll(':scope > span');
+    for (var i = 0; i < spans.length; i += 1) {
+      if (!spans[i].className) spans[i].className = 'bp-denom';
     }
+
+    if (!main.querySelector('.bp-ticks')) {
+      ['a', 'b', 'c'].forEach(function (ring) {
+        var band = el('span', 'bp-ring');
+        band.setAttribute('data-ring', ring);
+        band.setAttribute('aria-hidden', 'true');
+        main.appendChild(band);
+      });
+
+      main.appendChild(el('span', 'bp-arc')).setAttribute('aria-hidden', 'true');
+
+      var ticks = el('span', 'bp-ticks');
+      ticks.setAttribute('aria-hidden', 'true');
+      for (var t = 0; t < TICKS; t += 1) {
+        var tick = document.createElement('i');
+        tick.style.setProperty('--a', (t * (360 / TICKS)).toFixed(3) + 'deg');
+        ticks.appendChild(tick);
+      }
+      main.appendChild(ticks);
+
+      var label = el('span', 'bp-dial-label', 'Readiness index');
+      label.setAttribute('aria-hidden', 'true');
+      main.appendChild(label);
+    }
+
+    return main;
+  }
+
+  /** Lights the scored ticks from the printed score and mirrors it into CSS. */
+  function syncDial() {
+    var main = injectDial();
+    if (!main) return;
     var score = readinessScore();
     if (score === null) return;
-    var lit = Math.round((score / 100) * RING_TICKS);
-    var ticks = ring ? ring.children : [];
-    for (var i = 0; i < ticks.length; i += 1) {
-      ticks[i].classList.toggle('on', i < lit);
+    var ring = main.querySelector('.bp-ticks');
+    var lit = Math.round((score / 100) * TICKS);
+    if (ring) {
+      for (var i = 0; i < ring.children.length; i += 1) {
+        ring.children[i].classList.toggle('on', i < lit);
+      }
     }
-    var shell = document.querySelector('#cmd-deck .cmd-deck-shell');
-    if (shell && shell.style) shell.style.setProperty('--hud-score', String(score));
+    main.style.setProperty('--hud-score', String(score));
+    var card = main.closest('.cmd-score-card');
+    if (card) card.style.setProperty('--hud-score', String(score));
   }
 
-  function injectRing() {
-    var main = document.querySelector('#cmd-deck .cmd-score-main');
-    if (!main || main.querySelector('.fx-ring')) return;
-    var ring = el('span', 'fx-ring');
-    ring.setAttribute('aria-hidden', 'true');
-    for (var i = 0; i < RING_TICKS; i += 1) {
-      var tick = document.createElement('i');
-      tick.style.setProperty('--a', (i * (360 / RING_TICKS)).toFixed(3) + 'deg');
-      ring.appendChild(tick);
+  // ------------------------------------------------------------ panel build
+
+  function buildPanel(def) {
+    var panel = el('article', 'bp-panel');
+    panel.setAttribute('data-bp', String(def.n));
+    panel.setAttribute('data-bp-panel', def.key);
+    panel.setAttribute('data-side', def.side);
+    panel.setAttribute('aria-label', 'Readout ' + def.n + ': ' + def.label);
+
+    panel.appendChild(el('span', 'bp-id', (def.n < 10 ? '0' : '') + def.n));
+    panel.appendChild(el('span', 'bp-label', def.label));
+
+    var value = el('span', 'bp-value', '—');
+    value.id = 'bp-v-' + def.key;
+    panel.appendChild(value);
+
+    var sub = el('span', 'bp-sub', '—');
+    sub.id = 'bp-s-' + def.key;
+    panel.appendChild(sub);
+
+    if (def.meter) {
+      var meter = el('span', 'bp-meter');
+      var fill = document.createElement('i');
+      fill.id = 'bp-m-' + def.key;
+      meter.appendChild(fill);
+      panel.appendChild(meter);
     }
-    main.appendChild(ring);
+
+    return panel;
   }
 
-  // ------------------------------------------------------------- board build
-
-  function tile(label, valueId, subId) {
-    var box = el('div', 'fx-tile');
-    box.appendChild(el('div', 'fx-tile-label', label));
-    var value = el('div', 'fx-tile-value', '—');
-    value.id = valueId;
-    box.appendChild(value);
-    var sub = el('div', 'fx-tile-sub', '—');
-    sub.id = subId;
-    box.appendChild(sub);
-    return box;
+  function buildChart(key, title) {
+    var chart = el('div', 'bp-chart');
+    var head = el('div', 'bp-chart-head');
+    head.appendChild(el('span', null, title));
+    var val = el('span', 'bp-chart-val', 'collecting…');
+    val.id = 'bp-chart-' + key + '-val';
+    head.appendChild(val);
+    chart.appendChild(head);
+    var bars = el('div', 'bp-bars');
+    bars.id = 'bp-bars-' + key;
+    bars.setAttribute('role', 'img');
+    bars.setAttribute('aria-label', title + ', samples taken in this page session');
+    chart.appendChild(bars);
+    return chart;
   }
 
-  function chart(id, title) {
-    var box = el('div', 'fx-chart');
-    var head = el('div', 'fx-chart-head');
-    head.appendChild(el('div', 'fx-chart-title', title));
-    var now = el('div', 'fx-chart-now', 'collecting…');
-    now.id = id + '-now';
-    head.appendChild(now);
-    box.appendChild(head);
-    var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.setAttribute('class', 'fx-spark');
-    svg.setAttribute('viewBox', '0 0 100 40');
-    svg.setAttribute('preserveAspectRatio', 'none');
-    svg.setAttribute('role', 'img');
-    svg.setAttribute('aria-label', title + ' rolling session trend');
-    svg.id = id;
-    box.appendChild(svg);
-    return box;
-  }
+  function buildStrip() {
+    var strip = el('section', 'bp-strip');
+    strip.setAttribute('aria-label', 'Session traces and live status');
 
-  function rail(labelId, trackId) {
-    var box = el('div', 'fx-rail');
-    var lbl = el('div', 'fx-rail-lbl');
-    var name = el('span', null, '—');
-    name.id = labelId;
-    var val = el('span', null, '—');
-    val.id = labelId + '-val';
-    lbl.appendChild(name);
-    lbl.appendChild(val);
-    box.appendChild(lbl);
-    var track = el('div', 'fx-rail-track');
-    var fill = el('span', 'fx-rail-fill');
-    fill.id = trackId;
-    fill.style.transform = 'scaleX(0)';
-    track.appendChild(fill);
-    box.appendChild(track);
-    return box;
-  }
+    var head = el('div', 'bp-strip-head');
+    head.appendChild(el('span', 'bp-strip-title', 'Session traces'));
 
-  function boardHead(titleText, statusId) {
-    var head = el('div', 'fx-board-head');
-    var title = el('div', 'fx-board-title');
-    title.appendChild(el('span', 'fx-live-dot'));
-    title.appendChild(el('span', null, titleText));
-    head.appendChild(title);
+    var source = el('span', 'bp-source', 'GET ' + API_URL + ' · ' + Math.round(POLL_MS / 1000) + 's');
+    head.appendChild(source);
 
-    var status = el('div', 'fx-board-meta');
-    var statusText = el('span', null, 'connecting…');
-    statusText.id = statusId;
-    statusText.setAttribute('role', 'status');
-    statusText.setAttribute('aria-live', 'polite');
-    status.appendChild(statusText);
-
-    var source = el('span', null, 'rolling session window');
-    source.id = 'fx-board-source';
-    status.appendChild(source);
-
-    var updated = el('span', null, '—');
-    updated.id = 'fx-board-updated';
-    status.appendChild(updated);
-
-    var pause = el('button', 'fx-board-btn', 'Pause');
-    pause.type = 'button';
-    pause.id = 'fx-board-pause';
-    pause.setAttribute('aria-pressed', 'false');
-    status.appendChild(pause);
+    var status = el('span', 'bp-status', 'connecting');
+    status.id = 'bp-status';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
     head.appendChild(status);
+
+    var pause = el('button', 'bp-strip-btn', 'Pause');
+    pause.type = 'button';
+    pause.id = 'bp-pause';
+    pause.setAttribute('aria-pressed', 'false');
+    head.appendChild(pause);
 
     pause.addEventListener('click', function () {
       state.paused = !state.paused;
       pause.textContent = state.paused ? 'Resume' : 'Pause';
       pause.setAttribute('aria-pressed', state.paused ? 'true' : 'false');
-      if (!state.paused) {
-        poll();
-        schedule();
-      } else {
+      if (state.paused) {
         if (state.timer) root.clearTimeout(state.timer);
         state.timer = null;
-        setStatus('paused', 'paused by operator');
+        setStatus('paused', 'paused');
+      } else {
+        poll();
+        schedule();
       }
     });
 
-    return head;
-  }
+    strip.appendChild(head);
 
-  function buildBoard() {
-    var board = el('section', 'fx-board is-offline');
-    board.setAttribute('aria-label', 'Live performance telemetry');
-    board.setAttribute('data-fx-board', '1');
-    board.appendChild(boardHead('Live Performance', 'fx-board-status'));
+    var charts = el('div', 'bp-charts');
+    charts.appendChild(buildChart('ttfb', 'TTFB · this session'));
+    charts.appendChild(buildChart('calls', 'Call throughput · this session'));
+    strip.appendChild(charts);
 
-    var grid = el('div', 'fx-board-grid');
-    grid.appendChild(tile('Active bridge calls', 'fx-active', 'fx-active-sub'));
-    grid.appendChild(tile('Avg TTFB', 'fx-ttfb', 'fx-ttfb-sub'));
-    grid.appendChild(tile('Transfer rate', 'fx-xfer', 'fx-xfer-sub'));
-    grid.appendChild(tile('DNC blocked', 'fx-dnc', 'fx-dnc-sub'));
-    grid.appendChild(tile('Retained calls', 'fx-calls', 'fx-calls-sub'));
-    grid.appendChild(tile('Server uptime', 'fx-uptime', 'fx-uptime-sub'));
-    board.appendChild(grid);
-
-    var charts = el('div', 'fx-charts');
-    charts.appendChild(chart('fx-spark-ttfb', 'TTFB trend'));
-    charts.appendChild(chart('fx-spark-calls', 'Call throughput'));
-    board.appendChild(charts);
-
-    return board;
-  }
-
-  function buildAux() {
-    var aux = el('section', 'fx-aux is-offline');
-    aux.setAttribute('aria-label', 'Signal detail and session ticker');
-    aux.setAttribute('data-fx-aux', '1');
-    aux.appendChild(boardHead('Signal Detail', 'fx-aux-status'));
-
-    var rails = el('div', 'fx-rails');
-    rails.appendChild(rail('fx-rail-ttfb', 'fx-fill-ttfb'));
-    rails.appendChild(rail('fx-rail-budget', 'fx-fill-budget'));
-    rails.appendChild(rail('fx-rail-heap', 'fx-fill-heap'));
-    rails.appendChild(rail('fx-rail-retention', 'fx-fill-retention'));
-    aux.appendChild(rails);
-
-    var ticker = el('div', 'fx-ticker');
-    ticker.appendChild(el('span', 'fx-ticker-tag', 'SIGNAL'));
-    var line = el('div', 'fx-ticker-line', 'Waiting for the first telemetry sample.');
-    line.id = 'fx-ticker-line';
+    var ticker = el('div', 'bp-ticker');
+    ticker.appendChild(el('span', 'bp-ticker-tag', 'Signal'));
+    var line = el('span', 'bp-ticker-line', 'Waiting for the first telemetry sample.');
+    line.id = 'bp-ticker-line';
     ticker.appendChild(line);
-    aux.appendChild(ticker);
+    strip.appendChild(ticker);
 
-    return aux;
+    return strip;
   }
 
-  // ------------------------------------------------------------ status text
+  // ------------------------------------------------------------------ state
 
   function setStatus(kind, text) {
-    [state.board, state.aux].forEach(function (panel) {
-      if (!panel) return;
-      panel.classList.toggle('is-offline', kind === 'offline');
-      panel.classList.toggle('is-stale', kind === 'stale');
-    });
-    var status = document.getElementById('fx-board-status');
-    if (status) status.textContent = text;
-    var auxStatus = document.getElementById('fx-aux-status');
-    if (auxStatus) auxStatus.textContent = text;
+    state.status = kind;
+    var node = byId('bp-status');
+    if (!node) return;
+    node.textContent = text;
+    node.classList.toggle('is-live', kind === 'live');
+    node.classList.toggle('is-stale', kind === 'stale');
+    node.classList.toggle('is-offline', kind === 'offline');
+    node.classList.toggle('is-paused', kind === 'paused');
   }
 
-  // ------------------------------------------------------------ sparkline draw
-
-  function drawSpark(svg, values, opts) {
-    if (!svg) return;
-    var options = opts || {};
-    while (svg.firstChild) svg.removeChild(svg.firstChild);
-
-    for (var g = 1; g <= 3; g += 1) {
-      var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      line.setAttribute('class', 'fx-spark-grid');
-      line.setAttribute('x1', '0');
-      line.setAttribute('x2', '100');
-      line.setAttribute('y1', String((40 / 4) * g));
-      line.setAttribute('y2', String((40 / 4) * g));
-      svg.appendChild(line);
-    }
+  function drawBars(key, values, zeroBase) {
+    var box = byId('bp-bars-' + key);
+    if (!box) return;
+    while (box.firstChild) box.removeChild(box.firstChild);
 
     var points = values.filter(function (v) { return num(v) !== null; });
-    if (points.length < 2) {
-      var hint = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      hint.setAttribute('x', '50');
-      hint.setAttribute('y', '24');
-      hint.setAttribute('text-anchor', 'middle');
-      hint.setAttribute('fill', 'currentColor');
-      hint.setAttribute('opacity', '0.35');
-      hint.setAttribute('font-size', '5');
-      hint.textContent = 'collecting samples…';
-      svg.appendChild(hint);
+    if (!points.length) {
+      box.setAttribute('data-empty', '1');
       return;
     }
+    box.removeAttribute('data-empty');
 
-    var min = Math.min.apply(null, points);
     var max = Math.max.apply(null, points);
-    if (options.zeroBase) min = 0;
+    if (zeroBase) max = Math.max(max, 1);
+    var min = zeroBase ? 0 : Math.min.apply(null, points);
     var span = max - min || 1;
-    var stepX = 100 / Math.max(1, points.length - 1);
 
-    var coords = points.map(function (v, i) {
-      var x = i * stepX;
-      var y = 37 - ((v - min) / span) * 34;
-      return [x, Math.max(3, Math.min(37, y))];
-    });
-
-    var path = coords.map(function (p, i) {
-      return (i ? 'L' : 'M') + p[0].toFixed(2) + ' ' + p[1].toFixed(2);
-    }).join(' ');
-
-    var area = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    area.setAttribute('class', 'fx-spark-area');
-    area.setAttribute('d', path + ' L100 40 L0 40 Z');
-    area.setAttribute('fill', 'var(--ac)');
-    svg.appendChild(area);
-
-    var stroke = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    stroke.setAttribute('class', 'fx-spark-line');
-    stroke.setAttribute('d', path);
-    svg.appendChild(stroke);
-
-    var last = coords[coords.length - 1];
-    var dot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-    dot.setAttribute('class', 'fx-spark-dot');
-    dot.setAttribute('cx', last[0].toFixed(2));
-    dot.setAttribute('cy', last[1].toFixed(2));
-    dot.setAttribute('r', '1.6');
-    svg.appendChild(dot);
-  }
-
-  // ------------------------------------------------------------- client perf
-
-  /**
-   * Measures real composed frame timing. requestAnimationFrame does not fire in
-   * a hidden or throttled tab, so a watchdog marks the sample as unavailable
-   * instead of leaving the rail on "sampling…" forever.
-   */
-  function sampleFrameBudget() {
-    if (typeof root.requestAnimationFrame !== 'function') return;
-    if (root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    var frames = 0;
-    var start = 0;
-    var done = false;
-    state.fpsUnavailable = false;
-    var watchdog = root.setTimeout(function () {
-      if (done) return;
-      done = true;
-      state.fpsUnavailable = true;
-      var budget = frameBudget();
-      var fill = document.getElementById('fx-fill-budget');
-      var val = document.getElementById('fx-rail-budget-val');
-      if (fill) fill.style.transform = 'scaleX(0)';
-      if (val) val.textContent = budget.text;
-    }, 1400);
-    function frame(now) {
-      if (done) return;
-      if (!start) start = now;
-      frames += 1;
-      if (now - start < 700) {
-        root.requestAnimationFrame(frame);
+    values.forEach(function (v, i) {
+      var bar = document.createElement('i');
+      var n = num(v);
+      if (n === null) {
+        bar.style.height = '0%';
       } else {
-        done = true;
-        root.clearTimeout(watchdog);
-        var fps = (frames / (now - start)) * 1000;
-        state.fps = Math.max(0, Math.min(240, fps));
+        var pct = 8 + ((n - min) / span) * 92;
+        bar.style.height = Math.max(3, Math.min(100, pct)).toFixed(1) + '%';
       }
-    }
-    try {
-      root.requestAnimationFrame(frame);
-    } catch (e) {
-      root.clearTimeout(watchdog);
-      state.fpsUnavailable = true;
-    }
+      if (i === values.length - 1) bar.className = 'hot';
+      box.appendChild(bar);
+    });
   }
 
-  // ------------------------------------------------------------------ render
+  // ----------------------------------------------------------------- render
 
   function render(sample) {
     var t = sample.telemetry || {};
@@ -446,127 +354,98 @@
     var simCalls = num(traffic.totalSimulatorCalls);
     var uptime = num(runtime.uptimeSec);
     var rss = num(runtime.rssMb);
+    var heap = num(runtime.heapMb);
     var qaPassed = num(inventory.qaPassed);
     var qaTotal = num(inventory.qaTotal);
     var listening = runtime.audioSocketListening === true;
-
-    tickValue(document.getElementById('fx-active'),
-      active === null ? '—' : fmtInt(active), active !== null);
-    tickValue(document.getElementById('fx-active-sub'),
-      listening ? 'bridge listener online' : 'bridge listener offline', false);
-
-    tickValue(document.getElementById('fx-ttfb'), fmtMs(ttfb), true);
-    tickValue(document.getElementById('fx-ttfb-sub'),
-      p95 !== null && p95 > 0 ? 'p95 ' + fmtMs(p95) : 'p95 not reported', false);
-
-    tickValue(document.getElementById('fx-xfer'), fmtPct(xferRate), true);
-    tickValue(document.getElementById('fx-xfer-sub'),
-      xferCount !== null ? fmtInt(xferCount) + ' closer transfers' : 'no transfer data', false);
-
-    tickValue(document.getElementById('fx-dnc'), fmtInt(dnc), true);
-    tickValue(document.getElementById('fx-dnc-sub'), 'suppressed outcomes', false);
-
-    tickValue(document.getElementById('fx-calls'), fmtInt(calls), true);
-    tickValue(document.getElementById('fx-calls-sub'),
-      (bridgeCalls === null ? '—' : fmtInt(bridgeCalls)) + ' bridge · ' +
-      (simCalls === null ? '—' : fmtInt(simCalls)) + ' browser', false);
-
-    tickValue(document.getElementById('fx-uptime'), fmtDuration(uptime), false);
-    tickValue(document.getElementById('fx-uptime-sub'),
-      qaTotal !== null ? 'QA ' + fmtInt(qaPassed) + '/' + fmtInt(qaTotal) + ' passed' : 'QA not reported', false);
-
-    // ---- rolling charts (session window only)
-    var ttfbHistory = state.samples.map(function (s) { return s.ttfb; });
-    var callHistory = state.samples.map(function (s) { return s.callDelta; });
-    drawSpark(document.getElementById('fx-spark-ttfb'), ttfbHistory, { zeroBase: false });
-    drawSpark(document.getElementById('fx-spark-calls'), callHistory, { zeroBase: true });
-
-    var ttfbNow = document.getElementById('fx-spark-ttfb-now');
-    if (ttfbNow) {
-      var recent = ttfbHistory.filter(function (v) { return num(v) !== null; });
-      if (recent.length) {
-        var sum = recent.reduce(function (a, b) { return a + b; }, 0);
-        ttfbNow.textContent = 'mean ' + fmtMs(sum / recent.length);
-      }
-    }
-    var callsNow = document.getElementById('fx-spark-calls-now');
-    if (callsNow) {
-      var deltas = callHistory.filter(function (v) { return num(v) !== null; });
-      var added = deltas.reduce(function (a, b) { return a + b; }, 0);
-      callsNow.textContent = (added > 0 ? '+' : '') + fmtInt(added) + ' calls';
-    }
-
-    // ---- rails
-    function setRail(labelId, fillId, label, ratio, valueText) {
-      var lbl = document.getElementById(labelId);
-      var val = document.getElementById(labelId + '-val');
-      var fill = document.getElementById(fillId);
-      if (lbl) lbl.textContent = label;
-      if (val) val.textContent = valueText;
-      if (fill) fill.style.transform = 'scaleX(' + Math.max(0, Math.min(1, ratio || 0)).toFixed(3) + ')';
-    }
-
-    setRail('fx-rail-ttfb', 'fx-fill-ttfb', 'TTFB / 1 s budget',
-      ttfb ? Math.min(1, ttfb / 1000) : 0, ttfb ? fmtMs(ttfb) : '—');
-    var budget = frameBudget();
-    setRail('fx-rail-budget', 'fx-fill-budget', 'Frame budget', budget.ratio, budget.text);
-    setRail('fx-rail-heap', 'fx-fill-heap', 'Server RSS',
-      rss ? Math.min(1, rss / 1024) : 0, rss ? rss + ' MB' : '—');
     var retention = num(traffic.retentionLimits && traffic.retentionLimits.bridgeCalls);
-    setRail('fx-rail-retention', 'fx-fill-retention', 'Retained bridge history',
-      retention && bridgeCalls ? Math.min(1, bridgeCalls / retention) : 0,
-      retention ? fmtInt(bridgeCalls) + '/' + fmtInt(retention) : 'no cap reported');
 
-    // ---- ticker (readiness is read from the number on screen, not recomputed)
-    var line = document.getElementById('fx-ticker-line');
+    // 01 active bridge calls
+    setText('bp-v-active', fmtInt(active));
+    setText('bp-s-active', listening ? 'listener online' : 'listener offline');
+
+    // 02 avg ttfb (meter is the 1 s budget, a real threshold)
+    setText('bp-v-ttfb', fmtMs(ttfb));
+    setText('bp-s-ttfb', p95 !== null && p95 > 0 ? 'p95 ' + fmtMs(p95) : 'p95 not reported');
+    setMeter('ttfb', ttfb ? Math.min(1, ttfb / 1000) : 0);
+
+    // 03 transfer rate
+    setText('bp-v-xfer', fmtPct(xferRate));
+    setText('bp-s-xfer', xferCount !== null ? fmtInt(xferCount) + ' closer transfers' : 'no transfer data');
+    setMeter('xfer', xferRate ? xferRate / 100 : 0);
+
+    // 04 dnc blocked
+    setText('bp-v-dnc', fmtInt(dnc));
+    setText('bp-s-dnc', 'suppressed outcomes');
+
+    // 05 retained calls
+    setText('bp-v-calls', fmtInt(calls));
+    setText('bp-s-calls',
+      (bridgeCalls === null ? '—' : fmtInt(bridgeCalls)) + ' bridge · ' +
+      (simCalls === null ? '—' : fmtInt(simCalls)) + ' browser');
+    setMeter('calls', retention && bridgeCalls ? Math.min(1, bridgeCalls / retention) : 0);
+
+    // 06 uptime
+    setText('bp-v-uptime', fmtDuration(uptime));
+    setText('bp-s-uptime', 'process uptime');
+
+    // 07 QA checks
+    setText('bp-v-qa', qaTotal !== null && qaTotal > 0
+      ? fmtInt(qaPassed) + '/' + fmtInt(qaTotal)
+      : '—');
+    setText('bp-s-qa', 'configuration tests');
+    setMeter('qa', qaTotal ? (qaPassed || 0) / qaTotal : 0);
+
+    // 08 server rss
+    setText('bp-v-rss', rss === null ? '—' : fmtInt(rss) + ' MB');
+    setText('bp-s-rss', heap === null ? 'heap not reported' : 'heap ' + fmtInt(heap) + ' MB');
+    setMeter('rss', rss && heap ? Math.min(1, heap / rss) : 0);
+
+    // Session traces
+    drawBars('ttfb', state.samples.map(function (s) { return s.ttfb; }), false);
+    drawBars('calls', state.samples.map(function (s) { return s.callDelta; }), true);
+
+    var ttfbValues = state.samples
+      .map(function (s) { return s.ttfb; })
+      .filter(function (v) { return num(v) !== null; });
+    if (ttfbValues.length) {
+      var sum = ttfbValues.reduce(function (a, b) { return a + b; }, 0);
+      setText('bp-chart-ttfb-val', 'mean ' + fmtMs(sum / ttfbValues.length));
+    } else {
+      setText('bp-chart-ttfb-val', 'collecting…');
+    }
+
+    var deltas = state.samples.map(function (s) { return s.callDelta; });
+    if (deltas.length) {
+      var added = deltas.reduce(function (a, b) { return a + (num(b) || 0); }, 0);
+      setText('bp-chart-calls-val', (added > 0 ? '+' : '') + fmtInt(added) + ' calls');
+    } else {
+      setText('bp-chart-calls-val', 'collecting…');
+    }
+
+    // Ticker
+    var line = byId('bp-ticker-line');
     if (line) {
       var domScore = readinessScore();
       line.textContent = '';
       line.appendChild(el('b', null, fmtInt(active) + ' active'));
-      line.appendChild(document.createTextNode(
+      line.appendChild(root.document.createTextNode(
         ' · ' + fmtMs(ttfb) + ' TTFB · ' + fmtPct(xferRate) + ' transfer · ' +
         fmtInt(calls) + ' retained calls · readiness ' +
         (domScore === null ? '—' : domScore + '/100') +
         ' · sample ' + timeLabel(sample.at)
       ));
     }
-
-    var updated = document.getElementById('fx-board-updated');
-    if (updated) updated.textContent = 'sampled ' + timeLabel(sample.at);
-
-    var source = document.getElementById('fx-board-source');
-    if (source) source.textContent = 'GET ' + API_URL + ' · ' + Math.round(POLL_MS / 1000) + 's';
   }
 
-  // ------------------------------------------------------------- frame budget
-
-  /**
-   * Client-side frame timing is the only figure these panels can produce
-   * without the server. It is reported together with the reason it is
-   * unavailable, so "not sampled" is never a silent gap.
-   */
-  function frameBudget() {
-    if (state.fps !== null) {
-      return { ratio: Math.min(1, state.fps / 60), text: Math.round(state.fps) + ' fps' };
-    }
-    if (root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      return { ratio: 0, text: 'off (reduced motion)' };
-    }
-    if (document.hidden) return { ratio: 0, text: 'paused (tab hidden)' };
-    if (typeof root.requestAnimationFrame !== 'function') return { ratio: 0, text: 'not supported' };
-    if (state.fpsUnavailable) return { ratio: 0, text: 'unavailable (no frames)' };
-    return { ratio: 0, text: 'sampling…' };
-  }
-
-  // ---------------------------------------------------------------- fetching
+  // ---------------------------------------------------------------- polling
 
   function poll() {
     if (state.inFlight || state.paused) return;
     state.inFlight = true;
-    var started = Date.now();
 
-    var url = API_URL + '?t=' + started;
-    root.fetch(url, {
+    var started = Date.now();
+    root.fetch(API_URL + '?t=' + started, {
       credentials: 'same-origin',
       headers: { Accept: 'application/json' },
       cache: 'no-store',
@@ -580,39 +459,27 @@
       var telemetry = data.telemetry;
       var traffic = telemetry.traffic || {};
       var callsTotal = num(traffic.totalCallsAllChannels);
-      var sample = { at: Date.now(), ttfb: num(traffic.avgTtfbMs) };
-      // Record the throughput delta before overwriting state.prev.
       var delta = callsTotal === null || state.prev === null ? 0 : Math.max(0, callsTotal - state.prev);
-      state.samples.push({ at: sample.at, ttfb: sample.ttfb, callDelta: delta });
+      state.samples.push({ at: Date.now(), ttfb: num(traffic.avgTtfbMs), callDelta: delta });
       if (state.samples.length > MAX_SAMPLES) state.samples.shift();
       state.prev = callsTotal;
 
       state.offline = false;
-      state.lastFetchAt = sample.at;
+      state.lastFetchAt = Date.now();
       state.lastError = '';
       setStatus('live', 'live');
-      render({ telemetry: telemetry, at: sample.at });
-      sampleFrameBudget();
+      render({ telemetry: telemetry, at: state.lastFetchAt });
     }).catch(function (err) {
       state.offline = true;
       state.lastError = (err && err.message) || 'unreachable';
       setStatus('offline', 'telemetry offline');
-      var line = document.getElementById('fx-ticker-line');
+      var line = byId('bp-ticker-line');
       if (line) {
         line.textContent = 'No server telemetry: ' + state.lastError +
-          '. Showing local frame timing only; no call figures are invented.';
+          '. No call figures are invented; the panels keep their last measured values.';
       }
-      var updated = document.getElementById('fx-board-updated');
-      if (updated) updated.textContent = 'retrying…';
-      var budget = frameBudget();
-      var fill = document.getElementById('fx-fill-budget');
-      var val = document.getElementById('fx-rail-budget-val');
-      if (fill) fill.style.transform = 'scaleX(' + budget.ratio.toFixed(3) + ')';
-      if (val) val.textContent = budget.text;
-      sampleFrameBudget();
     }).then(function () {
       state.inFlight = false;
-      // A sample that never lands must not keep pulsing as "live".
       if (!state.offline && Date.now() - state.lastFetchAt > STALE_MS) {
         setStatus('stale', 'stale sample');
       }
@@ -628,54 +495,38 @@
     }, POLL_MS);
   }
 
-  // ------------------------------------------------------------- mounting
+  // -------------------------------------------------------------- mounting
 
   function mountPanels() {
-    var shell = document.querySelector('#cmd-deck .cmd-deck-shell');
-    if (!shell) {
-      state.board = null;
-      state.aux = null;
-      return;
-    }
+    var shell = root.document.querySelector('#cmd-deck .cmd-deck-shell');
+    if (!shell) return;
 
     var anchor = shell.querySelector('.readiness-issues');
+    var mounted = shell.querySelector('[data-bp-panel]');
 
-    var board = shell.querySelector('[data-fx-board]');
-    if (!board) {
-      board = buildBoard();
-      if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(board, anchor);
-      else shell.appendChild(board);
+    if (!mounted) {
+      var frag = root.document.createDocumentFragment();
+      PANELS.forEach(function (def) { frag.appendChild(buildPanel(def)); });
+      frag.appendChild(buildStrip());
+      if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(frag, anchor);
+      else shell.appendChild(frag);
     }
 
-    var aux = shell.querySelector('[data-fx-aux]');
-    if (!aux) {
-      aux = buildAux();
-      if (board.parentNode) board.parentNode.insertBefore(aux, board.nextSibling);
-      else shell.appendChild(aux);
-    }
-
-    state.board = board;
-    state.aux = aux;
-
-    injectRing();
+    injectDial();
     syncDial();
+
+    if (!state.paused && !state.timer) {
+      poll();
+      schedule();
+    }
   }
 
-  /**
-   * The dashboard is re-rendered by app.js on every state change (it rewrites
-   * the deck's innerHTML), so the panels and the dial are re-attached whenever
-   * they disappear. The observer is created once, in boot().
-   */
   function observeDeck() {
     if (state.observer) return;
-    var target = document.getElementById('m') || document.body;
+    var target = root.document.getElementById('m') || root.document.body;
     state.observer = new MutationObserver(function () {
-      if (!document.querySelector('#cmd-deck .cmd-deck-shell')) {
-        state.board = null;
-        state.aux = null;
-        return;
-      }
-      if (!document.querySelector('#cmd-deck [data-fx-board]')) mountPanels();
+      if (!root.document.querySelector('#cmd-deck .cmd-deck-shell')) return;
+      if (!root.document.querySelector('#cmd-deck [data-bp-panel]')) mountPanels();
       else syncDial();
     });
     state.observer.observe(target, { childList: true, subtree: true });
@@ -684,25 +535,20 @@
   function boot() {
     observeDeck();
     mountPanels();
-    if (!state.timer && !state.paused) {
-      poll();
-      schedule();
-    }
 
-    document.addEventListener('visibilitychange', function () {
-      state.visible = document.visibilityState !== 'hidden';
+    root.document.addEventListener('visibilitychange', function () {
+      state.visible = root.document.visibilityState !== 'hidden';
       if (state.visible) poll();
     });
 
-    // The deck's own Sync button refreshes these panels too.
-    document.addEventListener('click', function (event) {
+    // The deck's own Sync button refreshes the panels too.
+    root.document.addEventListener('click', function (event) {
       var btn = event.target && event.target.closest ? event.target.closest('#btn-cmd-refresh') : null;
-      if (btn) {
-        if (state.timer) root.clearTimeout(state.timer);
-        state.timer = null;
-        poll();
-        schedule();
-      }
+      if (!btn) return;
+      if (state.timer) root.clearTimeout(state.timer);
+      state.timer = null;
+      poll();
+      schedule();
     }, true);
 
     root.addEventListener('beforeunload', function () {
@@ -711,8 +557,8 @@
     });
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', boot, { once: true });
+  if (root.document.readyState === 'loading') {
+    root.document.addEventListener('DOMContentLoaded', boot, { once: true });
   } else {
     boot();
   }
