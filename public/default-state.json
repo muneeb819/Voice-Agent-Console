@@ -1,6 +1,6 @@
 {
   "version": 4,
-  "updatedAt": "2026-11-02T18:37:23.277Z",
+  "updatedAt": "2026-11-16T02:24:25.542Z",
   "services": {
     "stt": {
       "providerId": "s1",
@@ -328,6 +328,52 @@
         "fn_dispo",
         "fn_end"
       ]
+    },
+    {
+      "id": "a_builtin",
+      "name": "Build-In Bot",
+      "mode": "both",
+      "language": "en",
+      "greeting": "Hi there! This is Build-In Bot on the line. How are you doing today?",
+      "prompt": "You are Build-In Bot, a helpful, warm, and concise voice assistant.\nCore Capabilities:\n1) Self-Introduction: Introduce yourself warmly as Build-In Bot and answer honestly that you are an AI assistant if asked.\n2) General Q&A: Answer any general questions accurately and conversationally.\n3) Live Specialist Transfer: Whenever the caller asks to speak with a live specialist, closer, or supervisor, call set_disposition with code \"XFER\" and call transfer_to_live_agent.\n4) Do-Not-Call (DNC): If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with \"DNC\", and call end_call immediately.",
+      "acceptViciCalls": true,
+      "injectCampaignDisclosure": false,
+      "randomGreetingEnabled": false,
+      "behavior": {
+        "bargeIn": "instant",
+        "bargeInSensitivity": "balanced",
+        "latencyProfile": "ultra",
+        "expressionStyle": "warm_empathetic",
+        "vocalGestures": true,
+        "allowGeneralQa": true,
+        "selfIntro": "Hi! I'm Build-In Bot, an AI voice assistant ready to help you out."
+      },
+      "stt": {
+        "keyterms": "Build-In Bot, assistant",
+        "eot": 0.55,
+        "eager": 0.35,
+        "eotms": 1800,
+        "smartFormat": false
+      },
+      "llm": {
+        "temp": 0.65,
+        "reasoning": "low"
+      },
+      "tts": {
+        "speed": 1.05,
+        "expr": 1
+      },
+      "audio": {
+        "inEnc": "linear16",
+        "inRate": 8000,
+        "outEnc": "linear16",
+        "outRate": 8000
+      },
+      "fnIds": [
+        "fn_xfer",
+        "fn_dispo",
+        "fn_end"
+      ]
     }
   ],
   "campaigns": [
@@ -422,6 +468,29 @@
         "a_jessica"
       ],
       "complianceRules": "Medicare campaign rules: identify accurately and never imply government affiliation. Never guarantee benefits, eligibility, funds or savings. A caller-confirmed Medicare Part A or Part B satisfies the qualification step; never ask age or birth date after Medicare is confirmed, and never infer a specific age from Medicare or lead data. Only a volunteered out-of-band age may disqualify. Do not request Medicare or Social Security numbers, bank or payment details. Transfer only with caller consent and honor refusal or do-not-call requests immediately."
+    },
+    {
+      "id": "c_builtin",
+      "name": "Build-In Bot – Default Campaign",
+      "agentId": "a_builtin",
+      "agentIds": [
+        "a_builtin"
+      ],
+      "viciCampaign": "BUILTIN",
+      "lists": "4001",
+      "start": "09:00",
+      "end": "20:00",
+      "tz": "America/New_York",
+      "attempts": 3,
+      "retry": 120,
+      "maxCalls": 10,
+      "xferType": "ingroup",
+      "xferTarget": "CLOSERS",
+      "fallback": "Dispo CALLBK",
+      "dnc": true,
+      "disclosure": "This call may be recorded for quality purposes.",
+      "dispos": "XFER,NI,DNC,NA,CALLBK,DEC",
+      "complianceRules": "Build-In Bot campaign rules: identify as an AI assistant when asked, answer general questions accurately, protect sensitive information, and honor stop or do-not-call requests immediately."
     }
   ],
   "vici": {
