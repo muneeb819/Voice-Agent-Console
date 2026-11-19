@@ -612,7 +612,12 @@ export function generateViciConfig(state: ConsoleState): string {
     .join('\n;\n');
 
   const sipCarrierBlock = [
-    `; === OPTION A (Universal — Asterisk 13 / 16 / 18+ on ViciBox 8/9/10/11/12): SIP + RTP Mode ===`,
+    `; === SIP + RTP MODE (${String(v.sipConnectionMode || 'static_peer').toUpperCase()}) ===`,
+    `; Static Peer: configure host=${v.bridgeHost}, port=${v.sipPort} and restrict source IPs.`,
+    `; Registration: Asterisk peer must be dynamic and accept REGISTER for ${v.sipUsername || '<sip-username>'}.`,
+    `; Hybrid: configure both the static peer and dynamic registration account.`,
+    `; Registration credentials are server-side only (VICI_SIP_PASSWORD); never paste them into this export.`,
+    `; This sample uses chan_sip syntax. For PJSIP, create an endpoint + auth + aor and map its contact to this bridge.`,
     `; 1) VICIdial Admin -> Admin -> Carriers -> Add New Carrier:`,
     `;    Carrier ID: AIBRIDGE | Registration String: (blank) | Server IP: ALL`,
     `;    Account Entry:`,
@@ -663,6 +668,7 @@ export function generateViciConfig(state: ConsoleState): string {
     campaignLines,
     ``,
     `; === VICIdial Admin Setup Checklist (Co-Located on ViciBox ${v.bridgeHost}) ===`,
+    `; SIP connection model: ${v.sipConnectionMode || 'static_peer'}; registrar ${v.sipRegistrarHost || '(unset)'}:${v.sipRegistrarPort || 5060}; user ${v.sipUsername || '(unset)'}`,
     `; 1. Users -> API User "${v.apiUser}": User Level=8, Modify Leads=1, Modify Lists=1, Agent API Access=1`,
     `; 2. Remote Agents -> Create Remote Agent User ${v.remoteAgentUser} (Lines=${state.campaigns[0]?.maxCalls || 10}, External Exten=${v.aiExten}1, On-Hook=N, Status=ACTIVE)`,
     `; 3. Inbound Groups -> Create Closer In-Group "${state.campaigns[0]?.xferTarget || 'FE_CLOSERS'}" & enable in Campaign "Allowed Transfer Groups"`,
@@ -686,5 +692,6 @@ export function generateViciConfig(state: ConsoleState): string {
     `AMI_SECRET=***`,
     `AUDIOSOCKET_PORT=${v.bridgePort}`,
     `BRIDGE_SIP_PORT=${v.sipPort}`,
+    `VICI_SIP_PASSWORD=***  # Required for registration/hybrid only`,
   ].join('\n');
 }
