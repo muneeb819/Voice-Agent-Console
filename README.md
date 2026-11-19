@@ -182,7 +182,7 @@ expire in ~6 days and need automated renewal).
 
 ## ☎️ Co-Located ViciBox Production Deployment (5 Minutes)
 
-See **[`VICIBOX-PRODUCTION-RUNBOOK.md`](./VICIBOX-PRODUCTION-RUNBOOK.md)** for full VICIdial Admin screenshots/settings (`User 6666`, `FE_CLOSERS` In-Group, `AIBRIDGE` Carrier on `115.186.137.240:5062`, and `Remote Agent 9001`).
+See **[`VICIBOX-PRODUCTION-RUNBOOK.md`](./VICIBOX-PRODUCTION-RUNBOOK.md)** for full VICIdial Admin screenshots/settings. For remote AWS-hosted SIP deployments, including Static Peer, SIP Registration and Hybrid, see **[`docs/VICIDIAL-REMOTE-SIP-CONNECTOR.md`](./docs/VICIDIAL-REMOTE-SIP-CONNECTOR.md)**. The remote connector guide documents supported registration authentication and network limitations.\n\n (`User 6666`, `FE_CLOSERS` In-Group, `AIBRIDGE` Carrier on `115.186.137.240:5062`, and `Remote Agent 9001`).
 
 ```bash
 git clone https://github.com/muneeb819/Voice-Agent-Console.git /tmp/voice-agent-console
