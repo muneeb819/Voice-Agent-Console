@@ -2,6 +2,7 @@ import { Agent,  AgentBehavior, AgentFunction, Campaign, ConsoleState, Provider 
 import { migrateStockMedicarePrompt, migrateStockOpening } from './opening';
 import { migrateLegacyQualificationPrompt, migrateLegacyCampaignRules, defaultSelfIntro, migrateLegacySelfIntro } from './persona';
 import { normalizeCampaignAgents } from './campaign-assignment';
+import { SENTINEL_QA_AGENT, SENTINEL_QA_TESTS } from './sentinel-qa';
 
 // SIP configuration is interpolated into raw UDP headers, so never let control
 // characters, quotes or angle brackets reach the registrar client. These are
@@ -484,13 +485,14 @@ export function createDefaultState(): ConsoleState {
           "fn_end"
         ]
       },
+      SENTINEL_QA_AGENT,
     ],
     campaigns: [
       {
         id: 'c1',
         name: 'FE Fronter – Test',
         agentId: 'a1',
-        agentIds: ['a1'],
+        agentIds: ['a1', 'a_qa'],
         viciCampaign: 'FETEST',
         lists: '1001',
         start: '09:00',
@@ -517,7 +519,7 @@ export function createDefaultState(): ConsoleState {
         id: 'c_medicare',
         name: 'Medicare — Food & OTC Outbound',
         agentId: 'a_medicare',
-        agentIds: ['a_medicare'],
+        agentIds: ['a_medicare', 'a_qa'],
         viciCampaign: 'MEDICARE',
         lists: '2001,2002',
         start: '09:00',
@@ -544,7 +546,7 @@ export function createDefaultState(): ConsoleState {
         id: 'c_nova',
         name: 'Nova — Live Concierge & General Q&A',
         agentId: 'a_nova',
-        agentIds: ['a_nova'],
+        agentIds: ['a_nova', 'a_qa'],
         viciCampaign: 'NOVACONC',
         lists: '3001',
         start: '09:00',
@@ -572,7 +574,8 @@ export function createDefaultState(): ConsoleState {
         "name": "Build-In Bot – Default Campaign",
         "agentId": "a_builtin",
         "agentIds": [
-          "a_builtin"
+          "a_builtin",
+          "a_qa"
         ],
         "viciCampaign": "BUILTIN",
         "lists": "4001",
@@ -720,6 +723,7 @@ export function createDefaultState(): ConsoleState {
           n: '',
         },
       ],
+      a_qa: SENTINEL_QA_TESTS,
     },
   };
 }

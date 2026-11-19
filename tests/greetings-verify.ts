@@ -63,12 +63,15 @@ async function main() {
   console.log('✓ Exact 1,100-row CSV seed, metadata, SQLite import and static catalog parity');
 
   const defaults = createDefaultState();
-  assert.ok(defaults.agents.every((agent) => agent.randomGreetingEnabled));
+  // Sentinel is an internal QA reviewer with a fixed opening; it is not a
+  // customer-facing call bot and must not draw a random sales greeting.
+  const callAgents = (state: typeof defaults) => state.agents.filter((agent) => agent.id !== 'a_qa');
+  assert.ok(callAgents(defaults).every((agent) => agent.randomGreetingEnabled));
   const oldState: any = structuredClone(defaults);
   for (const agent of oldState.agents) delete agent.randomGreetingEnabled;
   oldState.agents.push({ ...structuredClone(oldState.agents[0]), id: 'new-bot', name: 'New Bot' });
   const migrated = normalizeState(oldState);
-  assert.ok(migrated.agents.every((agent) => agent.randomGreetingEnabled));
+  assert.ok(callAgents(migrated).every((agent) => agent.randomGreetingEnabled));
   migrated.agents[0].randomGreetingEnabled = false;
   assert.equal(normalizeState(migrated).agents[0].randomGreetingEnabled, false);
   const agent = defaults.agents[0], campaign = defaults.campaigns.find((c) => c.agentId === agent.id)!;

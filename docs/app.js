@@ -2468,10 +2468,18 @@
     push(provJsonOk && fnJsonOk, 'Plug-in JSON objects and function JSON schemas are valid');
 
     const fnNames = agentFns.map((f) => f.name);
-    push(Boolean(agent.acceptViciCalls), 'Bridge VICIdial call-connect & lead hydration enabled', agent.mode === 'outbound');
-    push(fnNames.includes('transfer_to_live_agent'), 'transfer_to_live_agent function enabled');
+    const isQaReviewAgent = agent.id === 'a_qa';
     push(
-      !fnNames.includes('transfer_to_live_agent') || /transfer_to_live_agent/i.test(agent.prompt),
+      Boolean(agent.acceptViciCalls) || isQaReviewAgent,
+      isQaReviewAgent ? 'QA review agent — VICIdial bridge intentionally disabled' : 'Bridge VICIdial call-connect & lead hydration enabled',
+      agent.mode === 'outbound' && !isQaReviewAgent,
+    );
+    push(
+      fnNames.includes('transfer_to_live_agent') || isQaReviewAgent,
+      isQaReviewAgent ? 'QA review agent — live transfer intentionally disabled' : 'transfer_to_live_agent function enabled',
+    );
+    push(
+      !fnNames.includes('transfer_to_live_agent') || /transfer_to_live_agent/i.test(agent.prompt) || isQaReviewAgent,
       'System prompt specifies when to call transfer_to_live_agent',
     );
     push(/(dnc|do not call|take me off|stop)/i.test(agent.prompt), 'System prompt handles Do-Not-Call requests');
