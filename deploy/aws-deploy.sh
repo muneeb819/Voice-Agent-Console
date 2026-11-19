@@ -9,7 +9,7 @@
 #
 # Run this ON the instance, from an extracted release or a git checkout:
 #
-#   sudo bash deploy/aws-deploy.sh --ip 3.107.192.118
+#   sudo bash deploy/aws-deploy.sh --ip <EC2_PUBLIC_IP>
 #
 # Safe to re-run: an existing .env and TLS certificate are preserved.
 set -euo pipefail
@@ -169,13 +169,13 @@ node -e 'const [M,m]=process.versions.node.split(".").map(Number); process.exit(
   echo "ERROR: Node ${NODE_VERSION} is too old; 22.5+ is required." >&2; exit 1; }
 echo "Node ${NODE_VERSION} OK"
 
-if ! command -v nginx >/dev/null 2>&1; then
+if ! command -v nginx >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
-    apt-get update -qq && apt-get install -y nginx openssl
+    apt-get update -qq && apt-get install -y nginx openssl curl
   elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y nginx openssl
+    dnf install -y nginx openssl curl
   else
-    echo "ERROR: install nginx and openssl, then re-run." >&2; exit 1
+    echo "ERROR: install nginx, openssl and curl, then re-run." >&2; exit 1
   fi
 fi
 
@@ -225,6 +225,15 @@ cd "$INSTALL_DIR"
 npm ci --include=dev
 npm run build
 
+# Run the service as an unprivileged system account. It only needs the install
+# tree (writable for .env updates, data, recordings and the release archive).
+if ! id -u voiceagent >/dev/null 2>&1; then
+  useradd --system --home-dir "$INSTALL_DIR" --no-create-home \
+    --shell "$(command -v nologin || echo /bin/false)" voiceagent
+fi
+chown -R voiceagent:voiceagent "$INSTALL_DIR"
+chmod 600 "$INSTALL_DIR/.env"
+
 echo "=== [4/7] Configuring TLS ==="
 mkdir -p "$CERT_DIR"
 if [ "$SELF_SIGNED" = "yes" ]; then
@@ -256,14 +265,27 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=voiceagent
+Group=voiceagent
 WorkingDirectory=${INSTALL_DIR}
 EnvironmentFile=${INSTALL_DIR}/.env
+Environment=NODE_ENV=production
 ExecStart=$(command -v node) ${INSTALL_DIR}/dist/server.js
 Restart=always
 RestartSec=3
 LimitNOFILE=65535
+UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+CapabilityBoundingSet=
 StandardOutput=journal
 StandardError=journal
 
@@ -298,7 +320,7 @@ server {
 
     client_max_body_size 25m;
     add_header X-Content-Type-Options nosniff always;
-    add_header Referrer-Policy same-origin always;
+    add_header Referrer-Policy no-referrer always;
 
     location / {
         proxy_pass http://127.0.0.1:${APP_PORT};

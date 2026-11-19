@@ -10,6 +10,15 @@ exports.normalizeState = normalizeState;
 const opening_1 = require("./opening");
 const persona_1 = require("./persona");
 const campaign_assignment_1 = require("./campaign-assignment");
+// SIP configuration is interpolated into raw UDP headers, so never let control
+// characters, quotes or angle brackets reach the registrar client. These are
+// deliberately conservative allowlists rather than an escaping scheme.
+function cleanSipUser(value, maxLength = 128) {
+    return String(value ?? '').replace(/[^A-Za-z0-9+._=-]/g, '').slice(0, maxLength);
+}
+function cleanSipHost(value, maxLength = 255) {
+    return String(value ?? '').trim().replace(/[^A-Za-z0-9.\-:[\]]/g, '').slice(0, maxLength);
+}
 // Deepgram Voice Agent listens with either Nova (general purpose) or Flux v2.
 // The Voice Agent's own verified baseline is Nova-3; Flux models remain available.
 exports.VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'];
@@ -337,50 +346,50 @@ function createDefaultState() {
                 fnIds: ['fn_xfer', 'fn_dispo', 'fn_end'],
             },
             {
-              "id": "a_builtin",
-              "name": "Build-In Bot",
-              "mode": "both",
-              "language": "en",
-              "greeting": "Hi there! This is Build-In Bot on the line. How are you doing today?",
-              "prompt": "You are Build-In Bot, a helpful, warm, and concise voice assistant.\nCore Capabilities:\n1) Self-Introduction: Introduce yourself warmly as Build-In Bot and answer honestly that you are an AI assistant if asked.\n2) General Q&A: Answer any general questions accurately and conversationally.\n3) Live Specialist Transfer: Whenever the caller asks to speak with a live specialist, closer, or supervisor, call set_disposition with code \"XFER\" and call transfer_to_live_agent.\n4) Do-Not-Call (DNC): If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with \"DNC\", and call end_call immediately.",
-              "acceptViciCalls": true,
-              "injectCampaignDisclosure": false,
-              "randomGreetingEnabled": true,
-              "behavior": {
-                "bargeIn": "instant",
-                "bargeInSensitivity": "balanced",
-                "latencyProfile": "ultra",
-                "expressionStyle": "warm_empathetic",
-                "vocalGestures": true,
-                "allowGeneralQa": true,
-                "selfIntro": "Hi! I'm Build-In Bot, an AI voice assistant ready to help you out."
-              },
-              "stt": {
-                "keyterms": "Build-In Bot, assistant",
-                "eot": 0.55,
-                "eager": 0.35,
-                "eotms": 1800,
-                "smartFormat": false
-              },
-              "llm": {
-                "temp": 0.65,
-                "reasoning": "low"
-              },
-              "tts": {
-                "speed": 1.05,
-                "expr": 1
-              },
-              "audio": {
-                "inEnc": "linear16",
-                "inRate": 8000,
-                "outEnc": "linear16",
-                "outRate": 8000
-              },
-              "fnIds": [
-                "fn_xfer",
-                "fn_dispo",
-                "fn_end"
-              ]
+                "id": "a_builtin",
+                "name": "Build-In Bot",
+                "mode": "both",
+                "language": "en",
+                "greeting": "Hi there! This is Build-In Bot on the line. How are you doing today?",
+                "prompt": "You are Build-In Bot, a helpful, warm, and concise voice assistant.\nCore Capabilities:\n1) Self-Introduction: Introduce yourself warmly as Build-In Bot and answer honestly that you are an AI assistant if asked.\n2) General Q&A: Answer any general questions accurately and conversationally.\n3) Live Specialist Transfer: Whenever the caller asks to speak with a live specialist, closer, or supervisor, call set_disposition with code \"XFER\" and call transfer_to_live_agent.\n4) Do-Not-Call (DNC): If the caller says stop, take me off your list, or do not call, apologize politely, call set_disposition with \"DNC\", and call end_call immediately.",
+                "acceptViciCalls": true,
+                "injectCampaignDisclosure": false,
+                "randomGreetingEnabled": true,
+                "behavior": {
+                    "bargeIn": "instant",
+                    "bargeInSensitivity": "balanced",
+                    "latencyProfile": "ultra",
+                    "expressionStyle": "warm_empathetic",
+                    "vocalGestures": true,
+                    "allowGeneralQa": true,
+                    "selfIntro": "Hi! I'm Build-In Bot, an AI voice assistant ready to help you out."
+                },
+                "stt": {
+                    "keyterms": "Build-In Bot, assistant",
+                    "eot": 0.55,
+                    "eager": 0.35,
+                    "eotms": 1800,
+                    "smartFormat": false
+                },
+                "llm": {
+                    "temp": 0.65,
+                    "reasoning": "low"
+                },
+                "tts": {
+                    "speed": 1.05,
+                    "expr": 1
+                },
+                "audio": {
+                    "inEnc": "linear16",
+                    "inRate": 8000,
+                    "outEnc": "linear16",
+                    "outRate": 8000
+                },
+                "fnIds": [
+                    "fn_xfer",
+                    "fn_dispo",
+                    "fn_end"
+                ]
             },
         ],
         campaigns: [
@@ -463,27 +472,27 @@ function createDefaultState() {
                     '- Immediately honor stop, do-not-call, refusal, or hang-up requests without persuasion. Follow the assigned campaign’s configured disclosure and transfer instructions.',
             },
             {
-              "id": "c_builtin",
-              "name": "Build-In Bot – Default Campaign",
-              "agentId": "a_builtin",
-              "agentIds": [
-                "a_builtin"
-              ],
-              "viciCampaign": "BUILTIN",
-              "lists": "4001",
-              "start": "09:00",
-              "end": "20:00",
-              "tz": "America/New_York",
-              "attempts": 3,
-              "retry": 120,
-              "maxCalls": 10,
-              "xferType": "ingroup",
-              "xferTarget": "CLOSERS",
-              "fallback": "Dispo CALLBK",
-              "dnc": true,
-              "disclosure": "This call may be recorded for quality purposes.",
-              "dispos": "XFER,NI,DNC,NA,CALLBK,DEC",
-              "complianceRules": "Build-In Bot campaign rules: identify as an AI assistant when asked, answer general questions accurately, protect sensitive information, and honor stop or do-not-call requests immediately."
+                "id": "c_builtin",
+                "name": "Build-In Bot – Default Campaign",
+                "agentId": "a_builtin",
+                "agentIds": [
+                    "a_builtin"
+                ],
+                "viciCampaign": "BUILTIN",
+                "lists": "4001",
+                "start": "09:00",
+                "end": "20:00",
+                "tz": "America/New_York",
+                "attempts": 3,
+                "retry": 120,
+                "maxCalls": 10,
+                "xferType": "ingroup",
+                "xferTarget": "CLOSERS",
+                "fallback": "Dispo CALLBK",
+                "dnc": true,
+                "disclosure": "This call may be recorded for quality purposes.",
+                "dispos": "XFER,NI,DNC,NA,CALLBK,DEC",
+                "complianceRules": "Build-In Bot campaign rules: identify as an AI assistant when asked, answer general questions accurately, protect sensitive information, and honor stop or do-not-call requests immediately."
             },
         ],
         vici: {
@@ -493,6 +502,13 @@ function createDefaultState() {
             apiUser: '6666',
             source: 'aibot',
             transport: 'sip_trunk',
+            sipConnectionMode: 'static_peer',
+            sipRegistrarHost: '',
+            sipRegistrarPort: 5060,
+            sipDomain: '',
+            sipUsername: '',
+            sipAuthUsername: '',
+            sipTransportProtocol: 'udp',
             bridgeHost: '127.0.0.1',
             bridgePort: 9092,
             sipPort: 5062,
@@ -924,7 +940,14 @@ function normalizeState(raw) {
         apiUser: String(src.vici?.apiUser === 'apiuser' ? '6666' : src.vici?.apiUser || base.vici.apiUser),
         source: String(src.vici?.source || base.vici.source),
         transport: src.vici?.transport === 'audiosocket' ? 'audiosocket' : 'sip_trunk',
-        bridgeHost: String(rawBridgeHost || base.vici.bridgeHost),
+        sipConnectionMode: ['static_peer', 'registration', 'hybrid'].includes(src.vici?.sipConnectionMode) ? src.vici.sipConnectionMode : 'static_peer',
+        sipRegistrarHost: cleanSipHost(src.vici?.sipRegistrarHost),
+        sipRegistrarPort: Math.round(num(src.vici?.sipRegistrarPort, 5060, 1, 65535)),
+        sipDomain: cleanSipHost(src.vici?.sipDomain),
+        sipUsername: cleanSipUser(src.vici?.sipUsername),
+        sipAuthUsername: cleanSipUser(src.vici?.sipAuthUsername),
+        sipTransportProtocol: 'udp',
+        bridgeHost: cleanSipHost(rawBridgeHost || base.vici.bridgeHost),
         bridgePort: Math.round(num(src.vici?.bridgePort, 9092, 1, 65535)),
         sipPort: Math.round(Math.min(65535, Math.max(1, rawSipPort))),
         aiExten: String(src.vici?.aiExten || base.vici.aiExten),

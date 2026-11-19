@@ -73,7 +73,12 @@ async function run() {
   assert.equal(d.getElementById('st'), null, 'The saved-in-browser header pill is removed');
   assert.equal(d.querySelector('.console-header h1, .console-header .brand-copy, .console-header .brand-sub'), null, 'Header keeps only the centered logo');
   assert(d.querySelector('.side-rail-footer #btn-theme'), 'Theme control lives in the side-rail footer');
-  assert(d.querySelector('.side-rail-footer #btn-keys') && d.querySelector('.side-rail-footer #btn-account-menu'), 'Keys and account controls live in the side-rail footer');
+  assert.equal(d.querySelector('.console-header #btn-keys'), null, 'API keys no longer sit in the header');
+  assert.equal(d.querySelector('.console-header #btn-logout'), null, 'Sign-out no longer sits in the header');
+  assert.equal(d.querySelector('.console-header #btn-theme-header'), null, 'The header keeps no duplicate edition switch');
+  assert(d.querySelector('.side-rail-footer .side-utility-dock #btn-keys'), 'API keys return to the side-rail footer utility row');
+  assert(d.querySelector('#account-popover #btn-logout'), 'Sign-out returns to the side-rail account popover');
+  assert(d.querySelector('.side-rail-footer #btn-account-menu'), 'Account controls remain in the side-rail footer');
   // The panel toggle belongs to the same utility row as Theme / Keys / Account.
   assert(d.querySelector('.side-rail-footer .side-utility-dock #btn-sidebar-toggle'), 'Panel toggle lives in the rail footer utility row');
   assert.equal(d.querySelector('.console-header #btn-sidebar-toggle'), null, 'Desktop panel toggle is no longer in the header');
@@ -86,6 +91,7 @@ async function run() {
   assert(mobileToggle && mobileToggle.closest('.console-header'), 'Phones keep a header opener outside the off-canvas rail');
   assert(mobileToggle!.classList.contains('rail-toggle-mobile'), 'Phone opener must carry the desktop-hiding class');
   assert.notEqual(mobileToggle!.id, footerToggle.id, 'The two toggles need distinct ids');
+  assert.match(d.getElementById('section-masthead')!.textContent || '', /Agents/, 'Every section opens with its own title masthead');
   click(d.getElementById('btn-account-menu')!);
   assert.equal(d.getElementById('account-popover')!.hidden, false, 'Account links open from the rail footer');
   assert.notEqual((d.getElementById('btn-logout') as HTMLElement).style.display, 'none');
@@ -188,17 +194,26 @@ async function run() {
   assert(!(d.getElementById('btn-call-mic') as HTMLButtonElement).disabled, 'Blocked setup explains requirements instead of a dead button');
   click(d.getElementById('btn-call-mic')!); await tick();
   assert.match(d.getElementById('m')!.textContent || '', /Live Call Error|Deepgram key needed|Campaign setup required/);
-  // Theme Studio must swap the supplied banner logo, favicon and loader preview.
+  // House identity: one supplied crest across header, favicon and loader.
   click(d.getElementById('btn-theme')!);
   const initialLogo = (d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src');
-  assert.match(initialLogo || '', /mma-cyan-signal\.webp/);
-  assert.doesNotMatch(initialLogo || '', /-icon\.jpg/, 'Header shows the full landscape banner, not the square icon');
-  click(d.querySelector('[data-pick-theme="ember_pulse"]')!);
-  assert.match((d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src') || '', /mma-gold-ember\.webp/);
-  assert.doesNotMatch((d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src') || '', /-icon\.jpg/);
-  assert.match((d.querySelector('link[rel="icon"]') as HTMLLinkElement).href, /mma-gold-ember-icon\.jpg/);
-  assert.match((d.querySelector('#theme-loader-logo img') as HTMLImageElement).getAttribute('src') || '', /mma-gold-ember\.webp/);
-  assert(d.querySelectorAll('#theme-swatch-grid .theme-preview-logo img').length >= 10);
+  assert.match(initialLogo || '', /mma-atelier-icon\.png/);
+  assert.doesNotMatch(initialLogo || '', /mma-atelier-logo\.png/, 'Header uses the crest icon beside the wordmark');
+  assert.equal(d.documentElement.dataset.theme, 'atelier');
+  assert.match(d.getElementById('theme-studio-hero')!.textContent || '', /Atelier Oxblood/);
+  assert.equal(d.querySelectorAll('#theme-studio-hero .theme-hero-palette span').length, 3, 'House palette is shown once');
+  assert.equal(d.querySelectorAll('#theme-swatch-grid [data-pick-theme]').length, 5, 'Five curated house editions');
+  assert.equal(d.getElementById('theme-modal')!.hidden, false, 'Theme studio is open from the rail footer');
+  click(d.querySelector('[data-pick-theme="terracotta"]')!);
+  assert.equal(d.documentElement.dataset.theme, 'terracotta');
+  assert.match(d.getElementById('theme-studio-hero')!.textContent || '', /Aegean Clay/);
+  assert.match(d.getElementById('theme-active-lbl')!.textContent || '', /Aegean/);
+  assert.equal(d.querySelectorAll('#theme-swatch-grid .theme-card.on').length, 1, 'Exactly one edition is selected');
+  assert.match((d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src') || '', /mma-atelier-icon\.png/);
+  assert.match((d.querySelector('link[rel="icon"]') as HTMLLinkElement).href, /mma-atelier-icon\.png/);
+  click(d.getElementById('btn-theme-preview-loader')!);
+  assert.equal(d.getElementById('theme-loader-preview')!.hidden, false);
+  assert.match((d.querySelector('#theme-loader-logo img') as HTMLImageElement).getAttribute('src') || '', /mma-atelier-logo\.png/);
   assert.deepEqual(f.errors, []);
   w.close();
 
@@ -215,8 +230,14 @@ async function run() {
   failed.w.close();
 
   const dashboard = await fixture({ tab: 'dashboard' });
+  assert.match(dashboard.d.getElementById('section-masthead')!.textContent || '', /Dashboard/, 'Dashboard masthead names the section');
   const text = dashboard.d.getElementById('m')!.textContent || '';
-  assert.match(text, /Configuration Readiness/);
+  assert.match(text, /Command deck/);
+  assert.match(text, /System readiness/);
+  assert.equal(dashboard.d.querySelectorAll('.cmd-score-ribbon i').length, 12, 'Heartbeat ribbon is a twelve-segment meter');
+  assert.equal(dashboard.d.querySelectorAll('.ready-signal i').length, 34, 'Readiness card carries a live signal');
+  assert.equal(dashboard.d.querySelectorAll('.ready-led').length, 4, 'Readiness card shows four live indicator lamps');
+  assert(dashboard.d.querySelector('[data-ready-ticker]'), 'Readiness card carries a live ticker');
   assert.match(text, /no score is a 99\.999% reliability guarantee/);
   assert.match(text, /What still needs attention|All configuration checks passed/);
   assert(!/GRADE D/.test(text), 'Valid shipped examples must not receive an arbitrary failing grade');
@@ -287,34 +308,24 @@ async function run() {
   assert.deepEqual(retired.errors, []);
   retired.w.close();
 
-  // ---- live animated logo waves (fresh fixture: the first one is closed above)
+  // ---- house crest rendering (fresh fixture: the first one is closed above)
   const waved = await fixture();
   const d2 = waved.d;
   const brandMark = d2.getElementById('brand-mark')!;
-  const left = brandMark.querySelector('.mma-wave-l');
-  const right = brandMark.querySelector('.mma-wave-r');
-  assert(left && right, 'Header banner renders both live wave flanks');
-  assert.equal(left!.querySelectorAll('i').length, 12, 'Left flank has the pinned bar count');
-  assert.equal(right!.querySelectorAll('i').length, 12, 'Right flank has the pinned bar count');
-  assert.equal(brandMark.querySelectorAll('.mma-wave i[style*="animation-duration"]').length, 24,
-    'Every bar carries its own duration so the motion is not a uniform sweep');
-  assert.equal(brandMark.querySelectorAll('.mma-wave[aria-hidden="true"]').length, 2,
-    'Decorative waves are hidden from assistive tech');
-  const heights = Array.from(left!.querySelectorAll('i')).map((b) => parseFloat((b as HTMLElement).style.height));
-  const mid = heights.length >> 1;
-  assert(heights[0] < heights[mid - 1] && heights[heights.length - 1] < heights[mid],
-    'Wave envelope tapers at both ends like the supplied art');
-  // Theme changes must keep the live bars rather than falling back to a static image.
+  assert.equal(brandMark.querySelectorAll('.mma-wave').length, 0, 'Header must not render synthetic equaliser bars');
+  assert.equal(brandMark.querySelectorAll('img.mma-icon-art').length, 1, 'Header renders the supplied crest once');
+  assert.match((brandMark.querySelector('img') as HTMLImageElement).getAttribute('src') || '', /mma-atelier-icon\.png/);
   const brandApi = (waved.w as any).VACBrandLogos;
-  brandApi.applyTo(brandMark, 'ember_pulse', 'full');
-  assert.equal(brandMark.querySelectorAll('.mma-wave i').length, 24, 'Switching theme keeps the live waves');
+  brandApi.applyTo(brandMark, 'atelier', 'full');
+  assert.equal(brandMark.querySelectorAll('img').length, 1, 'Re-render keeps a single crest');
+  assert.match((brandMark.querySelector('img') as HTMLImageElement).getAttribute('src') || '', /mma-atelier-logo\.png/);
   brandApi.setEnergy(brandMark, 'speaking');
-  assert.equal(brandMark.dataset.energy, 'speaking', 'Speaking state is exposed to CSS');
+  assert.equal(brandMark.dataset.energy, 'speaking', 'Call state is exposed to CSS without an animation loop');
   brandApi.setEnergy(brandMark, '');
   assert.equal(brandMark.dataset.energy, undefined, 'Idle clears the energy attribute');
-  assert.equal(brandApi.fullHtml('cyan_signal', { waves: false }).includes('mma-wave'), false,
-    'Callers can still request the plain static banner');
-  assert.deepEqual(waved.errors, [], 'Live waves must not throw during console boot');
+  assert.equal(brandApi.fullHtml('atelier').includes('mma-wave'), false, 'Brand HTML contains no decorative bars');
+  assert.match(brandApi.assetFor('atelier').icon, /mma-atelier-icon\.png/);
+  assert.deepEqual(waved.errors, [], 'Brand renderer must not throw during console boot');
   waved.w.close();
 
   // ---- server-mode account security UI (password change / revoke sessions)
@@ -396,6 +407,6 @@ async function run() {
     assert.equal(beforeCampaigns + 2, beforeCampaigns + 2, 'Fixture sanity');
   }
 
-  console.log('✓ Static console: full landscape header logo, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
+  console.log('✓ Static console: house crest header lockup, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
 }
 run().catch((error) => { console.error(error); process.exit(1); });

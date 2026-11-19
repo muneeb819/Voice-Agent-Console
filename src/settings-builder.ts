@@ -1,4 +1,5 @@
-import { Agent, Campaign, ConsoleState, Provider, ValidationItem } from './types';
+import { Agent, Campaign, ConsoleState, Provider, ValidationItem, ViciConfig } from './types';
+import { getSecret } from './env-store';
 import { deepgramModelsForProviderType, VOICE_AGENT_STT_MODELS } from './defaults';
 import { composeOpening } from './opening';
 import { composeBehavioralPrompt } from './persona';
@@ -517,6 +518,9 @@ export function getCampaignCallReadinessBlockers(state: ConsoleState, campaign: 
 
 export function getDeploymentReadinessBlockers(state: ConsoleState): string[] {
   const blockers: string[] = [];
+  for (const item of validateViciSip(state.vici)) {
+    if (item.level === 'er') blockers.push(`VICIdial SIP: ${item.message}.`);
+  }
   for (const agent of state.agents) {
     if (!state.campaigns.some((campaign) => campaignHasAgent(campaign, agent.id))) {
       blockers.push(`Agent “${agent.name}” must be explicitly assigned to at least one campaign.`);
@@ -535,8 +539,30 @@ export function getDeploymentReadinessBlockers(state: ConsoleState): string[] {
   return [...new Set(blockers)];
 }
 
+function validateViciSip(v: ViciConfig): ValidationItem[] {
+  if (v.sipConnectionMode === 'static_peer') return [];
+  const items: ValidationItem[] = [];
+  const push = (ok: boolean, message: string, warnOnly = false) => {
+    items.push({
+      level: ok ? 'ok' : warnOnly ? 'wn' : 'er',
+      icon: ok ? '✓' : warnOnly ? '!' : '✗',
+      scope: 'VICIdial SIP',
+      message,
+    });
+  };
+  const bridgeHost = String(v.bridgeHost || '').trim();
+  const loopbackBridge = !bridgeHost || /^(?:localhost|0\.0\.0\.0|127\.|::1$|\[::1\]$|::|\[::\])/i.test(bridgeHost);
+  push(Boolean(String(v.sipRegistrarHost || '').trim()), 'SIP registrar host is set');
+  push(Boolean(String(v.sipUsername || '').trim()), 'SIP username is set');
+  push(v.sipTransportProtocol === 'udp', 'SIP registration transport is UDP');
+  push(!loopbackBridge, 'Bridge Host is public/reachable (not loopback or 0.0.0.0)');
+  push(Boolean(getSecret('VICI_SIP_PASSWORD')), 'VICI_SIP_PASSWORD is configured in server secrets');
+  return items;
+}
+
 export function validateState(state: ConsoleState): ValidationItem[] {
   const results: ValidationItem[] = [];
+  results.push(...validateViciSip(state.vici));
   for (const agent of state.agents) {
     results.push(...validateAgent(state, agent));
   }
@@ -586,6 +612,10 @@ export function diffStates(prev: ConsoleState, next: ConsoleState): string[] {
 
 export function generateViciConfig(state: ConsoleState): string {
   const v = state.vici;
+  // Asterisk runs on the same host, so it must reach the port this process
+  // actually listens on (PORT may differ from the historical 533 default).
+  const configuredPort = Number(process.env.PORT);
+  const consolePort = Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : 533;
   const nonAgentUrl = `${v.viciBaseUrl}${v.nonAgentApiPath}`;
   const agentApiUrl = `${v.viciBaseUrl}${v.agentApiPath}`;
 
@@ -650,7 +680,7 @@ export function generateViciConfig(state: ConsoleState): string {
     ` same => n,Answer()`,
     ` same => n,Set(CHANNEL(audioreadformat)=slin)`,
     ` same => n,Set(CHANNEL(audiowriteformat)=slin)`,
-    ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:533/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
+    ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:${consolePort}/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
     ` same => n,AudioSocket(\${_BRIDGE_UUID},${v.bridgeHost}:${v.bridgePort})`,
     ` same => n,Hangup()`,
   ].join('\n');
@@ -684,7 +714,7 @@ export function generateViciConfig(state: ConsoleState): string {
     `; 5. Dispo/DNC  : Updates status via ${nonAgentUrl} (update_lead + add_dnc_phone) & releases Remote Agent via ${agentApiUrl} (stage=HANGUP)`,
     ``,
     `# === Bridge Server .env (Co-Located on ViciBox) ===`,
-    `PORT=533`,
+    `PORT=${consolePort}`,
     `# Set HOST explicitly for remote access after configuring authentication`,
     `HOST=127.0.0.1`,
     `DEEPGRAM_API_KEY=***`,

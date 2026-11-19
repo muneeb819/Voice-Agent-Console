@@ -17,6 +17,26 @@ function md5(value: string): string {
   return crypto.createHash('md5').update(value).digest('hex');
 }
 
+function isLoopbackOrUnspecifiedHost(host: string): boolean {
+  const value = String(host || '').trim().toLowerCase();
+  return !value || value === 'localhost' || value === '0.0.0.0' || value === '::' ||
+    /^127\./.test(value) || value === '::1' || value === '[::1]';
+}
+
+function hasUnsafeHeaderChars(value: string): boolean {
+  // Reject every character that can terminate a header or change SIP URI
+  // parameters. normalizeState uses a narrower allowlist; this is the
+  // defense-in-depth check for callers that construct the client directly.
+  return /[\r\n\0"<>;,\s@]/.test(String(value || ''));
+}
+
+// Digest challenge values are reflected back into an Authorization header.
+// Strip CR/LF/NUL and escape quotes/backslashes so a registrar cannot inject a
+// second header or break out of a quoted parameter.
+function quoteDigestValue(value: string): string {
+  return String(value || '').replace(/[\r\n\0]/g, '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 function parseHeaders(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
   for (const line of raw.split(/\r?\n/).slice(1)) {
@@ -49,6 +69,7 @@ export class SipRegistrationClient {
   private fromTag = crypto.randomBytes(8).toString('hex');
   private cseq = 1;
   private nonceCount = 0;
+  private authAttempts = 0;
   private nonce = '';
   private realm = '';
   private opaque = '';
@@ -70,30 +91,44 @@ export class SipRegistrationClient {
     };
   }
 
+  private fail(message: string): void {
+    this.status = 'failed';
+    this.lastError = message;
+    this.expiresAt = null;
+  }
+
   async start(): Promise<void> {
     if (!['registration', 'hybrid'].includes(this.cfg.sipConnectionMode)) return;
     if (!this.cfg.sipRegistrarHost || !this.cfg.sipUsername || !this.cfg.bridgeHost) {
-      this.status = 'failed';
-      this.lastError = 'SIP registration requires registrar host, SIP username, and a public bridge host.';
+      this.fail('SIP registration requires registrar host, SIP username, and a public bridge host.');
       return;
     }
     if (this.cfg.sipTransportProtocol !== 'udp') {
-      this.status = 'failed';
-      this.lastError = 'Only UDP SIP registration is currently supported; TLS/TCP is not enabled.';
+      this.fail('Only UDP SIP registration is currently supported; TLS/TCP is not enabled.');
+      return;
+    }
+    // These values are interpolated into raw SIP headers. normalizeState strips
+    // them, but validate again so a direct constructor call cannot inject CRLF.
+    if ([this.cfg.sipRegistrarHost, this.cfg.sipDomain, this.cfg.sipUsername, this.cfg.sipAuthUsername, this.cfg.bridgeHost]
+      .some(hasUnsafeHeaderChars)) {
+      this.fail('SIP configuration contains unsafe header characters.');
+      return;
+    }
+    if (isLoopbackOrUnspecifiedHost(this.cfg.bridgeHost)) {
+      this.fail('SIP registration needs a public/reachable Bridge Host; loopback and 0.0.0.0 are not advertisable to a registrar.');
       return;
     }
     if (!getSecret('VICI_SIP_PASSWORD')) {
-      this.status = 'failed';
-      this.lastError = 'VICI_SIP_PASSWORD is not configured in server secrets.';
+      this.fail('VICI_SIP_PASSWORD is not configured in server secrets.');
       return;
     }
     this.stopped = false;
+    this.authAttempts = 0;
     try {
       const resolved = await dns.lookup(this.cfg.sipRegistrarHost, { all: true, family: 4 });
       this.registrarAddresses = new Set(resolved.map((entry) => entry.address));
     } catch (err: any) {
-      this.status = 'failed';
-      this.lastError = `Could not resolve SIP registrar: ${err?.message || 'DNS lookup failed'}`;
+      this.fail(`Could not resolve SIP registrar: ${err?.message || 'DNS lookup failed'}`);
       return;
     }
     this.socket = dgram.createSocket('udp4');
@@ -102,8 +137,7 @@ export class SipRegistrationClient {
       void this.handleResponse(message.toString('utf8'));
     });
     this.socket.on('error', (err) => {
-      this.status = 'failed';
-      this.lastError = err.message;
+      this.fail(err.message);
     });
     await new Promise<void>((resolve, reject) => {
       this.socket!.once('error', reject);
@@ -127,12 +161,14 @@ export class SipRegistrationClient {
     this.refreshTimer = null;
     this.timeoutTimer = null;
     if (this.socket) {
-      try { this.sendRegister(0); } catch {}
       const socket = this.socket;
       this.socket = null;
-      await new Promise<void>((resolve) => socket.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        try { socket.close(() => resolve()); } catch { resolve(); }
+      });
     }
     this.status = 'stopped';
+    this.expiresAt = null;
   }
 
   private authHeader(method: string, uri: string): string {
@@ -144,7 +180,8 @@ export class SipRegistrationClient {
     const nc = (++this.nonceCount).toString(16).padStart(8, '0');
     const cnonce = crypto.randomBytes(12).toString('hex');
     const response = md5(`${ha1}:${this.nonce}:${nc}:${cnonce}:${qop}:${ha2}`);
-    return `Digest username="${username}", realm="${this.realm}", nonce="${this.nonce}", uri="${uri}", response="${response}", algorithm=MD5, qop=auth, nc=${nc}, cnonce="${cnonce}"${this.opaque ? `, opaque="${this.opaque}"` : ''}`;
+    const q = quoteDigestValue;
+    return `Digest username="${q(username)}", realm="${q(this.realm)}", nonce="${q(this.nonce)}", uri="${q(uri)}", response="${response}", algorithm=MD5, qop=auth, nc=${nc}, cnonce="${cnonce}"${this.opaque ? `, opaque="${q(this.opaque)}"` : ''}`;
   }
 
   private sendRegister(expires = 3600): void {
@@ -172,15 +209,13 @@ export class SipRegistrationClient {
     ].join('\r\n') + '\r\n\r\n';
     this.socket.send(Buffer.from(request), port, host, (err) => {
       if (err) {
-        this.status = 'failed';
-        this.lastError = err.message;
+        this.fail(err.message);
       }
     });
     if (this.timeoutTimer) clearTimeout(this.timeoutTimer);
     this.timeoutTimer = setTimeout(() => {
       if (!this.stopped && this.status !== 'registered') {
-        this.status = 'failed';
-        this.lastError = 'No SIP REGISTER response received within 8 seconds.';
+        this.fail('No SIP REGISTER response received within 8 seconds.');
       }
     }, 8000);
     this.timeoutTimer.unref();
@@ -188,21 +223,24 @@ export class SipRegistrationClient {
 
   private async handleResponse(raw: string): Promise<void> {
     if (this.stopped) return;
-    const statusLine = raw.split(/\r?\n/, 1)[0] || '';
+    const statusLine = (raw.split(/\r?\n/, 1)[0] || '').slice(0, 180);
     const status = Number(/^SIP\/2\.0\s+(\d+)/.exec(statusLine)?.[1] || 0);
     const headers = parseHeaders(raw);
     if (status === 401 || status === 407) {
+      if (++this.authAttempts > 2) {
+        this.fail('Registrar rejected the SIP credentials repeatedly (401/407).');
+        return;
+      }
       const challenge = challengeParams(headers[status === 407 ? 'proxy-authenticate' : 'www-authenticate'] || '');
       const qops = String(challenge.qop || '').split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
       if (!challenge.realm || !challenge.nonce || !qops.includes('auth') || (challenge.algorithm && challenge.algorithm.toUpperCase() !== 'MD5')) {
-        this.status = 'failed';
-        this.lastError = 'Registrar returned an unsupported SIP digest challenge.';
+        this.fail('Registrar returned an unsupported SIP digest challenge.');
         return;
       }
       this.proxyAuth = status === 407;
-      this.realm = challenge.realm;
-      this.nonce = challenge.nonce;
-      this.opaque = challenge.opaque || '';
+      this.realm = String(challenge.realm).slice(0, 200);
+      this.nonce = String(challenge.nonce).slice(0, 512);
+      this.opaque = String(challenge.opaque || '').slice(0, 512);
       this.nonceCount = 0;
       this.sendRegister();
       return;
@@ -214,15 +252,19 @@ export class SipRegistrationClient {
       const expires = Number.isFinite(expiresHeader) ? Math.max(60, Math.min(expiresHeader, 86400)) : 3600;
       this.status = 'registered';
       this.lastError = null;
+      this.authAttempts = 0;
       this.expiresAt = new Date(Date.now() + expires * 1000).toISOString();
       if (this.refreshTimer) clearTimeout(this.refreshTimer);
-      this.refreshTimer = setTimeout(() => { this.status = 'registering'; this.sendRegister(); }, Math.max(30, Math.floor(expires * 0.8)) * 1000);
+      this.refreshTimer = setTimeout(() => {
+        this.status = 'registering';
+        this.expiresAt = null;
+        this.sendRegister();
+      }, Math.max(30, Math.floor(expires * 0.8)) * 1000);
       this.refreshTimer.unref();
       return;
     }
     if (status >= 300) {
-      this.status = 'failed';
-      this.lastError = `Registrar rejected REGISTER: ${statusLine}`;
+      this.fail(`Registrar rejected REGISTER: ${statusLine}`);
     }
   }
 }

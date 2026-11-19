@@ -60,8 +60,58 @@ export function getSecret(key: SecretKeyName): string {
 export function maskSecret(val: string): string {
   const clean = sanitizeSecretValue(val || '');
   if (!clean) return '';
-  if (clean.length <= 8) return '••••••••';
-  return `${clean.slice(0, 4)}••••${clean.slice(-4)}`;
+  // Never reveal any characters of a stored secret. Some console views are
+  // readable by viewer/operator accounts, so a partial mask would leak the
+  // first and last four characters of ADMIN_PASSWORD and every provider key.
+  return '••••••••';
+}
+
+/**
+ * Secrets that may be interpolated into provider configuration (custom STT/TTS
+ * endpoint, headers and extra JSON). Administrative and PBX credentials are
+ * deliberately excluded: an authenticated operator can edit agent/provider
+ * configuration, so allowing {{ADMIN_PASSWORD}}, {{VICI_API_PASS}} or
+ * {{AMI_SECRET}} here would let them exfiltrate those secrets to a provider.
+ */
+export const PROVIDER_PLACEHOLDER_KEYS = [
+  'DEEPGRAM_API_KEY',
+  'SPEECH_SERVICE_URL',
+  'SPEECH_SERVICE_API_KEY',
+  'ELEVENLABS_API_KEY',
+  'CARTESIA_API_KEY',
+  'OPENAI_API_KEY',
+  'GROQ_API_KEY',
+] as const;
+
+const PROVIDER_PLACEHOLDER_ALIASES: Record<string, SecretKeyName> = {
+  ELEVEN_KEY: 'ELEVENLABS_API_KEY',
+  ELEVEN_LABS_API_KEY: 'ELEVENLABS_API_KEY',
+  GROQ_KEY: 'GROQ_API_KEY',
+  CARTESIA_KEY: 'CARTESIA_API_KEY',
+};
+
+export function resolveProviderPlaceholder(name: string): string {
+  const key = PROVIDER_PLACEHOLDER_ALIASES[name] || name;
+  if (!(PROVIDER_PLACEHOLDER_KEYS as readonly string[]).includes(key)) return '';
+  return getSecret(key as SecretKeyName);
+}
+
+/** Recursively resolves only provider-scoped {{PLACEHOLDER}} values. */
+export function interpolateProviderPlaceholders(value: any): any {
+  if (typeof value === 'string') {
+    return value.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (_match, name: string) =>
+      resolveProviderPlaceholder(name)
+    );
+  }
+  if (Array.isArray(value)) return value.map((entry) => interpolateProviderPlaceholders(entry));
+  if (value && typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      out[key] = interpolateProviderPlaceholders(entry);
+    }
+    return out;
+  }
+  return value;
 }
 
 export function getSecretsStatus(): Record<SecretKeyName, { configured: boolean; masked: string }> {

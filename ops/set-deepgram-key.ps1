@@ -1,6 +1,6 @@
 # Securely set the Deepgram API key in .env.
 #
-#   powershell -ExecutionPolicy Bypass -File F:\Voice-Agent-Console\ops\set-deepgram-key.ps1
+#   powershell -ExecutionPolicy Bypass -File .\ops\set-deepgram-key.ps1
 #
 # Prompts for the key without echoing it to the screen or the transcript,
 # writes it to .env, locks the file down, and restarts the console.
@@ -8,7 +8,7 @@
 # Do not pass the key as an argument. Do not paste it into a chat.
 
 $ErrorActionPreference = "Stop"
-$root = "F:\Voice-Agent-Console"
+$root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $envPath = Join-Path $root ".env"
 
 if (-not (Test-Path -LiteralPath $envPath)) {

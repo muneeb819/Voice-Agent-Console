@@ -15,13 +15,15 @@ let startingPromise: Promise<{ ok: boolean; publicUrl: string | null; error?: st
 
 export function getPreferredLanIpv4(): string | null {
   const nets = os.networkInterfaces();
-  for (const list of Object.values(nets)) {
+  for (const [name, list] of Object.entries(nets)) {
+    // Skip container/bridge/virtual adapters so an EC2 VPC address (often
+    // 172.31.x.x) is not discarded just because Docker also uses 172.16/12.
+    if (/^(?:docker|br-|veth|virbr|tun|tap|lo)/i.test(name)) continue;
     for (const iface of list || []) {
       if (
         iface.family === 'IPv4' &&
         !iface.internal &&
-        !iface.address.startsWith('169.254.') &&
-        !iface.address.startsWith('172.')
+        !iface.address.startsWith('169.254.')
       ) {
         return iface.address;
       }
@@ -134,26 +136,33 @@ export async function discoverActiveTunnelUrl(): Promise<string | null> {
     return managedTunnelUrl;
   }
 
-  for (const metricsPort of [20241, 20242, 20243, 20244, 20245]) {
-    try {
-      const res = await fetch(`http://localhost:${metricsPort}/quicktunnel`, {
-        signal: AbortSignal.timeout(220),
-      });
-      if (res.ok) {
-        const data = (await res.json()) as { hostname?: string };
-        const host = String(data?.hostname || '').trim();
-        if (host && host.includes('.')) {
+  // Probe the candidate metrics ports in parallel. Sequential 220 ms timeouts
+  // made every /api/state request wait ~1.1 s when no tunnel was running.
+  const found = (
+    await Promise.all(
+      [20241, 20242, 20243, 20244, 20245].map(async (metricsPort) => {
+        try {
+          const res = await fetch(`http://localhost:${metricsPort}/quicktunnel`, {
+            signal: AbortSignal.timeout(220),
+          });
+          if (!res.ok) return null;
+          const data = (await res.json()) as { hostname?: string };
+          const host = String(data?.hostname || '').trim();
+          if (!host || !host.includes('.')) return null;
           const full = host.startsWith('http') ? host : `https://${host}`;
-          try {
-            fs.mkdirSync(LOGS_DIR, { recursive: true });
-            fs.writeFileSync(DEMO_URL_FILE, `${full}\n`, 'utf8');
-          } catch {}
           return full.replace(/\/+$/, '');
+        } catch {
+          return null;
         }
-      }
-    } catch {
-      // Port not listening; continue
-    }
+      })
+    )
+  ).find((value): value is string => Boolean(value));
+  if (found) {
+    try {
+      fs.mkdirSync(LOGS_DIR, { recursive: true });
+      fs.writeFileSync(DEMO_URL_FILE, `${found}\n`, 'utf8');
+    } catch {}
+    return found;
   }
 
   try {

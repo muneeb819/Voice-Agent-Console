@@ -3,6 +3,17 @@ import { migrateStockMedicarePrompt, migrateStockOpening } from './opening';
 import { migrateLegacyQualificationPrompt, migrateLegacyCampaignRules, defaultSelfIntro, migrateLegacySelfIntro } from './persona';
 import { normalizeCampaignAgents } from './campaign-assignment';
 
+// SIP configuration is interpolated into raw UDP headers, so never let control
+// characters, quotes or angle brackets reach the registrar client. These are
+// deliberately conservative allowlists rather than an escaping scheme.
+function cleanSipUser(value: unknown, maxLength = 128): string {
+  return String(value ?? '').replace(/[^A-Za-z0-9+._=-]/g, '').slice(0, maxLength);
+}
+
+function cleanSipHost(value: unknown, maxLength = 255): string {
+  return String(value ?? '').trim().replace(/[^A-Za-z0-9.\-:[\]]/g, '').slice(0, maxLength);
+}
+
 // Deepgram Voice Agent listens with either Nova (general purpose) or Flux v2.
 // The Voice Agent's own verified baseline is Nova-3; Flux models remain available.
 export const VOICE_AGENT_STT_MODELS = ['nova-3', 'flux-general-en', 'flux-general-multi'] as const;
@@ -1053,13 +1064,13 @@ export function normalizeState(raw: any): ConsoleState {
     source: String(src.vici?.source || base.vici.source),
     transport: src.vici?.transport === 'audiosocket' ? ('audiosocket' as const) : ('sip_trunk' as const),
     sipConnectionMode: ['static_peer', 'registration', 'hybrid'].includes(src.vici?.sipConnectionMode) ? src.vici.sipConnectionMode : 'static_peer',
-    sipRegistrarHost: String(src.vici?.sipRegistrarHost || '').trim(),
+    sipRegistrarHost: cleanSipHost(src.vici?.sipRegistrarHost),
     sipRegistrarPort: Math.round(num(src.vici?.sipRegistrarPort, 5060, 1, 65535)),
-    sipDomain: String(src.vici?.sipDomain || '').trim(),
-    sipUsername: String(src.vici?.sipUsername || '').trim(),
-    sipAuthUsername: String(src.vici?.sipAuthUsername || '').trim(),
+    sipDomain: cleanSipHost(src.vici?.sipDomain),
+    sipUsername: cleanSipUser(src.vici?.sipUsername),
+    sipAuthUsername: cleanSipUser(src.vici?.sipAuthUsername),
     sipTransportProtocol: 'udp' as const,
-    bridgeHost: String(rawBridgeHost || base.vici.bridgeHost),
+    bridgeHost: cleanSipHost(rawBridgeHost || base.vici.bridgeHost),
     bridgePort: Math.round(num(src.vici?.bridgePort, 9092, 1, 65535)),
     sipPort: Math.round(Math.min(65535, Math.max(1, rawSipPort))),
     aiExten: String(src.vici?.aiExten || base.vici.aiExten),

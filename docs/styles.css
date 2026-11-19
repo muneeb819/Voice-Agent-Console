@@ -392,8 +392,6 @@ body {
   background: var(--ac);
 }
 
-}
-
 /* ============================================================================
    STRATEGIC 3-ZONE PRECISION COMMAND HEADER & MICRO-ANIMATIONS
    ============================================================================ */
@@ -3780,13 +3778,6 @@ header::after {
 
 /* Simplified dashboard score card (replaces gauge + KPI grid). */
 .cmd-score-card { margin-top: 14px; padding: 16px; border: 1px solid var(--bd); border-radius: 12px; background: var(--sf); }
-.cmd-score-main { display: flex; align-items: baseline; gap: 8px; }
-.cmd-score-main strong { font-size: 34px; line-height: 1; }
-.cmd-score-main span { color: var(--tx-2, #9aa); font-size: 13px; }
-.cmd-score-bar { margin: 10px 0 8px; height: 8px; border-radius: 6px; background: color-mix(in srgb, var(--bd) 60%, transparent); overflow: hidden; }
-.cmd-score-bar i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, var(--ac), var(--ac-2)); }
-.cmd-score-stats { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; font-size: 13px; }
-.cmd-score-stats b { font-size: 15px; }
 .readiness-issues .ck button,
 .readiness-issues .ck a.g { margin-left: 6px; padding: 3px 8px; font-size: 11px; }
 

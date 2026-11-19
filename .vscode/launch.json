@@ -14,11 +14,11 @@
       "console": "integratedTerminal",
       "envFile": "${workspaceFolder}/.env",
       "env": {
-        "HOST": "115.186.137.240",
+        "HOST": "127.0.0.1",
         "PORT": "533",
-        "BRIDGE_BIND_HOST": "115.186.137.240",
-        "AUDIOSOCKET_PORT": "19092",
-        "BRIDGE_SIP_PORT": "15062"
+        "BRIDGE_BIND_HOST": "127.0.0.1",
+        "AUDIOSOCKET_PORT": "9092",
+        "BRIDGE_SIP_PORT": "5062"
       }
     },
     {

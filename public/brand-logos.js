@@ -1,11 +1,7 @@
-/* MMA Digital Labs — theme-bound transparent logo assets.
-   The eight operator-supplied banners are the source of truth. Each theme maps
-   to one banner; the two light themes reuse the closest supplied banner until
-   additional artwork is provided. The full banner is a transparent WebP cut.
-   The waveform baked into the artwork is masked out and replaced with live
-   CSS-animated bars in the same windows, so the logo moves without a canvas,
-   requestAnimationFrame loop, or audio analyser. The motion is a decorative
-   CSS loop, not a measurement of microphone or provider audio. */
+/* MMA Digital Lab — one house identity.
+   The operator-supplied crest is the only brand mark used by the console,
+   the sign-in shell, the loader and the favicon. There is no per-theme logo
+   set and no synthetic waveform overlay: the supplied artwork is shown as-is. */
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -14,133 +10,65 @@
   'use strict';
 
   const ASSETS = {
-    'mma-cyan-signal': {
-      full: './assets/brand/mma-cyan-signal.webp',
-      icon: './assets/brand/mma-cyan-signal-icon.jpg',
-      label: 'MMA Cyan Signal',
-    },
-    'mma-blue-ultraviolet': {
-      full: './assets/brand/mma-blue-ultraviolet.webp',
-      icon: './assets/brand/mma-blue-ultraviolet-icon.jpg',
-      label: 'MMA Blue Ultraviolet',
-    },
-    'mma-cyan-field': {
-      full: './assets/brand/mma-cyan-field.webp',
-      icon: './assets/brand/mma-cyan-field-icon.jpg',
-      label: 'MMA Cyan Field',
-    },
-    'mma-gold-ember': {
-      full: './assets/brand/mma-gold-ember.webp',
-      icon: './assets/brand/mma-gold-ember-icon.jpg',
-      label: 'MMA Gold Ember',
-    },
-    'mma-ice-obsidian': {
-      full: './assets/brand/mma-ice-obsidian.webp',
-      icon: './assets/brand/mma-ice-obsidian-icon.jpg',
-      label: 'MMA Ice Obsidian',
-    },
-    'mma-cyan-emerald': {
-      full: './assets/brand/mma-cyan-emerald.webp',
-      icon: './assets/brand/mma-cyan-emerald-icon.jpg',
-      label: 'MMA Cyan Emerald',
-    },
-    'mma-cyan-aurora': {
-      full: './assets/brand/mma-cyan-aurora.webp',
-      icon: './assets/brand/mma-cyan-aurora-icon.jpg',
-      label: 'MMA Cyan Aurora',
-    },
-    'mma-gold-crimson': {
-      full: './assets/brand/mma-gold-crimson.webp',
-      icon: './assets/brand/mma-gold-crimson-icon.jpg',
-      label: 'MMA Gold Crimson',
+    'mma-house': {
+      full: './assets/brand/mma-atelier-logo.png',
+      icon: './assets/brand/mma-atelier-icon.png',
+      label: 'MMA Digital Lab',
     },
   };
 
   const THEME_LOGO_MAP = {
-    cyan_signal: 'mma-cyan-signal',
-    ultraviolet: 'mma-blue-ultraviolet',
-    aurora_field: 'mma-cyan-field',
-    ember_pulse: 'mma-gold-ember',
-    obsidian: 'mma-ice-obsidian',
-    emerald: 'mma-cyan-emerald',
-    aurora: 'mma-cyan-aurora',
-    crimson: 'mma-gold-crimson',
-    pearl: 'mma-ice-obsidian',
-    sakura: 'mma-gold-crimson',
+    atelier: 'mma-house',
+    terracotta: 'mma-house',
+    nocturne: 'mma-house',
+    botanic: 'mma-house',
+    chalk: 'mma-house',
+    // Older saved preferences resolve to the same house mark.
+    cyan_signal: 'mma-house',
+    ultraviolet: 'mma-house',
+    aurora_field: 'mma-house',
+    ember_pulse: 'mma-house',
+    obsidian: 'mma-house',
+    emerald: 'mma-house',
+    aurora: 'mma-house',
+    crimson: 'mma-house',
+    pearl: 'mma-house',
+    sakura: 'mma-house',
   };
 
   function assetFor(themeId) {
-    const key = THEME_LOGO_MAP[themeId] || THEME_LOGO_MAP.cyan_signal;
-    return ASSETS[key] || ASSETS['mma-cyan-signal'];
-  }
-
-  // Fewer, bolder bars than the baked artwork: at header size 24 bars collapsed
-  // to ~1px each and read as a static smudge. 12 bars stay individually visible
-  // and the motion is actually perceptible.
-  const WAVE_BARS = 12;
-
-  /**
-   * Builds one flank of live bars. Heights follow a sine envelope so the group
-   * tapers at both ends like the original art. Durations and delays are derived
-   * deterministically from the index, so the two flanks stay in sync across
-   * renders and the motion never looks like a single uniform sweep.
-   */
-  function waveBars() {
-    let html = '';
-    for (let i = 0; i < WAVE_BARS; i += 1) {
-      const t = (i + 0.5) / WAVE_BARS;
-      const envelope = Math.pow(Math.sin(Math.PI * t), 0.5);
-      const height = 20 + 80 * envelope * (0.35 + 0.65 * Math.abs(Math.sin(i * 1.9 + 0.4)));
-      const duration = (1.05 + ((i * 37) % 11) / 10).toFixed(2);
-      const delay = (-((i * 53) % 17) / 10).toFixed(2);
-      html += '<i style="height:' + height.toFixed(1) + '%;animation-duration:' + duration + 's;animation-delay:' + delay + 's"></i>';
-    }
-    return html;
-  }
-
-  function waveHtml() {
-    const bars = waveBars();
-    return (
-      '<span class="mma-wave mma-wave-l" aria-hidden="true">' + bars + '</span>' +
-      '<span class="mma-wave mma-wave-r" aria-hidden="true">' + bars + '</span>'
-    );
+    const key = THEME_LOGO_MAP[themeId] || 'mma-house';
+    return ASSETS[key] || ASSETS['mma-house'];
   }
 
   function fullHtml(themeId, opts) {
     const options = opts || {};
     const asset = assetFor(themeId);
-    const alt = options.alt || 'MMA Digital Labs — Voice Agent Bots Console';
+    const alt = options.alt == null ? 'MMA Digital Lab — Voice Agent Console' : options.alt;
     const lazy = options.lazy ? ' loading="lazy"' : '';
-    const waves = options.waves === false ? '' : waveHtml();
-    return '<img class="mma-logo-art" src="' + asset.full + '" alt="' + alt + '" draggable="false"' + lazy + ' />' + waves;
+    return '<img class="mma-logo-art" src="' + asset.full + '" alt="' + alt + '" draggable="false" decoding="async"' + lazy + ' />';
   }
 
   function iconHtml(themeId, opts) {
     const options = opts || {};
     const asset = assetFor(themeId);
     const alt = options.alt || '';
-    return (
-      '<span class="mma-brand-icon">' +
-      '<img class="mma-icon-art" src="' + asset.icon + '" alt="' + alt + '" draggable="false" />' +
-      '</span>'
-    );
+    return '<img class="mma-icon-art" src="' + asset.icon + '" alt="' + alt + '" draggable="false" decoding="async" />';
   }
 
   function applyTo(el, themeId, variant) {
     if (!el) return;
-    el.dataset.brandTheme = themeId || 'cyan_signal';
-    el.innerHTML = variant === 'icon' ? iconHtml(themeId) : fullHtml(themeId);
+    el.dataset.brandTheme = themeId || 'atelier';
+    el.innerHTML = variant === 'icon' ? iconHtml(themeId) : fullHtml(themeId, { alt: '' });
   }
 
-  /**
-   * Sets decorative wave energy from real call state. This only changes CSS
-   * custom properties; it never starts a timer or animation loop.
-   */
+  /* Kept for callers that mirror live call state onto the mark. The house
+     identity has no equaliser, so this only records the state for styling. */
   function setEnergy(el, level) {
     if (!el) return;
     if (level) el.dataset.energy = level;
     else delete el.dataset.energy;
   }
 
-  return { ASSETS, THEME_LOGO_MAP, assetFor, fullHtml, iconHtml, applyTo, setEnergy, WAVE_BARS };
+  return { ASSETS, THEME_LOGO_MAP, assetFor, fullHtml, iconHtml, applyTo, setEnergy };
 });
