@@ -13,13 +13,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="./styles.css?v=nova-3.12" />
-    <link rel="stylesheet" href="./brand-logos.css?v=nova-3.12" />
-    <link rel="stylesheet" href="./future.css?v=nova-3.12" />
-    <link rel="stylesheet" href="./atelier.css?v=nova-3.12" />
+    <link rel="stylesheet" href="./styles.css?v=nova-3.13" />
+    <link rel="stylesheet" href="./brand-logos.css?v=nova-3.13" />
+    <link rel="stylesheet" href="./future.css?v=nova-3.13" />
+    <link rel="stylesheet" href="./atelier.css?v=nova-3.13" />
     <script>
       (function () {
-        var CURRENT_BUILD = 'nova-3.12';
+        var CURRENT_BUILD = 'nova-3.13';
         // Discard legacy token handoffs; browser authentication uses HttpOnly cookies.
         try {
           sessionStorage.removeItem('vac_auth_token');
@@ -91,76 +91,6 @@
       <div class="hdr-zone hdr-zone-right">
         <span class="hdr-imprint">Voice Operations</span>
         <span class="hdr-live-pill" title="Live console session"><i aria-hidden="true"></i>LIVE</span>
-        <div class="hdr-actions" role="group" aria-label="API keys and session controls">
-          <button
-            class="g hdr-action-btn"
-            id="btn-keys"
-            type="button"
-            title="API keys &amp; security"
-            aria-label="Open API keys and security"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <circle cx="8" cy="8" r="4.2" />
-              <path d="m11 11 8.5 8.5M16 16l2.2-2.2M18.5 18.5 21 16" />
-            </svg>
-            <span class="hdr-action-lbl">API</span>
-          </button>
-          <button
-            class="g hdr-action-btn hdr-logout-btn"
-            id="btn-logout"
-            type="button"
-            title="Sign out"
-            aria-label="Sign out"
-            style="display: none"
-          >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" />
-              <path d="m15 8 4 4-4 4M19 12H9" />
-            </svg>
-            <span>Sign out</span>
-          </button>
-        </div>
-        <button
-          class="g hdr-edition-btn"
-          id="btn-theme-header"
-          type="button"
-          aria-haspopup="dialog"
-          aria-controls="theme-modal"
-          title="Change house edition"
-        >
-          <span class="edition-dot" aria-hidden="true"></span>
-          <span id="hdr-edition-name">Edition 01</span>
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M12 3a9 9 0 1 0 0 18h1.2a2.2 2.2 0 0 0 1.6-3.7c-.5-.6-.1-1.5.7-1.5H17a4 4 0 0 0 4-4c0-5-4-9-9-9Z" />
-            <circle cx="7.5" cy="11" r="1" />
-            <circle cx="11" cy="7.5" r="1" />
-            <circle cx="15" cy="8.5" r="1" />
-          </svg>
-        </button>
       </div>
     </header>
 
@@ -186,7 +116,20 @@
             <span class="theme-dot" id="theme-active-dot" aria-hidden="true"></span>
             <span class="side-utility-lbl" id="theme-active-lbl">Theme</span>
           </button>
-          <div class="side-utility-dock hdr-tool-dock" role="group" aria-label="Account and panel controls">
+          <div class="side-utility-dock hdr-tool-dock" role="group" aria-label="Keys, account and panel controls">
+            <button
+              class="g side-utility-btn"
+              id="btn-keys"
+              type="button"
+              title="API keys &amp; security"
+              aria-label="Open API keys and security"
+            >
+              <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="8" cy="8" r="4.2" />
+                <path d="m11 11 8.5 8.5M16 16l2.2-2.2M18.5 18.5 21 16" />
+              </svg>
+              <span class="side-utility-lbl">API Keys</span>
+            </button>
             <button
               class="g side-utility-btn"
               id="btn-account-menu"
@@ -231,6 +174,7 @@
             <div class="account-popover" id="account-popover" hidden>
               <a class="g" id="btn-create-account" href="/signup" style="display: none; text-decoration: none">Create Account</a>
               <button class="g" id="btn-account-security" type="button" style="display: none">Password &amp; Sessions</button>
+              <button class="g" id="btn-logout" type="button" style="display: none">Sign Out</button>
               <button class="g" id="btn-share-demo" type="button" style="display: none">Copy Client Link</button>
               <a class="g" id="btn-newtab" href="./" target="_blank" rel="noopener" style="display: none; text-decoration: none"
                 >Open Tab</a
@@ -356,10 +300,10 @@
     </div>
 
     <input type="file" id="import-file" accept="application/json,.json" hidden />
-    <script src="./opening.js?v=nova-3.12"></script>
-    <script src="./persona.js?v=nova-3.12"></script>
-    <script src="./brand-logos.js?v=nova-3.12"></script>
-    <script src="./app.js?v=nova-3.12"></script>
-    <script src="./future-board.js?v=nova-3.12"></script>
+    <script src="./opening.js?v=nova-3.13"></script>
+    <script src="./persona.js?v=nova-3.13"></script>
+    <script src="./brand-logos.js?v=nova-3.13"></script>
+    <script src="./app.js?v=nova-3.13"></script>
+    <script src="./future-board.js?v=nova-3.13"></script>
   </body>
 </html>

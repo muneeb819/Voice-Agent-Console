@@ -499,14 +499,6 @@
     if (themeColor) themeColor.setAttribute('content', meta.themeColor || '#f3ede2');
     const lbl = document.getElementById('theme-active-lbl');
     if (lbl) lbl.textContent = meta.short;
-    const hdrEdition = document.getElementById('hdr-edition-name');
-    if (hdrEdition) {
-      const editionIndex = Math.max(
-        0,
-        APPEARANCE_THEMES.findIndex((t) => t.id === meta.id),
-      );
-      hdrEdition.textContent = `Edition ${String(editionIndex + 1).padStart(2, '0')} · ${meta.short}`;
-    }
     const dot = document.getElementById('theme-active-dot');
     if (dot) dot.style.background = meta.dots[0];
     renderBrandMark();
@@ -7614,7 +7606,7 @@
       return;
     }
 
-    if (b.id === 'btn-theme' || b.id === 'btn-theme-header') {
+    if (b.id === 'btn-theme') {
       if (e.shiftKey) {
         const idx = APPEARANCE_THEMES.findIndex((t) => t.id === appearance.theme);
         appearance.theme = APPEARANCE_THEMES[(idx + 1) % APPEARANCE_THEMES.length].id;

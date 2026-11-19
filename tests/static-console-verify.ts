@@ -73,9 +73,11 @@ async function run() {
   assert.equal(d.getElementById('st'), null, 'The saved-in-browser header pill is removed');
   assert.equal(d.querySelector('.console-header h1, .console-header .brand-copy, .console-header .brand-sub'), null, 'Header keeps only the centered logo');
   assert(d.querySelector('.side-rail-footer #btn-theme'), 'Theme control lives in the side-rail footer');
-  assert(d.querySelector('.console-header #btn-keys') && d.querySelector('.console-header #btn-logout'), 'API keys and sign-out live in the header');
-  assert.equal(d.querySelector('.side-rail-footer #btn-keys'), null, 'API keys no longer hide in the rail footer');
-  assert.equal(d.querySelector('.side-rail-footer #btn-logout'), null, 'Sign-out no longer hides in the rail footer');
+  assert.equal(d.querySelector('.console-header #btn-keys'), null, 'API keys no longer sit in the header');
+  assert.equal(d.querySelector('.console-header #btn-logout'), null, 'Sign-out no longer sits in the header');
+  assert.equal(d.querySelector('.console-header #btn-theme-header'), null, 'The header keeps no duplicate edition switch');
+  assert(d.querySelector('.side-rail-footer .side-utility-dock #btn-keys'), 'API keys return to the side-rail footer utility row');
+  assert(d.querySelector('#account-popover #btn-logout'), 'Sign-out returns to the side-rail account popover');
   assert(d.querySelector('.side-rail-footer #btn-account-menu'), 'Account controls remain in the side-rail footer');
   // The panel toggle belongs to the same utility row as Theme / Keys / Account.
   assert(d.querySelector('.side-rail-footer .side-utility-dock #btn-sidebar-toggle'), 'Panel toggle lives in the rail footer utility row');
@@ -201,12 +203,11 @@ async function run() {
   assert.match(d.getElementById('theme-studio-hero')!.textContent || '', /Atelier Oxblood/);
   assert.equal(d.querySelectorAll('#theme-studio-hero .theme-hero-palette span').length, 3, 'House palette is shown once');
   assert.equal(d.querySelectorAll('#theme-swatch-grid [data-pick-theme]').length, 5, 'Five curated house editions');
-  click(d.getElementById('btn-theme-header')!);
-  assert.equal(d.getElementById('theme-modal')!.hidden, false, 'Header edition switch opens the studio');
+  assert.equal(d.getElementById('theme-modal')!.hidden, false, 'Theme studio is open from the rail footer');
   click(d.querySelector('[data-pick-theme="terracotta"]')!);
   assert.equal(d.documentElement.dataset.theme, 'terracotta');
   assert.match(d.getElementById('theme-studio-hero')!.textContent || '', /Aegean Clay/);
-  assert.match(d.getElementById('hdr-edition-name')!.textContent || '', /Edition 02 · Aegean/);
+  assert.match(d.getElementById('theme-active-lbl')!.textContent || '', /Aegean/);
   assert.equal(d.querySelectorAll('#theme-swatch-grid .theme-card.on').length, 1, 'Exactly one edition is selected');
   assert.match((d.querySelector('#brand-mark img') as HTMLImageElement).getAttribute('src') || '', /mma-atelier-icon\.png/);
   assert.match((d.querySelector('link[rel="icon"]') as HTMLLinkElement).href, /mma-atelier-icon\.png/);
