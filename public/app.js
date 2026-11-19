@@ -5780,6 +5780,24 @@
             ${F('API Source Tag', 'v.source')}
           </div>
 
+          <h2>SIP Connection Model (Static Peer, Registration &amp; Hybrid)</h2>
+          ${F('SIP Connection Model', 'v.sipConnectionMode', 'sel', [
+            ['static_peer', 'Static SIP Peer — PBX sends calls to this bridge'],
+            ['registration', 'SIP Registration — bridge registers to the VICIdial/Asterisk registrar'],
+            ['hybrid', 'Hybrid — static peer allowlist plus active SIP registration'],
+          ])}
+          <div class="row r3">
+            ${F('Registrar Host / IP', 'v.sipRegistrarHost')}
+            ${F('Registrar UDP Port', 'v.sipRegistrarPort', 'number', [], 'min="1" max="65535" step="1"')}
+            ${F('SIP Domain (optional)', 'v.sipDomain')}
+          </div>
+          <div class="row r3">
+            ${F('SIP Username', 'v.sipUsername')}
+            ${F('SIP Authentication Username (optional)', 'v.sipAuthUsername')}
+            ${F('SIP Transport', 'v.sipTransportProtocol', 'sel', [['udp', 'UDP (currently supported)]])}
+          </div>
+          <div class="note">For Registration or Hybrid, save <code>VICI_SIP_PASSWORD</code> under API Keys. The registrar must accept this account and route its registered Contact to the bridge. Use a public, reachable Bridge Host and restrict SIP/RTP firewall rules to the dialer. Registration is a signaling relationship; it does not replace the VICIdial Remote Agent call-ID/session requirements.</div>
+
           <h2>Telephony Media &amp; Control Transport (Both Listeners Run Simultaneously)</h2>
           ${F('Primary Dialplan Mode Highlighted in Export', 'v.transport', 'sel', [
             ['sip_trunk', 'SIP + RTP G.711 μ-law Peer (:5062 — Works on ALL ViciBox / Asterisk 13, 16, 18+)'],
