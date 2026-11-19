@@ -6692,7 +6692,7 @@
   }
 
   async function loadFromServer() {
-    const authRes = await fetch('./api/auth/status', { credentials: 'same-origin' }).catch(() => null);
+    const authRes = await fetch('./api/auth/status', { credentials: 'same-origin', cache: 'no-store' }).catch(() => null);
     if (authRes && authRes.ok && (authRes.headers.get('content-type') || '').includes('application/json')) {
       const authJson = await authRes.json().catch(() => ({}));
       const logoutBtn = document.getElementById('btn-logout');

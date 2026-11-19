@@ -62,6 +62,12 @@ async function main() {
     assert.equal(redirect.headers.get('location'), '/');
     const loop = await fetch(base + '/login?next=' + encodeURIComponent('/login'), { headers: { Cookie: adminCookie }, redirect: 'manual' });
     assert.equal(loop.headers.get('location'), '/', 'signed-in /login?next=/login must not loop');
+    // A cached anonymous auth status or a cached login redirect is what makes
+    // a signed-in browser bounce back to the login shell.
+    assert.equal(loop.headers.get('cache-control'), 'no-store, max-age=0', 'auth redirects must not be cached');
+    const statusProbe = await fetch(base + '/api/auth/status');
+    assert.equal(statusProbe.headers.get('cache-control'), 'no-store, max-age=0', 'auth status must not be cached');
+    assert.match(statusProbe.headers.get('vary') || '', /Cookie/i);
     const loginPage = await fetch(base + '/login');
     assert.match(loginPage.headers.get('content-security-policy') || '', /default-src 'self'/);
     assert.equal(loginPage.headers.get('x-content-type-options'), 'nosniff');

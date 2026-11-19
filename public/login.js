@@ -585,6 +585,7 @@
       var res = await fetch(apiPath('/api/auth/status'), {
         headers: headers,
         credentials: 'same-origin',
+        cache: 'no-store',
       });
       var ct = String(res.headers.get('content-type') || '').toLowerCase();
       if (res.ok && ct.indexOf('application/json') !== -1) {

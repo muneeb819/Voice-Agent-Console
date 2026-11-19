@@ -263,6 +263,15 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     attempts.count += 1;
   };
 
+  // Authentication state must never be cached: a cached anonymous status is
+  // what makes a just-signed-in browser bounce back to the login shell.
+  app.use('/api/auth', (_req: Request, res: Response, next: express.NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Vary', 'Cookie');
+    next();
+  });
+
   app.get('/api/auth/status', (req: Request, res: Response) => {
     const user = getAuthenticatedUser(req);
     const sessionAuth = hasActiveAuthSession(req);
@@ -1560,6 +1569,9 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   };
 
   const serveAuthShell = (req: Request, res: Response) => {
+    // Never cache an auth-shell redirect or page; a stale copy would keep
+    // signed-in operators on the login screen.
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
     // A signed-in operator can explicitly open /signup to provision an account.
     if (hasActiveAuthSession(req) && req.path !== '/signup') {
       res.redirect(safeNextPath(req.query.next));
@@ -1575,6 +1587,8 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   // Gate the web console entry point so Sign Up / Sign In is always the very first page
   const serveConsoleEntry = (req: Request, res: Response) => {
+    // A cached "not signed in" redirect is a login bounce; forbid caching.
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
     if (!hasActiveAuthSession(req)) {
       const entryPath = isAuthEnabled() ? '/login' : '/signup';
       const qsIdx = req.originalUrl.indexOf('?');

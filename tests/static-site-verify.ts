@@ -154,6 +154,17 @@ async function run() {
   // session, redirect to login.html, and login.js immediately redirect back.
   const appSource = read('public/app.js');
   const loginSource = read('public/login.js');
+  const loginHtml = read('public/login.html');
+  // Regression: the mode switch looked like a disabled submit above the email
+  // field. It now renders below the forms, and every submit follows its fields.
+  const signinEmailAt = loginHtml.indexOf('id="signin-email"');
+  const signinSubmitAt = loginHtml.indexOf('id="signin-submit"');
+  const signupEmailAt = loginHtml.indexOf('id="signup-email"');
+  const signupSubmitAt = loginHtml.indexOf('id="signup-submit"');
+  const modeSwitchAt = loginHtml.indexOf('class="tabs"');
+  assert(signinEmailAt > 0 && signinSubmitAt > signinEmailAt, 'Sign In submit must follow the email field');
+  assert(signupEmailAt > 0 && signupSubmitAt > signupEmailAt, 'Sign Up submit must follow the email field');
+  assert(modeSwitchAt > signinSubmitAt && modeSwitchAt > signupSubmitAt, 'Sign In / Create Account switch must render below the forms, never above the fields');
   const appSessionKey = appSource.match(/const VAC_CLOUD_SESSION_KEY = '([^']+)'/);
   const loginSessionKey = loginSource.match(/var CLOUD_SESSION_KEY = '([^']+)'/);
   assert(appSessionKey, 'app.js must define VAC_CLOUD_SESSION_KEY before reading the static demo session');
