@@ -5772,6 +5772,11 @@
           <div class="note wn">Loopback test CDRs are mixed with bridge history. Their mock VICIdial successes do not confirm real transfers, dispositions or DNC updates; older records may not distinguish tests from live calls.</div>
           <h2>Recent SQLite Bridge Call CDRs &amp; VICIdial API Trail <button class="g" id="btn-clear-vici-logs" style="font-size:11px;padding:3px 8px;text-transform:none">Clear CDRs</button></h2>
           <div id="vici-cdr-box">${renderBridgeCdrList()}</div>
+          <div class="note">
+            **SIP Registration Status:** ${esc(viciMon.status?.sipRegistration?.status || 'Not reported')}
+            ${viciMon.status?.sipRegistration?.registrar ? ` · ${esc(viciMon.status.sipRegistration.registrar)}` : ''}
+            ${viciMon.status?.sipRegistration?.lastError ? ` · ${esc(viciMon.status.sipRegistration.lastError)}` : ''}
+          </div>
 
           <h2>VICIdial API Endpoints (Separated Non-Agent vs Agent API)</h2>
           ${F('VICIdial Server Base URL (115.186.137.240)', 'v.viciBaseUrl')}
