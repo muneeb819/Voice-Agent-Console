@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import dgram from 'dgram';
+import dns from 'dns/promises';
 import { ViciConfig } from './types';
 import { getSecret } from './env-store';
 
@@ -55,6 +56,7 @@ export class SipRegistrationClient {
   private expiresAt: string | null = null;
   private lastError: string | null = null;
   private stopped = false;
+  private registrarAddresses = new Set<string>();
 
   constructor(private readonly cfg: ViciConfig) {}
 
@@ -85,9 +87,17 @@ export class SipRegistrationClient {
       return;
     }
     this.stopped = false;
+    try {
+      const resolved = await dns.lookup(this.cfg.sipRegistrarHost, { all: true, family: 4 });
+      this.registrarAddresses = new Set(resolved.map((entry) => entry.address));
+    } catch (err: any) {
+      this.status = 'failed';
+      this.lastError = `Could not resolve SIP registrar: ${err?.message || 'DNS lookup failed'}`;
+      return;
+    }
     this.socket = dgram.createSocket('udp4');
     this.socket.on('message', (message, peer) => {
-      if (peer.address !== this.cfg.sipRegistrarHost || peer.port !== this.cfg.sipRegistrarPort) return;
+      if (!this.registrarAddresses.has(peer.address) || peer.port !== this.cfg.sipRegistrarPort) return;
       void this.handleResponse(message.toString('utf8'));
     });
     this.socket.on('error', (err) => {
