@@ -164,7 +164,7 @@ The 2026-11-19 deep audit, every fix, the executed verification evidence, residu
 
 ## Docker / Render Deployment
 
-The full console needs a long-running Node 22.5+ service with WebSocket support. Configure a strong `ADMIN_PASSWORD` or create a local account before binding to a non-loopback address or opening a public demo tunnel. The Docker image runs as an unprivileged user on port **8080** (not 533, which is privileged on Linux) and stores runtime state in the `/data` volume:
+The full console needs a long-running Node 22.5+ service with WebSocket support. Configure a strong `ADMIN_PASSWORD` or create a local account before binding to a non-loopback address or opening a public demo tunnel. The Docker image runs as an unprivileged user on port **8080** (not 533, which is privileged on Linux) and stores runtime state, recordings and managed API keys in the `/data` volume:
 
 ```bash
 docker build -t voice-agent-console .
@@ -185,15 +185,38 @@ The release bundle contains only files listed in `tools/release-manifest.json`; 
 
 ---
 
-## ☁️ Publishing on AWS EC2 (HTTPS)
+## 🐧 Publishing on Linux (systemd + nginx or Docker)
 
-To serve the console over HTTPS on your own instance (for example
-`https://<instance-ip>:533/`), run `sudo bash deploy/aws-deploy.sh --ip <instance-ip>`
-on that instance. It installs the app on loopback, puts nginx in front for TLS,
-and verifies both hops. See **[`docs/AWS-DEPLOYMENT.md`](./docs/AWS-DEPLOYMENT.md)**
-for prerequisites, the security-group rule you must add, and how to get a
-publicly trusted certificate for a bare IP (Let's Encrypt issues them, but they
-expire in ~6 days and need automated renewal).
+The console runs on Debian 12 / Ubuntu 22.04+, RHEL 9 / Rocky / AlmaLinux and
+Amazon Linux 2023. On a fresh systemd host:
+
+```bash
+sudo git clone https://github.com/muneeb819/Voice-Agent-Console.git /opt/vac-src
+cd /opt/vac-src
+sudo git checkout main
+sudo bash deploy/linux-deploy.sh --host <public-ip-or-domain>
+```
+
+It installs to `/opt/voice-agent-console`, keeps Node on `127.0.0.1:534`, puts
+nginx TLS on `:533`, creates `.env` with a generated admin password, installs a
+systemd service and verifies both hops. The old
+`deploy/aws-deploy.sh --ip ...` command remains as a compatibility wrapper.
+
+Prerequisites, distro-specific Node 22.5+ commands, firewall/SELinux notes,
+trusted certificates, SIP ports and updates are in
+**[`docs/LINUX-DEPLOYMENT.md`](./docs/LINUX-DEPLOYMENT.md)**. AWS-specific
+security-group/ALB guidance is in
+**[`docs/AWS-DEPLOYMENT.md`](./docs/AWS-DEPLOYMENT.md)**.
+
+For Docker on any Linux host:
+
+```bash
+cp .env.example .env    # set ADMIN_PASSWORD
+docker compose up -d --build
+```
+
+The container listens on `8080` with loopback-only host binding by default and
+persists state/secrets in the `voice-agent-data` volume.
 
 ---
 

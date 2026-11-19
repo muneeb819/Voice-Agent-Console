@@ -1,5 +1,10 @@
 # Publishing the Console on AWS EC2
 
+> The generic Linux installer is documented in
+> [`LINUX-DEPLOYMENT.md`](./LINUX-DEPLOYMENT.md). This page only adds the
+> AWS-specific security-group, ALB and certificate notes. The older
+> `deploy/aws-deploy.sh` command is still accepted as a compatibility wrapper.
+
 Example target used in the commands below: **`https://<EC2_PUBLIC_IP>:533/`**.
 Replace that address with the public IPv4/DNS of **your** EC2 instance; it is not
 baked into the application.
@@ -61,7 +66,7 @@ for a private repo use a deploy key or upload a release tarball):
 ```bash
 git clone https://github.com/muneeb819/Voice-Agent-Console.git
 cd Voice-Agent-Console
-sudo bash deploy/aws-deploy.sh --ip <EC2_PUBLIC_IP>
+sudo bash deploy/linux-deploy.sh --ip <EC2_PUBLIC_IP>
 ```
 
 The script is safe to re-run. It:
@@ -105,7 +110,7 @@ The constraints that matter here:
 Once issued, install it with:
 
 ```bash
-sudo bash deploy/aws-deploy.sh --ip <EC2_PUBLIC_IP> \
+sudo bash deploy/linux-deploy.sh --ip <EC2_PUBLIC_IP> \
   --cert /etc/letsencrypt/live/<name>/fullchain.pem \
   --key  /etc/letsencrypt/live/<name>/privkey.pem
 ```
@@ -133,7 +138,7 @@ advertise `hostname:533` if it forwarded its own `$server_port`. The same-origin
 check then rejects **every login**. Tell the script the browser-facing port:
 
 ```bash
-sudo bash deploy/aws-deploy.sh --ip console.example.com \
+sudo bash deploy/linux-deploy.sh --ip console.example.com \
   --tls-port 533 --public-port 443 \
   --cert /path/fullchain.pem --key /path/privkey.pem
 ```
@@ -149,7 +154,7 @@ address can exhaust both and lock each other out. Tell nginx which networks may
 supply the client IP:
 
 ```bash
-sudo bash deploy/aws-deploy.sh --ip console.example.com \
+sudo bash deploy/linux-deploy.sh --ip console.example.com \
   --tls-port 533 --public-port 443 \
   --real-ip-from 10.0.0.0/16 --real-ip-from 172.31.0.0/20 \
   --cert /path/fullchain.pem --key /path/privkey.pem
@@ -219,7 +224,7 @@ deployment.
 
 ```bash
 cd Voice-Agent-Console && git pull
-sudo bash deploy/aws-deploy.sh --ip <EC2_PUBLIC_IP>
+sudo bash deploy/linux-deploy.sh --ip <EC2_PUBLIC_IP>
 ```
 
 `.env`, the database, recordings and the TLS certificate are all preserved.
@@ -230,7 +235,7 @@ The service restarts, so active calls drop — update outside calling hours.
 ```bash
 sudo systemctl stop voice-agent-console.service
 cd Voice-Agent-Console && git checkout <previous-tag>
-sudo bash deploy/aws-deploy.sh --ip <EC2_PUBLIC_IP>
+sudo bash deploy/linux-deploy.sh --ip <EC2_PUBLIC_IP>
 ```
 
 Database migrations are additive; take a copy of `data/console.sqlite` before

@@ -222,6 +222,24 @@ async function run() {
   assert(!storage.has('vac_auth_token'), 'Console boot must remove legacy stored tokens');
   assert.deepStrictEqual(replacements, ['/?tab=agents'], 'Console boot must strip URL credentials without losing navigation');
   console.log('✓ Legacy browser token cleanup');
+
+  // Linux deployment surface: one generic installer (with the AWS entry point
+  // kept as a wrapper), a compose file that persists state/secrets, and a
+  // runbook. A syntax error here would only appear on the target host.
+  const linuxDeploy = read('deploy/linux-deploy.sh');
+  assert(linuxDeploy.includes('--host') && linuxDeploy.includes('dnf install') && linuxDeploy.includes('systemctl'), 'Linux installer must support systemd and dnf/RHEL-family hosts');
+  assert(linuxDeploy.includes('deploy/linux-deploy.sh --host'), 'Installer usage must document the Linux --host entry point');
+  assert(read('deploy/aws-deploy.sh').includes('deploy/linux-deploy.sh'), 'AWS entry point must delegate to the Linux installer');
+  const compose = read('compose.yaml');
+  assert(compose.includes('voice-agent-data:/data') && compose.includes('VAC_ENV_FILE: /data/.env'), 'Compose deployment must persist SQLite/recordings and managed secrets');
+  assert(read('docs/LINUX-DEPLOYMENT.md').includes('deploy/linux-deploy.sh'), 'Linux runbook must document the installer');
+  const dockerfile = read('Dockerfile');
+  assert(dockerfile.includes('VAC_ENV_FILE=/data/.env') && dockerfile.includes('EXPOSE 8080'), 'Container must persist managed secrets and expose the unprivileged port');
+  if (process.platform !== 'win32') {
+    childProcess.execFileSync('bash', ['-n', path.join(root, 'deploy/linux-deploy.sh')]);
+    childProcess.execFileSync('bash', ['-n', path.join(root, 'deploy/aws-deploy.sh')]);
+  }
+  console.log('✓ Linux deployment installer, compatibility wrapper, compose volume and secrets persistence');
   console.log('ALL STATIC SITE REGRESSION CHECKS PASSED');
 }
 

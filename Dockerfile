@@ -23,7 +23,8 @@ RUN npm run build \
 ENV NODE_ENV=production \
     PORT=8080 \
     HOST=0.0.0.0 \
-    VAC_DATA_DIR=/data
+    VAC_DATA_DIR=/data \
+    VAC_ENV_FILE=/data/.env
 EXPOSE 8080
 VOLUME ["/data"]
 
