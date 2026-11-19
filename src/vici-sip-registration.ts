@@ -164,7 +164,7 @@ export class SipRegistrationClient {
       'User-Agent: MMA-Voice-Agent-Console',
       ...(this.nonce ? [`Authorization: ${this.authHeader('REGISTER', uri)}`] : []),
       'Content-Length: 0',
-    ].join('\\r\\n') + '\\r\\n\\r\\n';
+    ].join('\r\n') + '\r\n\r\n';
     this.socket.send(Buffer.from(request), port, host, (err) => {
       if (err) {
         this.status = 'failed';
