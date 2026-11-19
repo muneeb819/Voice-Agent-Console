@@ -83,6 +83,19 @@ The Console includes example outbound qualification bots with sample VICIdial ex
 | **#1** | `Final Expense — Warm Intro` (`a1`) | `FETEST` (`c1`) | `88001` / `RA 9001` | `FE_CLOSERS` | Senior burial/final-expense screen (`50–85`), warm closer handoff, DNC compliance |
 | **#2** | `Medicare — Food & OTC Advisor` (`a_medicare`) | `MEDICARE` (`c_medicare`) | `88002` / `RA 9002` | `MED_CLOSERS` | Caller-confirmed **Medicare Part A/B** satisfies the sample campaign qualification step; the bot must not ask or infer age/DOB. Only a volunteered age outside the operator-defined `65–85` band disqualifies. Consent-based specialist handoff, `flux-general-multi` (`en,es`) Spanish `LANG` exit, DNC handling, and caller-stated-only closer metadata (`Name`, optional `Age`, `Medicare`, `Hook`) |
 
+### Sentinel — shared QA supervisor
+
+`Sentinel — Supervisor & Quality Control` (`a_qa`) is a single QA review bot
+available to every campaign. It audits a supplied transcript, scores compliance
+and quality on a 100-point standard, flags critical violations and gives a
+release decision. It is never a primary dialling agent and never accepts a live
+VICIdial call.
+
+When Sentinel says **INSUFFICIENT EVIDENCE**, give it evidence rather than
+disabling the guardrail: use the browser-test text box and send
+`EVIDENCE PART 1/N` … `END OF EVIDENCE`, or request a `LIMITED REVIEW` for partial
+evidence. Details: **[`docs/QA-SUPERVISOR.md`](./docs/QA-SUPERVISOR.md)**.
+
 ---
 
 ## 🚀 Quickstart (Local / Dev)

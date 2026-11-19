@@ -397,9 +397,13 @@ function validateAgent(state, agent) {
     push(providersValidJson && fnsValidJson, 'All linked plug-in JSON objects and function JSON schemas are valid');
     // Call lifecycle & compliance checks
     const fnNames = fnsForAgent.map((f) => f.name);
-    push(agent.acceptViciCalls, 'Bridge VICIdial call-connect & lead hydration enabled', agent.mode === 'outbound');
-    push(fnNames.includes('transfer_to_live_agent'), 'transfer_to_live_agent function enabled');
-    push(!fnNames.includes('transfer_to_live_agent') || /transfer_to_live_agent/i.test(agent.prompt), 'System prompt specifies when to call transfer_to_live_agent');
+    // QA reviewers are intentionally excluded from the telephone path. They are
+    // still selectable in browser tests for every campaign, but must not be
+    // marked unhealthy for declining bridge/transfer capabilities.
+    const isQaReviewAgent = agent.id === 'a_qa';
+    push(agent.acceptViciCalls || isQaReviewAgent, isQaReviewAgent ? 'QA review agent — VICIdial bridge intentionally disabled' : 'Bridge VICIdial call-connect & lead hydration enabled', agent.mode === 'outbound' && !isQaReviewAgent);
+    push(fnNames.includes('transfer_to_live_agent') || isQaReviewAgent, isQaReviewAgent ? 'QA review agent — live transfer intentionally disabled' : 'transfer_to_live_agent function enabled');
+    push(!fnNames.includes('transfer_to_live_agent') || /transfer_to_live_agent/i.test(agent.prompt) || isQaReviewAgent, 'System prompt specifies when to call transfer_to_live_agent');
     push(/(dnc|do not call|take me off|stop)/i.test(agent.prompt), 'System prompt handles Do-Not-Call requests');
     push(fnNames.includes('end_call'), 'end_call function enabled');
     push(Number(agent.audio.inRate) === 8000, '8000 Hz input sample rate matches Asterisk/VICIdial telephony', true);

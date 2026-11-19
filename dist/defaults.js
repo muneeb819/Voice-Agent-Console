@@ -10,6 +10,7 @@ exports.normalizeState = normalizeState;
 const opening_1 = require("./opening");
 const persona_1 = require("./persona");
 const campaign_assignment_1 = require("./campaign-assignment");
+const sentinel_qa_1 = require("./sentinel-qa");
 // SIP configuration is interpolated into raw UDP headers, so never let control
 // characters, quotes or angle brackets reach the registrar client. These are
 // deliberately conservative allowlists rather than an escaping scheme.
@@ -391,13 +392,14 @@ function createDefaultState() {
                     "fn_end"
                 ]
             },
+            sentinel_qa_1.SENTINEL_QA_AGENT,
         ],
         campaigns: [
             {
                 id: 'c1',
                 name: 'FE Fronter – Test',
                 agentId: 'a1',
-                agentIds: ['a1'],
+                agentIds: ['a1', 'a_qa'],
                 viciCampaign: 'FETEST',
                 lists: '1001',
                 start: '09:00',
@@ -423,7 +425,7 @@ function createDefaultState() {
                 id: 'c_medicare',
                 name: 'Medicare — Food & OTC Outbound',
                 agentId: 'a_medicare',
-                agentIds: ['a_medicare'],
+                agentIds: ['a_medicare', 'a_qa'],
                 viciCampaign: 'MEDICARE',
                 lists: '2001,2002',
                 start: '09:00',
@@ -449,7 +451,7 @@ function createDefaultState() {
                 id: 'c_nova',
                 name: 'Nova — Live Concierge & General Q&A',
                 agentId: 'a_nova',
-                agentIds: ['a_nova'],
+                agentIds: ['a_nova', 'a_qa'],
                 viciCampaign: 'NOVACONC',
                 lists: '3001',
                 start: '09:00',
@@ -476,7 +478,8 @@ function createDefaultState() {
                 "name": "Build-In Bot – Default Campaign",
                 "agentId": "a_builtin",
                 "agentIds": [
-                    "a_builtin"
+                    "a_builtin",
+                    "a_qa"
                 ],
                 "viciCampaign": "BUILTIN",
                 "lists": "4001",
@@ -624,6 +627,7 @@ function createDefaultState() {
                     n: '',
                 },
             ],
+            a_qa: sentinel_qa_1.SENTINEL_QA_TESTS,
         },
     };
 }
