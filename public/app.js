@@ -2432,7 +2432,10 @@
       .join('\n;\n');
 
     const sipCarrierBlock = [
-      `; === OPTION A (Universal — Asterisk 13 / 16 / 18+ on ViciBox 8-12): SIP + RTP Mode ===`,
+      `; === SIP + RTP MODE: ${String(v.sipConnectionMode || 'static_peer').toUpperCase()} ===`,
+      `; Static Peer: host=${v.bridgeHost}; Registration: dynamic peer for ${v.sipUsername || '<sip-username>'}; Hybrid: configure both.`,
+      `; For registration/hybrid, configure VICI_SIP_PASSWORD on the bridge and matching Asterisk peer secret.`,
+      `; This example is chan_sip syntax. For PJSIP configure endpoint/auth/aor separately.`,
       `; 1) VICIdial Admin -> Carriers -> Add New Carrier (ID: AIBRIDGE) -> Account Entry:`,
       `[ai-bridge]`,
       `disallow=all`,
@@ -2506,6 +2509,7 @@
       `DEEPGRAM_API_KEY=***`,
       `VICI_API_PASS=***`,
       `AMI_SECRET=***`,
+      `VICI_SIP_PASSWORD=***  # registration/hybrid only`,
       `AUDIOSOCKET_PORT=${v.bridgePort}`,
       `BRIDGE_SIP_PORT=${v.sipPort}`,
     ].join('\n');
