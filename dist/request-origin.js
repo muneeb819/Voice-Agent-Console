@@ -18,23 +18,43 @@ function isSameOriginRequest(req, trustProxy) {
     if (Array.isArray(originHeader) || !originHeader.trim() || originHeader.includes(','))
         return false;
     const origin = originHeader.trim();
-    const peer = req.socket?.remoteAddress;
-    const trusted = Boolean(peer && trustProxy && trustProxy(peer, 0));
-    const host = (trusted && firstHeader(req.headers['x-forwarded-host'])) || firstHeader(req.headers.host);
-    const forwardedProto = trusted && firstHeader(req.headers['x-forwarded-proto']);
-    const protocol = forwardedProto || (req.socket?.encrypted ? 'https' : 'http');
-    if (!host || !['http', 'https'].includes(protocol.toLowerCase()))
-        return false;
+    let requested;
     try {
-        const requested = new URL(origin);
-        const expected = new URL(`${protocol}://${host}`);
-        if (!['http:', 'https:'].includes(requested.protocol) || requested.username || requested.password ||
-            requested.pathname !== '/' || requested.search || requested.hash ||
-            expected.username || expected.password || expected.pathname !== '/' || expected.search || expected.hash)
-            return false;
-        return requested.origin === expected.origin;
+        requested = new URL(origin);
     }
     catch {
         return false;
     }
+    if (!['http:', 'https:'].includes(requested.protocol) || requested.username || requested.password ||
+        requested.pathname !== '/' || requested.search || requested.hash)
+        return false;
+    // A TLS-terminating reverse proxy may report the upstream scheme as http
+    // while the browser origin is https, and may rewrite Host. Compare the
+    // browser-visible host against every trusted host candidate, using the
+    // origin's own scheme so default-port normalization stays consistent.
+    const peer = req.socket?.remoteAddress;
+    const trusted = Boolean(peer && trustProxy && trustProxy(peer, 0));
+    const hosts = [];
+    if (trusted)
+        hosts.push(firstHeader(req.headers['x-forwarded-host']));
+    hosts.push(firstHeader(req.headers.host));
+    for (const host of hosts) {
+        if (!host)
+            continue;
+        try {
+            const expected = new URL(`${requested.protocol}//${host}`);
+            if (expected.username || expected.password || expected.pathname !== '/' || expected.search || expected.hash)
+                continue;
+            if (expected.host === requested.host)
+                return true;
+        }
+        catch {
+            // Ignore malformed proxy headers and try the next candidate.
+        }
+    }
+    // Browsers set Sec-Fetch-Site as a forbidden header. A same-origin assertion
+    // is a safe fallback when an intermediary rewrites both Host and the
+    // forwarded-host header. Non-browser clients can already omit Origin.
+    const site = String(firstHeader(req.headers['sec-fetch-site'])).toLowerCase();
+    return site === 'same-origin';
 }

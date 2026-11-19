@@ -1,6 +1,6 @@
 ================================================================================
 MMA DIGITAL LABS — VOICE AGENT CONSOLE (FULL PRODUCTION & DEMO RELEASE)
-Build: elite-2.19 | Verification: 42/42 Node E2E + 19/19 Speech Service Pytest
+Build: nova-3.5 | Verification: see AUDIT-REPORT-2026-11-19.md (executed locally)
 ================================================================================
 
 INCLUDED LATEST FEATURES & ARCHITECTURE:
@@ -33,9 +33,11 @@ INCLUDED LATEST FEATURES & ARCHITECTURE:
      "Launch Public Client HTTPS Link" directly inside the top Command Dashboard.
    - Auto-targets active IPv4 LAN interface on Windows to avoid IPv6 [::1] 502s.
 6. Deepgram Voice Agent v1 + Universal VICIdial Bridge:
-   - Configured for target IP 115.186.137.240:533 (100-port EADDRINUSE fallback),
-     AudioSocket TCP + WebSocket multiplex (:9092), SIP/RTP G.711 u-law (:5062),
-     <15ms Dual-Layer Barge-In, Stereo 8 kHz WAV recording, and SQLite WAL DB.
+   - Listens on HOST/PORT from `.env` (default 127.0.0.1:533), AudioSocket TCP +
+     WebSocket multiplex (:9092), SIP/RTP G.711 u-law (:5062), dual-layer
+     barge-in, Stereo 8 kHz WAV recording, and SQLite WAL DB.
+   - An occupied port fails startup instead of hopping; a non-root Linux process
+     that cannot bind privileged 533 falls back to 5533 and logs why.
 
 --------------------------------------------------------------------------------
 QUICK START (WINDOWS 10 / 11 — ADMINISTRATOR POWERSHELL OR DOUBLE-CLICK):
@@ -56,4 +58,7 @@ QUICK START (LINUX / VICIBOX SERVER):
   npm ci
   npm run build
   npm start
+  # Container alternative (unprivileged, port 8080 inside the image):
+  # docker build -t voice-agent-console . && docker run -p 533:8080 \
+  #   -e ADMIN_PASSWORD='...' -v voice-agent-data:/data voice-agent-console
 ================================================================================

@@ -18,16 +18,19 @@
   function markStaticDemo() {
     staticDemoReady = true;
     var note = document.getElementById('auth-security-note');
-    if (note) note.textContent = 'Static demo only: accounts are stored in this browser and do not secure a server. Do not use a real password.';
+    if (note)
+      note.textContent = 'Static demo only: accounts are stored in this browser and do not secure a server. Do not use a real password.';
   }
 
   async function sha256Hex(input) {
     if (window.crypto && window.crypto.subtle && window.TextEncoder) {
       var bytes = new TextEncoder().encode(input);
       var digest = await window.crypto.subtle.digest('SHA-256', bytes);
-      return Array.prototype.map.call(new Uint8Array(digest), function (b) {
-        return ('00' + b.toString(16)).slice(-2);
-      }).join('');
+      return Array.prototype.map
+        .call(new Uint8Array(digest), function (b) {
+          return ('00' + b.toString(16)).slice(-2);
+        })
+        .join('');
     }
     // Deterministic fallback hash if non-secure context lacks WebCrypto
     var h = 2166136261;
@@ -58,10 +61,13 @@
 
   function writeCloudSession(user) {
     try {
-      localStorage.setItem(CLOUD_SESSION_KEY, JSON.stringify({
-        user: user,
-        signedInAt: new Date().toISOString()
-      }));
+      localStorage.setItem(
+        CLOUD_SESSION_KEY,
+        JSON.stringify({
+          user: user,
+          signedInAt: new Date().toISOString(),
+        }),
+      );
       return true;
     } catch (e) {
       return false;
@@ -85,13 +91,23 @@
   } catch (e) {}
 
   // ---------------------------------------------------------------- Theme-bound animated brand logo
-  // The supplied MMA banners are the logo source. Waves are a smooth CSS loop,
-  // not microphone/audio-reactive, and follow the saved console theme.
+  // The supplied crest is the logo source on every edition. A saved console
+  // edition only changes the palette; the mark itself never changes.
+  var HOUSE_THEMES = ['atelier', 'terracotta', 'nocturne', 'botanic', 'chalk'];
+  var HOUSE_THEME_COLORS = {
+    atelier: '#f3ede2',
+    terracotta: '#f6e9dc',
+    nocturne: '#171216',
+    botanic: '#ebefe3',
+    chalk: '#f0efea',
+  };
   function applyLoginBrandTheme(themeId) {
     var api = window.VACBrandLogos;
     if (!api) return;
-    var theme = themeId || document.documentElement.dataset.theme || 'cyan_signal';
+    var theme = HOUSE_THEMES.indexOf(themeId) >= 0 ? themeId : 'atelier';
     document.documentElement.dataset.theme = theme;
+    var metaColor = typeof document.querySelector === 'function' ? document.querySelector('meta[name="theme-color"]') : null;
+    if (metaColor) metaColor.setAttribute('content', HOUSE_THEME_COLORS[theme] || '#f3ede2');
     api.applyTo(document.getElementById('login-brand-plaque'), theme, 'full');
     var foot = document.getElementById('login-foot-mark');
     var loaderMark = document.getElementById('login-loader-mark');
@@ -101,7 +117,7 @@
     ['icon', 'alternate icon', 'apple-touch-icon'].forEach(function (rel) {
       var links = document.querySelectorAll ? document.querySelectorAll('link[rel="' + rel + '"]') : [];
       Array.prototype.forEach.call(links, function (link) {
-        link.type = 'image/jpeg';
+        link.type = 'image/png';
         link.href = asset.icon;
       });
     });
@@ -111,7 +127,7 @@
     var savedBrandApp = JSON.parse(localStorage.getItem('vac_appearance_v2') || localStorage.getItem('vac_appearance_v1') || '{}');
     applyLoginBrandTheme(savedBrandApp && savedBrandApp.theme);
   } catch (e) {
-    applyLoginBrandTheme('cyan_signal');
+    applyLoginBrandTheme('atelier');
   }
 
   if (window.addEventListener) {
@@ -131,7 +147,7 @@
   var panes = {
     signin: document.getElementById('signin-form'),
     signup: document.getElementById('signup-form'),
-    admin: document.getElementById('admin-form')
+    admin: document.getElementById('admin-form'),
   };
 
   function setMode(mode) {
@@ -167,11 +183,15 @@
         var suffix = nextParam ? '?next=' + encodeURIComponent(nextParam) : '';
         history.replaceState(null, '', apiPath(mode === 'signup' ? '/signup' : '/login') + suffix);
       }
-    } catch (e) { /* ignore */ }
+    } catch (e) {
+      /* ignore */
+    }
   }
 
   tabs.forEach(function (t) {
-    t.addEventListener('click', function () { setMode(t.dataset.mode); });
+    t.addEventListener('click', function () {
+      setMode(t.dataset.mode);
+    });
     t.addEventListener('keydown', function (ev) {
       if (ev.key === 'ArrowRight' || ev.key === 'ArrowLeft') {
         var signupTab = document.getElementById('tab-signup');
@@ -214,12 +234,16 @@
     if (loaderText) loaderText.textContent = text || 'CONNECTING TO MODEL...';
     if (progressBar) progressBar.style.width = '0%';
     loader.hidden = false;
-    window.setTimeout(function () { if (progressBar) progressBar.style.width = '80%'; }, 40);
+    window.setTimeout(function () {
+      if (progressBar) progressBar.style.width = '80%';
+    }, 40);
   }
 
   function finishLoader() {
     if (progressBar) progressBar.style.width = '100%';
-    window.setTimeout(function () { loader.hidden = true; }, 260);
+    window.setTimeout(function () {
+      loader.hidden = true;
+    }, 260);
   }
 
   function setMsg(el, text, ok) {
@@ -241,18 +265,22 @@
       method: 'POST',
       headers: headers,
       credentials: 'same-origin',
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
     });
     var ct = String(res.headers.get('content-type') || '').toLowerCase();
     var isJson = ct.indexOf('application/json') !== -1;
     var data = {};
     if (isJson) {
-      try { data = await res.json(); } catch (e) { /* ignore */ }
+      try {
+        data = await res.json();
+      } catch (e) {
+        /* ignore */
+      }
     }
     return {
       res: res,
       data: data,
-      isStaticHost: staticDemoReady && (res.status === 404 || res.status === 405 || (res.ok && !isJson))
+      isStaticHost: staticDemoReady && (res.status === 404 || res.status === 405 || (res.ok && !isJson)),
     };
   }
 
@@ -268,7 +296,7 @@
           // `next` may already contain the GitHub Pages project prefix. Do not
           // prepend it twice, or the demo bounces through a nonexistent path.
           var alreadyPrefixed = basePrefix && (parsed.pathname === basePrefix || parsed.pathname.indexOf(basePrefix + '/') === 0);
-          target = (alreadyPrefixed ? '' : (basePrefix || '')) + parsed.pathname + parsed.search;
+          target = (alreadyPrefixed ? '' : basePrefix || '') + parsed.pathname + parsed.search;
         }
       } catch (_) {}
     }
@@ -314,7 +342,10 @@
         var emailLower = emailVal.toLowerCase();
         var matched = null;
         for (var i = 0; i < users.length; i++) {
-          if (users[i].email === emailLower) { matched = users[i]; break; }
+          if (users[i].email === emailLower) {
+            matched = users[i];
+            break;
+          }
         }
         if (!matched) {
           finishLoader();
@@ -337,7 +368,9 @@
         }
         if (progressBar) progressBar.style.width = '100%';
         if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
-        window.setTimeout(function () { goHome(''); }, 320);
+        window.setTimeout(function () {
+          goHome('');
+        }, 320);
         return;
       }
 
@@ -350,7 +383,9 @@
       }
       if (progressBar) progressBar.style.width = '100%';
       if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
-      window.setTimeout(function () { goHome(); }, 320);
+      window.setTimeout(function () {
+        goHome();
+      }, 320);
     } catch (err) {
       finishLoader();
       setMsg(msg, 'Network error. Check your connection and try again.');
@@ -362,8 +397,14 @@
   // Admin password fallback (server operator)
   var adminToggle = document.getElementById('admin-toggle');
   var adminBack = document.getElementById('admin-back');
-  if (adminToggle) adminToggle.addEventListener('click', function () { setMode('admin'); });
-  if (adminBack) adminBack.addEventListener('click', function () { setMode('signin'); });
+  if (adminToggle)
+    adminToggle.addEventListener('click', function () {
+      setMode('admin');
+    });
+  if (adminBack)
+    adminBack.addEventListener('click', function () {
+      setMode('signin');
+    });
 
   var adminForm = panes.admin;
   if (adminForm) {
@@ -393,9 +434,11 @@
           input.select();
           return;
         }
-         if (progressBar) progressBar.style.width = '100%';
+        if (progressBar) progressBar.style.width = '100%';
         if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
-        window.setTimeout(function () { goHome(); }, 320);
+        window.setTimeout(function () {
+          goHome();
+        }, 320);
       } catch (err) {
         finishLoader();
         setMsg(msg, 'Network error. Check your connection and try again.');
@@ -416,20 +459,31 @@
     var submit = document.getElementById('signup-submit');
 
     setMsg(msg, '');
-    [name, email, password].forEach(function (i) { markInvalid(i, false); });
+    [name, email, password].forEach(function (i) {
+      markInvalid(i, false);
+    });
 
     var nameVal = name.value.replace(/\s+/g, ' ').trim();
     var emailVal = email.value.trim();
     var pwVal = password.value;
 
     if (nameVal.length < 2) {
-      markInvalid(name, true); setMsg(msg, 'Please enter your full name.'); name.focus(); return;
+      markInvalid(name, true);
+      setMsg(msg, 'Please enter your full name.');
+      name.focus();
+      return;
     }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(emailVal)) {
-      markInvalid(email, true); setMsg(msg, 'Enter a valid email address.'); email.focus(); return;
+      markInvalid(email, true);
+      setMsg(msg, 'Enter a valid email address.');
+      email.focus();
+      return;
     }
     if (pwVal.length < 15) {
-      markInvalid(password, true); setMsg(msg, 'Password must be at least 15 characters. A short passphrase works well.'); password.focus(); return;
+      markInvalid(password, true);
+      setMsg(msg, 'Password must be at least 15 characters. A short passphrase works well.');
+      password.focus();
+      return;
     }
 
     submit.disabled = true;
@@ -438,7 +492,7 @@
       var out = await postJson('/api/auth/signup', {
         fullName: nameVal,
         email: emailVal,
-        password: pwVal
+        password: pwVal,
       });
       if (out.isStaticHost) {
         // Static Cloud Mode (GitHub Pages / Static CDN)
@@ -461,7 +515,7 @@
           email: emailLower,
           salt: salt,
           passwordHash: pwHash,
-          createdAt: new Date().toISOString()
+          createdAt: new Date().toISOString(),
         };
         users.push(newUser);
         if (!writeCloudUsers(users) || !writeCloudSession({ id: newUser.id, fullName: newUser.fullName, email: newUser.email })) {
@@ -471,7 +525,9 @@
         }
         if (progressBar) progressBar.style.width = '100%';
         if (loaderText) loaderText.textContent = 'ACCOUNT READY';
-        window.setTimeout(function () { goHome(''); }, 360);
+        window.setTimeout(function () {
+          goHome('');
+        }, 360);
         return;
       }
 
@@ -479,14 +535,25 @@
         finishLoader();
         setMsg(msg, out.data.error || 'Could not create the account.');
         var field = out.data.field;
-        if (field === 'email') { markInvalid(email, true); email.focus(); }
-        if (field === 'fullName') { markInvalid(name, true); name.focus(); }
-        if (field === 'password') { markInvalid(password, true); password.focus(); }
+        if (field === 'email') {
+          markInvalid(email, true);
+          email.focus();
+        }
+        if (field === 'fullName') {
+          markInvalid(name, true);
+          name.focus();
+        }
+        if (field === 'password') {
+          markInvalid(password, true);
+          password.focus();
+        }
         return;
       }
       if (progressBar) progressBar.style.width = '100%';
       if (loaderText) loaderText.textContent = 'ACCOUNT READY';
-      window.setTimeout(function () { goHome(); }, 360);
+      window.setTimeout(function () {
+        goHome();
+      }, 360);
     } catch (err) {
       finishLoader();
       setMsg(msg, 'Network error. Check your connection and try again.');
@@ -510,7 +577,7 @@
       var headers = {};
       var res = await fetch(apiPath('/api/auth/status'), {
         headers: headers,
-        credentials: 'same-origin'
+        credentials: 'same-origin',
       });
       var ct = String(res.headers.get('content-type') || '').toLowerCase();
       if (res.ok && ct.indexOf('application/json') !== -1) {

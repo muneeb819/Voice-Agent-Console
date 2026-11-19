@@ -56,6 +56,7 @@ const g711_1 = require("./g711");
 const settings_builder_1 = require("./settings-builder");
 const persona_1 = require("./persona");
 const campaign_assignment_1 = require("./campaign-assignment");
+const vici_sip_registration_1 = require("./vici-sip-registration");
 const vici_client_1 = require("./vici-client");
 function resolveSdpAdvertisedHost(peerAddress, configuredHost, bindHost) {
     if ((0, auth_guard_1.isLoopbackIp)(peerAddress))
@@ -64,32 +65,6 @@ function resolveSdpAdvertisedHost(peerAddress, configuredHost, bindHost) {
     const bind = bindHost.trim();
     const usable = (host) => Boolean(host && !(0, auth_guard_1.isLoopbackIp)(host) && !['0.0.0.0', '::', '[::]'].includes(host));
     return usable(configured) ? configured : usable(bind) ? bind : '127.0.0.1';
-}
-function interpolateEnvPlaceholders(obj) {
-    if (typeof obj === 'string') {
-        return obj.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (_match, varName) => {
-            if (env_store_1.MANAGED_SECRET_KEYS.includes(varName)) {
-                return (0, env_store_1.getSecret)(varName) || process.env[varName] || '';
-            }
-            if (varName === 'ELEVEN_KEY' || varName === 'ELEVEN_LABS_API_KEY')
-                return (0, env_store_1.getSecret)('ELEVENLABS_API_KEY');
-            if (varName === 'GROQ_KEY')
-                return (0, env_store_1.getSecret)('GROQ_API_KEY');
-            if (varName === 'CARTESIA_KEY')
-                return (0, env_store_1.getSecret)('CARTESIA_API_KEY');
-            return ''; // unknown environment variables are not provider secrets
-        });
-    }
-    if (Array.isArray(obj))
-        return obj.map(interpolateEnvPlaceholders);
-    if (obj && typeof obj === 'object') {
-        const out = {};
-        for (const [k, v] of Object.entries(obj)) {
-            out[k] = interpolateEnvPlaceholders(v);
-        }
-        return out;
-    }
-    return obj;
 }
 function uuidBytesToCanonical(buf) {
     if (buf.length === 16) {
@@ -192,6 +167,7 @@ class VicidialBridgeService {
     tcpServer = null;
     sipSocket = null;
     monitorWss = null;
+    sipRegistrationClient = null;
     preCallRegistry = new Map();
     preCallSweepTimer = null;
     activeCalls = new Map();
@@ -251,6 +227,7 @@ class VicidialBridgeService {
             sipPort: this.sipPort,
             activeCallsCount: this.activeCalls.size,
             activeCalls: Array.from(this.activeCalls.values()),
+            sipRegistration: this.sipRegistrationClient?.snapshot() || { status: 'stopped', registrar: '', expiresAt: null, lastError: null },
         };
     }
     forceHangupCall(callId) {
@@ -347,6 +324,13 @@ class VicidialBridgeService {
         await this.startAudioSocketServer();
         try {
             await this.startSipRtpServer();
+            // BRIDGE_SIP_PORT may override the saved console port; register the port
+            // this process actually listens on, not the stale saved value.
+            const sipCfg = { ...(0, db_1.getConsoleState)().vici, sipPort: this.sipPort };
+            if (sipCfg.sipConnectionMode === 'registration' || sipCfg.sipConnectionMode === 'hybrid') {
+                this.sipRegistrationClient = new vici_sip_registration_1.SipRegistrationClient(sipCfg);
+                await this.sipRegistrationClient.start();
+            }
         }
         catch (err) {
             await this.stop();
@@ -359,6 +343,10 @@ class VicidialBridgeService {
             this.preCallSweepTimer = null;
         }
         this.preCallRegistry.clear();
+        if (this.sipRegistrationClient) {
+            await this.sipRegistrationClient.stop();
+            this.sipRegistrationClient = null;
+        }
         if (this.monitorWss) {
             for (const client of this.monitorWss.clients)
                 client.terminate();
@@ -539,7 +527,7 @@ class VicidialBridgeService {
             });
         });
         await new Promise((resolve, reject) => {
-            const tryListen = (candidatePort, candidateHost, retriesLeft) => {
+            const tryListen = (candidatePort, candidateHost) => {
                 const onErr = (err) => {
                     this.tcpServer.removeListener('error', onErr);
                     reject(err);
@@ -555,7 +543,7 @@ class VicidialBridgeService {
                     resolve();
                 });
             };
-            tryListen(this.audioSocketPort, this.host, 0);
+            tryListen(this.audioSocketPort, this.host);
         });
     }
     // ==================== TRANSPORT 2: ASTERISK 13/16/18+ SIP + RTP (G.711 ULAW) ====================
@@ -653,7 +641,7 @@ class VicidialBridgeService {
                         return;
                     }
                     sendSipResponse('100 Trying', headers, toRaw, [], '', rinfo);
-                    // Parse dialed extension from Request-URI: sip:88001@115.186.137.240:5062
+                    // Parse dialed extension from Request-URI: sip:88001@<bridge-host>:5062
                     const uriMatch = /sip:([^@;>\s]+)/i.exec(requestUri || '');
                     const exten = firstHeader(headers, 'x-vici-exten') || (uriMatch ? uriMatch[1] : '');
                     // Campaign maxCalls concurrency guard
@@ -670,7 +658,7 @@ class VicidialBridgeService {
                         sendSipResponse('486 Busy Here', headers, toRaw, [], '', rinfo);
                         return;
                     }
-                    // Parse From header: "V1027153012000104892" <sip:3055550192@115.186.137.240>;tag=as123
+                    // Parse From header: "V1027153012000104892" <sip:3055550192@<bridge-host>>;tag=as123
                     const dispMatch = /^\s*"?([^"<]+?)"?\s*<sip:([^@;>]+)/i.exec(fromRaw);
                     const sipUriPhoneMatch = /<sip:([^@;>]+)/i.exec(fromRaw);
                     const viciCidHeader = firstHeader(headers, 'x-vici-callname');
@@ -895,7 +883,7 @@ class VicidialBridgeService {
             }
         });
         await new Promise((resolve, reject) => {
-            const tryBind = (candidatePort, candidateHost, retriesLeft) => {
+            const tryBind = (candidatePort, candidateHost) => {
                 const onErr = (err) => {
                     sock.removeListener('error', onErr);
                     reject(err);
@@ -911,7 +899,7 @@ class VicidialBridgeService {
                     resolve();
                 });
             };
-            tryBind(this.sipPort, this.host, 0);
+            tryBind(this.sipPort, this.host);
         });
     }
     // ==================== UNIFIED CALL LIFECYCLE ORCHESTRATOR ====================
@@ -1270,7 +1258,7 @@ class VicidialBridgeService {
             let wireSettings;
             let openingText = '';
             try {
-                const prepared = (0, opening_1.prepareDelayedOpening)(interpolateEnvPlaceholders(rawSettings));
+                const prepared = (0, opening_1.prepareDelayedOpening)((0, env_store_1.interpolateProviderPlaceholders)(rawSettings));
                 openingText = prepared.greeting;
                 wireSettings = prepared.settings;
             }

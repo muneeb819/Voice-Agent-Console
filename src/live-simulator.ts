@@ -6,7 +6,7 @@ import { getConsoleState, saveSimulatorCallLog, SimulatorCallLogRecord, trySelec
 import { GreetingRecord } from './greetings';
 import { createOpeningGate, OpeningGate, prepareDelayedOpening } from './opening';
 import { normalizeState } from './defaults';
-import { getSecret, MANAGED_SECRET_KEYS } from './env-store';
+import { getSecret, interpolateProviderPlaceholders } from './env-store';
 import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCallReadinessBlockers } from './settings-builder';
 import { createConversationMemory } from './persona';
 import { campaignHasAgent } from './campaign-assignment';
@@ -32,29 +32,6 @@ export interface SimulatorStartMessage {
   // Both are off by default and apply only to this browser test.
   allowWebhooks?: boolean;
   recordAudio?: boolean;
-}
-
-function interpolateEnvPlaceholders(obj: any): any {
-  if (typeof obj === 'string') {
-    return obj.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (_match, varName) => {
-      if ((MANAGED_SECRET_KEYS as readonly string[]).includes(varName)) {
-        return getSecret(varName as any) || process.env[varName] || '';
-      }
-      if (varName === 'ELEVEN_KEY' || varName === 'ELEVEN_LABS_API_KEY') return getSecret('ELEVENLABS_API_KEY');
-      if (varName === 'GROQ_KEY') return getSecret('GROQ_API_KEY');
-      if (varName === 'CARTESIA_KEY') return getSecret('CARTESIA_API_KEY');
-      return ''; // unknown environment variables are not provider secrets
-    });
-  }
-  if (Array.isArray(obj)) return obj.map(interpolateEnvPlaceholders);
-  if (obj && typeof obj === 'object') {
-    const out: Record<string, any> = {};
-    for (const [k, v] of Object.entries(obj)) {
-      out[k] = interpolateEnvPlaceholders(v);
-    }
-    return out;
-  }
-  return obj;
 }
 
 function hydrateLeadIntoPromptAndGreeting(
@@ -104,6 +81,9 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
     : new WebSocketServer({ server, path: '/ws/simulator', maxPayload: 4 * 1024 * 1024, perMessageDeflate: false });
 
   wss.on('connection', (clientWs: WebSocket, req: http.IncomingMessage) => {
+    // Defence in depth: the HTTP upgrade path checks this too, but rejecting
+    // here keeps a direct attachLiveSimulator(server) use from being open.
+    if (!isRequestAuthorized(req)) { clientWs.close(1008, 'Authentication required'); return; }
     if (getAuthenticatedUser(req)?.role === 'viewer') { clientWs.close(1008, 'Read-only account'); return; }
     if (wss.clients.size > 64) { clientWs.close(1013, 'Simulator capacity reached'); return; }
     const callId = `sim_${Date.now().toString(36)}_${crypto.randomBytes(3).toString('hex')}`;
@@ -673,7 +653,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         let wireSettings: any;
         let openingText = '';
         try {
-          const prepared = prepareDelayedOpening(interpolateEnvPlaceholders(rawSettings));
+          const prepared = prepareDelayedOpening(interpolateProviderPlaceholders(rawSettings));
           openingText = prepared.greeting;
           wireSettings = prepared.settings;
         } catch (err: any) {

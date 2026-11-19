@@ -43,6 +43,7 @@ function asyncRoute(handler) {
 }
 function createApp(viciBridge) {
     const app = (0, express_1.default)();
+    app.disable('x-powered-by');
     // Proxy headers are untrusted by default. Configure only known proxy IPs or
     // CIDRs (for example TRUST_PROXY=loopback) when running behind a proxy.
     const trustedProxies = String(process.env.TRUST_PROXY || '').trim();
@@ -54,9 +55,33 @@ function createApp(viciBridge) {
     const loginWindowMs = 15 * 60 * 1000;
     const loginAttemptLimit = 5;
     const signupAttemptLimit = 10;
+    // Baseline browser hardening for every response. The console UI uses a small
+    // inline boot script and inline style attributes, so those must stay allowed;
+    // external scripts, objects, framing and cross-origin API connections do not.
+    const contentSecurityPolicy = [
+        "default-src 'self'",
+        "script-src 'self' 'unsafe-inline'",
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+        "font-src 'self' https://fonts.gstatic.com data:",
+        "img-src 'self' data: blob:",
+        "media-src 'self' data: blob:",
+        "connect-src 'self' https://api.deepgram.com wss://agent.deepgram.com",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    ].join('; ');
     app.use((req, res, next) => {
         // Avoid leaking console URLs to external providers or sample hosts.
         res.setHeader('Referrer-Policy', 'no-referrer');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('X-Frame-Options', 'DENY');
+        res.setHeader('Permissions-Policy', 'microphone=(self), camera=(), geolocation=()');
+        res.setHeader('Content-Security-Policy', contentSecurityPolicy);
+        // Only advertise HSTS when the request actually arrived over TLS (directly
+        // or through a proxy that Express has been explicitly told to trust).
+        if (req.secure)
+            res.setHeader('Strict-Transport-Security', 'max-age=15552000');
         // Session cookies are first-party (SameSite=Lax).
         // Do not grant cross-origin API access, and reject browser requests with a
         // mismatched Origin even when they would not need a CORS preflight.
@@ -67,6 +92,17 @@ function createApp(viciBridge) {
             return;
         }
         if (requestPath.startsWith('/api/') && !(0, request_origin_1.isSameOriginRequest)(req, app.get('trust proxy fn'))) {
+            if (process.env.VAC_DEBUG === '1') {
+                console.log('[VAC:DEBUG] origin rejected', JSON.stringify({
+                    origin: req.headers.origin || null,
+                    host: req.headers.host || null,
+                    forwardedHost: req.headers['x-forwarded-host'] || null,
+                    forwardedProto: req.headers['x-forwarded-proto'] || null,
+                    fetchSite: req.headers['sec-fetch-site'] || null,
+                    peer: req.socket?.remoteAddress || null,
+                    url: req.originalUrl,
+                }));
+            }
             res.status(403).json({ ok: false, error: 'Cross-origin API requests are not allowed.' });
             return;
         }
@@ -208,7 +244,9 @@ function createApp(viciBridge) {
         });
     }));
     app.post('/api/auth/login', asyncRoute(async (req, res) => {
-        const ip = req.socket?.remoteAddress || 'unknown';
+        // Use Express's resolved client IP so a trusted reverse proxy does not make
+        // every operator share one coarse sign-in bucket.
+        const ip = String(req.ip || req.socket?.remoteAddress || 'unknown');
         const ipNow = Date.now();
         let ipBucket = loginIpAttempts.get(ip);
         if (!ipBucket || ipBucket.resetAt <= ipNow) {
@@ -1351,7 +1389,13 @@ function createApp(viciBridge) {
             return '/';
         try {
             const parsed = new URL(value, 'http://local.invalid');
-            return parsed.origin === 'http://local.invalid' ? `${parsed.pathname}${parsed.search}` : '/';
+            if (parsed.origin !== 'http://local.invalid')
+                return '/';
+            // Never bounce a signed-in account back to the authentication shells;
+            // /login?next=/login would otherwise redirect forever.
+            if (['/login', '/login.html', '/signup'].includes(parsed.pathname))
+                return '/';
+            return `${parsed.pathname}${parsed.search}`;
         }
         catch {
             return '/';
@@ -1387,7 +1431,7 @@ function createApp(viciBridge) {
     app.get('/index.html', serveConsoleEntry);
     app.use(express_1.default.static(publicDir, { index: false }));
     app.get('*', serveConsoleEntry);
-    app.use((err, req, res, next) => {
+    app.use((err, _req, res, next) => {
         if (res.headersSent) {
             next(err);
             return;
@@ -1446,7 +1490,11 @@ function createServerWithSimulator(bridgeOpts) {
     return { app, server, viciBridge, liveSimulator: simWss };
 }
 if (require.main === module) {
-    const requestedPort = Number(process.env.PORT || 533);
+    const requestedPort = Number(process.env.PORT ?? 533);
+    if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
+        console.error(`[VoiceAgentConsole] Invalid PORT "${process.env.PORT}": expected an integer from 0 to 65535.`);
+        process.exit(1);
+    }
     const initialPort = process.env.E2B_SANDBOX === 'true' && requestedPort > 0 && requestedPort < 1024
         ? requestedPort + 5000
         : requestedPort;
@@ -1459,7 +1507,7 @@ if (require.main === module) {
     const { server, viciBridge, liveSimulator } = createServerWithSimulator({ enableBridge: true });
     (async () => {
         if (initialPort !== requestedPort) {
-            console.warn(`[VoiceAgentConsole] Cloud preview proxy blocks privileged ports <1024 (port ${requestedPort}) — mapping preview listener to port ${initialPort} (production ViciBox/115.186.137.240 keeps port ${requestedPort}).`);
+            console.warn(`[VoiceAgentConsole] Cloud preview proxy blocks privileged ports <1024 (port ${requestedPort}); mapping this preview listener to port ${initialPort}.`);
         }
         let bindHost = host;
         await new Promise((resolveListen) => {
@@ -1496,7 +1544,11 @@ if (require.main === module) {
                 server.once('listening', onListening);
                 server.listen(candidatePort, bindHost);
             };
-            listenWithFallback(initialPort, 0);
+            // A privileged port on a non-root Linux process fails deterministically
+            // with EACCES. Fall back once to an unprivileged port so `npm start` works
+            // for local development; an actually occupied port (EADDRINUSE) still
+            // fails fast instead of silently moving.
+            listenWithFallback(initialPort, initialPort > 0 && initialPort < 1024 ? 1 : 0);
         });
         let shuttingDown = false;
         const shutdown = async (signal) => {
@@ -1512,8 +1564,11 @@ if (require.main === module) {
             await new Promise((resolve) => liveSimulator.close(() => resolve()));
             if (viciBridge)
                 await viciBridge.stop().catch(() => { });
-            await new Promise((resolve) => server.close(() => resolve()));
+            // Initiate the close first, then drop idle/keep-alive sockets so the
+            // close callback cannot be held open until the force-exit timer fires.
+            const closed = new Promise((resolve) => server.close(() => resolve()));
             server.closeAllConnections?.();
+            await closed;
             (0, db_1.closeDb)();
             clearTimeout(force);
             process.exit(0);

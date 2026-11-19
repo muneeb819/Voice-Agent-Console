@@ -131,11 +131,6 @@ body {
   font-variant-numeric: tabular-nums;
   color: var(--text);
   background-color: var(--bg);
-  background-image: url("/assets/background-texture.svg");
-  background-size: cover;
-  background-position: center;
-  background-attachment: fixed;
-  background-repeat: no-repeat;
   display: grid;
   place-items: center;
   padding: 32px 18px;

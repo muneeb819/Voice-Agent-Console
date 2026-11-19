@@ -68,11 +68,19 @@ if command -v asterisk >/dev/null 2>&1; then
   if asterisk -rx "module show like audiosocket" 2>/dev/null | grep -qi "app_audiosocket"; then
     echo "✓ app_audiosocket.so is loaded — Both AudioSocket (:9092) and SIP/RTP (:5062) are ready!"
   else
-    echo "ℹ app_audiosocket.so not loaded — Use SIP/RTP Carrier Mode ([ai-bridge] -> 115.186.137.240:5062) in VICIdial Admin -> Carriers."
+    echo "ℹ app_audiosocket.so not loaded — Use SIP/RTP Carrier Mode ([ai-bridge] -> <BRIDGE_PUBLIC_IP>:5062) in VICIdial Admin -> Carriers."
   fi
 fi
 
 echo "=== [5/5] Installing & starting systemd service (voice-agent-bridge.service) ==="
+# The service binds :533 through CAP_NET_BIND_SERVICE rather than running as root.
+# It only needs write access to its install tree (.env, data and recordings).
+if ! id -u voiceagent >/dev/null 2>&1; then
+  useradd --system --home-dir "${INSTALL_DIR}" --no-create-home \
+    --shell "$(command -v nologin || echo /bin/false)" voiceagent
+fi
+chown -R voiceagent:voiceagent "${INSTALL_DIR}"
+chmod 600 "${INSTALL_DIR}/.env"
 cp "${INSTALL_DIR}/deploy/voice-agent-bridge.service" /etc/systemd/system/voice-agent-bridge.service
 systemctl daemon-reload
 systemctl enable voice-agent-bridge.service

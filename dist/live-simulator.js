@@ -48,32 +48,6 @@ const settings_builder_1 = require("./settings-builder");
 const persona_1 = require("./persona");
 const campaign_assignment_1 = require("./campaign-assignment");
 const webhook_executor_1 = require("./webhook-executor");
-function interpolateEnvPlaceholders(obj) {
-    if (typeof obj === 'string') {
-        return obj.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (_match, varName) => {
-            if (env_store_1.MANAGED_SECRET_KEYS.includes(varName)) {
-                return (0, env_store_1.getSecret)(varName) || process.env[varName] || '';
-            }
-            if (varName === 'ELEVEN_KEY' || varName === 'ELEVEN_LABS_API_KEY')
-                return (0, env_store_1.getSecret)('ELEVENLABS_API_KEY');
-            if (varName === 'GROQ_KEY')
-                return (0, env_store_1.getSecret)('GROQ_API_KEY');
-            if (varName === 'CARTESIA_KEY')
-                return (0, env_store_1.getSecret)('CARTESIA_API_KEY');
-            return ''; // unknown environment variables are not provider secrets
-        });
-    }
-    if (Array.isArray(obj))
-        return obj.map(interpolateEnvPlaceholders);
-    if (obj && typeof obj === 'object') {
-        const out = {};
-        for (const [k, v] of Object.entries(obj)) {
-            out[k] = interpolateEnvPlaceholders(v);
-        }
-        return out;
-    }
-    return obj;
-}
 function hydrateLeadIntoPromptAndGreeting(settings, agent, campaign, lead) {
     const cleanLead = {
         lead_id: String(lead?.lead_id || '').trim(),
@@ -108,6 +82,12 @@ function attachLiveSimulator(server, noServer = false) {
         ? new ws_1.WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024, perMessageDeflate: false })
         : new ws_1.WebSocketServer({ server, path: '/ws/simulator', maxPayload: 4 * 1024 * 1024, perMessageDeflate: false });
     wss.on('connection', (clientWs, req) => {
+        // Defence in depth: the HTTP upgrade path checks this too, but rejecting
+        // here keeps a direct attachLiveSimulator(server) use from being open.
+        if (!(0, auth_guard_1.isRequestAuthorized)(req)) {
+            clientWs.close(1008, 'Authentication required');
+            return;
+        }
         if ((0, auth_guard_1.getAuthenticatedUser)(req)?.role === 'viewer') {
             clientWs.close(1008, 'Read-only account');
             return;
@@ -671,7 +651,7 @@ function attachLiveSimulator(server, noServer = false) {
                 let wireSettings;
                 let openingText = '';
                 try {
-                    const prepared = (0, opening_1.prepareDelayedOpening)(interpolateEnvPlaceholders(rawSettings));
+                    const prepared = (0, opening_1.prepareDelayedOpening)((0, env_store_1.interpolateProviderPlaceholders)(rawSettings));
                     openingText = prepared.greeting;
                     wireSettings = prepared.settings;
                 }

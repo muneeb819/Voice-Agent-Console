@@ -3,11 +3,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MANAGED_SECRET_KEYS = void 0;
+exports.PROVIDER_PLACEHOLDER_KEYS = exports.MANAGED_SECRET_KEYS = void 0;
 exports.sanitizeSecretValue = sanitizeSecretValue;
 exports.loadEnv = loadEnv;
 exports.getSecret = getSecret;
 exports.maskSecret = maskSecret;
+exports.resolveProviderPlaceholder = resolveProviderPlaceholder;
+exports.interpolateProviderPlaceholders = interpolateProviderPlaceholders;
 exports.getSecretsStatus = getSecretsStatus;
 exports.updateSecrets = updateSecrets;
 exports.verifyDeepgramConnection = verifyDeepgramConnection;
@@ -34,6 +36,7 @@ exports.MANAGED_SECRET_KEYS = [
     'OPENAI_API_KEY',
     'GROQ_API_KEY',
     'VICI_API_PASS',
+    'VICI_SIP_PASSWORD',
     'AMI_SECRET',
     'CUSTOM_WEBHOOK_SECRET',
     'ADMIN_PASSWORD',
@@ -62,9 +65,54 @@ function maskSecret(val) {
     const clean = sanitizeSecretValue(val || '');
     if (!clean)
         return '';
-    if (clean.length <= 8)
-        return '••••••••';
-    return `${clean.slice(0, 4)}••••${clean.slice(-4)}`;
+    // Never reveal any characters of a stored secret. Some console views are
+    // readable by viewer/operator accounts, so a partial mask would leak the
+    // first and last four characters of ADMIN_PASSWORD and every provider key.
+    return '••••••••';
+}
+/**
+ * Secrets that may be interpolated into provider configuration (custom STT/TTS
+ * endpoint, headers and extra JSON). Administrative and PBX credentials are
+ * deliberately excluded: an authenticated operator can edit agent/provider
+ * configuration, so allowing {{ADMIN_PASSWORD}}, {{VICI_API_PASS}} or
+ * {{AMI_SECRET}} here would let them exfiltrate those secrets to a provider.
+ */
+exports.PROVIDER_PLACEHOLDER_KEYS = [
+    'DEEPGRAM_API_KEY',
+    'SPEECH_SERVICE_URL',
+    'SPEECH_SERVICE_API_KEY',
+    'ELEVENLABS_API_KEY',
+    'CARTESIA_API_KEY',
+    'OPENAI_API_KEY',
+    'GROQ_API_KEY',
+];
+const PROVIDER_PLACEHOLDER_ALIASES = {
+    ELEVEN_KEY: 'ELEVENLABS_API_KEY',
+    ELEVEN_LABS_API_KEY: 'ELEVENLABS_API_KEY',
+    GROQ_KEY: 'GROQ_API_KEY',
+    CARTESIA_KEY: 'CARTESIA_API_KEY',
+};
+function resolveProviderPlaceholder(name) {
+    const key = PROVIDER_PLACEHOLDER_ALIASES[name] || name;
+    if (!exports.PROVIDER_PLACEHOLDER_KEYS.includes(key))
+        return '';
+    return getSecret(key);
+}
+/** Recursively resolves only provider-scoped {{PLACEHOLDER}} values. */
+function interpolateProviderPlaceholders(value) {
+    if (typeof value === 'string') {
+        return value.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (_match, name) => resolveProviderPlaceholder(name));
+    }
+    if (Array.isArray(value))
+        return value.map((entry) => interpolateProviderPlaceholders(entry));
+    if (value && typeof value === 'object') {
+        const out = {};
+        for (const [key, entry] of Object.entries(value)) {
+            out[key] = interpolateProviderPlaceholders(entry);
+        }
+        return out;
+    }
+    return value;
 }
 function getSecretsStatus() {
     loadEnv();

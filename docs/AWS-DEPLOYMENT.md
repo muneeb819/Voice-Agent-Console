@@ -1,9 +1,11 @@
 # Publishing the Console on AWS EC2
 
-Target in this release: **`https://3.107.192.118:533/`**
+Example target used in the commands below: **`https://<EC2_PUBLIC_IP>:533/`**.
+Replace that address with the public IPv4/DNS of **your** EC2 instance; it is not
+baked into the application.
 
 > **Status: prepared, not deployed.** The build sandbox has no SSH key or AWS
-> credentials for this instance, and outbound traffic to `3.107.192.118:533` is
+> credentials for this instance, and outbound traffic to `<EC2_PUBLIC_IP>:533` is
 > blocked by the sandbox network policy (TCP connects, then TLS and HTTP are both
 > reset). Nothing in this repository has been pushed to that host, and no claim
 > is made that it is running there. Run the steps below on the instance, or from
@@ -59,19 +61,20 @@ for a private repo use a deploy key or upload a release tarball):
 ```bash
 git clone https://github.com/muneeb819/Voice-Agent-Console.git
 cd Voice-Agent-Console
-sudo bash deploy/aws-deploy.sh --ip 3.107.192.118
+sudo bash deploy/aws-deploy.sh --ip <EC2_PUBLIC_IP>
 ```
 
 The script is safe to re-run. It:
 
-1. Checks Node ≥ 22.5 and installs nginx/openssl if absent.
+1. Checks Node ≥ 22.5 and installs nginx/openssl/curl if absent.
 2. Copies the app to `/opt/voice-agent-console`.
 3. Creates `.env` **only if missing**, generating an admin password with
    `openssl rand -hex 24` and never printing it. An existing `.env` is preserved.
 4. Pins `HOST=127.0.0.1`, `PORT=534`, `TRUST_PROXY=127.0.0.1`.
 5. Runs `npm ci --include=dev` and `npm run build`.
 6. Creates a self-signed certificate with an **IP SAN** for the address.
-7. Installs and starts `voice-agent-console.service`, writes the nginx TLS
+7. Installs and starts `voice-agent-console.service` as the unprivileged system
+   account `voiceagent` (systemd sandboxing enabled), writes the nginx TLS
    server block, reloads nginx, and verifies `/api/health` on both hops.
 
 Options: `--tls-port`, `--app-port`, `--public-port`, `--real-ip-from`,
@@ -85,7 +88,7 @@ a hostname as well as an IPv4/IPv6 address (the certificate gets a `DNS:` or
 
 Let's Encrypt has issued publicly trusted **IP-address certificates** (IPv4 and
 IPv6) since [15 January 2026](https://letsencrypt.org/2026-01-15/6day-and-ip-general-availability).
-So `https://3.107.192.118:533/` does not have to stay self-signed.
+So `https://<EC2_PUBLIC_IP>:533/` does not have to stay self-signed.
 
 The constraints that matter here:
 
@@ -102,7 +105,7 @@ The constraints that matter here:
 Once issued, install it with:
 
 ```bash
-sudo bash deploy/aws-deploy.sh --ip 3.107.192.118 \
+sudo bash deploy/aws-deploy.sh --ip <EC2_PUBLIC_IP> \
   --cert /etc/letsencrypt/live/<name>/fullchain.pem \
   --key  /etc/letsencrypt/live/<name>/privkey.pem
 ```
@@ -177,7 +180,7 @@ journalctl -u voice-agent-console.service -f
 From your workstation:
 
 ```bash
-curl -kI https://3.107.192.118:533/
+curl -kI https://<EC2_PUBLIC_IP>:533/
 ```
 
 If that hangs, the security group is not open — the app cannot fix that from
@@ -216,7 +219,7 @@ deployment.
 
 ```bash
 cd Voice-Agent-Console && git pull
-sudo bash deploy/aws-deploy.sh --ip 3.107.192.118
+sudo bash deploy/aws-deploy.sh --ip <EC2_PUBLIC_IP>
 ```
 
 `.env`, the database, recordings and the TLS certificate are all preserved.
@@ -227,7 +230,7 @@ The service restarts, so active calls drop — update outside calling hours.
 ```bash
 sudo systemctl stop voice-agent-console.service
 cd Voice-Agent-Console && git checkout <previous-tag>
-sudo bash deploy/aws-deploy.sh --ip 3.107.192.118
+sudo bash deploy/aws-deploy.sh --ip <EC2_PUBLIC_IP>
 ```
 
 Database migrations are additive; take a copy of `data/console.sqlite` before

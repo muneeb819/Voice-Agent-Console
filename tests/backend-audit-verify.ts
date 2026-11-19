@@ -13,6 +13,11 @@ import { AsteriskAmiClient } from '../src/ami-client';
 import { readResponseBuffer } from '../src/http-limits';
 import { resolveRecordingPath, RECORDINGS_DIR, StereoCallRecorder8k } from '../src/call-recorder';
 import { getSpeechServiceBaseUrl } from '../src/speech-service-client';
+import {
+  getSecretsStatus,
+  interpolateProviderPlaceholders,
+  maskSecret,
+} from '../src/env-store';
 
 async function listen(app: any): Promise<{ server: http.Server; base: string }> {
   const server = http.createServer(app);
@@ -22,6 +27,13 @@ async function listen(app: any): Promise<{ server: http.Server; base: string }> 
 
 async function main() {
   process.env.ADMIN_PASSWORD = 'audit-admin-password';
+  process.env.DEEPGRAM_API_KEY = 'dg-audit-key-1234567890';
+  process.env.SPEECH_SERVICE_URL = 'http://127.0.0.1:8000';
+  process.env.SPEECH_SERVICE_API_KEY = 'speech-audit-key';
+  process.env.VICI_API_PASS = 'vici-audit-secret';
+  process.env.AMI_SECRET = 'ami-audit-secret';
+  process.env.CUSTOM_WEBHOOK_SECRET = 'webhook-audit-secret';
+  process.env.BRIDGE_ALLOWED_IPS = '127.0.0.1';
   const owner = await createUser({ email: 'owner@example.test', fullName: 'Owner', password: 'Test-Password-123!' });
   const operator = await createUser({ email: 'operator@example.test', fullName: 'Operator', password: 'Test-Password-123!' });
   assert.ok(owner.ok && operator.ok);
@@ -48,6 +60,13 @@ async function main() {
     const adminCookie = `vac_session=${createUserSession(owner.user!.id)}`;
     const redirect = await fetch(base + '/login?next=' + encodeURIComponent('/\\attacker.example'), { headers: { Cookie: adminCookie }, redirect: 'manual' });
     assert.equal(redirect.headers.get('location'), '/');
+    const loop = await fetch(base + '/login?next=' + encodeURIComponent('/login'), { headers: { Cookie: adminCookie }, redirect: 'manual' });
+    assert.equal(loop.headers.get('location'), '/', 'signed-in /login?next=/login must not loop');
+    const loginPage = await fetch(base + '/login');
+    assert.match(loginPage.headers.get('content-security-policy') || '', /default-src 'self'/);
+    assert.equal(loginPage.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(loginPage.headers.get('x-frame-options'), 'DENY');
+    assert.equal(loginPage.headers.get('x-powered-by'), null);
     const badJson = await fetch(base + '/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{' });
     assert.equal(badJson.status, 400);
     assert.equal((await badJson.json() as any).code, 'INVALID_BODY');
@@ -76,6 +95,28 @@ async function main() {
   assert.throws(() => getSpeechServiceBaseUrl('https://user:pass@example.test'));
   const huge = new Response(Buffer.alloc(1024));
   await assert.rejects(readResponseBuffer(huge, 128), /exceeds/);
+
+  // Provider settings may resolve provider keys and the local speech-service
+  // URL, but never administrative or PBX credentials.
+  const provider = interpolateProviderPlaceholders({
+    prompt: '{{ADMIN_PASSWORD}} {{VICI_API_PASS}} {{AMI_SECRET}} {{CUSTOM_WEBHOOK_SECRET}} {{BRIDGE_ALLOWED_IPS}}',
+    endpoint: '{{SPEECH_SERVICE_URL}}/v1/audio/speech',
+    headers: 'Bearer {{SPEECH_SERVICE_API_KEY}}',
+    key: '{{DEEPGRAM_API_KEY}}',
+    alias: '{{ELEVEN_KEY}}',
+  });
+  const providerText = JSON.stringify(provider);
+  for (const leaked of ['audit-admin-password', 'vici-audit-secret', 'ami-audit-secret', 'webhook-audit-secret']) {
+    assert.ok(!providerText.includes(leaked), `provider placeholders must not expose ${leaked}`);
+  }
+  assert.equal(provider.endpoint, 'http://127.0.0.1:8000/v1/audio/speech');
+  assert.equal(provider.headers, 'Bearer speech-audit-key');
+  assert.equal(provider.key, 'dg-audit-key-1234567890');
+  assert.equal(provider.alias, '');
+  // Reads available to viewer/operator accounts must not reveal any secret characters.
+  assert.equal(maskSecret('audit-admin-password'), '••••••••');
+  assert.equal(getSecretsStatus().ADMIN_PASSWORD.masked, '••••••••');
+  assert.equal(getSecretsStatus().DEEPGRAM_API_KEY.masked, '••••••••');
   console.log('✓ Environment secret allowlist, AMI injection, speech URL and response-size guards');
 
   fs.mkdirSync(RECORDINGS_DIR, { recursive: true });

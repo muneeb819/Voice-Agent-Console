@@ -266,6 +266,15 @@ async function run() {
       const forwarded = { 'X-Forwarded-Proto': 'https', 'X-Forwarded-Host': 'console.example', Cookie: cookie };
       assert.strictEqual((await fetch(`http://127.0.0.1:${trustedPort}/api/state`, { headers: { ...forwarded, Origin: 'https://console.example' } })).status, 200, 'Trusted proxy may convey the external origin');
       assert.strictEqual((await fetch(`http://127.0.0.1:${trustedPort}/api/state`, { headers: { ...forwarded, Origin: 'https://attacker.example' } })).status, 403);
+      assert.strictEqual((await fetch(`http://127.0.0.1:${trustedPort}/api/state`, {
+        headers: { 'X-Forwarded-Proto': 'http', 'X-Forwarded-Host': 'console.example', Cookie: cookie, Origin: 'https://console.example' },
+      })).status, 200, 'A TLS-terminating proxy may report an http upstream scheme without rejecting a same-host origin');
+      assert.strictEqual((await fetch(`http://127.0.0.1:${trustedPort}/api/state`, {
+        headers: { Cookie: cookie, Origin: 'https://console.example', 'Sec-Fetch-Site': 'same-origin' },
+      })).status, 200, 'A browser same-origin assertion survives host rewriting');
+      assert.strictEqual((await fetch(`http://127.0.0.1:${trustedPort}/api/state`, {
+        headers: { Cookie: cookie, Origin: 'https://attacker.example', 'Sec-Fetch-Site': 'cross-site' },
+      })).status, 403, 'Cross-site browser requests remain blocked');
     } finally { await close(trusted); delete process.env.TRUST_PROXY; }
     console.log('✓ 4. Trusted proxy origin, HTTPS cookies and cross-origin HTTP/WebSocket defenses');
 

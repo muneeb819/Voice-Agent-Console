@@ -33,11 +33,28 @@ function downloadFileWithRedirects(url, destPath, redirectsLeft = 6) {
       reject(new Error('Too many redirects while downloading cloudflared'));
       return;
     }
-    https
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      reject(new Error('Invalid cloudflared download URL'));
+      return;
+    }
+    // Match the server-side tunnel downloader: only the official GitHub
+    // release hosts, HTTPS, and a bounded download.
+    if (
+      parsed.protocol !== 'https:' ||
+      !['github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com'].includes(parsed.hostname)
+    ) {
+      reject(new Error('Blocked untrusted cloudflared download host'));
+      return;
+    }
+    const request = https
       .get(
         url,
         {
           headers: { 'User-Agent': 'Voice-Agent-Console-Demo-Launcher/1.0' },
+          timeout: 30000,
         },
         (res) => {
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -59,6 +76,10 @@ function downloadFileWithRedirects(url, destPath, redirectsLeft = 6) {
 
           res.on('data', (chunk) => {
             received += chunk.length;
+            if (received > 100 * 1024 * 1024) {
+              request.destroy(new Error('cloudflared download exceeds 100 MiB'));
+              return;
+            }
             if (totalBytes > 0) {
               const pct = Math.floor((received / totalBytes) * 100);
               if (pct >= lastPct + 20) {
@@ -91,6 +112,7 @@ function downloadFileWithRedirects(url, destPath, redirectsLeft = 6) {
           });
         }
       )
+      .on('timeout', () => request.destroy(new Error('cloudflared download timed out')))
       .on('error', reject);
   });
 }
@@ -148,13 +170,15 @@ async function isConsoleHealthy(port, host = '127.0.0.1') {
 
 function getLanIp() {
   const nets = os.networkInterfaces();
-  for (const list of Object.values(nets)) {
+  for (const [name, list] of Object.entries(nets)) {
+    // Skip container/bridge adapters; retain RFC1918 addresses such as the
+    // 172.31.x.x range commonly assigned to EC2 instances.
+    if (/^(?:docker|br-|veth|virbr|tun|tap|lo)/i.test(name)) continue;
     for (const iface of list || []) {
       if (
         iface.family === 'IPv4' &&
         !iface.internal &&
-        !iface.address.startsWith('169.254.') &&
-        !iface.address.startsWith('172.')
+        !iface.address.startsWith('169.254.')
       ) {
         return iface.address;
       }

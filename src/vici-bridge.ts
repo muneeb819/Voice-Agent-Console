@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import dgram from 'dgram';
-import http from 'http';
 import net from 'net';
 import WebSocket, { WebSocketServer } from 'ws';
 import { AsteriskAmiClient } from './ami-client';
@@ -9,7 +8,7 @@ import { StereoCallRecorder8k } from './call-recorder';
 import { getConsoleState, saveBridgeCallLog, trySelectGreeting } from './db';
 import { GreetingRecord } from './greetings';
 import { createOpeningGate, OpeningGate, prepareDelayedOpening } from './opening';
-import { getSecret, MANAGED_SECRET_KEYS } from './env-store';
+import { getSecret, interpolateProviderPlaceholders } from './env-store';
 import { executeCustomFunctionWebhook } from './webhook-executor';
 import {
   buildRtpPacket,
@@ -81,29 +80,6 @@ export interface ActiveBridgeCallSummary {
   turns: number;
   disposition: string | null;
   transferredTo: string | null;
-}
-
-function interpolateEnvPlaceholders(obj: any): any {
-  if (typeof obj === 'string') {
-    return obj.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (_match, varName) => {
-      if ((MANAGED_SECRET_KEYS as readonly string[]).includes(varName)) {
-        return getSecret(varName as any) || process.env[varName] || '';
-      }
-      if (varName === 'ELEVEN_KEY' || varName === 'ELEVEN_LABS_API_KEY') return getSecret('ELEVENLABS_API_KEY');
-      if (varName === 'GROQ_KEY') return getSecret('GROQ_API_KEY');
-      if (varName === 'CARTESIA_KEY') return getSecret('CARTESIA_API_KEY');
-      return ''; // unknown environment variables are not provider secrets
-    });
-  }
-  if (Array.isArray(obj)) return obj.map(interpolateEnvPlaceholders);
-  if (obj && typeof obj === 'object') {
-    const out: Record<string, any> = {};
-    for (const [k, v] of Object.entries(obj)) {
-      out[k] = interpolateEnvPlaceholders(v);
-    }
-    return out;
-  }
-  return obj;
 }
 
 export function uuidBytesToCanonical(buf: Buffer): string {
@@ -418,7 +394,9 @@ export class VicidialBridgeService {
     await this.startAudioSocketServer();
     try {
       await this.startSipRtpServer();
-      const sipCfg = getConsoleState().vici;
+      // BRIDGE_SIP_PORT may override the saved console port; register the port
+      // this process actually listens on, not the stale saved value.
+      const sipCfg = { ...getConsoleState().vici, sipPort: this.sipPort };
       if (sipCfg.sipConnectionMode === 'registration' || sipCfg.sipConnectionMode === 'hybrid') {
         this.sipRegistrationClient = new SipRegistrationClient(sipCfg);
         await this.sipRegistrationClient.start();
@@ -621,7 +599,7 @@ export class VicidialBridgeService {
     });
 
     await new Promise<void>((resolve, reject) => {
-      const tryListen = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
+      const tryListen = (candidatePort: number, candidateHost: string) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           this.tcpServer!.removeListener('error', onErr);
           reject(err);
@@ -637,7 +615,7 @@ export class VicidialBridgeService {
           resolve();
         });
       };
-      tryListen(this.audioSocketPort, this.host, 0);
+      tryListen(this.audioSocketPort, this.host);
     });
   }
 
@@ -775,7 +753,7 @@ export class VicidialBridgeService {
 
         sendSipResponse('100 Trying', headers, toRaw, [], '', rinfo);
 
-        // Parse dialed extension from Request-URI: sip:88001@115.186.137.240:5062
+        // Parse dialed extension from Request-URI: sip:88001@<bridge-host>:5062
         const uriMatch = /sip:([^@;>\s]+)/i.exec(requestUri || '');
         const exten = firstHeader(headers, 'x-vici-exten') || (uriMatch ? uriMatch[1] : '');
 
@@ -794,7 +772,7 @@ export class VicidialBridgeService {
           return;
         }
 
-        // Parse From header: "V1027153012000104892" <sip:3055550192@115.186.137.240>;tag=as123
+        // Parse From header: "V1027153012000104892" <sip:3055550192@<bridge-host>>;tag=as123
         const dispMatch = /^\s*"?([^"<]+?)"?\s*<sip:([^@;>]+)/i.exec(fromRaw);
         const sipUriPhoneMatch = /<sip:([^@;>]+)/i.exec(fromRaw);
         const viciCidHeader = firstHeader(headers, 'x-vici-callname');
@@ -1018,7 +996,7 @@ export class VicidialBridgeService {
     });
 
     await new Promise<void>((resolve, reject) => {
-      const tryBind = (candidatePort: number, candidateHost: string, retriesLeft: number) => {
+      const tryBind = (candidatePort: number, candidateHost: string) => {
         const onErr = (err: NodeJS.ErrnoException) => {
           sock.removeListener('error', onErr);
           reject(err);
@@ -1034,7 +1012,7 @@ export class VicidialBridgeService {
           resolve();
         });
       };
-      tryBind(this.sipPort, this.host, 0);
+      tryBind(this.sipPort, this.host);
     });
   }
 
@@ -1436,7 +1414,7 @@ export class VicidialBridgeService {
       let wireSettings: any;
       let openingText = '';
       try {
-        const prepared = prepareDelayedOpening(interpolateEnvPlaceholders(rawSettings));
+        const prepared = prepareDelayedOpening(interpolateProviderPlaceholders(rawSettings));
         openingText = prepared.greeting;
         wireSettings = prepared.settings;
       } catch (err: any) {

@@ -95,45 +95,39 @@ async function run() {
   const workflow = read('.github/workflows/jekyll-gh-pages.yml');
   assert(workflow.includes('path: ./public'), 'Pages must upload only the public browser assets');
   assert(!workflow.includes('source: ./\n'), 'Pages must not publish the repository root');
-  assert(workflow.includes('assets/brand/mma-gold-ember.webp'), 'Pages smoke check must request the transparent full banner');
-  assert(!workflow.includes('assets/brand/mma-gold-ember.jpg'), 'Pages must not depend on the retired full-banner JPEG');
+  assert(workflow.includes('assets/brand/mma-atelier-logo.png'), 'Pages smoke check must request the house crest');
+  assert(workflow.includes('assets/brand/mma-atelier-icon.png'), 'Pages smoke check must request the house icon');
+  assert(!workflow.includes('mma-gold-ember'), 'Pages must not depend on retired theme banners');
   const brandCss = read('public/brand-logos.css');
   assert(/\.mma-brand-icon\s*\{[^}]*width:\s*36px[^}]*height:\s*36px/s.test(brandCss), 'Brand icon needs explicit dimensions');
   const brandJs = read('public/brand-logos.js').replace(/\/\*[\s\S]*?\*\//g, '');
   assert(!/sheen|logo-plate|exposure/i.test(brandJs), 'Transparent logo renderer must not restore plate/sheen overlays');
-  // The baked-in waveform is masked out and replaced with live CSS bars.
-  assert(/mma-wave-l/.test(brandJs) && /mma-wave-r/.test(brandJs), 'Banner must render both live wave flanks');
-  assert(/WAVE_BARS\s*=\s*12/.test(brandJs), 'Live wave bar count is pinned');
-  assert(!/requestAnimationFrame|setInterval/.test(brandJs), 'Live waves must be CSS-driven, not a JS animation loop');
-  const brandCssLive = read('public/brand-logos.css');
-  assert(/@keyframes mmaLiveWave/.test(brandCssLive), 'Live wave keyframes must exist');
-  assert(/animation-name: mmaLiveWave/.test(brandCssLive), 'Bars must use the live wave animation');
-  assert(/transform: scaleY/.test(brandCssLive), 'Waves must animate transform (compositor), not height (layout)');
-  assert(/prefers-reduced-motion: reduce/.test(brandCssLive), 'Reduced motion must be honored');
-  const motionBlock = brandCssLive.slice(brandCssLive.indexOf('@media (prefers-reduced-motion: reduce)'));
-  assert(/\.mma-wave\s*\{\s*display: none/.test(motionBlock), 'Reduced motion hides the live bars');
-  assert(/mask-image: none/.test(motionBlock), 'Reduced motion restores the original baked-in artwork');
-  assert(/data-energy="speaking"/.test(brandCssLive) && /data-energy="listening"/.test(brandCssLive), 'Call state must drive wave amplitude');
-  // The wave strip must stay inside the banner.
-  const band = (name: string) => Number(brandCssLive.match(new RegExp('--mma-wave-' + name + ':\\s*([\\d.]+)%'))?.[1]);
-  assert(band('top') + band('height') <= 100, 'Wave strip must fit inside the banner');
-  // Regression guard: a mask layer sized to a fraction of the box cannot be
-  // placed with a plain percentage (CSS resolves it against box - layer), which
-  // silently erased a strip of the wordmark. Both layers must be full-size.
-  const maskBlock = brandCssLive.slice(brandCssLive.indexOf('.mma-brand-logo .mma-logo-art {'), brandCssLive.indexOf('.mma-brand-icon {'));
-  assert(/mask-image: var\(--mma-wave-vband\), var\(--mma-wave-hband\)/.test(maskBlock), 'Mask must union a vertical and a horizontal band');
-  assert(/mask-size: 100% 100%/.test(maskBlock), 'Mask layers must be full-size so percentage positioning cannot misplace them');
-  assert(!/mask-size:[^;]*var\(--mma-wave-(top|height|tail)\)/.test(maskBlock), 'Mask layers must not be sized from band fractions');
-  assert(/mask-composite: add/.test(maskBlock), 'Mask layers must be unioned, not intersected');
-  // The one banner with an opaque waveform panel must repaint it, or the masked
-  // window shows the page through the logo on light themes.
-  assert(/--mma-wave-panel-r: rgb\(13, 7, 1\)/.test(brandCssLive), 'Opaque crimson panel must be repainted behind the live bars');
-  assert(/data-theme="crimson"[\s\S]{0,120}data-theme="sakura"/.test(brandCssLive), 'Both themes mapped to mma-gold-crimson need the panel fill');
-  for (const theme of ['mma-cyan-signal', 'mma-blue-ultraviolet', 'mma-cyan-field', 'mma-gold-ember', 'mma-ice-obsidian', 'mma-cyan-emerald', 'mma-cyan-aurora', 'mma-gold-crimson']) {
-    assert(fs.existsSync(path.join(publicDir, 'assets', 'brand', `${theme}.webp`)), `Missing transparent banner ${theme}`);
-    assert(!fs.existsSync(path.join(publicDir, 'assets', 'brand', `${theme}.jpg`)), `Full-banner JPEG master must stay out of public/: ${theme}`);
-    assert(!fs.existsSync(path.join(root, 'docs', 'assets', 'brand', `${theme}.jpg`)), `Full-banner JPEG master must stay out of docs/: ${theme}`);
-    assert(fs.existsSync(path.join(root, 'brand-source', `${theme}.jpg`)), `Missing brand source master ${theme}`);
+  assert(!/mma-wave|WAVE_BARS|mmaLiveWave/.test(brandJs), 'The house crest must not reintroduce synthetic equaliser bars');
+  assert(!/requestAnimationFrame|setInterval/.test(brandJs), 'Brand renderer must not start a JS animation loop');
+  assert(/mma-atelier-logo\.png/.test(brandJs) && /mma-atelier-icon\.png/.test(brandJs), 'Brand renderer must use the supplied crest and icon');
+  assert(/THEME_LOGO_MAP/.test(brandJs), 'Theme lookup remains available to callers');
+  for (const rel of ['assets/brand/mma-atelier-logo.png', 'assets/brand/mma-atelier-icon.png', 'assets/brand/mma-atelier-watermark.png']) {
+    assert(fs.existsSync(path.join(publicDir, rel)), `Missing house brand asset ${rel}`);
+    assert(fs.existsSync(path.join(root, 'docs', rel)), `Docs mirror is missing ${rel}`);
+  }
+  const atelier = read('public/atelier.css');
+  assert(/:root\[data-theme="atelier"\]\s*\{/.test(atelier), 'House default tokens must be explicit');
+  assert(/data-theme="cyan_signal"[\s\S]{0,500}data-theme="sakura"/.test(atelier), 'Legacy saved themes must resolve to house tokens');
+  assert(/--bg:\s*#f3ede2/.test(atelier), 'House chalk ground is pinned');
+  assert(/--ac:\s*#7a2e2a/.test(atelier), 'House oxblood accent is pinned at a readable contrast');
+  assert(/body::after[\s\S]{0,500}mma-atelier-watermark\.png/.test(atelier), 'Every page gets the crest watermark');
+  assert(/pointer-events:\s*none/.test(atelier), 'The watermark must not intercept input');
+  assert(/prefers-reduced-motion: reduce/.test(atelier), 'House layer must honor reduced motion');
+  assert(!/#00f2fe|#00F2FE|#7b2cbf|#7B2CBF/.test(atelier), 'House layer must not retain neon theme colours');
+  assert(!/--ac-glow:\s*rgba/.test(atelier), 'Legacy glow token is disabled, not merely recoloured');
+  for (const edition of ['terracotta', 'nocturne', 'botanic', 'chalk']) {
+    assert(new RegExp(`\\[data-theme="${edition}"\\]`).test(atelier), `Missing house edition ${edition}`);
+  }
+  assert(/grid-template-columns:\s*repeat\(12/.test(atelier), 'Readiness ribbon must be the twelve-segment house meter');
+  assert(/cmd-score-ribbon/.test(atelier), 'Circular readiness gauge is replaced by the ribbon');
+  for (const oldTheme of ['mma-cyan-signal', 'mma-blue-ultraviolet', 'mma-cyan-field', 'mma-gold-ember', 'mma-ice-obsidian', 'mma-cyan-emerald', 'mma-cyan-aurora', 'mma-gold-crimson']) {
+    assert(fs.existsSync(path.join(publicDir, 'assets', 'brand', `${oldTheme}.webp`)), `Retired banner archive must remain intact ${oldTheme}`);
+    assert(fs.existsSync(path.join(root, 'brand-source', `${oldTheme}.jpg`)), `Missing brand source master ${oldTheme}`);
   }
   console.log('✓ Static mirrors, asset versions, JavaScript syntax, transparent brand assets and publication boundary');
 

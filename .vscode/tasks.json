@@ -29,9 +29,9 @@
 		{
 			"label": "Audit Full QA",
 			"type": "shell",
-			"command": "C:\\Program Files\\nodejs\\node.exe",
+			"command": "node",
 			"args": [
-				"F:\\Voice-Agent-Console\\tools\\run-tests.js"
+				"${workspaceFolder}/tools/run-tests.js"
 			],
 			"isBackground": false,
 			"problemMatcher": [],

@@ -31,11 +31,6 @@
   var API_URL = '/api/telemetry/overview';
 
   // 270-degree gauge: 51 ticks every 2 points, five printed scale numbers.
-  var GAUGE_START = 225;   // bottom-left, clockwise, gap at the bottom
-  var GAUGE_SWEEP = 270;
-  var GAUGE_TICKS = 51;
-  var GAUGE_STEP = GAUGE_SWEEP / (GAUGE_TICKS - 1);
-  var GAUGE_SCALE = [0, 25, 50, 75, 100];
 
   var state = {
     timer: null,
@@ -132,100 +127,11 @@
 
   /** The readiness score exactly as app.js printed it. */
   function readinessScore() {
-    var node = root.document.querySelector('#cmd-deck .cmd-score-main strong');
+    var node = root.document.querySelector('#cmd-deck .cmd-score-value');
     if (!node) return null;
     var value = parseInt(String(node.textContent).replace(/[^0-9-]/g, ''), 10);
     if (!isFinite(value)) return null;
     return Math.max(0, Math.min(100, value));
-  }
-
-  // ------------------------------------------------------------- dial build
-
-  function injectDial() {
-    var main = root.document.querySelector('#cmd-deck .cmd-score-main');
-    if (!main) return null;
-
-    // Tag the "/100" label. Without this, any generic span rule would also
-    // apply to the gauge spans and collapse their layout box.
-    var spans = main.querySelectorAll(':scope > span');
-    for (var i = 0; i < spans.length; i += 1) {
-      if (!spans[i].className) spans[i].className = 'bp-denom';
-    }
-
-    if (!main.querySelector('.bp-gauge-fill')) {
-      main.appendChild(el('span', 'bp-gauge-track')).setAttribute('aria-hidden', 'true');
-      main.appendChild(el('span', 'bp-gauge-fill')).setAttribute('aria-hidden', 'true');
-
-      var head = el('span', 'bp-gauge-head');
-      head.setAttribute('aria-hidden', 'true');
-      main.appendChild(head);
-
-      var ticks = el('span', 'bp-gauge-ticks');
-      ticks.setAttribute('aria-hidden', 'true');
-      for (var t = 0; t < GAUGE_TICKS; t += 1) {
-        var tick = document.createElement('i');
-        tick.style.setProperty('--a', (GAUGE_START + t * GAUGE_STEP).toFixed(3) + 'deg');
-        if (t % 5 === 0) tick.className = 'major';
-        ticks.appendChild(tick);
-      }
-      main.appendChild(ticks);
-
-      var scale = el('span', 'bp-gauge-scale');
-      scale.setAttribute('aria-hidden', 'true');
-      GAUGE_SCALE.forEach(function (value, index) {
-        var mark = document.createElement('b');
-        mark.textContent = String(value);
-        mark.style.setProperty(
-          '--a',
-          (GAUGE_START + index * (GAUGE_SWEEP / (GAUGE_SCALE.length - 1))).toFixed(3) + 'deg'
-        );
-        scale.appendChild(mark);
-      });
-      main.appendChild(scale);
-
-      var label = el('span', 'bp-dial-label', 'Readiness index');
-      label.setAttribute('aria-hidden', 'true');
-      main.insertBefore(label, main.firstChild);
-    }
-
-    return main;
-  }
-
-  /**
-   * Drives the gauge from the score printed on screen.
-   *
-   * `--bp-value` is a registered custom property, so the arc stop, the head
-   * marker and the lit ticks all follow one number. The first write starts at
-   * zero and the second lets the transition sweep to the real score.
-   */
-  function syncDial() {
-    var main = injectDial();
-    if (!main) return;
-    var score = readinessScore();
-    if (score === null) return;
-
-    var ticks = main.querySelector('.bp-gauge-ticks');
-    if (ticks) {
-      for (var i = 0; i < ticks.children.length; i += 1) {
-        ticks.children[i].classList.toggle('on', i * 2 <= score);
-      }
-    }
-
-    var current = main.style.getPropertyValue('--bp-value');
-    if (current === '') {
-      main.style.setProperty('--bp-value', '0');
-      root.requestAnimationFrame(function () {
-        root.requestAnimationFrame(function () {
-          main.style.setProperty('--bp-value', String(score));
-        });
-      });
-    } else if (Number(current) !== score) {
-      main.style.setProperty('--bp-value', String(score));
-    }
-
-    main.style.setProperty('--hud-score', String(score));
-    var card = main.closest('.cmd-score-card');
-    if (card) card.style.setProperty('--hud-score', String(score));
   }
 
   // ------------------------------------------------------------ panel build
@@ -549,9 +455,6 @@
       else shell.appendChild(frag);
     }
 
-    injectDial();
-    syncDial();
-
     if (!state.paused && !state.timer) {
       poll();
       schedule();
@@ -564,7 +467,6 @@
     state.observer = new MutationObserver(function () {
       if (!root.document.querySelector('#cmd-deck .cmd-deck-shell')) return;
       if (!root.document.querySelector('#cmd-deck [data-bp-panel]')) mountPanels();
-      else syncDial();
     });
     state.observer.observe(target, { childList: true, subtree: true });
   }
@@ -604,7 +506,6 @@
     refresh: poll,
     isOffline: function () { return state.offline; },
     samples: function () { return state.samples.slice(); },
-    syncDial: syncDial,
     POLL_MS: POLL_MS,
   };
 })(typeof window === 'undefined' ? null : window);

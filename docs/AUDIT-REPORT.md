@@ -1,3 +1,8 @@
+> **HISTORICAL — 2026-10-26.** This document describes an earlier single-file
+> browser prototype and is retained for history only. It is superseded by
+> [`AUDIT-REPORT-2026-11-19.md`](./AUDIT-REPORT-2026-11-19.md), which covers the
+> current Node/TypeScript console, bridge, tests and deployment review.
+
 # Quick Audit & Status Report: Voice Agent Console + VICIdial Project
 
 **Audit Date:** October 26, 2026  

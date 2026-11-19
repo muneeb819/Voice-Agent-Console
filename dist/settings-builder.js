@@ -15,6 +15,7 @@ exports.getDeploymentReadinessBlockers = getDeploymentReadinessBlockers;
 exports.validateState = validateState;
 exports.diffStates = diffStates;
 exports.generateViciConfig = generateViciConfig;
+const env_store_1 = require("./env-store");
 const defaults_1 = require("./defaults");
 const opening_1 = require("./opening");
 const persona_1 = require("./persona");
@@ -452,6 +453,10 @@ function getCampaignCallReadinessBlockers(state, campaign, selectedAgent) {
 }
 function getDeploymentReadinessBlockers(state) {
     const blockers = [];
+    for (const item of validateViciSip(state.vici)) {
+        if (item.level === 'er')
+            blockers.push(`VICIdial SIP: ${item.message}.`);
+    }
     for (const agent of state.agents) {
         if (!state.campaigns.some((campaign) => (0, campaign_assignment_1.campaignHasAgent)(campaign, agent.id))) {
             blockers.push(`Agent “${agent.name}” must be explicitly assigned to at least one campaign.`);
@@ -467,8 +472,30 @@ function getDeploymentReadinessBlockers(state) {
     }
     return [...new Set(blockers)];
 }
+function validateViciSip(v) {
+    if (v.sipConnectionMode === 'static_peer')
+        return [];
+    const items = [];
+    const push = (ok, message, warnOnly = false) => {
+        items.push({
+            level: ok ? 'ok' : warnOnly ? 'wn' : 'er',
+            icon: ok ? '✓' : warnOnly ? '!' : '✗',
+            scope: 'VICIdial SIP',
+            message,
+        });
+    };
+    const bridgeHost = String(v.bridgeHost || '').trim();
+    const loopbackBridge = !bridgeHost || /^(?:localhost|0\.0\.0\.0|127\.|::1$|\[::1\]$|::|\[::\])/i.test(bridgeHost);
+    push(Boolean(String(v.sipRegistrarHost || '').trim()), 'SIP registrar host is set');
+    push(Boolean(String(v.sipUsername || '').trim()), 'SIP username is set');
+    push(v.sipTransportProtocol === 'udp', 'SIP registration transport is UDP');
+    push(!loopbackBridge, 'Bridge Host is public/reachable (not loopback or 0.0.0.0)');
+    push(Boolean((0, env_store_1.getSecret)('VICI_SIP_PASSWORD')), 'VICI_SIP_PASSWORD is configured in server secrets');
+    return items;
+}
 function validateState(state) {
     const results = [];
+    results.push(...validateViciSip(state.vici));
     for (const agent of state.agents) {
         results.push(...validateAgent(state, agent));
     }
@@ -514,6 +541,10 @@ function diffStates(prev, next) {
 }
 function generateViciConfig(state) {
     const v = state.vici;
+    // Asterisk runs on the same host, so it must reach the port this process
+    // actually listens on (PORT may differ from the historical 533 default).
+    const configuredPort = Number(process.env.PORT);
+    const consolePort = Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : 533;
     const nonAgentUrl = `${v.viciBaseUrl}${v.nonAgentApiPath}`;
     const agentApiUrl = `${v.viciBaseUrl}${v.agentApiPath}`;
     const campaignLines = state.campaigns
@@ -537,7 +568,12 @@ function generateViciConfig(state) {
     })
         .join('\n;\n');
     const sipCarrierBlock = [
-        `; === OPTION A (Universal — Asterisk 13 / 16 / 18+ on ViciBox 8/9/10/11/12): SIP + RTP Mode ===`,
+        `; === SIP + RTP MODE (${String(v.sipConnectionMode || 'static_peer').toUpperCase()}) ===`,
+        `; Static Peer: configure host=${v.bridgeHost}, port=${v.sipPort} and restrict source IPs.`,
+        `; Registration: Asterisk peer must be dynamic and accept REGISTER for ${v.sipUsername || '<sip-username>'}.`,
+        `; Hybrid: configure both the static peer and dynamic registration account.`,
+        `; Registration credentials are server-side only (VICI_SIP_PASSWORD); never paste them into this export.`,
+        `; This sample uses chan_sip syntax. For PJSIP, create an endpoint + auth + aor and map its contact to this bridge.`,
         `; 1) VICIdial Admin -> Admin -> Carriers -> Add New Carrier:`,
         `;    Carrier ID: AIBRIDGE | Registration String: (blank) | Server IP: ALL`,
         `;    Account Entry:`,
@@ -569,7 +605,7 @@ function generateViciConfig(state) {
         ` same => n,Answer()`,
         ` same => n,Set(CHANNEL(audioreadformat)=slin)`,
         ` same => n,Set(CHANNEL(audiowriteformat)=slin)`,
-        ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:533/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
+        ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:${consolePort}/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
         ` same => n,AudioSocket(\${_BRIDGE_UUID},${v.bridgeHost}:${v.bridgePort})`,
         ` same => n,Hangup()`,
     ].join('\n');
@@ -584,6 +620,7 @@ function generateViciConfig(state) {
         campaignLines,
         ``,
         `; === VICIdial Admin Setup Checklist (Co-Located on ViciBox ${v.bridgeHost}) ===`,
+        `; SIP connection model: ${v.sipConnectionMode || 'static_peer'}; registrar ${v.sipRegistrarHost || '(unset)'}:${v.sipRegistrarPort || 5060}; user ${v.sipUsername || '(unset)'}`,
         `; 1. Users -> API User "${v.apiUser}": User Level=8, Modify Leads=1, Modify Lists=1, Agent API Access=1`,
         `; 2. Remote Agents -> Create Remote Agent User ${v.remoteAgentUser} (Lines=${state.campaigns[0]?.maxCalls || 10}, External Exten=${v.aiExten}1, On-Hook=N, Status=ACTIVE)`,
         `; 3. Inbound Groups -> Create Closer In-Group "${state.campaigns[0]?.xferTarget || 'FE_CLOSERS'}" & enable in Campaign "Allowed Transfer Groups"`,
@@ -599,7 +636,7 @@ function generateViciConfig(state) {
         `; 5. Dispo/DNC  : Updates status via ${nonAgentUrl} (update_lead + add_dnc_phone) & releases Remote Agent via ${agentApiUrl} (stage=HANGUP)`,
         ``,
         `# === Bridge Server .env (Co-Located on ViciBox) ===`,
-        `PORT=533`,
+        `PORT=${consolePort}`,
         `# Set HOST explicitly for remote access after configuring authentication`,
         `HOST=127.0.0.1`,
         `DEEPGRAM_API_KEY=***`,
@@ -607,5 +644,6 @@ function generateViciConfig(state) {
         `AMI_SECRET=***`,
         `AUDIOSOCKET_PORT=${v.bridgePort}`,
         `BRIDGE_SIP_PORT=${v.sipPort}`,
+        `VICI_SIP_PASSWORD=***  # Required for registration/hybrid only`,
     ].join('\n');
 }

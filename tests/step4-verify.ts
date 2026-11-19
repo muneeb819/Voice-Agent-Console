@@ -664,8 +664,8 @@ async function run() {
 
     // 11. Verify Executive Command & Console Quality Dashboard, logo-only header, rail utilities, save dock, transparent login logo & demo tunnel API
     assert(
-      signupHtml.includes('id="login-brand-plaque"') && signupHtml.includes('mma-cyan-signal.webp'),
-      'Expected login/signup page to include the transparent MMA logo plaque (#login-brand-plaque + WebP)'
+      signupHtml.includes('id="login-brand-plaque"') && signupHtml.includes('mma-atelier-logo.png'),
+      'Expected login/signup page to include the transparent house crest (#login-brand-plaque + PNG)'
     );
     assert(
       authedRootHtml.includes('<main id="m"') &&

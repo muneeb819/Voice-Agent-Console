@@ -6,13 +6,14 @@ node_modules/
 .env.*
 !.env.example
 
-# Runtime SQLite databases & call audio recordings
-data/*.sqlite
-data/*.sqlite-shm
-data/*.sqlite-wal
-data/recordings/*.wav
+# Runtime SQLite databases, JSON state mirror & call audio recordings.
+# Never commit local console state or recordings.
+data/
 # VAC_DATA_DIR may point elsewhere inside the checkout.
 **/simulator-recordings/
+
+# Generated browser-audit output (regenerate with audit/browser-smoke.cjs).
+audit/browser-results.json
 
 # OS / Editor
 .DS_Store
