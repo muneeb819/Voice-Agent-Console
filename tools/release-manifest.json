@@ -235,5 +235,8 @@
   "tools/start-demo.js",
   "tools/sync-static-site.js",
   "tsconfig.json",
-  "vercel.json"
+  "vercel.json",
+  "src/vici-sip-registration.ts",
+  "dist/vici-sip-registration.js",
+  "docs/VICIDIAL-REMOTE-SIP-CONNECTOR.md"
 ]

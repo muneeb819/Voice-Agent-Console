@@ -508,7 +508,14 @@
     "inIngroup": "AI_INBOUND",
     "amiHost": "127.0.0.1",
     "amiPort": 5038,
-    "amiUser": "cron"
+    "amiUser": "cron",
+    "sipConnectionMode": "static_peer",
+    "sipRegistrarHost": "",
+    "sipRegistrarPort": 5060,
+    "sipDomain": "",
+    "sipUsername": "",
+    "sipAuthUsername": "",
+    "sipTransportProtocol": "udp"
   },
   "tests": {
     "a_nova": [

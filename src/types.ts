@@ -97,6 +97,13 @@ export interface ViciConfig {
   apiUser: string;
   source: string;
   transport: 'sip_trunk' | 'audiosocket';
+  sipConnectionMode: 'static_peer' | 'registration' | 'hybrid';
+  sipRegistrarHost: string;
+  sipRegistrarPort: number;
+  sipDomain: string;
+  sipUsername: string;
+  sipAuthUsername: string;
+  sipTransportProtocol: 'udp';
   bridgeHost: string;
   bridgePort: number;
   sipPort: number;

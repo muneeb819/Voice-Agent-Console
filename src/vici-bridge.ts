@@ -23,6 +23,7 @@ import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCall
 import { createConversationMemory } from './persona';
 import { primaryCampaignAgent } from './campaign-assignment';
 import { Agent, Campaign, ConsoleState } from './types';
+import { SipRegistrationClient } from './vici-sip-registration';
 import {
   HydratedViciLead,
   ParsedViciCallerCode,
@@ -241,6 +242,7 @@ export class VicidialBridgeService {
   private tcpServer: net.Server | null = null;
   private sipSocket: dgram.Socket | null = null;
   private monitorWss: WebSocketServer | null = null;
+  private sipRegistrationClient: SipRegistrationClient | null = null;
 
   private readonly preCallRegistry = new Map<string, PreCallRecord>();
   private preCallSweepTimer: NodeJS.Timeout | null = null;
@@ -307,6 +309,7 @@ export class VicidialBridgeService {
       sipPort: this.sipPort,
       activeCallsCount: this.activeCalls.size,
       activeCalls: Array.from(this.activeCalls.values()),
+      sipRegistration: this.sipRegistrationClient?.snapshot() || { status: 'stopped', registrar: '', expiresAt: null, lastError: null },
     };
   }
 
@@ -415,6 +418,11 @@ export class VicidialBridgeService {
     await this.startAudioSocketServer();
     try {
       await this.startSipRtpServer();
+      const sipCfg = getConsoleState().vici;
+      if (sipCfg.sipConnectionMode === 'registration' || sipCfg.sipConnectionMode === 'hybrid') {
+        this.sipRegistrationClient = new SipRegistrationClient(sipCfg);
+        await this.sipRegistrationClient.start();
+      }
     } catch (err) {
       await this.stop();
       throw err;
@@ -424,6 +432,10 @@ export class VicidialBridgeService {
   public async stop(): Promise<void> {
     if (this.preCallSweepTimer) { clearInterval(this.preCallSweepTimer); this.preCallSweepTimer = null; }
     this.preCallRegistry.clear();
+    if (this.sipRegistrationClient) {
+      await this.sipRegistrationClient.stop();
+      this.sipRegistrationClient = null;
+    }
     if (this.monitorWss) {
       for (const client of this.monitorWss.clients) client.terminate();
       this.monitorWss.close();

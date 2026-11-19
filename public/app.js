@@ -988,6 +988,7 @@
       'OPENAI_API_KEY',
       'GROQ_API_KEY',
       'VICI_API_PASS',
+      'VICI_SIP_PASSWORD',
       'AMI_SECRET',
       'CUSTOM_WEBHOOK_SECRET',
       'ADMIN_PASSWORD',
@@ -2432,7 +2433,10 @@
       .join('\n;\n');
 
     const sipCarrierBlock = [
-      `; === OPTION A (Universal — Asterisk 13 / 16 / 18+ on ViciBox 8-12): SIP + RTP Mode ===`,
+      `; === SIP + RTP MODE: ${String(v.sipConnectionMode || 'static_peer').toUpperCase()} ===`,
+      `; Static Peer: host=${v.bridgeHost}; Registration: dynamic peer for ${v.sipUsername || '<sip-username>'}; Hybrid: configure both.`,
+      `; For registration/hybrid, configure VICI_SIP_PASSWORD on the bridge and matching Asterisk peer secret.`,
+      `; This example is chan_sip syntax. For PJSIP configure endpoint/auth/aor separately.`,
       `; 1) VICIdial Admin -> Carriers -> Add New Carrier (ID: AIBRIDGE) -> Account Entry:`,
       `[ai-bridge]`,
       `disallow=all`,
@@ -2506,6 +2510,7 @@
       `DEEPGRAM_API_KEY=***`,
       `VICI_API_PASS=***`,
       `AMI_SECRET=***`,
+      `VICI_SIP_PASSWORD=***  # registration/hybrid only`,
       `AUDIOSOCKET_PORT=${v.bridgePort}`,
       `BRIDGE_SIP_PORT=${v.sipPort}`,
     ].join('\n');
@@ -5768,6 +5773,11 @@
           <div class="note wn">Loopback test CDRs are mixed with bridge history. Their mock VICIdial successes do not confirm real transfers, dispositions or DNC updates; older records may not distinguish tests from live calls.</div>
           <h2>Recent SQLite Bridge Call CDRs &amp; VICIdial API Trail <button class="g" id="btn-clear-vici-logs" style="font-size:11px;padding:3px 8px;text-transform:none">Clear CDRs</button></h2>
           <div id="vici-cdr-box">${renderBridgeCdrList()}</div>
+          <div class="note">
+            <b>SIP Registration Status:</b> ${esc(viciMon.status?.sipRegistration?.status || 'Not reported')}
+            ${viciMon.status?.sipRegistration?.registrar ? ` · ${esc(viciMon.status.sipRegistration.registrar)}` : ''}
+            ${viciMon.status?.sipRegistration?.lastError ? ` · ${esc(viciMon.status.sipRegistration.lastError)}` : ''}
+          </div>
 
           <h2>VICIdial API Endpoints (Separated Non-Agent vs Agent API)</h2>
           ${F('VICIdial Server Base URL (115.186.137.240)', 'v.viciBaseUrl')}
@@ -5779,6 +5789,24 @@
             ${F('API User', 'v.apiUser')}
             ${F('API Source Tag', 'v.source')}
           </div>
+
+          <h2>SIP Connection Model (Static Peer, Registration &amp; Hybrid)</h2>
+          ${F('SIP Connection Model', 'v.sipConnectionMode', 'sel', [
+            ['static_peer', 'Static SIP Peer — PBX sends calls to this bridge'],
+            ['registration', 'SIP Registration — bridge registers to the VICIdial/Asterisk registrar'],
+            ['hybrid', 'Hybrid — static peer allowlist plus active SIP registration'],
+          ])}
+          <div class="row r3">
+            ${F('Registrar Host / IP', 'v.sipRegistrarHost')}
+            ${F('Registrar UDP Port', 'v.sipRegistrarPort', 'number', [], 'min="1" max="65535" step="1"')}
+            ${F('SIP Domain (optional)', 'v.sipDomain')}
+          </div>
+          <div class="row r3">
+            ${F('SIP Username', 'v.sipUsername')}
+            ${F('SIP Authentication Username (optional)', 'v.sipAuthUsername')}
+            ${F('SIP Transport', 'v.sipTransportProtocol', 'sel', [['udp', 'UDP (currently supported)']])}
+          </div>
+          <div class="note">For Registration or Hybrid, save <code>VICI_SIP_PASSWORD</code> under API Keys. The registrar must accept this account and route its registered Contact to the bridge. Use a public, reachable Bridge Host and restrict SIP/RTP firewall rules to the dialer. Registration is a signaling relationship; it does not replace the VICIdial Remote Agent call-ID/session requirements.</div>
 
           <h2>Telephony Media &amp; Control Transport (Both Listeners Run Simultaneously)</h2>
           ${F('Primary Dialplan Mode Highlighted in Export', 'v.transport', 'sel', [
