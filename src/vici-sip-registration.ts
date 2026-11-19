@@ -216,7 +216,7 @@ export class SipRegistrationClient {
       this.lastError = null;
       this.expiresAt = new Date(Date.now() + expires * 1000).toISOString();
       if (this.refreshTimer) clearTimeout(this.refreshTimer);
-      this.refreshTimer = setTimeout(() => this.sendRegister(), Math.max(30, Math.floor(expires * 0.8)) * 1000);
+      this.refreshTimer = setTimeout(() => { this.status = 'registering'; this.sendRegister(); }, Math.max(30, Math.floor(expires * 0.8)) * 1000);
       this.refreshTimer.unref();
       return;
     }
