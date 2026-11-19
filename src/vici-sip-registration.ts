@@ -151,7 +151,6 @@ export class SipRegistrationClient {
     const user = this.cfg.sipUsername;
     const branch = `z9hG4bK${crypto.randomBytes(8).toString('hex')}`;
     const contact = `<sip:${user}@${this.cfg.bridgeHost}:${this.cfg.sipPort};transport=udp>`;
-    const auth = this.nonce ? `Authorization: ${this.authHeader('REGISTER', uri)}\r\n` : '';
     const request = [
       `REGISTER ${uri} SIP/2.0`,
       `Via: SIP/2.0/UDP ${this.cfg.bridgeHost}:${this.cfg.sipPort};branch=${branch};rport`,
@@ -163,11 +162,9 @@ export class SipRegistrationClient {
       `Contact: ${contact}`,
       `Expires: ${expires}`,
       'User-Agent: MMA-Voice-Agent-Console',
-      auth.trimEnd(),
+      ...(this.nonce ? [`Authorization: ${this.authHeader('REGISTER', uri)}`] : []),
       'Content-Length: 0',
-      '',
-      '',
-    ].filter((line) => line !== '').join('\r\n');
+    ].join('\\r\\n') + '\\r\\n\\r\\n';
     this.socket.send(Buffer.from(request), port, host, (err) => {
       if (err) {
         this.status = 'failed';
