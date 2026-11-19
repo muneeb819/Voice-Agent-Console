@@ -988,6 +988,7 @@
       'OPENAI_API_KEY',
       'GROQ_API_KEY',
       'VICI_API_PASS',
+      'VICI_SIP_PASSWORD',
       'AMI_SECRET',
       'CUSTOM_WEBHOOK_SECRET',
       'ADMIN_PASSWORD',
@@ -5773,7 +5774,7 @@
           <h2>Recent SQLite Bridge Call CDRs &amp; VICIdial API Trail <button class="g" id="btn-clear-vici-logs" style="font-size:11px;padding:3px 8px;text-transform:none">Clear CDRs</button></h2>
           <div id="vici-cdr-box">${renderBridgeCdrList()}</div>
           <div class="note">
-            **SIP Registration Status:** ${esc(viciMon.status?.sipRegistration?.status || 'Not reported')}
+            <b>SIP Registration Status:</b> ${esc(viciMon.status?.sipRegistration?.status || 'Not reported')}
             ${viciMon.status?.sipRegistration?.registrar ? ` · ${esc(viciMon.status.sipRegistration.registrar)}` : ''}
             ${viciMon.status?.sipRegistration?.lastError ? ` · ${esc(viciMon.status.sipRegistration.lastError)}` : ''}
           </div>
