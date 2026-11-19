@@ -57,6 +57,7 @@ export class SipRegistrationClient {
   private lastError: string | null = null;
   private stopped = false;
   private registrarAddresses = new Set<string>();
+  private proxyAuth = false;
 
   constructor(private readonly cfg: ViciConfig) {}
 
@@ -116,6 +117,10 @@ export class SipRegistrationClient {
   }
 
   async stop(): Promise<void> {
+    if (this.socket && !this.stopped && this.status === 'registered') {
+      this.sendRegister(0);
+      await new Promise<void>((resolve) => setTimeout(resolve, 200));
+    }
     this.stopped = true;
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.timeoutTimer) clearTimeout(this.timeoutTimer);
@@ -162,7 +167,7 @@ export class SipRegistrationClient {
       `Contact: ${contact}`,
       `Expires: ${expires}`,
       'User-Agent: MMA-Voice-Agent-Console',
-      ...(this.nonce ? [`Authorization: ${this.authHeader('REGISTER', uri)}`] : []),
+      ...(this.nonce ? [`${this.proxyAuth ? 'Proxy-Authorization' : 'Authorization'}: ${this.authHeader('REGISTER', uri)}`] : []),
       'Content-Length: 0',
     ].join('\r\n') + '\r\n\r\n';
     this.socket.send(Buffer.from(request), port, host, (err) => {
@@ -188,11 +193,13 @@ export class SipRegistrationClient {
     const headers = parseHeaders(raw);
     if (status === 401 || status === 407) {
       const challenge = challengeParams(headers[status === 407 ? 'proxy-authenticate' : 'www-authenticate'] || '');
-      if (!challenge.realm || !challenge.nonce || (challenge.algorithm && challenge.algorithm.toUpperCase() !== 'MD5')) {
+      const qops = String(challenge.qop || '').split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
+      if (!challenge.realm || !challenge.nonce || !qops.includes('auth') || (challenge.algorithm && challenge.algorithm.toUpperCase() !== 'MD5')) {
         this.status = 'failed';
         this.lastError = 'Registrar returned an unsupported SIP digest challenge.';
         return;
       }
+      this.proxyAuth = status === 407;
       this.realm = challenge.realm;
       this.nonce = challenge.nonce;
       this.opaque = challenge.opaque || '';
