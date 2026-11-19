@@ -1,0 +1,43 @@
+# Voice Agent Console — container deployment for any Linux host with Docker.
+#
+#   1. cp .env.example .env        # set ADMIN_PASSWORD and provider keys
+#   2. docker compose up -d --build
+#   3. open http://127.0.0.1:8080/ (or put nginx/Caddy in front for TLS)
+#
+# The app listens on 8080 inside the container as an unprivileged user. The
+# default host binding is loopback-only; set VAC_BIND=0.0.0.0 only when a
+# firewall and TLS terminator protect it.
+services:
+  console:
+    build:
+      context: .
+    image: voice-agent-console:local
+    container_name: voice-agent-console
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8080"
+      VAC_DATA_DIR: /data
+      VAC_ENV_FILE: /data/.env
+    ports:
+      - "${VAC_BIND:-127.0.0.1}:${VAC_HTTP_PORT:-8080}:8080"
+    volumes:
+      - voice-agent-data:/data
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8080/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  voice-agent-data:
