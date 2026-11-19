@@ -129,7 +129,7 @@
   function readinessScore() {
     var node = root.document.querySelector('#cmd-deck .cmd-score-value');
     if (!node) return null;
-    var value = parseInt(String(node.textContent).replace(/[^0-9-]/g, ''), 10);
+    var value = parseInt(String(node.getAttribute('data-score') || node.textContent).replace(/[^0-9-]/g, ''), 10);
     if (!isFinite(value)) return null;
     return Math.max(0, Math.min(100, value));
   }

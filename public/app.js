@@ -628,6 +628,62 @@
     { key: 'export', icon: 'export', label: 'Export', sub: 'Settings JSON & Backup', group: 'Live & Operations' },
   ];
 
+  // --------------------------------------------------------------- masthead
+  // A live title band. Every section starts with its own name, family and a
+  // current local clock so the workspace never feels like a static form.
+  let sectionClockTimer = null;
+  let readyTickerTimer = null;
+  let readyScoreRaf = null;
+
+  function sectionLiveLabel() {
+    if (tab === 'dashboard') return 'Telemetry live';
+    if (tab === 'test') {
+      const live = sim && (sim.active || sim.connecting);
+      return live ? 'Session live' : 'Ready to test';
+    }
+    if (tab === 'vici') return viciMon && viciMon.active ? 'Bridge live' : 'Bridge monitor';
+    if (tab === 'wallboard') return 'Wallboard live';
+    if (tab === 'export') return 'Snapshot ready';
+    return 'Live editor';
+  }
+
+  function paintSectionClock() {
+    const now = new Date();
+    const clock = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const date = now.toLocaleDateString([], { weekday: 'short', day: '2-digit', month: 'short' }).toUpperCase();
+    document.querySelectorAll('[data-mast-clock]').forEach((el) => (el.textContent = clock));
+    document.querySelectorAll('[data-mast-date]').forEach((el) => (el.textContent = date));
+  }
+
+  function startSectionClock() {
+    paintSectionClock();
+    if (sectionClockTimer) return;
+    sectionClockTimer = window.setInterval(paintSectionClock, 1000);
+  }
+
+  function renderSectionMasthead() {
+    const host = document.getElementById('section-masthead');
+    if (!host || !S) return;
+    const item = NAV_ITEMS.find((i) => i.key === tab) || NAV_ITEMS[0];
+    const index = String(NAV_ITEMS.findIndex((i) => i.key === item.key) + 1).padStart(2, '0');
+    host.innerHTML = `
+      <div class="section-mast-card" data-section="${esc(item.key)}">
+        <div class="section-mast-icon" aria-hidden="true">${NAV_ICONS[item.icon] || NAV_ICONS.agents}</div>
+        <div class="section-mast-copy">
+          <div class="section-mast-kicker"><span>MMA DIGITAL LAB</span><i></i><span>${esc(item.group)}</span><i></i><span>SECTION ${index}</span></div>
+          <h1>${esc(item.label)}</h1>
+          <p>${esc(item.sub)}</p>
+        </div>
+        <div class="section-mast-live">
+          <span class="section-live-chip"><i aria-hidden="true"></i>${esc(sectionLiveLabel())}</span>
+          <span class="section-clock"><span data-mast-clock>--:--:--</span><small>LOCAL</small></span>
+          <span class="section-date" data-mast-date>---</span>
+          <div class="section-signal" aria-hidden="true">${Array.from({ length: 9 }, (_, i) => `<i style="--i:${i}"></i>`).join('')}</div>
+        </div>
+      </div>`;
+    startSectionClock();
+  }
+
   function sectionHref(target, selection = {}) {
     const key = SECTION_TABS.includes(target) ? target : 'dashboard';
     const params = new URLSearchParams({ tab: key });
@@ -5253,7 +5309,75 @@
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 3.5 9 4.8l1 3.2-2 1.7a12 12 0 0 0 6.3 6.3l1.7-2 3.2 1 .9 2.5a2 2 0 0 1-2 2.5C10.8 20 4 13.2 4 5.5a2 2 0 0 1 2.5-2Z"/></svg>',
     refresh:
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 8.5A7 7 0 0 1 19.8 12M4.2 12a7 7 0 0 0 13.7 3.5"/></svg>',
+    key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="4.2"/><path d="m11 11 8.5 8.5M16 16l2.2-2.2M18.5 18.5 21 16"/></svg>',
+    signal:
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 18v-4M9.3 18V9M14.7 18V5M20 18v-7"/></svg>',
   };
+
+  function readyWaveMarkup(score) {
+    const lit = Math.max(0, Math.min(34, Math.round((score / 100) * 34)));
+    return Array.from({ length: 34 }, (_, i) => {
+      const height = 22 + Math.round(Math.abs(Math.sin((i + 2) * 0.63)) * 58 + (i % 4) * 3);
+      return `<i class="${i < lit ? 'on' : ''}" style="--i:${i};--h:${height}%"></i>`;
+    }).join('');
+  }
+
+  let lastReadyScore = 0;
+
+  function animateReadyScore(node, target) {
+    if (!node) return;
+    if (readyScoreRaf) window.cancelAnimationFrame?.(readyScoreRaf);
+    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const from = Number.isFinite(lastReadyScore) ? lastReadyScore : target;
+    lastReadyScore = target;
+    node.dataset.score = String(target);
+    if (reduced || typeof window.requestAnimationFrame !== 'function') {
+      node.textContent = String(target);
+      return;
+    }
+    const started = Date.now();
+    const duration = 900;
+    node.textContent = String(from);
+    const step = () => {
+      const p = Math.min(1, (Date.now() - started) / duration);
+      const eased = 1 - Math.pow(1 - p, 3);
+      node.textContent = String(Math.round(from + (target - from) * eased));
+      if (p < 1) readyScoreRaf = window.requestAnimationFrame(step);
+      else node.textContent = String(target);
+    };
+    readyScoreRaf = window.requestAnimationFrame(step);
+  }
+
+  function startReadyStage(T) {
+    const host = document.querySelector('#cmd-deck [data-ready-stage]');
+    if (!host) return;
+    animateReadyScore(host.querySelector('.cmd-score-value'), T.score);
+    const lines = [
+      `${T.okCount} of ${T.totalChecks} configuration checks clear`,
+      `${T.agents.length} bots · ${T.campaigns.length} campaigns in the workspace`,
+      T.viciActive
+        ? `${T.viciActive} live bridge call${T.viciActive === 1 ? '' : 's'} right now`
+        : 'Bridge monitor connected · no live calls',
+      `QA ${T.testsPassed}/${T.testsTotal} passed · ${T.testsPending} pending`,
+    ];
+    const ticker = host.querySelector('[data-ready-ticker]');
+    if (readyTickerTimer) window.clearInterval(readyTickerTimer);
+    let idx = 0;
+    if (ticker) ticker.textContent = lines[0];
+    readyTickerTimer = window.setInterval(() => {
+      const node = document.querySelector('[data-ready-ticker]');
+      if (!node) {
+        window.clearInterval(readyTickerTimer);
+        readyTickerTimer = null;
+        return;
+      }
+      idx = (idx + 1) % lines.length;
+      node.classList.remove('is-in');
+      void node.offsetWidth;
+      node.textContent = lines[idx];
+      node.classList.add('is-in');
+    }, 3400);
+  }
 
   function renderExecutiveCommandDeck() {
     const wrap = document.getElementById('cmd-deck');
@@ -5271,7 +5395,7 @@
     <div class="cmd-topbar">
      <div class="cmd-brand-cluster">
       <span class="cmd-radar-dot ${healthClass === 'ok' ? '' : healthClass}"></span>
-      <h1 class="cmd-eyebrow">Command deck</h1>
+      <p class="cmd-eyebrow">Command deck</p>
       <span class="cmd-cert-badge ${healthClass === 'ok' ? '' : healthClass}">${esc(certText)}</span>
      </div>
      <div class="cmd-actions-cluster">
@@ -5281,23 +5405,35 @@
      </div>
     </div>
 
-    <div class="cmd-score-card ${healthClass}">
-     <div class="cmd-score-head">
-      <span class="cmd-score-kicker">${DECK_ICONS.pulse} System readiness</span>
+    <div class="cmd-score-card ready-stage ${healthClass}" data-ready-stage aria-label="System readiness, ${T.score} out of 100">
+     <div class="ready-stage-top">
+      <span class="cmd-score-kicker">${DECK_ICONS.pulse} System readiness <em>live</em></span>
       <span class="pill ${healthClass}">${healthClass === 'ok' ? 'Ready' : healthClass === 'wn' ? 'Review' : 'Attention'}</span>
      </div>
-     <div class="cmd-score-body">
-      <div class="cmd-score-number">
-       <strong class="cmd-score-value">${T.score}</strong><span>/100</span>
-       <small>configuration checks</small>
-      </div>
-      <div class="cmd-score-meter">
+     <div class="ready-stage-core">
+      <div class="ready-score-block">
+       <div class="ready-score-line">
+        <strong class="cmd-score-value" data-score="${T.score}">${T.score}</strong><span class="ready-denom">/100</span>
+       </div>
+       <div class="ready-score-label">Readiness index <span>·</span> configuration</div>
        <div class="cmd-score-ribbon" role="img" aria-label="Readiness ${T.score} out of 100">
         ${Array.from({ length: 12 }, (_, i) => `<i class="${i < Math.round((T.score / 100) * 12) ? 'on' : ''}"></i>`).join('')}
        </div>
        <div class="cmd-score-scale"><span>0</span><span>50</span><span>100</span></div>
-       <div class="note">Readiness = passed checks ÷ applicable checks. Pending QA and live provider/telephone health are shown separately; no score is a 99.999% reliability guarantee.</div>
       </div>
+      <div class="ready-visual">
+       <div class="ready-signal" aria-hidden="true">
+        ${readyWaveMarkup(T.score)}
+        <span class="ready-scan"></span>
+       </div>
+       <div class="ready-live-line"><span class="ready-live-dot" aria-hidden="true"></span><span data-ready-ticker class="is-in">${T.okCount} of ${T.totalChecks} configuration checks clear</span></div>
+      </div>
+     </div>
+     <div class="ready-leds" role="list" aria-label="Live readiness indicators">
+      <span class="ready-led ${secretsStatus?.DEEPGRAM_API_KEY?.configured ? 'ok' : 'wn'}" role="listitem">${DECK_ICONS.key}<b>Providers</b><i aria-hidden="true"></i></span>
+      <span class="ready-led ${T.agents.length ? 'ok' : 'er'}" role="listitem">${DECK_ICONS.bot}<b>Bots</b><i aria-hidden="true"></i></span>
+      <span class="ready-led ${T.campaigns.length ? 'ok' : 'wn'}" role="listitem">${DECK_ICONS.campaign}<b>Campaigns</b><i aria-hidden="true"></i></span>
+      <span class="ready-led ${T.viciActive ? 'ok' : 'idle'}" role="listitem">${DECK_ICONS.phone}<b>Telephony</b><i aria-hidden="true"></i></span>
      </div>
      <div class="cmd-live-band">
       <span class="cmd-live-chip"><i aria-hidden="true"></i> Live telemetry</span>
@@ -5306,6 +5442,7 @@
       <span>${DECK_ICONS.check}<b>${T.okCount}/${T.totalChecks}</b> checks</span>
       <span>${DECK_ICONS.phone}<b>${T.viciActive}</b> live calls</span>
      </div>
+     <p class="ready-note note">Readiness = passed checks ÷ applicable checks. Pending QA and live provider/telephone health are shown separately; no score is a 99.999% reliability guarantee.</p>
     </div>
 
     <div class="readiness-issues"><h2>${T.issues.length ? 'What still needs attention' : 'All configuration checks passed'}</h2>
@@ -5315,6 +5452,7 @@
     ${renderFleetMatrix()}
    </div>
   `;
+    startReadyStage(T);
   }
 
   function renderAgentCampaignAssignment(agent) {
@@ -5344,6 +5482,7 @@
   function render() {
     if (!S) return;
     renderSideNav();
+    renderSectionMasthead();
     applySidebarState(false);
 
     const m = document.getElementById('m');
@@ -6826,13 +6965,13 @@
       saveError = err?.message || 'Save failed';
       persistDraftLocally();
       const report = document.getElementById('vr');
-      report.innerHTML = `<div class="card save-report er" role="alert"><b>Save not confirmed</b><div>${esc(saveError)}</div><div class="note">Your edits remain in this tab. Retry Save & Verify, or download a JSON backup from Export before closing it.</div></div>`;
+      report.innerHTML = `<div class="card save-report er" role="alert"><b>Save not confirmed</b><div>${esc(saveError)}</div><div class="note">Your edits remain in this tab. Retry Save, or download a JSON backup from Export before closing it.</div></div>`;
       report.scrollIntoView?.({ block: 'nearest' });
       return false;
     } finally {
       manualSaveInFlight = false;
       const currentBtn = document.getElementById('sv');
-      currentBtn.textContent = 'Save & Verify';
+      currentBtn.textContent = 'Save';
       updateHeaderStatus();
     }
   }
@@ -7506,8 +7645,8 @@
         previewEl.hidden = !willShow;
         b.textContent = willShow ? 'Hide connection screen' : 'Preview connection screen';
         if (willShow && statusEl && subEl) {
-          statusEl.textContent = `CONNECTING TO MODEL · ${meta.name.toUpperCase()}…`;
-          subEl.textContent = `${meta.system || 'MMA DIGITAL LABS'} · ${meta.motif || 'Acoustic Pipeline'} · 16kHz / 8kHz Dual-Stream`;
+          statusEl.textContent = `PREVIEW BOOT · 0.5 ms · ${meta.name.toUpperCase()}`;
+          subEl.textContent = `100% READY FOR OPERATIONS · ${meta.system || 'MMA DIGITAL LABS'}`;
         }
       }
       return;

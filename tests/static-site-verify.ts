@@ -143,6 +143,7 @@ async function run() {
   staticLogin.get('signup-password').value = 'Synthetic-Password-123';
   await staticLogin.get('signup-form').handlers.submit({ preventDefault() {} });
   await flush();
+  assert.match(staticLogin.get('loader-text').textContent || '', /100% READY/, 'Sign-in loader reaches a ready state');
   staticLogin.timers.forEach((callback) => callback());
   assert.deepStrictEqual(staticLogin.navigations, ['/Voice-Agent-Console/'], 'Static signup must return to the project base path');
   assert(!staticLogin.storage.has('vac_auth_token'), 'Static signup must not create a server-session token');

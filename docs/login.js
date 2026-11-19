@@ -231,12 +231,24 @@
   }
 
   function showLoader(text) {
-    if (loaderText) loaderText.textContent = text || 'CONNECTING TO MODEL...';
+    if (loaderText) loaderText.textContent = text || 'PREPARING OPERATIONS…';
+    if (loader) loader.classList.remove('is-ready');
     if (progressBar) progressBar.style.width = '0%';
-    loader.hidden = false;
+    if (loader) loader.hidden = false;
     window.setTimeout(function () {
-      if (progressBar) progressBar.style.width = '80%';
+      if (progressBar) progressBar.style.width = '82%';
     }, 40);
+  }
+
+  // The boot readout is a preview target, not a measured API latency. The
+  // loader still waits for the real auth response before it says READY.
+  function markLoaderReady() {
+    if (progressBar) progressBar.style.width = '100%';
+    if (loaderText) loaderText.textContent = '100% READY · OPERATIONS ARMED';
+    if (loader && loader.classList) {
+      if (typeof loader.classList.add === 'function') loader.classList.add('is-ready');
+      else if (typeof loader.classList.toggle === 'function') loader.classList.toggle('is-ready', true);
+    }
   }
 
   function finishLoader() {
@@ -366,8 +378,7 @@
           setMsg(msg, 'Browser storage is unavailable, so the demo cannot keep you signed in. Enable site storage and retry.');
           return;
         }
-        if (progressBar) progressBar.style.width = '100%';
-        if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
+        markLoaderReady();
         window.setTimeout(function () {
           goHome('');
         }, 320);
@@ -381,8 +392,7 @@
         password.select();
         return;
       }
-      if (progressBar) progressBar.style.width = '100%';
-      if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
+      markLoaderReady();
       window.setTimeout(function () {
         goHome();
       }, 320);
@@ -434,8 +444,7 @@
           input.select();
           return;
         }
-        if (progressBar) progressBar.style.width = '100%';
-        if (loaderText) loaderText.textContent = 'ACCESS GRANTED';
+        markLoaderReady();
         window.setTimeout(function () {
           goHome();
         }, 320);
@@ -523,8 +532,7 @@
           setMsg(msg, 'Browser storage is unavailable, so the demo cannot save this account. Enable site storage and retry.');
           return;
         }
-        if (progressBar) progressBar.style.width = '100%';
-        if (loaderText) loaderText.textContent = 'ACCOUNT READY';
+        markLoaderReady();
         window.setTimeout(function () {
           goHome('');
         }, 360);
@@ -549,8 +557,7 @@
         }
         return;
       }
-      if (progressBar) progressBar.style.width = '100%';
-      if (loaderText) loaderText.textContent = 'ACCOUNT READY';
+      markLoaderReady();
       window.setTimeout(function () {
         goHome();
       }, 360);

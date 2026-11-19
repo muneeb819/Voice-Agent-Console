@@ -73,7 +73,10 @@ async function run() {
   assert.equal(d.getElementById('st'), null, 'The saved-in-browser header pill is removed');
   assert.equal(d.querySelector('.console-header h1, .console-header .brand-copy, .console-header .brand-sub'), null, 'Header keeps only the centered logo');
   assert(d.querySelector('.side-rail-footer #btn-theme'), 'Theme control lives in the side-rail footer');
-  assert(d.querySelector('.side-rail-footer #btn-keys') && d.querySelector('.side-rail-footer #btn-account-menu'), 'Keys and account controls live in the side-rail footer');
+  assert(d.querySelector('.console-header #btn-keys') && d.querySelector('.console-header #btn-logout'), 'API keys and sign-out live in the header');
+  assert.equal(d.querySelector('.side-rail-footer #btn-keys'), null, 'API keys no longer hide in the rail footer');
+  assert.equal(d.querySelector('.side-rail-footer #btn-logout'), null, 'Sign-out no longer hides in the rail footer');
+  assert(d.querySelector('.side-rail-footer #btn-account-menu'), 'Account controls remain in the side-rail footer');
   // The panel toggle belongs to the same utility row as Theme / Keys / Account.
   assert(d.querySelector('.side-rail-footer .side-utility-dock #btn-sidebar-toggle'), 'Panel toggle lives in the rail footer utility row');
   assert.equal(d.querySelector('.console-header #btn-sidebar-toggle'), null, 'Desktop panel toggle is no longer in the header');
@@ -86,6 +89,7 @@ async function run() {
   assert(mobileToggle && mobileToggle.closest('.console-header'), 'Phones keep a header opener outside the off-canvas rail');
   assert(mobileToggle!.classList.contains('rail-toggle-mobile'), 'Phone opener must carry the desktop-hiding class');
   assert.notEqual(mobileToggle!.id, footerToggle.id, 'The two toggles need distinct ids');
+  assert.match(d.getElementById('section-masthead')!.textContent || '', /Agents/, 'Every section opens with its own title masthead');
   click(d.getElementById('btn-account-menu')!);
   assert.equal(d.getElementById('account-popover')!.hidden, false, 'Account links open from the rail footer');
   assert.notEqual((d.getElementById('btn-logout') as HTMLElement).style.display, 'none');
@@ -225,10 +229,14 @@ async function run() {
   failed.w.close();
 
   const dashboard = await fixture({ tab: 'dashboard' });
+  assert.match(dashboard.d.getElementById('section-masthead')!.textContent || '', /Dashboard/, 'Dashboard masthead names the section');
   const text = dashboard.d.getElementById('m')!.textContent || '';
   assert.match(text, /Command deck/);
   assert.match(text, /System readiness/);
   assert.equal(dashboard.d.querySelectorAll('.cmd-score-ribbon i').length, 12, 'Heartbeat ribbon is a twelve-segment meter');
+  assert.equal(dashboard.d.querySelectorAll('.ready-signal i').length, 34, 'Readiness card carries a live signal');
+  assert.equal(dashboard.d.querySelectorAll('.ready-led').length, 4, 'Readiness card shows four live indicator lamps');
+  assert(dashboard.d.querySelector('[data-ready-ticker]'), 'Readiness card carries a live ticker');
   assert.match(text, /no score is a 99\.999% reliability guarantee/);
   assert.match(text, /What still needs attention|All configuration checks passed/);
   assert(!/GRADE D/.test(text), 'Valid shipped examples must not receive an arbitrary failing grade');
