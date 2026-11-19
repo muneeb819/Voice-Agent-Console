@@ -150,6 +150,9 @@
     admin: document.getElementById('admin-form'),
   };
 
+  var authSwitch = document.getElementById('auth-switch');
+  var modeNote = document.getElementById('mode-note');
+
   function setMode(mode) {
     if (!panes[mode]) mode = 'signin';
     tabs.forEach(function (t) {
@@ -158,6 +161,11 @@
       t.setAttribute('aria-selected', on ? 'true' : 'false');
       t.tabIndex = on ? 0 : -1;
     });
+    // Only the switch to the other form is shown. The Sign In button was
+    // duplicating the active form and read as a dim disabled control.
+    var signupTab = document.getElementById('tab-signup');
+    if (authSwitch) authSwitch.hidden = mode === 'admin' || Boolean(signupTab && signupTab.hidden);
+    if (modeNote) modeNote.textContent = mode === 'signup' ? 'Already have an account?' : 'New to the console?';
     Object.keys(panes).forEach(function (k) {
       panes[k].hidden = k !== mode;
     });
@@ -605,6 +613,7 @@
         if (data.signupOpen === false && signupTab) {
           signupTab.hidden = true;
           signupTab.style.display = 'none';
+          if (authSwitch) authSwitch.hidden = true;
           if (!panes.signup.hidden) setMode('signin');
         } else if (data.signupOpen && data.hasUsers === false && !/\/login$/i.test(rawPath)) {
           setMode('signup');

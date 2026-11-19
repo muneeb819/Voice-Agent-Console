@@ -2756,33 +2756,38 @@ main#m > * { animation: sectionEnter 460ms cubic-bezier(0.2, 0.8, 0.2, 1) both; 
 .auth-shell .pane > .linkish { order: 10; }
 
 .auth-shell .tabs {
+  display: flex;
   justify-content: center;
   align-items: center;
-  gap: 18px;
+  flex-wrap: wrap;
+  gap: 10px;
   margin: 16px 0 0;
   padding: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
 }
+.auth-shell .tabs[hidden] { display: none !important; }
+.auth-shell .tabs-note {
+  color: var(--mu);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+}
 .auth-shell .tab {
   flex: 0 0 auto;
-  padding: 5px 1px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  background: transparent;
-  color: var(--mu);
+  padding: 8px 12px;
+  border: 1px solid var(--bd-strong);
+  border-radius: 2px;
+  background: var(--sf2);
+  color: var(--ac);
   font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.12em;
+  font-weight: 700;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
-.auth-shell .tab:hover { color: var(--tx); background: transparent; }
-.auth-shell .tab.active {
-  color: var(--ac);
-  border-bottom-color: var(--ac);
-  background: transparent;
-  box-shadow: none;
-}
+.auth-shell .tab:hover { color: var(--ac); background: var(--ac-soft); }
+/* The active mode is already on screen; never show it twice. The one visible
+   tab is the switch to the other form (Sign Up while signing in, Sign In while
+   signing up). */
+.auth-shell .tab.active { display: none; }
 .auth-shell .tab:focus-visible { outline: 2px solid var(--ac-2); outline-offset: 2px; }

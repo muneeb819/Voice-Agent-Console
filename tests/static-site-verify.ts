@@ -165,6 +165,10 @@ async function run() {
   assert(signinEmailAt > 0 && signinSubmitAt > signinEmailAt, 'Sign In submit must follow the email field');
   assert(signupEmailAt > 0 && signupSubmitAt > signupEmailAt, 'Sign Up submit must follow the email field');
   assert(modeSwitchAt > signinSubmitAt && modeSwitchAt > signupSubmitAt, 'Sign In / Create Account switch must render below the forms, never above the fields');
+  assert(loginHtml.includes('id="auth-switch"') && loginHtml.includes('id="mode-note"'), 'The form switch must be a single labelled action below the form');
+  assert(loginHtml.includes('>\n            Sign Up\n'), 'The sign-in form must offer a Sign Up action');
+  const atelierCss = read('public/atelier.css');
+  assert(/\.auth-shell \.tab\.active \{\s*display: none;\s*\}/.test(atelierCss), 'The active mode tab must be hidden so no duplicate Sign In button renders');
   const appSessionKey = appSource.match(/const VAC_CLOUD_SESSION_KEY = '([^']+)'/);
   const loginSessionKey = loginSource.match(/var CLOUD_SESSION_KEY = '([^']+)'/);
   assert(appSessionKey, 'app.js must define VAC_CLOUD_SESSION_KEY before reading the static demo session');
