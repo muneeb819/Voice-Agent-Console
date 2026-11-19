@@ -5794,7 +5794,7 @@
           <div class="row r3">
             ${F('SIP Username', 'v.sipUsername')}
             ${F('SIP Authentication Username (optional)', 'v.sipAuthUsername')}
-            ${F('SIP Transport', 'v.sipTransportProtocol', 'sel', [['udp', 'UDP (currently supported)]])}
+            ${F('SIP Transport', 'v.sipTransportProtocol', 'sel', [['udp', 'UDP (currently supported)']])}
           </div>
           <div class="note">For Registration or Hybrid, save <code>VICI_SIP_PASSWORD</code> under API Keys. The registrar must accept this account and route its registered Contact to the bridge. Use a public, reachable Bridge Host and restrict SIP/RTP firewall rules to the dialer. Registration is a signaling relationship; it does not replace the VICIdial Remote Agent call-ID/session requirements.</div>
 
