@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.DEFAULT_MAX_CALL_SEC = exports.SPEECH_SERVICE_DEFAULT_VOICES = exports.SPEECH_SERVICE_STT_MODELS = exports.MISSING_CAMPAIGN_RULES = exports.VOICE_AGENT_STT_MODELS = void 0;
+exports.SEEDED_BUILTIN_BOTS = exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.DEFAULT_MAX_CALL_SEC = exports.SPEECH_SERVICE_DEFAULT_VOICES = exports.SPEECH_SERVICE_STT_MODELS = exports.MISSING_CAMPAIGN_RULES = exports.VOICE_AGENT_STT_MODELS = void 0;
 exports.defaultVoiceAgentSttModel = defaultVoiceAgentSttModel;
 exports.normalizeVoiceAgentSttModel = normalizeVoiceAgentSttModel;
 exports.defaultSelfIntroForAgent = defaultSelfIntroForAgent;
@@ -143,6 +143,7 @@ function createDefaultState() {
     return {
         version: 5,
         campaignSlotSeq: 4, // four built-in campaigns use slots 1-4
+        seededBuiltins: [...exports.SEEDED_BUILTIN_BOTS],
         updatedAt: new Date().toISOString(),
         // Intentionally unset: an operator must select and save one global provider/model per service.
         services: {
@@ -657,11 +658,80 @@ function createDefaultState() {
  * Normalizes / migrates incoming state (including legacy vac-v2 JSON exports from the old HTML prototype)
  * so numbers are coerced to real numbers, unique IDs exist, and legacy function names map to fnIds.
  */
+/**
+ * Built-in bots that later releases ship. An install created before a bot
+ * existed keeps its own saved bots, so the new bot would never appear.
+ * Each one is added ONCE (recorded in state.seededBuiltins): deleting it later
+ * is respected, and existing bots, prompts and campaigns are never changed.
+ */
+exports.SEEDED_BUILTIN_BOTS = ['a_qa', 'a_builtin'];
+function seedBuiltinBots(src, base) {
+    const recorded = Array.isArray(src.seededBuiltins) ? src.seededBuiltins.map(String) : [];
+    const marker = Array.from(new Set([...recorded, ...exports.SEEDED_BUILTIN_BOTS]));
+    const agents = Array.isArray(src.agents) ? src.agents.filter((a) => a && typeof a === 'object') : [];
+    if (!agents.length)
+        return { ...src, seededBuiltins: marker }; // fresh install: defaults already include them
+    const missing = exports.SEEDED_BUILTIN_BOTS.filter((id) => !recorded.includes(id));
+    if (!missing.length)
+        return src;
+    const clone = (v) => JSON.parse(JSON.stringify(v));
+    const out = {
+        ...src,
+        agents: [...src.agents],
+        campaigns: Array.isArray(src.campaigns) ? [...src.campaigns] : [],
+        functions: Array.isArray(src.functions) && src.functions.length ? [...src.functions] : clone(base.functions),
+        tests: { ...(src.tests && typeof src.tests === 'object' ? src.tests : {}) },
+        seededBuiltins: marker,
+    };
+    // Reuse the install's own functions by name; add only a missing one.
+    const fnIdByName = new Map(out.functions.filter((f) => f && f.name).map((f) => [String(f.name), String(f.id)]));
+    const mapFnIds = (ids) => ids.map((id) => {
+        const tpl = base.functions.find((f) => f.id === id);
+        if (!tpl)
+            return null;
+        if (!fnIdByName.has(tpl.name)) {
+            let newId = tpl.id;
+            while (out.functions.some((f) => f && f.id === newId))
+                newId = `${newId}_builtin`;
+            out.functions.push({ ...clone(tpl), id: newId });
+            fnIdByName.set(tpl.name, newId);
+        }
+        return fnIdByName.get(tpl.name);
+    }).filter(Boolean);
+    for (const id of missing) {
+        if (out.agents.some((a) => a && a.id === id))
+            continue;
+        const tpl = base.agents.find((a) => a.id === id);
+        if (!tpl)
+            continue;
+        out.agents.push({ ...clone(tpl), fnIds: mapFnIds(tpl.fnIds) });
+        if (base.tests[id] && !out.tests[id])
+            out.tests[id] = clone(base.tests[id]);
+        if (id === 'a_qa') {
+            // QA reviewer joins every campaign's bot pool (never the phone route).
+            out.campaigns = out.campaigns.map((c) => {
+                if (!c || typeof c !== 'object')
+                    return c;
+                const pool = Array.isArray(c.agentIds) ? c.agentIds.map(String) : (c.agentId ? [String(c.agentId)] : []);
+                return pool.includes('a_qa') ? c : { ...c, agentIds: [...pool, 'a_qa'] };
+            });
+        }
+        if (id === 'a_builtin' && !out.campaigns.some((c) => c && c.id === 'c_builtin')) {
+            const camp = clone(base.campaigns.find((c) => c.id === 'c_builtin'));
+            if (camp) {
+                delete camp.slot; // gets the next never-issued extension
+                camp.agentIds = ['a_builtin', ...(out.agents.some((a) => a && a.id === 'a_qa') ? ['a_qa'] : [])];
+                out.campaigns.push(camp);
+            }
+        }
+    }
+    return out;
+}
 function normalizeState(raw) {
     const base = createDefaultState();
     if (!raw || typeof raw !== 'object')
         return base;
-    const src = raw.console && typeof raw.console === 'object' ? raw.console : raw;
+    const src = seedBuiltinBots(raw.console && typeof raw.console === 'object' ? raw.console : raw, base);
     const usedFnIds = new Set();
     const functions = Array.isArray(src.functions) && src.functions.length
         ? src.functions
@@ -1035,5 +1105,6 @@ function normalizeState(raw) {
         vici,
         tests: cleanTests,
         campaignSlotSeq,
+        seededBuiltins: Array.isArray(src.seededBuiltins) ? Array.from(new Set(src.seededBuiltins.map(String))) : [...exports.SEEDED_BUILTIN_BOTS],
     };
 }
