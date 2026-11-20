@@ -34,13 +34,15 @@ async function until(fn: () => boolean, label: string, timeout = 8000) {
 }
 
 type Step =
+  | { sleep: number }
   | { user: string }
   | { fn: string; args?: Record<string, unknown> }
   | { audioDone: true };
-interface Scenario { steps: Step[] }
+interface Scenario { steps: Step[]; speakInjected?: boolean }
 interface ProviderSession {
   settings: any;
   responses: Array<{ name: string; content: any }>;
+  messages: any[];
   closed: boolean;
 }
 
@@ -57,6 +59,10 @@ async function main() {
   const viciApi = http.createServer((req, res) => {
     const params = Object.fromEntries(new URL(req.url || '/', 'http://x').searchParams.entries());
     viciRequests.push(params);
+    if (params.function === 'update_lead' && Object.values(params).some((v) => /SLOWNOTES/.test(String(v)))) {
+      setTimeout(() => { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('SUCCESS: synthetic slow'); }, 3000);
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end(params.function === 'lead_all_info'
       ? 'lead_id|phone_number|first_name|last_name|state|date_of_birth|age|status|campaign_id\n104892|3055550192|Robert|Fixture|FL|1955-04-10|71|NEW|FETEST'
@@ -119,7 +125,7 @@ async function main() {
   const provider = http.createServer();
   const wss = new WebSocketServer({ server: provider, path: '/agent' });
   wss.on('connection', (ws) => {
-    const session: ProviderSession = { settings: null, responses: [], closed: false };
+    const session: ProviderSession = { settings: null, responses: [], messages: [], closed: false };
     sessions.push(session);
     const scenario = scenarios.shift() || { steps: [] };
     let fnSeq = 0;
@@ -129,6 +135,12 @@ async function main() {
     ws.on('message', async (raw, binary) => {
       if (binary) return;
       const msg = JSON.parse(raw.toString());
+      session.messages.push(msg);
+      if (msg.type === 'InjectAgentMessage' && scenario.speakInjected) {
+        ws.send(JSON.stringify({ type: 'AgentStartedSpeaking' }));
+        setTimeout(() => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'AgentAudioDone' })); }, 300);
+        return;
+      }
       if (msg.type === 'FunctionCallResponse') {
         let content: any = msg.content;
         try { content = JSON.parse(msg.content); } catch {}
@@ -142,7 +154,9 @@ async function main() {
       await wait(1600); // let the opening gate release
       for (const step of scenario.steps) {
         if (ws.readyState !== WebSocket.OPEN) return;
-        if ('user' in step) {
+        if ('sleep' in step) {
+          await wait(step.sleep);
+        } else if ('user' in step) {
           ws.send(JSON.stringify({ type: 'ConversationText', role: 'user', content: step.user }));
           await wait(80);
         } else if ('fn' in step) {
@@ -226,6 +240,7 @@ async function main() {
     assert.ok(fnNames.includes('end_call') && fnNames.includes('transfer_to_live_agent') && fnNames.includes('set_disposition'), `${agent.name}: functions declared to the provider`);
     assert.ok(prompt.includes(promptMark('v1', agent.id)), `${agent.name}: saved prompt reached the call`);
     assert.ok(/CALL ENDING \(MANDATORY/.test(prompt) && /says goodbye, bye/.test(prompt), `${agent.name}: universal call-ending policy is in the live prompt`);
+    assert.ok(/SOUND LIKE A REAL PERSON/.test(prompt) && /CALL TIME LIMIT \(70 SECONDS\)/.test(prompt), `${agent.name}: human-speech and 70 s fast-transfer policy in the live prompt`);
     assert.ok(prompt.includes(ruleMark('v1', campaign.id)), `${agent.name}: saved campaign rules reached the call`);
     for (const other of inv.campaigns.filter((c) => c.id !== campaign.id)) {
       assert.ok(!prompt.includes(ruleMark('v1', other.id)), `${agent.name}: no rules leaked from ${other.name}`);
@@ -292,7 +307,44 @@ async function main() {
     call.close();
   }
 
-  // ------------------------------------ 5) Sentinel QA bot (browser/QA only)
+  // ------------------------------------------ 5) hard call-length limit
+  {
+    const { campaign, agent } = phoneBots[phoneBots.length - 1];
+    await putState((st) => { st.campaigns.find((c: any) => c.id === campaign.id).maxCallSec = 30; });
+    const call = await placeCall(`${inv.vici.aiExten}${campaign.slot}`, { steps: [{ user: 'Haha, tell me a joke and keep talking.' }], speakInjected: true });
+    const prompt = String(call.session.settings?.agent?.think?.prompt || '');
+    assert.match(prompt, /CALL TIME LIMIT \(30 SECONDS\) & FAST TRANSFER/, 'time-limit and fast-transfer policy is in the prompt');
+    await until(() => call.result.byeAt > 0, `${agent.name}: call ended by the time limit`, 40000);
+    const secs = (call.result.byeAt - call.result.startedAt) / 1000;
+    const wrap = call.session.messages.find((m) => m.type === 'UpdatePrompt');
+    const closing = call.session.messages.find((m) => m.type === 'InjectAgentMessage' && /have to let you go/.test(m.message || ''));
+    assert.ok(wrap && /TIME CHECK/.test(wrap.prompt), 'wrap-up instruction sent before the limit');
+    assert.ok(closing, 'closing line spoken before hanging up');
+    assert.ok(secs >= 23 && secs <= 31, `call ended inside the window (${secs.toFixed(1)}s)`);
+    await until(() => viciRequests.some((p) => p.function === 'ra_call_control' && p.stage === 'HANGUP' && p.value === call.callerCode), 'VICIdial HANGUP after time limit');
+    console.log(`✓ TIME LIMIT ${agent.name}: 30 s limit -> wrap-up instruction at 18 s, closing line at 24 s, hung up at ${secs.toFixed(1)}s`);
+    call.close();
+    viciRequests.length = 0;
+    // Codex P2: a transfer requested just before the limit, while the VICIdial
+    // notes update is still in flight, must not be hung up by the limit.
+    {
+      const late = await placeCall(`${inv.vici.aiExten}${campaign.slot}`, { steps: [
+        { user: "Yes, I'm interested, connect me." },
+        { sleep: 26500 },
+        { fn: 'set_disposition', args: { code: 'XFER', notes: 'Qualified' } },
+        { fn: 'transfer_to_live_agent', args: { reason: 'SLOWNOTES qualified late' } },
+        { audioDone: true },
+      ] });
+      await until(() => viciRequests.some((p) => p.function === 'ra_call_control' && p.value === late.callerCode && /TRANSFER/.test(p.stage || '')), 'late transfer still executed', 45000);
+      assert.ok(!viciRequests.some((p) => p.function === 'ra_call_control' && p.stage === 'HANGUP' && p.value === late.callerCode), 'time limit did not hang up the transfer');
+      console.log(`✓ TIME LIMIT ${agent.name}: transfer requested 1.5 s before the limit (slow VICIdial) still went through, not cut off`);
+      late.close();
+      viciRequests.length = 0;
+    }
+    await putState((st) => { st.campaigns.find((c: any) => c.id === campaign.id).maxCallSec = 70; });
+  }
+
+  // ------------------------------------ 6) Sentinel QA bot (browser/QA only)
   {
     const s = getConsoleState();
     const qa = s.agents.find((a) => a.id === 'a_qa');
@@ -302,6 +354,7 @@ async function main() {
       const p = String(settings.agent.think.prompt);
       assert.ok(p.includes(promptMark('v2', qa.id)) && p.includes(ruleMark('v2', camp.id)));
       assert.ok(settings.agent.think.functions.some((f: any) => f.name === 'end_call'));
+      assert.ok(!/CALL TIME LIMIT/.test(p), 'QA reviewer bot is not time-boxed');
       console.log(`✓ ${qa.name}: Live Bot session gets the newest prompt + rules and its end_call function`);
     }
   }

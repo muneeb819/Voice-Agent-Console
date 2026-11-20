@@ -82,6 +82,7 @@ export interface Campaign {
   attempts: number;
   retry: number;
   maxCalls: number;
+  maxCallSec: number; // Hard per-call time limit in seconds (0 = no limit).
   xferType: 'ingroup' | 'extension' | 'number';
   xferTarget: string;
   fallback: string;

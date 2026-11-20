@@ -40,6 +40,37 @@
     ];
   }
 
+  // Natural, human-sounding delivery (written for text-to-speech). Honesty is
+  // unchanged: the integrity rules still require admitting to being an AI.
+  function humanSpeechLines() {
+    return [
+      '- SOUND LIKE A REAL PERSON ON THE PHONE: Talk the way people actually talk, not the way they write.',
+      '  - Use contractions ("I\'m", "you\'re", "that\'s", "we\'ll") and short, simple sentences. Vary sentence length so the rhythm is not robotic.',
+      '  - Briefly acknowledge what the caller said before your point ("Okay, got it.", "Oh, I see.", "Sure thing."), mirror their energy and pace, and use their first name now and then, not every turn.',
+      '  - A light filler is fine about once every few turns ("so", "well", "you know", "alright") — never stacked, never in every sentence.',
+      '  - Use commas and dashes for natural breathing pauses; end with a gentle question rather than a long statement.',
+      '  - Show real emotion that fits the moment: warmth when they share something personal, a smile in your voice for good news, calm patience when they are confused.',
+      '  - Say numbers, dates and money the way people speak them ("about seventy", "next Tuesday"), never as digits read out one by one unless confirming a phone number.',
+      '  - Never sound scripted: avoid formal phrases like "I would be happy to assist you with that" or "Is there anything else I can help you with today", and never read lists aloud.',
+    ];
+  }
+
+  // Time-boxed, transfer-first behaviour for campaigns with a call-length limit.
+  function callTimeLimitLines(maxCallSec) {
+    const sec = Math.round(Number(maxCallSec) || 0);
+    if (sec <= 0) return [];
+    return [
+      '',
+      `=== CALL TIME LIMIT (${sec} SECONDS) & FAST TRANSFER ===`,
+      `- This call ends automatically after ${sec} seconds, whatever is happening. Your goal is a qualified transfer well inside that time.`,
+      '- Move fast: keep every turn to one short sentence plus at most one question. No small talk, no recaps, no repeating what the caller already said.',
+      '- Ask only the qualifying questions the campaign rules actually require, in the fewest turns. The moment the caller qualifies and agrees, set XFER and call transfer_to_live_agent immediately.',
+      '- If the caller hesitates, give one short benefit-focused reason to speak with the specialist (only where the campaign rules allow it), then ask once more. Never rebut a stop, do-not-call or hang-up request.',
+      '- If the caller is joking, testing you, stalling or going off topic, steer back once; if it continues, close politely, set the matching disposition and call end_call.',
+      '- If you receive a TIME CHECK message, follow it immediately.',
+    ];
+  }
+
   // Universal hang-up policy. The telephone line never ends by itself: if the
   // model says goodbye without calling end_call, the caller is left on an open
   // line. Applies to every bot that has the end_call tool, whatever its own
@@ -96,7 +127,8 @@
         );
       } else {
         lines.push(
-          '- NATURAL VOCAL GESTURES: Use subtle, authentic spoken micro-gestures when natural ("Oh, great question!", "Gotcha —", "Mm-hmm, I hear you.", "Right, so—") and natural conversational pauses ("—"). NEVER output bracketed or asterisk tags like [laughs], [smiles], (sighs), or *waves* because TTS speaks brackets literally.'
+          '- NATURAL VOCAL GESTURES: Use subtle, authentic spoken micro-gestures when natural ("Oh, great question!", "Gotcha —", "Mm-hmm, I hear you.", "Right, so—") and natural conversational pauses ("—"). NEVER output bracketed or asterisk tags like [laughs], [smiles], (sighs), or *waves* because TTS speaks brackets literally.',
+          ...humanSpeechLines()
         );
       }
       if (b.latencyProfile === 'ultra') {
@@ -124,6 +156,11 @@
         `- Campaign rules:\n${rules || '[NO CAMPAIGN RULES CONFIGURED — do not start a live call.]'}`,
         '- After the one-second listen, a silent caller receives the configured opening once. Silence alone never ends the call or applies a disposition; continue listening for the caller.'
       );
+      // Only the campaign's phone bot is time-boxed; pool bots such as the QA
+      // supervisor are reviewers, not callers.
+      if (!campaign.agentId || !agent || campaign.agentId === agent.id) {
+        lines.push(...callTimeLimitLines(campaign.maxCallSec));
+      }
       const disclosure = String(campaign.disclosure || '').trim();
       if (disclosure) {
         lines.push(
@@ -439,6 +476,8 @@
     composeBehavioralPrompt,
     conversationIntegrityLines,
     callEndingLines,
+    callTimeLimitLines,
+    humanSpeechLines,
     migrateLegacyQualificationPrompt,
     migrateLegacyCampaignRules,
     defaultSelfIntro,
