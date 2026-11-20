@@ -846,8 +846,11 @@ function attachLiveSimulator(server, noServer = false) {
                             while (pendingPreSettingsAudio.length > 0) {
                                 const chunk = pendingPreSettingsAudio.shift();
                                 preSettingsBytes -= chunk.length;
-                                if (dgWs?.readyState === ws_1.default.OPEN)
-                                    dgWs.send(chunk, { binary: true });
+                                // Same background-voice filter as live audio (it also learns the caller's level here).
+                                const even = chunk.length % 2 ? chunk.subarray(0, chunk.length - 1) : chunk;
+                                const filtered = even.length >= 2 ? getVoiceFilter().process(even) : even;
+                                if (dgWs?.readyState === ws_1.default.OPEN && filtered.length)
+                                    dgWs.send(filtered, { binary: true });
                             }
                             while (pendingInjectedMessages.length > 0) {
                                 const injected = pendingInjectedMessages.shift();
