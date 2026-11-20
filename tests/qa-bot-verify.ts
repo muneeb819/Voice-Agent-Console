@@ -69,6 +69,15 @@ function run(): void {
     assert.equal(again.agents.length, upgraded.agents.length, 'adding is one-time (idempotent)');
     const deleted = normalizeState({ ...upgraded, agents: upgraded.agents.filter((a) => a.id !== 'a_qa') });
     assert.ok(!deleted.agents.some((a) => a.id === 'a_qa'), 'a deleted Sentinel is not re-added');
+    // Codex P2: a saved function without an id must still bind to the new bots.
+    const noIds: any = JSON.parse(JSON.stringify(legacy));
+    noIds.functions = noIds.functions.map((f: any) => { const { id, ...rest } = f; void id; return rest; });
+    noIds.agents = noIds.agents.map((a: any) => { const { fnIds, ...rest } = a; void fnIds; return { ...rest, fns: ['end_call'] }; });
+    const fromNoIds = normalizeState(noIds);
+    const qa2 = fromNoIds.agents.find((a) => a.id === 'a_qa')!;
+    const b2 = fromNoIds.agents.find((a) => a.id === 'a_builtin')!;
+    assert.deepEqual(qa2.fnIds.map((id) => fromNoIds.functions.find((f) => f.id === id)?.name), ['end_call'], 'Sentinel binds end_call even when saved functions had no id');
+    assert.deepEqual(b2.fnIds.map((id) => fromNoIds.functions.find((f) => f.id === id)?.name).sort(), ['end_call', 'set_disposition', 'transfer_to_live_agent'], 'Build-In Bot binds all three tools');
     console.log('✓ Older installs (e.g. Sarah/Nova/Jesica) gain Sentinel + Build-In Bot once; existing bots untouched; deletes respected');
   }
 

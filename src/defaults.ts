@@ -777,25 +777,30 @@ function seedBuiltinBots(src: any, base: ConsoleState): any {
     tests: { ...(src.tests && typeof src.tests === 'object' ? src.tests : {}) },
     seededBuiltins: marker,
   };
-  // Reuse the install's own functions by name; add only a missing one.
-  const fnIdByName = new Map<string, string>(out.functions.filter((f: any) => f && f.name).map((f: any) => [String(f.name), String(f.id)]));
-  const mapFnIds = (ids: string[]) => ids.map((id) => {
+  // Reference tools by NAME (the legacy `fns` form normalizeState resolves
+  // after it has assigned final function ids), so a saved function without an
+  // id still binds. Add only a tool the install does not have yet.
+  const fnNames = new Set<string>(out.functions.filter((f: any) => f && f.name).map((f: any) => String(f.name).trim()));
+  const toolNames = (ids: string[]) => ids.map((id) => {
     const tpl = base.functions.find((f) => f.id === id);
     if (!tpl) return null;
-    if (!fnIdByName.has(tpl.name)) {
+    if (!fnNames.has(tpl.name)) {
       let newId = tpl.id;
       while (out.functions.some((f: any) => f && f.id === newId)) newId = `${newId}_builtin`;
       out.functions.push({ ...clone(tpl), id: newId });
-      fnIdByName.set(tpl.name, newId);
+      fnNames.add(tpl.name);
     }
-    return fnIdByName.get(tpl.name)!;
+    return tpl.name;
   }).filter(Boolean) as string[];
 
   for (const id of missing) {
     if (out.agents.some((a: any) => a && a.id === id)) continue;
     const tpl = base.agents.find((a) => a.id === id);
     if (!tpl) continue;
-    out.agents.push({ ...clone(tpl), fnIds: mapFnIds(tpl.fnIds) });
+    const seeded: any = clone(tpl);
+    delete seeded.fnIds;
+    seeded.fns = toolNames(tpl.fnIds);
+    out.agents.push(seeded);
     if (base.tests[id] && !out.tests[id]) out.tests[id] = clone(base.tests[id]);
     if (id === 'a_qa') {
       // QA reviewer joins every campaign's bot pool (never the phone route).
