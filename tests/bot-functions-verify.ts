@@ -34,6 +34,7 @@ async function until(fn: () => boolean, label: string, timeout = 8000) {
 }
 
 type Step =
+  | { raw: Record<string, unknown> }
   | { sleep: number }
   | { user: string }
   | { fn: string; args?: Record<string, unknown> }
@@ -154,7 +155,9 @@ async function main() {
       await wait(1600); // let the opening gate release
       for (const step of scenario.steps) {
         if (ws.readyState !== WebSocket.OPEN) return;
-        if ('sleep' in step) {
+        if ('raw' in step) {
+          ws.send(JSON.stringify(step.raw));
+        } else if ('sleep' in step) {
           await wait(step.sleep);
         } else if ('user' in step) {
           ws.send(JSON.stringify({ type: 'ConversationText', role: 'user', content: step.user }));
@@ -190,10 +193,13 @@ async function main() {
     const rtp = dgram.createSocket('udp4');
     await Promise.all([sip, rtp].map((s) => new Promise<void>((r) => s.bind(0, '127.0.0.1', r))));
     const port = (s: dgram.Socket) => (s.address() as net.AddressInfo).port;
-    const result = { answered: false, byeAt: 0, startedAt: Date.now() };
+    const result = { answered: false, byeAt: 0, startedAt: Date.now(), bridgeRtpPort: 0 };
     sip.on('message', (data, rinfo) => {
       const m = data.toString();
-      if (m.startsWith('SIP/2.0 200') && /^CSeq:\s*1 INVITE/im.test(m)) result.answered = true;
+      if (m.startsWith('SIP/2.0 200') && /^CSeq:\s*1 INVITE/im.test(m)) {
+        result.answered = true;
+        result.bridgeRtpPort = Number(/^m=audio\s+(\d+)/m.exec(m)?.[1] || 0);
+      }
       if (m.startsWith('BYE ')) {
         result.byeAt = Date.now();
         const via = /^Via:.*$/im.exec(m)?.[0] || '';
@@ -218,7 +224,7 @@ async function main() {
     await until(() => sessions.length > before && Boolean(sessions[before].settings), 'provider Settings received');
     const session = sessions[before];
     return {
-      session, result, callerCode, lead,
+      session, result, callerCode, lead, rtp,
       close: () => { try { sip.close(); } catch {} try { rtp.close(); } catch {} },
     };
   }
@@ -342,6 +348,47 @@ async function main() {
       viciRequests.length = 0;
     }
     await putState((st) => { st.campaigns.find((c: any) => c.id === campaign.id).maxCallSec = 70; });
+  }
+
+  // ------------------------------- 6) barge-in sensitivity (%) on phone calls
+  {
+    const { buildRtpPacket, linear16ToUlaw } = await import('../src/g711');
+    const { campaign, agent } = phoneBots[0];
+    const states: string[] = [];
+    const origBroadcast = (bridge as any).broadcastMonitor.bind(bridge);
+    (bridge as any).broadcastMonitor = (m: any) => { if (m?.type === 'call_state' && m.call?.state) states.push(`${m.call.callId}:${m.call.state}`); return origBroadcast(m); };
+    const tone = (amp: number) => {
+      const b = Buffer.alloc(320);
+      for (let i = 0; i < 160; i += 1) b.writeInt16LE(Math.round(Math.sin(i / 3) * amp * 32767), i * 2);
+      return linear16ToUlaw(b);
+    };
+    const tryBarge = async (pct: number, amp: number) => {
+      await putState((st) => { st.agents.find((a: any) => a.id === agent.id).behavior.bargeInSensitivityPct = pct; });
+      states.length = 0;
+      const call = await placeCall(`${inv.vici.aiExten}${campaign.slot}`, { steps: [
+        { raw: { type: 'AgentStartedSpeaking' } },
+        { sleep: 200 },
+        { raw: { type: 'UserStartedSpeaking' } },
+        { sleep: 900 },
+        { fn: 'end_call' }, { audioDone: true },
+      ] });
+      // Stream caller audio for ~3 s at the given level.
+      for (let i = 0; i < 150 && !call.result.byeAt; i += 1) {
+        call.rtp.send(buildRtpPacket({ payloadType: 0, sequenceNumber: i + 1, timestamp: 160 * (i + 1), ssrc: 4242, marker: i === 0, payload: tone(amp) }), call.result.bridgeRtpPort, '127.0.0.1');
+        await wait(20);
+      }
+      await until(() => call.result.byeAt > 0, 'barge-in test call ended', 8000);
+      const interrupted = states.some((x) => x.endsWith(':caller_speaking'));
+      call.close();
+      return interrupted;
+    };
+    assert.equal(await tryBarge(10, 0.02), false, '10%: quiet background does not interrupt the bot');
+    assert.equal(await tryBarge(10, 0.15), true, '10%: clear caller speech still interrupts');
+    assert.equal(await tryBarge(100, 0.02), true, '100%: even quiet sound interrupts');
+    (bridge as any).broadcastMonitor = origBroadcast;
+    await putState((st) => { st.agents.find((a: any) => a.id === agent.id).behavior.bargeInSensitivityPct = 50; });
+    viciRequests.length = 0;
+    console.log(`✓ BARGE-IN ${agent.name}: 10% ignores quiet background but stops for clear speech; 100% stops for any sound (live SIP/RTP)`);
   }
 
   // ------------------------------------ 6) Sentinel QA bot (browser/QA only)

@@ -2,6 +2,7 @@ import { Agent,  AgentBehavior, AgentFunction, Campaign, ConsoleState, Provider 
 import { migrateStockMedicarePrompt, migrateStockOpening } from './opening';
 import { migrateLegacyQualificationPrompt, migrateLegacyCampaignRules, defaultSelfIntro, migrateLegacySelfIntro } from './persona';
 import { assignCampaignSlots, normalizeCampaignAgents } from './campaign-assignment';
+import { normalizeBargeInPct, presetForPct } from './barge-in';
 import { SENTINEL_QA_AGENT, SENTINEL_QA_TESTS } from './sentinel-qa';
 
 // SIP configuration is interpolated into raw UDP headers, so never let control
@@ -293,6 +294,7 @@ export function createDefaultState(): ConsoleState {
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
+          bargeInSensitivityPct: 50,
           latencyProfile: 'ultra',
           expressionStyle: 'warm_empathetic',
           vocalGestures: true,
@@ -370,6 +372,7 @@ export function createDefaultState(): ConsoleState {
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
+          bargeInSensitivityPct: 50,
           latencyProfile: 'ultra',
           expressionStyle: 'warm_empathetic',
           vocalGestures: true,
@@ -422,6 +425,7 @@ export function createDefaultState(): ConsoleState {
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
+          bargeInSensitivityPct: 50,
           latencyProfile: 'ultra',
           expressionStyle: 'energetic_upbeat',
           vocalGestures: true,
@@ -464,6 +468,7 @@ export function createDefaultState(): ConsoleState {
         "behavior": {
           "bargeIn": "instant",
           "bargeInSensitivity": "balanced",
+          "bargeInSensitivityPct": 50,
           "latencyProfile": "ultra",
           "expressionStyle": "warm_empathetic",
           "vocalGestures": true,
@@ -1030,9 +1035,8 @@ export function normalizeState(raw: any): ConsoleState {
         const rawBeh = a.behavior && typeof a.behavior === 'object' ? a.behavior : {};
         const behavior: AgentBehavior = {
           bargeIn: ['instant', 'server', 'off'].includes(rawBeh.bargeIn) ? rawBeh.bargeIn : 'instant',
-          bargeInSensitivity: ['high', 'balanced', 'low'].includes(rawBeh.bargeInSensitivity)
-            ? rawBeh.bargeInSensitivity
-            : 'balanced',
+          bargeInSensitivity: presetForPct(normalizeBargeInPct(rawBeh.bargeInSensitivityPct, rawBeh.bargeInSensitivity)),
+          bargeInSensitivityPct: normalizeBargeInPct(rawBeh.bargeInSensitivityPct, rawBeh.bargeInSensitivity),
           latencyProfile: ['ultra', 'balanced', 'quality'].includes(rawBeh.latencyProfile)
             ? rawBeh.latencyProfile
             : 'ultra',
