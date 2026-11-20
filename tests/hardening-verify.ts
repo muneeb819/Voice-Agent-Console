@@ -216,8 +216,8 @@ async function main() {
   process.env.DEEPGRAM_API_KEY = 'synthetic-bridge-key';
   process.env.BRIDGE_ALLOWED_IPS = '127.0.0.1';
   process.env.BRIDGE_RTP_TIMEOUT_SEC = '1.5';
-  process.env.BRIDGE_RTP_PORT_MIN = '41000';
-  process.env.BRIDGE_RTP_PORT_MAX = '41019';
+  process.env.BRIDGE_RTP_PORT_MIN = '24000';
+  process.env.BRIDGE_RTP_PORT_MAX = '24019';
 
   const bridge = new VicidialBridgeService({ host: '127.0.0.1', audioSocketPort: 0, sipPort: 0 });
   await bridge.start();
@@ -253,15 +253,17 @@ async function main() {
   ].join('\r\n');
   // Occupy all but one port of the range: the bridge must scan past EADDRINUSE.
   const blockers: dgram.Socket[] = [];
-  for (let p = 41000; p <= 41018; p += 1) {
+  // 24000-24019 sits below the OS ephemeral range (32768+), so unrelated
+  // processes rarely hold it; a port that is already busy counts as blocked.
+  for (let p = 24000; p <= 24018; p += 1) {
     const b = dgram.createSocket('udp4');
-    await new Promise<void>((r) => b.bind(p, '127.0.0.1', r));
+    await new Promise<void>((r) => { b.once('error', () => r()); b.bind(p, '127.0.0.1', () => r()); });
     blockers.push(b);
   }
   sip.send(Buffer.from(invite), sipPort, '127.0.0.1');
   await until(() => bridgeRtpPort > 0, 'SIP 200 OK for a NAT-advertised SDP');
-  assert.equal(bridgeRtpPort, 41019, `RTP port scan skipped busy ports (got ${bridgeRtpPort})`);
-  for (const b of blockers) b.close();
+  assert.equal(bridgeRtpPort, 24019, `RTP port scan skipped busy ports (got ${bridgeRtpPort})`);
+  for (const b of blockers) try { b.close(); } catch {}
   console.log('✓ SIP-11/12 private SDP address accepted via signaling source; RTP bound inside the configured range');
 
   // Caller audio arrives from a different source port than the SDP (NAT).

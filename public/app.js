@@ -1315,6 +1315,24 @@
       }
       // Missing campaign assignments stay visible and block calls; never generate a
       // campaign for a bot behind the operator's back.
+
+      // Persist stable telephone slots and the never-decreasing high-water mark
+      // in the browser too (serverless mode has no server reconciliation), so a
+      // delete never shifts or re-issues another campaign's extension.
+      const slotMap = campaignSlotMap(state.campaigns, state.campaignSlotSeq);
+      let highWater = Number.isInteger(Number(state.campaignSlotSeq)) && Number(state.campaignSlotSeq) > 0 ? Number(state.campaignSlotSeq) : 0;
+      for (const cp of state.campaigns) {
+        const slot = slotMap.get(cp);
+        if (cp.slot !== slot) {
+          cp.slot = slot;
+          mutated = true;
+        }
+        highWater = Math.max(highWater, slot);
+      }
+      if (state.campaignSlotSeq !== highWater) {
+        state.campaignSlotSeq = highWater;
+        mutated = true;
+      }
     }
 
     if (Array.isArray(state.providers)) {
@@ -2543,6 +2561,13 @@
   // Mirrors src/campaign-assignment.ts assignCampaignSlots: the telephone
   // extension is aiExten + a stored per-campaign slot, never the list position,
   // so deleting or reordering a campaign cannot re-route another one's calls.
+  // Next never-issued slot: above every current slot and every retired one.
+  function nextCampaignSlot() {
+    const used = (S.campaigns || []).map((c) => Number(c && c.slot) || 0);
+    const seq = Number.isInteger(Number(S.campaignSlotSeq)) ? Number(S.campaignSlotSeq) : 0;
+    return Math.max(seq, ...used, 0) + 1;
+  }
+
   function campaignSlotMap(list, highWater) {
     const valid = (value) => {
       const n = Number(value);
@@ -8513,8 +8538,10 @@
           disclosure: '',
           dispos: '',
           complianceRules: MISSING_CAMPAIGN_RULES,
+          slot: nextCampaignSlot(),
         };
         arr.push(clone);
+        S.campaignSlotSeq = clone.slot;
         cur.c = clone.id;
         render();
         updateHeaderStatus();
@@ -8532,8 +8559,9 @@
         clone.id = uid('cp');
         clone.name = `${currentObj.name} (Copy)`;
         Object.assign(clone, { agentId: '', agentIds: [], viciCampaign: '', xferTarget: '', fallback: '' });
-        // A copy needs its own telephone slot; the server assigns the next free one.
-        delete clone.slot;
+        // A copy needs its own telephone slot, never the original's.
+        clone.slot = nextCampaignSlot();
+        S.campaignSlotSeq = clone.slot;
         arr.push(clone);
         cur.c = clone.id;
         render();
