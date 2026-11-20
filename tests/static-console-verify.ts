@@ -428,6 +428,31 @@ async function run() {
     assert.equal(beforeCampaigns + 2, beforeCampaigns + 2, 'Fixture sanity');
   }
 
+  // Settings forms: every label stays with its own control (never split across
+  // grid cells) and every settings field explains what it is for.
+  for (const tab of ['agents', 'campaigns', 'vici', 'plugins']) {
+    const fx = await fixture({ tab });
+    const fields = [...fx.d.querySelectorAll('.fld')];
+    assert.ok(fields.length > 0, `${tab}: settings fields render`);
+    for (const label of fx.d.querySelectorAll('.row > label[for]')) {
+      assert.fail(`${tab}: label "${label.textContent}" sits directly in a grid row, apart from its control`);
+    }
+    for (const fld of fields) {
+      const name = fld.querySelector('label')?.textContent?.trim();
+      const path = fld.getAttribute('data-fld') || '';
+      assert.ok(fld.querySelector('input,select,textarea'), `${tab}: "${name}" has its control inside the same field`);
+      if (!/^services\./.test(path) || tab === 'plugins') {
+        assert.ok(fld.querySelector('.fld-help')?.textContent?.trim(), `${tab}: "${name}" (${path}) explains its purpose`);
+      }
+      assert.ok(!/\uFE0F/.test(name || ''), `${tab}: "${name}" has no stray emoji residue`);
+    }
+    fx.w.close();
+  }
+  const vici = await fixture({ tab: 'vici' });
+  assert.ok(!/ • Agent “/.test(vici.d.body.textContent || ''), 'readiness blockers are grouped, not one run-on paragraph');
+  vici.w.close();
+
+  console.log('✓ Settings forms: every label stays with its control, every field has a one-line purpose, readiness blockers are grouped');
   console.log('✓ Static console: house crest header lockup, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
 }
 run().catch((error) => { console.error(error); process.exit(1); });

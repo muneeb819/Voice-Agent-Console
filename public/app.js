@@ -2567,6 +2567,43 @@
     return items;
   }
 
+  // Readiness blockers used to render as one run-on paragraph (hundreds of
+  // "Agent “X”: …" fragments). Group them per bot / campaign, lift checks that
+  // fail for every bot into one "All bots" group, and fold the detail away.
+  function renderBlockerList(intro, blockers, cls) {
+    const groups = new Map();
+    const add = (name, text) => {
+      if (!groups.has(name)) groups.set(name, []);
+      const list = groups.get(name);
+      if (!list.includes(text)) list.push(text);
+    };
+    for (const raw of blockers) {
+      const m = /^(Agent|Campaign) “(.+?)”[:]?\s*(.*)$/.exec(String(raw));
+      const text = (m ? m[3] : String(raw)).replace(/\.$/, '');
+      add(m ? `${m[1] === 'Agent' ? 'Bot' : 'Campaign'}: ${m[2]}` : 'General', text || String(raw));
+    }
+    const botGroups = [...groups.keys()].filter((k) => k.startsWith('Bot: '));
+    if (botGroups.length > 1) {
+      const shared = groups.get(botGroups[0]).filter((t) => botGroups.every((k) => groups.get(k).includes(t)));
+      if (shared.length) {
+        for (const k of botGroups) {
+          const rest = groups.get(k).filter((t) => !shared.includes(t));
+          if (rest.length) groups.set(k, rest); else groups.delete(k);
+        }
+        const ordered = new Map([[`All ${botGroups.length} bots`, shared], ...groups]);
+        groups.clear();
+        ordered.forEach((v, k) => groups.set(k, v));
+      }
+    }
+    const total = [...groups.values()].reduce((n, l) => n + l.length, 0);
+    return `<div class="note ${cls} blocker-list" style="margin-top:8px">
+      <b>${esc(intro)}</b> — ${total} check${total === 1 ? '' : 's'} not passing yet.
+      <details><summary>Show what to fix</summary>${[...groups.entries()]
+        .map(([name, items]) => `<div class="blocker-group"><b>${esc(name)}</b><ul>${items.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>`)
+        .join('')}</details>
+    </div>`;
+  }
+
   function deploymentReadinessBlockersLocal() {
     const blockers = [];
     for (const agent of S.agents || []) {
@@ -2749,12 +2786,97 @@
     arr.map((x) => `<div class="ck"><span class="${x[0]}">${x[1]}</span><span>${x[2]}</span></div>`).join('');
 
   let fieldSerial = 0;
+  // Plain-English, one-line purpose for every settings field (shown under the field).
+  const FIELD_HELP = {
+    'a.name': 'Name shown in this console. Callers only hear it if you put it in the opening line.',
+    'a.mode': 'Outbound: VICIdial dials leads and the bot talks when they answer. Inbound: VICIdial routes incoming callers to the bot.',
+    'a.acceptViciCalls': 'Keep on. When a call connects, the bot gets the lead’s name, phone and other fields from VICIdial.',
+    'a.injectCampaignDisclosure': 'Says the campaign’s recording notice before the opening line. It does not turn recording on or off.',
+    'a.greeting': 'The first thing the bot says. Keep it to one short sentence with the bot’s name.',
+    'a.randomGreetingEnabled': 'On: a different opening from the greeting library on each call. Off: always the opening line above.',
+    'a.prompt': 'Who the bot is and what it must do: persona, questions to ask, when to transfer, how to handle DNC. Campaign rules are added automatically.',
+    'a.behavior.bargeIn': 'Whether the caller can cut the bot off mid-sentence, and how fast it is detected. “Off” makes the bot always finish speaking.',
+    'a.behavior.bargeInSensitivityPct': 'How easily the caller can interrupt. Higher = softer or shorter speech stops the bot. Lower = coughs, TV and noise are ignored. Start at 50.',
+    'a.behavior.latencyProfile': 'How long each reply is. Fast = 1–2 short sentences (best for quick transfers). Balanced = 2–3. Detailed = 3–5.',
+    'a.behavior.backgroundVoiceFilterPct': 'Mutes people talking behind the customer (family, TV, coworkers). 0 = off · 50 = recommended · 70–80 = busy homes. Too high can clip soft words.',
+    'a.behavior.expressionStyle': 'The personality and tone the bot speaks with.',
+    'a.behavior.vocalGestures': 'Adds short human reactions, pauses and fillers so the bot sounds less robotic.',
+    'a.behavior.allowGeneralQa': 'On: answers off-topic questions (facts, math, everyday). Off: politely steers back to the call’s purpose.',
+    'a.behavior.selfIntro': 'Used only when the caller asks who they are speaking with.',
+    'a.language': 'Language code for speech recognition, e.g. en, en-US or es.',
+    'a.stt.keyterms': 'Names and words callers may say (brand, product, place names), comma-separated, so they are recognized correctly.',
+    'a.stt.eot': 'How sure the system must be that the caller finished before the bot answers. Higher = waits longer and cuts callers off less. Default 0.55.',
+    'a.stt.eager': 'Lets the bot start preparing an answer before the caller fully stops. Lower = faster replies but more early jump-ins. Default 0.35.',
+    'a.stt.eotms': 'The bot answers after this much silence even if unsure the caller finished. 2000 = 2 seconds.',
+    'a.llm.temp': 'Low (0.3–0.5) = sticks to the script. Higher = more varied wording but can drift. 0.5–0.7 suits most bots.',
+    'a.llm.reasoning': 'Only for GPT-5 models: how much it thinks before answering. Use “low” for live calls (fastest).',
+    'a.audio.inEnc': 'Format of the caller’s audio. Leave as set; it must match what the phone system sends.',
+    'a.audio.inRate': 'Use 8000 for VICIdial phone calls.',
+    'a.audio.outEnc': 'Format of the bot’s voice audio. Leave as set unless your phone system needs another.',
+    'a.audio.outRate': 'Use 8000 for VICIdial phone calls.',
+    'a.tts.speed': 'Only affects the Speak Text preview on this page, not live calls.',
+    'a.tts.expr': 'Only affects the Speak Text preview on this page, not live calls.',
+    'services.*.providerId': 'Shared by every bot. Save and verify after changing.',
+    'services.*.model': 'Model used by every bot for this service.',
+    'f.*.name': 'The name the bot calls, e.g. transfer_to_live_agent. Letters, numbers and underscores only.',
+    'f.*.method': 'Only used when a webhook URL is set.',
+    'f.*.description': 'Plain explanation the AI reads to decide when to use this function.',
+    'f.*.params': 'The details the AI must fill in when it uses this function (JSON Schema).',
+    'f.*.url': 'Optional. If set, the server calls this address when the function runs. Placeholders: {{lead.lead_id}}, {{phone}}, {{caller_code}}.',
+    'f.*.headers': 'Optional extra headers as JSON, e.g. {"Authorization":"Bearer {{CUSTOM_WEBHOOK_SECRET}}"}. Secrets come from API Keys.',
+    'f.*.defer': 'Runs only after the caller finishes speaking. Recommended for transfer and hang-up.',
+    'c.name': 'Name shown in this console only.',
+    'c.viciCampaign': 'Must match the Campaign ID in VICIdial exactly.',
+    'c.lists': 'VICIdial lead lists this campaign uses, comma-separated. Used in the dialplan export.',
+    'c.start': 'Reference for the readiness check. Set the real dialing hours in VICIdial.',
+    'c.end': 'Reference for the readiness check. Set the real dialing hours in VICIdial.',
+    'c.tz': 'Time zone of the leads, e.g. America/New_York.',
+    'c.attempts': 'Reference only. VICIdial controls redialing.',
+    'c.retry': 'Reference only. VICIdial controls redialing.',
+    'c.maxCalls': 'Calls above this number are refused. Match the “Lines” on the VICIdial remote agent.',
+    'c.maxCallSec': 'The bot wraps up and hangs up by this time; a transfer already started is never cut off. 70 recommended · 0 = no limit · 30–900.',
+    'c.xferType': 'Where qualified callers go: a VICIdial closer in-group (keeps the screen-pop), an extension, or a phone number.',
+    'c.xferTarget': 'The in-group ID, extension or phone number for the transfer type you picked.',
+    'c.fallback': 'Status to set when a transfer fails, written as “Dispo CALLBK”. The code must be in the allowed results below.',
+    'c.disclosure': 'Spoken before the opening when a bot has “Speak the campaign’s recording notice” on.',
+    'c.complianceRules': 'Rules and banned claims the bot must follow on this campaign. Added to the bot’s instructions on every call.',
+    'c.dispos': 'VICIdial status codes the bot may set, comma-separated, e.g. XFER, NI, DNC, NA, CALLBK.',
+    'c.dnc': 'When a caller says “don’t call me”, their number is added to the VICIdial DNC list.',
+    'v.viciBaseUrl': 'Address of your VICIdial web server, e.g. http://10.0.0.5 or https://dialer.example.com.',
+    'v.nonAgentApiPath': 'Usually /vicidial/non_agent_api.php. Used to look up leads, add DNC and update leads.',
+    'v.agentApiPath': 'Usually /agc/api.php. Used to transfer and hang up calls.',
+    'v.apiUser': 'VICIdial user with API access. Its password goes in API Keys (VICI_API_PASS).',
+    'v.source': 'Short label shown in VICIdial logs for actions the bots take, e.g. aibot.',
+    'v.sipConnectionMode': 'Static peer (most common): VICIdial sends calls straight to this server. Registration: this server logs in to VICIdial like a phone. Hybrid: both.',
+    'v.sipRegistrarHost': 'Registration / Hybrid only: the VICIdial or Asterisk server to log in to.',
+    'v.sipRegistrarPort': 'Registration / Hybrid only. Usually 5060.',
+    'v.sipDomain': 'Leave blank unless your phone system needs a SIP domain.',
+    'v.sipUsername': 'Registration / Hybrid only. Its password goes in API Keys (VICI_SIP_PASSWORD).',
+    'v.sipAuthUsername': 'Only if the login name differs from the SIP username.',
+    'v.sipTransportProtocol': 'UDP is the only option for now.',
+    'v.transport': 'Which setup the generated dialplan highlights; both always run. SIP + RTP works on every ViciBox; AudioSocket needs Asterisk 18+.',
+    'v.bridgeHost': 'The address VICIdial uses to reach this server, e.g. your EC2 public IP.',
+    'v.sipPort': 'Port this server receives calls on. Default 5062; avoid 5060 if VICIdial runs on the same machine.',
+    'v.bridgePort': 'AudioSocket only (Asterisk 18+). Default 9092.',
+    'v.aiExten': 'Each campaign gets this prefix plus its number (8800 → 88001, 88002…). Use it as the remote agent’s external extension.',
+    'v.remoteAgentUser': 'VICIdial remote agent user for campaign 1; later campaigns use the next numbers (9001, 9002…).',
+    'v.inIngroup': 'Inbound in-group whose callers are sent to the bot.',
+    'v.amiHost': 'Asterisk Manager address on the VICIdial server. Its secret goes in API Keys (AMI_SECRET).',
+    'v.amiPort': 'Usually 5038.',
+    'v.amiUser': 'Asterisk Manager username.',
+  };
+  const fieldHelp = (path) =>
+    FIELD_HELP[String(path).replace(/^f\.\d+\./, 'f.*.').replace(/^services\.[a-z]+\./, 'services.*.')] || '';
+
   const F = (label, path, type = 'text', opts = [], attrs = '') => {
     const val = getPath(path);
     const fieldId = `vac-field-${++fieldSerial}`;
     const dp = `data-p="${path}" id="${fieldId}"`;
+    // Leftover emoji variation selectors / leading spaces made labels look misaligned.
+    label = String(label).replace(/\uFE0F/g, '').trim();
+    const help = fieldHelp(path);
     if (type === 'chk') {
-      return `<label class="chk-label"><input type="checkbox" style="width:auto" ${dp} ${val ? 'checked' : ''}>${label}</label>`;
+      return `<div class="fld fld-chk" data-fld="${esc(path)}"><label class="chk-label"><input type="checkbox" style="width:auto" ${dp} ${val ? 'checked' : ''}>${label}</label>${help ? `<div class="fld-help">${help}</div>` : ''}</div>`;
     }
     let fieldHtml = '';
     if (type === 'sel') {
@@ -2775,7 +2897,7 @@
       const stepAttr = type === 'number' && !attrs.includes('step=') ? 'step="any"' : '';
       fieldHtml = `<input type="${type}" ${dp} ${stepAttr} ${attrs} value="${esc(val ?? '')}">`;
     }
-    return `<label for="${fieldId}">${label}</label>${fieldHtml}`;
+    return `<div class="fld" data-fld="${esc(path)}"><label for="${fieldId}">${label}</label>${fieldHtml}${help ? `<div class="fld-help">${help}</div>` : ''}</div>`;
   };
 
   const providersByKind = (kind) => S.providers.filter((p) => p.kind === kind).map((p) => [p.id, p.name]);
@@ -2946,17 +3068,17 @@
     return `<div class="t">
    <div class="row">
     ${F('Function name', `f.${idx}.name`)}
-    ${F('HTTP Method (when server URL is set)', `f.${idx}.method`, 'sel', ['post', 'get'])}
+    ${F('HTTP method', `f.${idx}.method`, 'sel', ['post', 'get'])}
    </div>
-   ${F('Description (shown to LLM)', `f.${idx}.description`)}
+   ${F('When to use it (read by the AI)', `f.${idx}.description`)}
    ${F(
-     `Parameters JSON Schema <span class="${schemaCheck.ok ? 'ok' : 'er'}">(${schemaCheck.ok ? 'valid schema' : esc(schemaCheck.error)})</span>`,
+     `Inputs (JSON Schema) <span class="${schemaCheck.ok ? 'ok' : 'er'}">(${schemaCheck.ok ? 'valid schema' : esc(schemaCheck.error)})</span>`,
      `f.${idx}.params`,
      'ta',
    )}
-   ${F('Server webhook URL (supports {{lead.lead_id}}, {{phone}}, {{caller_code}} & http://YOUR-BRIDGE-HOST)', `f.${idx}.url`)}
-   ${F('Headers JSON object (supports {{CUSTOM_WEBHOOK_SECRET}} &.env placeholders)', `f.${idx}.headers`)}
-   ${F('Hold until turn confirmed (defer_until_eot — recommended for transfers & hang-ups)', `f.${idx}.defer`, 'chk')}
+   ${F('Webhook URL (optional)', `f.${idx}.url`)}
+   ${F('Webhook headers (JSON)', `f.${idx}.headers`)}
+   ${F('Wait until the caller finishes speaking', `f.${idx}.defer`, 'chk')}
    <div class="bar" style="margin-top:8px;margin-bottom:0">
     <span class="note" style="margin:0;margin-right:auto">Immutable ID: <code>${esc(f.id)}</code></span>
     ${f.url && f.url.trim() ? `<button class="g" data-test-wh="${idx}"> Test Webhook</button>` : ''}
@@ -3028,7 +3150,7 @@
 
   function renderPersonaStageHtml(agent) {
     const beh = agent.behavior || {};
-    const bargeModeLbl = beh.bargeIn === 'off' ? 'Barge-In Off' : beh.bargeIn === 'server' ? 'Server VAD Barge-In' : 'Local + server VAD';
+    const bargeModeLbl = beh.bargeIn === 'off' ? 'Interruptions off' : beh.bargeIn === 'server' ? 'Interrupt: Deepgram' : 'Interrupt: fastest';
     return `
    <div class="persona-stage" id="persona-stage">
     <div class="persona-meta">
@@ -5594,73 +5716,66 @@
       m.innerHTML = `
     <div class="card">
      ${renderSelectorBar('a')}
-     ${F('Agent name', 'a.name')}
+     ${F('Bot name', 'a.name')}
      ${renderAgentCampaignAssignment(a)}
-     ${F('Call handling direction', 'a.mode', 'sel', [
+     ${F('Call direction', 'a.mode', 'sel', [
        ['outbound', 'Outbound – VICIdial dials lead, bot engages on answer'],
        ['inbound', 'Inbound – VICIdial In-Group routes caller to bot'],
        ['both', 'Both Outbound & Inbound'],
      ])}
-     ${F('Bridge VICIdial call-connect & automatic lead hydration (recommended — replaces hallucinated LLM accept tool)', 'a.acceptViciCalls', 'chk')}
-     ${F('Include the linked campaign recording notice (optional)', 'a.injectCampaignDisclosure', 'chk')}
-     <div class="note wn">Spoken campaign notice only — does not turn off recording.</div>
-     ${F('Saved opening and identity (keep it brief)', 'a.greeting', 'ta')}
-     ${F('Vary this opening using the imported greeting library', 'a.randomGreetingEnabled', 'chk')}
-     ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
+     ${F('Load lead details from VICIdial when a call connects (recommended)', 'a.acceptViciCalls', 'chk')}
+     ${F('Speak the campaign’s recording notice', 'a.injectCampaignDisclosure', 'chk')}
+     ${F('Opening line', 'a.greeting', 'ta')}
+     ${F('Rotate openings from the greeting library', 'a.randomGreetingEnabled', 'chk')}
+     ${F('Bot instructions (system prompt)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
      <div class="note wn">Verify every factual claim before calling.</div>
 
-     <h2> Barge-In, Expressions, Gestures, Speed &amp; General Q&amp;A</h2>
-     <div class="note">Providers/models are global (Plug-Ins). Behavior below is per-bot.</div>
+     <h2>Interruptions, Noise &amp; Speaking Style</h2>
+     <div class="note">These settings apply to this bot only. Speech and AI providers are shared and set in Plug-Ins.</div>
 
-     <div class="row r3">
-      ${F(' Barge-In Interruption Mode', 'a.behavior.bargeIn', 'sel', [
-        ['instant', 'Local Mic VAD + Deepgram'],
-        ['server', ' Deepgram Server VAD Only'],
-        ['off', ' Disabled (Finish Speaking First)'],
-      ])}
-      ${F('️ Barge-In Sensitivity (%)', 'a.behavior.bargeInSensitivityPct', 'number', [], 'min="0" max="100" step="5"')}
-      ${F(' Streaming Cadence Profile', 'a.behavior.latencyProfile', 'sel', [
-        ['ultra', ' Ultra-Fast Front-Loaded Speech'],
-        ['balanced', '️ Balanced Conversational'],
-        ['quality', ' Detailed Responses'],
-      ])}
-     </div>
-     <div class="row r3">
-      ${F('️ Background Voice Filter (%)', 'a.behavior.backgroundVoiceFilterPct', 'number', [], 'min="0" max="100" step="5"')}
-     </div>
-     <div class="note">Background voice filter: mutes people talking <b>behind</b> the customer (family, TV, coworkers) so the bot only hears the customer. It learns how loud the customer speaks and mutes voices that are clearly quieter. 0% = off; 50% = recommended (mutes voices ~13 dB quieter); 70-80% = stronger for busy homes/offices; 100% = maximum (may clip very soft words). Recordings keep the original audio.</div>
-     <div class="note">Barge-in sensitivity applies to Live Bot <b>and</b> live phone calls. Higher % = the caller interrupts the bot with softer, shorter speech (quiet callers, clean lines). Lower % = the bot keeps talking through background noise, TV or a cough and stops only for clear, sustained speech. 50% is balanced; 80% / 20% equal the old High / Low presets.</div>
      <div class="row">
-      ${F(' Vocal Expression & Persona Tone', 'a.behavior.expressionStyle', 'sel', [
-        ['warm_empathetic', ' Warm, Empathetic & Caring'],
-        ['energetic_upbeat', ' Energetic, Bright & Upbeat'],
-        ['charismatic_closer', ' Confident, Charismatic & Persuasive'],
-        ['calm_concierge', ' Calm, Articulate & Executive'],
+      ${F('Caller can interrupt the bot', 'a.behavior.bargeIn', 'sel', [
+        ['instant', 'Yes — fastest detection'],
+        ['server', 'Yes — Deepgram detection only'],
+        ['off', 'No — bot finishes speaking first'],
       ])}
-      <div style="display:flex;flex-direction:column;justify-content:center;gap:8px;padding-top:16px">
-       ${F(' Enable Natural Vocal Gestures & Micro-Reactions ("Oh, great question!", "Gotcha —")', 'a.behavior.vocalGestures', 'chk')}
-       ${F(' Answer Any General Knowledge, Math, Science & Everyday Questions', 'a.behavior.allowGeneralQa', 'chk')}
-      </div>
+      ${F('Interrupt sensitivity (%)', 'a.behavior.bargeInSensitivityPct', 'number', [], 'min="0" max="100" step="5"')}
      </div>
-     ${F(' Self-Introduction Bio (spoken naturally when asked "Who are you?" or "Introduce yourself")', 'a.behavior.selfIntro', 'ta')}
+     <div class="row">
+      ${F('Background voice filter (%)', 'a.behavior.backgroundVoiceFilterPct', 'number', [], 'min="0" max="100" step="5"')}
+      ${F('Reply length', 'a.behavior.latencyProfile', 'sel', [
+        ['ultra', 'Fast — short replies'],
+        ['balanced', 'Balanced'],
+        ['quality', 'Detailed — longer replies'],
+      ])}
+     </div>
+     ${F('Tone of voice', 'a.behavior.expressionStyle', 'sel', [
+       ['warm_empathetic', 'Warm & caring'],
+       ['energetic_upbeat', 'Energetic & upbeat'],
+       ['charismatic_closer', 'Confident & persuasive'],
+       ['calm_concierge', 'Calm & professional'],
+     ])}
+     ${F('Natural reactions (“Oh, great question!”, “Gotcha”)', 'a.behavior.vocalGestures', 'chk')}
+     ${F('Answer general questions (facts, math, everyday)', 'a.behavior.allowGeneralQa', 'chk')}
+     ${F('Answer to “Who are you?”', 'a.behavior.selfIntro', 'ta')}
 
      <h2>Speech-to-Text (Listen)</h2>
      <div class="note">Global STT: <b>${esc(globalServiceProvider('stt')?.name || 'Not selected')}</b> · <code>${esc(S.services?.stt?.model || 'not selected')}</code> (Plug-Ins)</div>
      <div class="row">
-      ${F('Language / BCP-47 hints', 'a.language')}
-      ${F('Keyterms (comma-separated phrases)', 'a.stt.keyterms')}
+      ${F('Language', 'a.language')}
+      ${F('Words to recognize better', 'a.stt.keyterms')}
      </div>
      <div class="row r3">
-      ${F('eot_threshold (0.5–1.0)', 'a.stt.eot', 'number', [], 'min="0.5" max="1.0" step="0.05"')}
-      ${F('eager_eot (0.3–0.9)', 'a.stt.eager', 'number', [], 'min="0.3" max="0.9" step="0.05"')}
-      ${F('eot_timeout_ms', 'a.stt.eotms', 'number', [], 'min="500" max="15000" step="100"')}
+      ${F('End-of-turn confidence (0.5–1.0)', 'a.stt.eot', 'number', [], 'min="0.5" max="1.0" step="0.05"')}
+      ${F('Early reply start (0.3–0.9)', 'a.stt.eager', 'number', [], 'min="0.3" max="0.9" step="0.05"')}
+      ${F('Max wait after caller stops (ms)', 'a.stt.eotms', 'number', [], 'min="500" max="15000" step="100"')}
      </div>
 
      <h2>Language Model (Think — Deepgram Managed)</h2>
      <div class="note">Global LLM: <b>${esc(globalServiceProvider('llm')?.name || 'Not selected')}</b> · <code>${esc(S.services?.llm?.model || 'not selected')}</code> (Plug-Ins)</div>
      <div class="row">
-      ${F('Temperature (0–2)', 'a.llm.temp', 'number', [], 'min="0" max="2" step="0.05"')}
-      ${F('Reasoning (gpt-5*)', 'a.llm.reasoning', 'sel', ['low', 'medium', 'high'])}
+      ${F('Creativity / temperature (0–2)', 'a.llm.temp', 'number', [], 'min="0" max="2" step="0.05"')}
+      ${F('Reasoning effort (GPT-5 only)', 'a.llm.reasoning', 'sel', ['low', 'medium', 'high'])}
      </div>
 
      <h2>Text-to-Speech (Speak) <a class="g" href="${esc(sectionHref('voice', { agentId: a.id }))}" data-t="voice" style="font-size:11px;padding:3px 8px;text-transform:none"> Open Real Voice Lab →</a></h2>
@@ -5668,20 +5783,20 @@
 
      <h2>Telephony Audio Stream</h2>
      <div class="row">
-      ${F('Input encoding', 'a.audio.inEnc', 'sel', ['linear16', 'mulaw', 'alaw'])}
-      ${F('Input sample rate (Hz)', 'a.audio.inRate', 'sel', [8000, 16000, 24000, 48000])}
+      ${F('Caller audio format', 'a.audio.inEnc', 'sel', ['linear16', 'mulaw', 'alaw'])}
+      ${F('Caller audio rate (Hz)', 'a.audio.inRate', 'sel', [8000, 16000, 24000, 48000])}
      </div>
      <div class="row">
-      ${F('Output encoding', 'a.audio.outEnc', 'sel', ['linear16', 'mulaw', 'alaw'])}
-      ${F('Output sample rate (Hz)', 'a.audio.outRate', 'sel', [8000, 16000, 24000, 48000])}
+      ${F('Bot audio format', 'a.audio.outEnc', 'sel', ['linear16', 'mulaw', 'alaw'])}
+      ${F('Bot audio rate (Hz)', 'a.audio.outRate', 'sel', [8000, 16000, 24000, 48000])}
      </div>
 
-     <h2>Enabled LLM Functions</h2>
+     <h2>Actions this bot can take (functions)</h2>
      ${S.functions
        .map(
          (fn) => `<label class="chk-label">
         <input type="checkbox" style="width:auto" data-fnid="${esc(fn.id)}" ${a.fnIds.includes(fn.id) ? 'checked' : ''}>
-        <span><b>${esc(fn.name)}</b> <span class="note">(${fn.defer ? 'defer_until_eot' : 'immediate'})</span></span>
+        <span><b>${esc(fn.name)}</b> <small>— ${fn.defer ? 'runs after the caller finishes speaking' : 'runs immediately'}</small></span>
        </label>`,
        )
        .join('')}
@@ -5720,42 +5835,41 @@
         m.innerHTML = `
     <div class="card">
      ${renderSelectorBar('c')}
-     ${F('Campaign display name', 'c.name')}
+     ${F('Campaign name', 'c.name')}
      ${renderCampaignAgentAssignment(C())}
      <div class="row">
-      ${F('VICIdial Campaign ID', 'c.viciCampaign')}
-      ${F('VICIdial List IDs', 'c.lists')}
+      ${F('VICIdial campaign ID', 'c.viciCampaign')}
+      ${F('VICIdial list IDs', 'c.lists')}
      </div>
      <div class="row">
-      ${F('Calling window start', 'c.start', 'time')}
-      ${F('Calling window end', 'c.end', 'time')}
+      ${F('Calling hours start', 'c.start', 'time')}
+      ${F('Calling hours end', 'c.end', 'time')}
      </div>
-     ${F('Lead Timezone', 'c.tz')}
-     <div class="row r3">
+     ${F('Lead time zone', 'c.tz')}
+     <div class="row">
       ${F('Max dial attempts', 'c.attempts', 'number', [], 'min="1" max="20" step="1"')}
-      ${F('Retry delay (min)', 'c.retry', 'number', [], 'min="1" step="1"')}
-      ${F('Max concurrent AI calls', 'c.maxCalls', 'number', [], 'min="1" step="1"')}
+      ${F('Retry delay (minutes)', 'c.retry', 'number', [], 'min="1" step="1"')}
      </div>
      <div class="row">
-      ${F('Max call length (seconds, 0 = no limit)', 'c.maxCallSec', 'number', [], 'min="0" max="900" step="5"')}
+      ${F('Max AI calls at once', 'c.maxCalls', 'number', [], 'min="1" step="1"')}
+      ${F('Max call length (seconds)', 'c.maxCallSec', 'number', [], 'min="0" max="900" step="5"')}
      </div>
-     <div class="note">Every call on this campaign is wrapped up and ends by this limit (default 70&nbsp;s). About 20&nbsp;s before the limit the bot is told to transfer now if the caller qualifies, otherwise to close; a call already being transferred is never cut off.</div>
      <div class="row">
-      ${F('Live closer transfer type', 'c.xferType', 'sel', [
-        ['ingroup', 'VICIdial Closer In-Group (preserves screen-pop)'],
-        ['extension', 'Asterisk Extension'],
-        ['number', 'External DID / Number'],
+      ${F('Transfer qualified callers to', 'c.xferType', 'sel', [
+        ['ingroup', 'VICIdial closer in-group'],
+        ['extension', 'Asterisk extension'],
+        ['number', 'Phone number (DID)'],
       ])}
-      ${F('Target In-Group / Exten / DID', 'c.xferTarget')}
+      ${F('Transfer destination', 'c.xferTarget')}
      </div>
-     ${F('Fallback if no live closer available', 'c.fallback')}
-     ${F('Call recording disclosure (auto-prepended to bot greeting when enabled)', 'c.disclosure')}
+     ${F('If the transfer fails', 'c.fallback')}
+     ${F('Recording notice text', 'c.disclosure')}
      <h2>️ Compliance &amp; Rules</h2>
      <div class="note wn">These rules are attached to this campaign and injected into its assigned bot’s live prompt. Write campaign-specific, actionable rules and review all claims with your compliance owner. This console is not legal advice or a compliance certification.</div>
-     ${F('Mandatory campaign-specific rules and prohibited claims (20–8,000 characters)', 'c.complianceRules', 'ta', [], 'style="min-height:180px" maxlength="8000"')}
-     ${F('Allowed VICIdial disposition codes for this campaign (comma-separated)', 'c.dispos')}
+     ${F('Campaign rules the bot must follow (20–8,000 characters)', 'c.complianceRules', 'ta', [], 'style="min-height:180px" maxlength="8000"')}
+     ${F('Allowed call results (disposition codes)', 'c.dispos')}
      <div class="note">These codes control explicit agent disposition requests. Caller silence does not select a code or end the call.</div>
-     ${F('Scrub leads against DNC list before dialing', 'c.dnc', 'chk')}
+     ${F('Add “do not call” callers to the VICIdial DNC list', 'c.dnc', 'chk')}
     </div>
     <div class="card sticky">
      <h2>Campaign Readiness</h2>
@@ -5784,8 +5898,8 @@
         <span class="pill ok">Model: <code>${esc(S.services?.tts?.model || 'not selected')}</code></span>
        </div>
        <div class="row">
-        ${F('Preview speed (0.5–1.5, Speak Text only)', 'a.tts.speed', 'number', [], 'min="0.5" max="1.5" step="0.05"')}
-        ${F('Preview expressivity, Flux v2 (−2..+2, Speak Text only)', 'a.tts.expr', 'sel', [
+        ${F('Preview speed (0.5–1.5)', 'a.tts.speed', 'number', [], 'min="0.5" max="1.5" step="0.05"')}
+        ${F('Preview expressiveness (−2 to +2)', 'a.tts.expr', 'sel', [
           [-2, '-2 (Calmest)'],
           [-1, '-1 (Calm)'],
           [0, '0 (Default)'],
@@ -6288,12 +6402,12 @@
       </div>
       ${
         loopbackBlockers.length
-          ? `<div class="note er" style="margin-top:8px">Selected campaign call test blocked: ${esc(loopbackBlockers.join(' • '))}</div>`
+          ? renderBlockerList('This campaign’s test call is blocked', loopbackBlockers, 'er')
           : '<div class="note ok" style="margin-top:8px">Selected campaign and assigned agent passed call-readiness checks.</div>'
       }
       ${
         deployBlockers.length
-          ? `<div class="note wn" style="margin-top:8px">Release downloads remain blocked until every agent and campaign is ready: ${esc(deployBlockers.join(' • '))}</div>`
+          ? renderBlockerList('Downloads stay locked until every bot and campaign is ready', deployBlockers, 'wn')
           : ''
       }
       <div class="bar" style="margin-top:10px;margin-bottom:0">
@@ -6338,53 +6452,53 @@
      </div>
 
      <h2>VICIdial API Endpoints (Separated Non-Agent vs Agent API)</h2>
-     ${F('VICIdial Server Base URL', 'v.viciBaseUrl')}
+     ${F('VICIdial server URL', 'v.viciBaseUrl')}
      <div class="row">
-      ${F('Non-Agent API Path (lead_all_info, add_dnc_phone, update_lead)', 'v.nonAgentApiPath')}
-      ${F('Agent API Path (ra_call_control closer transfers & hangup)', 'v.agentApiPath')}
+      ${F('Non-agent API path', 'v.nonAgentApiPath')}
+      ${F('Agent API path', 'v.agentApiPath')}
      </div>
      <div class="row">
-      ${F('API User', 'v.apiUser')}
-      ${F('API Source Tag', 'v.source')}
+      ${F('API user', 'v.apiUser')}
+      ${F('API source tag', 'v.source')}
      </div>
 
      <h2>SIP Connection Model (Static Peer, Registration &amp; Hybrid)</h2>
-     ${F('SIP Connection Model', 'v.sipConnectionMode', 'sel', [
+     ${F('How VICIdial connects to the bots', 'v.sipConnectionMode', 'sel', [
        ['static_peer', 'Static SIP Peer — PBX sends calls to this bridge'],
        ['registration', 'SIP Registration — bridge registers to the VICIdial/Asterisk registrar'],
        ['hybrid', 'Hybrid — static peer allowlist plus active SIP registration'],
      ])}
      <div class="row r3">
-      ${F('Registrar Host / IP', 'v.sipRegistrarHost')}
-      ${F('Registrar UDP Port', 'v.sipRegistrarPort', 'number', [], 'min="1" max="65535" step="1"')}
+      ${F('Registrar host / IP', 'v.sipRegistrarHost')}
+      ${F('Registrar port', 'v.sipRegistrarPort', 'number', [], 'min="1" max="65535" step="1"')}
       ${F('SIP Domain (optional)', 'v.sipDomain')}
      </div>
      <div class="row r3">
-      ${F('SIP Username', 'v.sipUsername')}
-      ${F('SIP Authentication Username (optional)', 'v.sipAuthUsername')}
-      ${F('SIP Transport', 'v.sipTransportProtocol', 'sel', [['udp', 'UDP (currently supported)']])}
+      ${F('SIP username', 'v.sipUsername')}
+      ${F('SIP login name (optional)', 'v.sipAuthUsername')}
+      ${F('SIP transport', 'v.sipTransportProtocol', 'sel', [['udp', 'UDP (currently supported)']])}
      </div>
      <div class="note">For Registration or Hybrid, save <code>VICI_SIP_PASSWORD</code> under API Keys. The registrar must accept this account and route its registered Contact to the bridge. Use a public, reachable Bridge Host and restrict SIP/RTP firewall rules to the dialer. <b>Restart the console service after changing the SIP mode, registrar, credentials or Bridge Host</b>; the bridge reads this configuration at startup. Registration is a signaling relationship; it does not replace the VICIdial Remote Agent call-ID/session requirements.</div>
 
      <h2>Telephony Media &amp; Control Transport (Both Listeners Run Simultaneously)</h2>
-     ${F('Primary Dialplan Mode Highlighted in Export', 'v.transport', 'sel', [
+     ${F('Main connection type (dialplan export)', 'v.transport', 'sel', [
        ['sip_trunk', 'SIP + RTP G.711 μ-law Peer (:5062 — Works on ALL ViciBox / Asterisk 13, 16, 18+)'],
        ['audiosocket', 'Asterisk AudioSocket TCP (:9092 — Native Asterisk 18+ / ViciBox 11-12)'],
      ])}
      <div class="row r3">
-      ${F('Bridge Host / IP', 'v.bridgeHost')}
-      ${F('SIP Port (avoid 5060 on ViciBox)', 'v.sipPort', 'number', [], 'min="1" max="65535" step="1"')}
-      ${F('AudioSocket Port', 'v.bridgePort', 'number', [], 'min="1" max="65535" step="1"')}
+      ${F('This server’s address (IP)', 'v.bridgeHost')}
+      ${F('SIP port', 'v.sipPort', 'number', [], 'min="1" max="65535" step="1"')}
+      ${F('AudioSocket port', 'v.bridgePort', 'number', [], 'min="1" max="65535" step="1"')}
      </div>
      <div class="row r3">
-      ${F('AI Extension Prefix', 'v.aiExten')}
-      ${F('Base Remote Agent User', 'v.remoteAgentUser')}
-      ${F('Inbound Drop In-Group', 'v.inIngroup')}
+      ${F('AI extension prefix', 'v.aiExten')}
+      ${F('First remote agent user', 'v.remoteAgentUser')}
+      ${F('Inbound in-group', 'v.inIngroup')}
      </div>
      <div class="row r3">
-      ${F('AMI Host', 'v.amiHost')}
-      ${F('AMI Port', 'v.amiPort', 'number', [], 'min="1" max="65535" step="1"')}
-      ${F('AMI Username', 'v.amiUser')}
+      ${F('AMI host', 'v.amiHost')}
+      ${F('AMI port', 'v.amiPort', 'number', [], 'min="1" max="65535" step="1"')}
+      ${F('AMI username', 'v.amiUser')}
      </div>
      <div class="note">
       Passwords (<code>VICI_API_PASS</code>, <code>AMI_SECRET</code>, <code>DEEPGRAM_API_KEY</code>) live exclusively in the server <code>.env</code> file — click <b> API Keys</b> in the side panel to manage them safely.
