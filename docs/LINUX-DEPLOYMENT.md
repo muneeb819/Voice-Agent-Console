@@ -228,6 +228,9 @@ The installer now also:
 - labels the TLS port `http_port_t` and enables `httpd_can_network_connect` on
   SELinux-enforcing hosts;
 - skips the IPv6 listener on hosts without IPv6;
+- coexists with another web server already on port 80 (Caddy, Apache): it moves
+  only nginx's idle distro default site to `127.0.0.1:8080` (backup in
+  `/etc/nginx/vac-port80-backup/`) and never touches the other server;
 - opens the TLS port in an active `ufw`/`firewalld` (`--no-firewall` to opt
   out). The AWS security group must still allow TCP 533 from your operator IPs.
 

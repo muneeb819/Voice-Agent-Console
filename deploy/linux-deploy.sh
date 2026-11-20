@@ -494,8 +494,32 @@ if ! nginx -t; then
   exit 1
 fi
 [ -n "${REALIP_BACKUP:-}" ] && [ -f "${REALIP_BACKUP:-}" ] && rm -f "$REALIP_BACKUP"
+# Another web server (Caddy, Apache, ...) may already own TCP 80. nginx -t
+# passes, but nginx then fails to start because the distro default site
+# claims *:80 (a server block with no listen line defaults to *:80 too). The
+# console only needs its TLS port, so move just that idle default site to
+# 127.0.0.1:8080, with a backup, and leave the other server untouched.
+port80_owner() {
+  ss -ltnpH 2>/dev/null | awk '$4 ~ /[:.]80$/' | grep -o 'users:(("[^"]*"' | head -1 | sed -e 's/users:(("//' -e 's/"$//' || true
+}
+OWNER80="$(port80_owner)"
+if [ -n "$OWNER80" ] && [ "$OWNER80" != "nginx" ]; then
+  echo "Port 80 is already used by '${OWNER80}'; keeping it and moving nginx's unused default site off :80."
+  if command -v python3 >/dev/null 2>&1; then
+    python3 "$SRC_DIR/deploy/nginx-free-port80.py" /etc/nginx/nginx.conf /etc/nginx/sites-enabled/default
+  else
+    echo "WARNING: python3 not found; edit the default server block in /etc/nginx/nginx.conf to 'listen 127.0.0.1:8080;'." >&2
+  fi
+  nginx -t || { echo "ERROR: nginx -t failed after moving the default site off :80." >&2; exit 1; }
+fi
 systemctl enable nginx
-systemctl reload nginx || systemctl restart nginx
+if ! { systemctl reload nginx 2>/dev/null || systemctl restart nginx; }; then
+  echo "ERROR: nginx failed to start. Most recent errors:" >&2
+  journalctl -u nginx --no-pager -n 30 2>/dev/null | grep -iE 'emerg|error' | tail -5 >&2 || true
+  echo "Ports in use:" >&2
+  ss -ltnp 2>/dev/null | grep -E ":(80|443|${TLS_PORT})\b" >&2 || true
+  exit 1
+fi
 
 # Host firewall (not the cloud security group): open only the TLS port.
 if [ "$OPEN_FIREWALL" = "yes" ]; then
