@@ -1,4 +1,5 @@
 import http from 'http';
+import { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
 import { getAuthenticatedUser, isRequestAuthorized } from './auth-guard';
 import crypto from 'crypto';
 import WebSocket, { WebSocketServer } from 'ws';
@@ -140,6 +141,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
     let detectedDisposition: string | null = null;
     let transferredTo: string | null = null;
     let awaitingHangupAudioDone = false;
+    const callLimitTimers: NodeJS.Timeout[] = [];
     let pendingEndFunctionId: string | null = null;
     let fatalErrorMessage: string | null = null;
     let suppressStaleAgentAudio = false;
@@ -355,6 +357,8 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         clearTimeout(pendingEndTimer);
         pendingEndTimer = null;
       }
+      for (const t of callLimitTimers) clearTimeout(t);
+      callLimitTimers.length = 0;
       if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
       if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
       if (startTimer) { clearTimeout(startTimer); startTimer = null; }
@@ -760,6 +764,32 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
               if (settingsApplied) break;
               settingsApplied = true;
               openingGate?.start();
+              // Same call-length limit as a live VICIdial call, so it can be
+              // tested here (only for the campaign's phone bot).
+              const limitMs = activeCampaign && activeAgent && activeCampaign.agentId === activeAgent.id
+                ? callLimitMsForCampaign(activeCampaign) : 0;
+              if (limitMs > 0) {
+                const plan = callLimitSchedule(limitMs);
+                const t0 = Date.now();
+                const at = (ms: number, fn: () => void) => callLimitTimers.push(setTimeout(fn, Math.max(0, ms - (Date.now() - t0))));
+                at(plan.wrapUpAtMs, () => {
+                  if (closed) return;
+                  const left = Math.round((limitMs - plan.wrapUpAtMs) / 1000);
+                  recordTranscript('system', `Call time limit: ${left}s left, wrap-up instruction sent to the bot`);
+                  if (dgWs && dgWs.readyState === WebSocket.OPEN) dgWs.send(JSON.stringify({ type: 'UpdatePrompt', prompt: callLimitWrapUpPrompt(left) }));
+                });
+                at(plan.closingAtMs, () => {
+                  if (closed || awaitingHangupAudioDone) return;
+                  awaitingHangupAudioDone = true;
+                  recordTranscript('system', 'Call time limit: closing line spoken, ending after it');
+                  if (dgWs && dgWs.readyState === WebSocket.OPEN) dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message: CALL_LIMIT_CLOSING_LINE }));
+                });
+                at(limitMs, () => {
+                  if (closed) return;
+                  recordTranscript('system', `Call time limit of ${Math.round(limitMs / 1000)}s reached, call ended`);
+                  finalizeCall('max_call_duration');
+                });
+              }
               if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
       if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
       if (startTimer) { clearTimeout(startTimer); startTimer = null; }

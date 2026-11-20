@@ -1,9 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.SPEECH_SERVICE_DEFAULT_VOICES = exports.SPEECH_SERVICE_STT_MODELS = exports.MISSING_CAMPAIGN_RULES = exports.VOICE_AGENT_STT_MODELS = void 0;
+exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.DEFAULT_MAX_CALL_SEC = exports.SPEECH_SERVICE_DEFAULT_VOICES = exports.SPEECH_SERVICE_STT_MODELS = exports.MISSING_CAMPAIGN_RULES = exports.VOICE_AGENT_STT_MODELS = void 0;
 exports.defaultVoiceAgentSttModel = defaultVoiceAgentSttModel;
 exports.normalizeVoiceAgentSttModel = normalizeVoiceAgentSttModel;
 exports.defaultSelfIntroForAgent = defaultSelfIntroForAgent;
+exports.normalizeMaxCallSec = normalizeMaxCallSec;
 exports.deepgramModelsForProviderType = deepgramModelsForProviderType;
 exports.createDefaultState = createDefaultState;
 exports.normalizeState = normalizeState;
@@ -72,6 +73,18 @@ const makeProvider = (id, kind, name, type, models, overrides = {}) => ({
     mk: 'model',
     ...overrides,
 });
+/** Default hard call-length limit (seconds). 0 disables; otherwise 30-900. */
+exports.DEFAULT_MAX_CALL_SEC = 70;
+function normalizeMaxCallSec(value) {
+    if (value === undefined || value === null || value === '')
+        return exports.DEFAULT_MAX_CALL_SEC;
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0)
+        return exports.DEFAULT_MAX_CALL_SEC;
+    if (n === 0)
+        return 0;
+    return Math.min(900, Math.max(30, Math.round(n)));
+}
 const makeFn = (id, name, description, params, overrides = {}) => ({
     id,
     name,
@@ -410,6 +423,7 @@ function createDefaultState() {
                 attempts: 3,
                 retry: 120,
                 maxCalls: 10,
+                maxCallSec: 70,
                 xferType: 'ingroup',
                 xferTarget: 'FE_CLOSERS',
                 fallback: 'Dispo CALLBK',
@@ -437,6 +451,7 @@ function createDefaultState() {
                 attempts: 3,
                 retry: 120,
                 maxCalls: 15,
+                maxCallSec: 70,
                 xferType: 'ingroup',
                 xferTarget: 'MED_CLOSERS',
                 fallback: 'Dispo CALLBK',
@@ -464,6 +479,7 @@ function createDefaultState() {
                 attempts: 3,
                 retry: 120,
                 maxCalls: 10,
+                maxCallSec: 70,
                 xferType: 'ingroup',
                 xferTarget: 'CONCIERGE_CLOSERS',
                 fallback: 'Dispo CALLBK',
@@ -494,6 +510,7 @@ function createDefaultState() {
                 "attempts": 3,
                 "retry": 120,
                 "maxCalls": 10,
+                "maxCallSec": 70,
                 "xferType": "ingroup",
                 "xferTarget": "CLOSERS",
                 "fallback": "Dispo CALLBK",
@@ -911,6 +928,7 @@ function normalizeState(raw) {
                 attempts: Math.round(num(c.attempts, 3, 1, 20)),
                 retry: Math.round(num(c.retry, 120, 0, 86400)),
                 maxCalls: Math.round(num(c.maxCalls, 10, 1, 1000)),
+                maxCallSec: normalizeMaxCallSec(c.maxCallSec),
                 xferType: (['ingroup', 'extension', 'number'].includes(c.xferType) ? c.xferType : 'ingroup'),
                 // Transfer routing is campaign-specific; never infer a closer from a campaign name.
                 xferTarget: String(c.xferTarget ?? '').trim(),

@@ -1277,6 +1277,10 @@
           cp.dnc = true;
           mutated = true;
         }
+        if (cp.maxCallSec === undefined || cp.maxCallSec === null || cp.maxCallSec === '') {
+          cp.maxCallSec = 70;
+          mutated = true;
+        }
         const assignment = { agentId: cp.agentId, agentIds: cp.agentIds };
         const valid = new Set((state.agents || []).map((agent) => agent.id));
         const ids = [
@@ -5707,6 +5711,10 @@
       ${F('Max concurrent AI calls', 'c.maxCalls', 'number', [], 'min="1" step="1"')}
      </div>
      <div class="row">
+      ${F('Max call length (seconds, 0 = no limit)', 'c.maxCallSec', 'number', [], 'min="0" max="900" step="5"')}
+     </div>
+     <div class="note">Every call on this campaign is wrapped up and ends by this limit (default 70&nbsp;s). About 20&nbsp;s before the limit the bot is told to transfer now if the caller qualifies, otherwise to close; a call already being transferred is never cut off.</div>
+     <div class="row">
       ${F('Live closer transfer type', 'c.xferType', 'sel', [
         ['ingroup', 'VICIdial Closer In-Group (preserves screen-pop)'],
         ['extension', 'Asterisk Extension'],
@@ -8531,6 +8539,7 @@
           attempts: 3,
           retry: 120,
           maxCalls: 10,
+          maxCallSec: 70,
           xferType: 'ingroup',
           xferTarget: '',
           fallback: '',

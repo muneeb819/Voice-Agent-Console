@@ -21,6 +21,8 @@ import {
 import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCallReadinessBlockers } from './settings-builder';
 import { createConversationMemory } from './persona';
 import { campaignExtension, campaignSlot, primaryCampaignAgent } from './campaign-assignment';
+import { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
+export { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
 import { Agent, Campaign, ConsoleState } from './types';
 import { SipRegistrationClient } from './vici-sip-registration';
 import {
@@ -1186,6 +1188,7 @@ export class VicidialBridgeService {
       hook_type?: string;
     } | null = null;
     let awaitingHangupAfterSpeech = false;
+    const callLimitTimers: NodeJS.Timeout[] = [];
 
     const conversationMemory = createConversationMemory();
     const cancelledFnIds = new Set<string>();
@@ -1324,6 +1327,8 @@ export class VicidialBridgeService {
         deferredActionTimer = null;
       }
       if (speechDrainTimer) { clearTimeout(speechDrainTimer); speechDrainTimer = null; }
+      for (const t of callLimitTimers) clearTimeout(t);
+      callLimitTimers.length = 0;
       openingGate?.cancel();
       openingGate = null;
 
@@ -1407,6 +1412,45 @@ export class VicidialBridgeService {
         status: this.getStatus(),
       });
     };
+
+    // Hard per-call time limit (campaign.maxCallSec, default 70 s) so callers who
+    // stall or play with the bot cannot hold a line and VoIP minutes:
+    //   limit-20s: instruct the bot to transfer now if qualified, otherwise close
+    //   limit-6s : speak a closing line and hang up after it
+    //   limit    : hang up
+    // A transfer that is already underway is never cut off.
+    const callLimitMs = callLimitMsForCampaign(campaign);
+    if (callLimitMs > 0) {
+      const transferUnderway = () => Boolean(pendingTransferArgs || transferCompletion || transferExecuted || transferredTo);
+      const plan = callLimitSchedule(callLimitMs);
+      const elapsed = () => Date.now() - startedAtMs;
+      const at = (ms: number, fn: () => void) => callLimitTimers.push(setTimeout(fn, Math.max(0, ms - elapsed())));
+      at(plan.wrapUpAtMs, () => {
+        if (closed || transferUnderway()) return;
+        addTranscript('system', `Call time limit: ${Math.round((callLimitMs - plan.wrapUpAtMs) / 1000)}s left, wrap-up instruction sent to the bot`);
+        if (dgWs && dgWs.readyState === WebSocket.OPEN) {
+          dgWs.send(JSON.stringify({ type: 'UpdatePrompt', prompt: callLimitWrapUpPrompt(Math.round((callLimitMs - plan.wrapUpAtMs) / 1000)) }));
+        }
+      });
+      at(plan.closingAtMs, () => {
+        if (closed || transferUnderway() || awaitingHangupAfterSpeech) return;
+        awaitingHangupAfterSpeech = true;
+        addTranscript('system', 'Call time limit: closing line spoken, hanging up after it');
+        if (dgWs && dgWs.readyState === WebSocket.OPEN) {
+          dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message: CALL_LIMIT_CLOSING_LINE }));
+        }
+      });
+      at(callLimitMs, () => {
+        if (closed || transferUnderway()) return;
+        addTranscript('system', `Call time limit of ${Math.round(callLimitMs / 1000)}s reached, call ended`);
+        finalizeSession('max_call_duration').catch(() => {});
+      });
+      // Absolute backstop even while a transfer is in flight.
+      at(callLimitMs + 25000, () => {
+        if (closed || transferredTo) return;
+        finalizeSession('max_call_duration').catch(() => {});
+      });
+    }
 
     this.activeSessionClosers.set(callId, finalizeSession);
     this.activeSessionTransferrers.set(callId, async (reason: string) => {

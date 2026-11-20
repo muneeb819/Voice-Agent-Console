@@ -82,6 +82,16 @@ const makeProvider = (
   ...overrides,
 });
 
+/** Default hard call-length limit (seconds). 0 disables; otherwise 30-900. */
+export const DEFAULT_MAX_CALL_SEC = 70;
+export function normalizeMaxCallSec(value: unknown): number {
+  if (value === undefined || value === null || value === '') return DEFAULT_MAX_CALL_SEC;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_MAX_CALL_SEC;
+  if (n === 0) return 0;
+  return Math.min(900, Math.max(30, Math.round(n)));
+}
+
 const makeFn = (
   id: string,
   name: string,
@@ -503,6 +513,7 @@ export function createDefaultState(): ConsoleState {
         attempts: 3,
         retry: 120,
         maxCalls: 10,
+        maxCallSec: 70,
         xferType: 'ingroup',
         xferTarget: 'FE_CLOSERS',
         fallback: 'Dispo CALLBK',
@@ -531,6 +542,7 @@ export function createDefaultState(): ConsoleState {
         attempts: 3,
         retry: 120,
         maxCalls: 15,
+        maxCallSec: 70,
         xferType: 'ingroup',
         xferTarget: 'MED_CLOSERS',
         fallback: 'Dispo CALLBK',
@@ -559,6 +571,7 @@ export function createDefaultState(): ConsoleState {
         attempts: 3,
         retry: 120,
         maxCalls: 10,
+        maxCallSec: 70,
         xferType: 'ingroup',
         xferTarget: 'CONCIERGE_CLOSERS',
         fallback: 'Dispo CALLBK',
@@ -590,6 +603,7 @@ export function createDefaultState(): ConsoleState {
         "attempts": 3,
         "retry": 120,
         "maxCalls": 10,
+        "maxCallSec": 70,
         "xferType": "ingroup",
         "xferTarget": "CLOSERS",
         "fallback": "Dispo CALLBK",
@@ -1030,6 +1044,7 @@ export function normalizeState(raw: any): ConsoleState {
           attempts: Math.round(num(c.attempts, 3, 1, 20)),
           retry: Math.round(num(c.retry, 120, 0, 86400)),
           maxCalls: Math.round(num(c.maxCalls, 10, 1, 1000)),
+          maxCallSec: normalizeMaxCallSec(c.maxCallSec),
           xferType: (['ingroup', 'extension', 'number'].includes(c.xferType) ? c.xferType : 'ingroup') as
             | 'ingroup'
             | 'extension'
