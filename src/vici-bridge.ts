@@ -20,7 +20,7 @@ import {
 } from './g711';
 import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCallReadinessBlockers } from './settings-builder';
 import { createConversationMemory } from './persona';
-import { primaryCampaignAgent } from './campaign-assignment';
+import { campaignExtension, campaignSlot, primaryCampaignAgent } from './campaign-assignment';
 import { Agent, Campaign, ConsoleState } from './types';
 import { SipRegistrationClient } from './vici-sip-registration';
 import {
@@ -100,6 +100,21 @@ export function canonicalUuidToBytes(uuid: string): Buffer {
   return fallback;
 }
 
+/** Optional fixed RTP port range so a cloud firewall can allow exactly it. */
+export function rtpPortRange(env: NodeJS.ProcessEnv = process.env): { min: number; max: number } | null {
+  const min = Number(env.BRIDGE_RTP_PORT_MIN || 0);
+  const max = Number(env.BRIDGE_RTP_PORT_MAX || 0);
+  if (!Number.isInteger(min) || !Number.isInteger(max) || min < 1024 || max > 65535 || max < min) return null;
+  return { min, max };
+}
+
+/** Seconds without inbound RTP before a SIP call is torn down (0 disables). */
+export function rtpInactivityTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.BRIDGE_RTP_TIMEOUT_SEC;
+  const sec = raw === undefined || raw === '' ? 60 : Number(raw);
+  return Number.isFinite(sec) && sec > 0 ? Math.round(sec * 1000) : 0;
+}
+
 export function resolveCampaignAndAgent(
   state: ConsoleState,
   dialedExten: string
@@ -107,9 +122,11 @@ export function resolveCampaignAndAgent(
   const cleanExten = String(dialedExten || '').trim();
   const prefix = String(state.vici.aiExten || '8800').trim();
   const baseRa = Number(state.vici.remoteAgentUser || 9001);
-  const idx = state.campaigns.findIndex((_campaign, i) => cleanExten === `${prefix}${i + 1}`);
-  const safeIndex = idx >= 0 ? idx : 0;
-  const remoteAgentUser = String(Number.isFinite(baseRa) ? baseRa + safeIndex : state.vici.remoteAgentUser || '9001');
+  // Match the campaign's stored slot, never its array position: deleting or
+  // reordering a campaign must not re-route another campaign's live calls.
+  const idx = state.campaigns.findIndex((campaign, i) => cleanExten === campaignExtension(prefix, campaign, i));
+  const slot = idx >= 0 ? campaignSlot(state.campaigns[idx], idx) : 1;
+  const remoteAgentUser = String(Number.isFinite(baseRa) ? baseRa + slot - 1 : state.vici.remoteAgentUser || '9001');
 
   if (idx < 0) {
     return {
@@ -785,12 +802,18 @@ export class VicidialBridgeService {
         const cMatch = /^c=IN IP4\s+([^\r\n\s]+)/m.exec(body);
         const mMatch = /^m=audio\s+(\d+)\s+RTP\/AVP/m.exec(body);
         const rawRemoteRtpIp = cMatch ? cMatch[1].trim() : rinfo.address;
-        const remoteRtpIp = rawRemoteRtpIp.toLowerCase() === 'localhost' ? '127.0.0.1' : rawRemoteRtpIp;
+        let remoteRtpIp = rawRemoteRtpIp.toLowerCase() === 'localhost' ? '127.0.0.1' : rawRemoteRtpIp;
         if (net.isIP(remoteRtpIp) === 0) {
           sendSipResponse('488 Not Acceptable Here', headers, toRaw, [], '', rinfo);
           return;
         }
-        const remoteRtpPort = mMatch ? Number(mMatch[1]) : 0;
+        let remoteRtpPort = mMatch ? Number(mMatch[1]) : 0;
+        // NAT: a PBX behind NAT often advertises its private address in SDP.
+        // The signaling source is already allowlisted, so send media there and
+        // latch onto the real RTP source below (symmetric RTP / comedia).
+        if (!isBridgePeerIpAllowed(remoteRtpIp) && isBridgePeerIpAllowed(rinfo.address)) {
+          remoteRtpIp = rinfo.address;
+        }
 
         if (!Number.isInteger(remoteRtpPort) || remoteRtpPort < 1024 || remoteRtpPort > 65535 || !isBridgePeerIpAllowed(remoteRtpIp)) {
           this.stats.lastError = 'SIP SDP media endpoint is missing or outside the trusted PBX allowlist.';
@@ -800,17 +823,44 @@ export class VicidialBridgeService {
 
         // Bind dedicated UDP RTP socket for this call
         const rtpSocket = dgram.createSocket('udp4');
-        rtpSocket.on('error', () => { try { rtpSocket.close(); } catch {} });
         try {
           await new Promise<void>((resolve, reject) => {
             const onError = (err: Error) => reject(err);
             rtpSocket.once('error', onError);
-            rtpSocket.bind(0, this.host, () => { rtpSocket.removeListener('error', onError); resolve(); });
+            const range = rtpPortRange();
+            if (!range) {
+              rtpSocket.bind(0, this.host, () => { rtpSocket.removeListener('error', onError); resolve(); });
+              return;
+            }
+            // Try the configured range starting at a random offset so
+            // concurrent calls do not all contend for the same first port.
+            const span = range.max - range.min + 1;
+            const start = crypto.randomInt(0, span);
+            let attempt = 0;
+            const tryPort = () => {
+              if (attempt >= span) { onError(new Error('No free RTP port in BRIDGE_RTP_PORT_MIN..MAX')); return; }
+              const port = range.min + ((start + attempt) % span);
+              attempt += 1;
+              const retry = (err: NodeJS.ErrnoException) => {
+                if (err.code === 'EADDRINUSE') tryPort(); else onError(err);
+              };
+              rtpSocket.removeListener('error', onError);
+              rtpSocket.once('error', retry);
+              rtpSocket.bind(port, this.host, () => {
+                rtpSocket.removeListener('error', retry);
+                resolve();
+              });
+            };
+            tryPort();
           });
         } catch {
+          try { rtpSocket.close(); } catch {}
           sendSipResponse('503 Service Unavailable', headers, toRaw, [], '', rinfo);
           return;
         }
+        // Registered only after binding: during a port-range scan an
+        // EADDRINUSE must retry the next port, not close the socket.
+        rtpSocket.on('error', () => { try { rtpSocket.close(); } catch {} });
         // An earlier concurrent INVITE may have won while this socket was binding.
         if (dialogs.has(callId)) { try { rtpSocket.close(); } catch {} return; }
         const localRtpPort = (rtpSocket.address() as net.AddressInfo).port;
@@ -881,9 +931,22 @@ export class VicidialBridgeService {
         let rtpTimestamp = crypto.randomInt(1000, 100000);
         const rtpSsrc = crypto.randomBytes(4).readUInt32BE(0);
         let nextTalkspurtMarker = true;
+        // A lost BYE must not leave a call (and its paid Deepgram session and
+        // maxCalls slot) open forever: end the call when inbound RTP stops.
+        const rtpTimeoutMs = rtpInactivityTimeoutMs();
+        let lastInboundRtpAt = Date.now();
+        let rtpLatched = false;
+        const signalingIp = rinfo.address;
 
         const rtpPacer = setInterval(() => {
           if (rtpClosed) return;
+          if (rtpTimeoutMs && Date.now() - lastInboundRtpAt > rtpTimeoutMs) {
+            this.stats.lastError = `SIP call ${callId} ended: no inbound RTP for ${Math.round(rtpTimeoutMs / 1000)}s`;
+            const dlg = dialogs.get(callId);
+            cleanupRtpAndBye(true);
+            if (dlg) sessionCallbacks.onTransportClosed('rtp_timeout');
+            return;
+          }
           if (txPcmQueue.length === 0) {
             nextTalkspurtMarker = true;
             return;
@@ -962,9 +1025,20 @@ export class VicidialBridgeService {
         });
 
         rtpSocket.on('message', (pktBuf, peer) => {
-          if (rtpClosed || peer.address !== remoteRtpIp || peer.port !== remoteRtpPort) return;
+          if (rtpClosed) return;
+          const fromExpected = peer.address === remoteRtpIp && peer.port === remoteRtpPort;
+          // Symmetric RTP: behind NAT the media source port (and sometimes
+          // address) differs from the SDP. Latch once onto a trusted source.
+          const trustedSource = (peer.address === remoteRtpIp || peer.address === signalingIp) && isBridgePeerIpAllowed(peer.address);
+          if (!fromExpected && (rtpLatched || !trustedSource)) return;
           const parsed = parseRtpPacket(pktBuf);
           if (!parsed) return;
+          if (!fromExpected) {
+            remoteRtpIp = peer.address;
+            remoteRtpPort = peer.port;
+          }
+          rtpLatched = true;
+          lastInboundRtpAt = Date.now();
           if (parsed.payloadType === 0 && parsed.payload.length > 0) {
             sessionCallbacks.onCallerPcm8k(ulawToLinear16(parsed.payload));
           } else if (parsed.payloadType === 101) {

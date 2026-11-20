@@ -206,3 +206,56 @@ docker compose down
 - Keep SIP/RTP ports private and set `BRIDGE_ALLOWED_IPS` explicitly.
 - Terminate TLS with a trusted certificate; replace self-signed defaults.
 - Back up the SQLite database and recordings, and monitor `/api/health`.
+
+## One-command EC2 install (2026-11-20 hardening)
+
+On a fresh Ubuntu 22.04/24.04, Debian 12, RHEL-family or Amazon Linux 2023
+instance the prerequisites step above is now optional:
+
+```bash
+git clone https://github.com/muneeb819/Voice-Agent-Console.git
+cd Voice-Agent-Console
+sudo bash deploy/linux-deploy.sh --ip <EC2_PUBLIC_IP>
+```
+
+The installer now also:
+
+- installs Node.js 22 from NodeSource when Node is missing or older than 22.5
+  (`--no-install-node` to opt out);
+- grants the service only `CAP_NET_BIND_SERVICE` when the loopback app port is
+  below 1024 (default 534). Previously the unprivileged service hit `EACCES`,
+  silently moved to 5534 and nginx answered 502;
+- labels the TLS port `http_port_t` and enables `httpd_can_network_connect` on
+  SELinux-enforcing hosts;
+- skips the IPv6 listener on hosts without IPv6;
+- opens the TLS port in an active `ufw`/`firewalld` (`--no-firewall` to opt
+  out). The AWS security group must still allow TCP 533 from your operator IPs.
+
+In production (`NODE_ENV=production`) the server no longer moves to another
+port when it cannot bind the configured one; it exits with a clear error so
+the reverse proxy and the app never disagree.
+
+## Connecting a remote VICIdial/ViciBox to the EC2 bridge
+
+The bridge listens on loopback by default. For a dialer on another host set in
+`/opt/voice-agent-console/.env`, then `sudo systemctl restart voice-agent-console`:
+
+```bash
+BRIDGE_BIND_HOST=0.0.0.0            # or the instance's private IP
+BRIDGE_ALLOWED_IPS=<VICIDIAL_IP>    # only the dialer(s); never 0.0.0.0/0
+BRIDGE_RTP_PORT_MIN=20000           # fixed RTP range for the security group
+BRIDGE_RTP_PORT_MAX=20199
+BRIDGE_RTP_TIMEOUT_SEC=60           # end calls whose BYE was lost
+```
+
+Set the console's VICIdial **Bridge Host** to the instance's public IP (it is
+written into SIP/SDP). In the security group allow, from the dialer IP only:
+UDP 5062 (SIP), the UDP RTP range above, and TCP 9092 only if you use
+AudioSocket. A dialer behind NAT that advertises a private SDP address is
+handled: media is sent to the SIP source address and latched onto the real RTP
+source port.
+
+Campaign extensions are now stable: each campaign stores a telephone slot, and
+its extension is `aiExten + slot` (Remote Agent User `remoteAgentUser + slot - 1`).
+Existing installations keep their current numbers; deleting or reordering a
+campaign no longer re-routes another campaign's calls.

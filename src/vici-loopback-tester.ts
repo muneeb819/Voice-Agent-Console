@@ -7,6 +7,7 @@ import { getConsoleState, listBridgeCallLogs } from './db';
 import { getSecret } from './env-store';
 import { buildRtpPacket, linear16ToUlaw, parseRtpPacket } from './g711';
 import { canonicalUuidToBytes, VicidialBridgeService } from './vici-bridge';
+import { campaignExtension } from './campaign-assignment';
 
 export type LoopbackScenario =
   | 'qualified_xfer'
@@ -62,7 +63,7 @@ export async function runSimulatedViciBridgeCall(
   const selectedCampaignIndex = stForExten.campaigns.findIndex((campaign) => campaign.id === opts.campaignId);
   if (selectedCampaignIndex < 0) throw new Error('The selected loopback campaign no longer exists. Refresh and choose a campaign.');
   const selectedCampaign = stForExten.campaigns[selectedCampaignIndex];
-  const mappedExten = `${stForExten.vici.aiExten}${selectedCampaignIndex + 1}`;
+  const mappedExten = campaignExtension(stForExten.vici.aiExten, selectedCampaign, selectedCampaignIndex);
   if (opts.exten && String(opts.exten).trim() !== mappedExten) {
     throw new Error('The supplied campaign extension does not match the explicitly selected campaign.');
   }

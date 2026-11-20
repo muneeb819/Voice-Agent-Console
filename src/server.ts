@@ -46,7 +46,8 @@ import {
   listSimulatorCallLogs,
   saveConsoleState,
 } from './db';
-import { createDefaultState } from './defaults';
+import { createDefaultState, normalizeState } from './defaults';
+import { credentialRoutingChanges } from './state-guard';
 import { DATA_DIR } from './data-paths';
 import {
   fetchAllowedSampleAudio,
@@ -910,6 +911,22 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   app.put('/api/state', (req: Request, res: Response) => {
     try {
       const bodyState = req.body?.state ?? req.body;
+      // Only owners/admins may change where stored credentials are sent
+      // (VICIdial/AMI/SIP hosts, provider endpoints, webhook URLs). A legacy
+      // ADMIN_PASSWORD session has no account and is owner-equivalent.
+      const account = getAuthenticatedUser(req);
+      if (account && account.role !== 'owner' && account.role !== 'admin') {
+        const blocked = credentialRoutingChanges(getConsoleState(), normalizeState(bodyState));
+        if (blocked.length) {
+          res.status(403).json({
+            ok: false,
+            code: 'FORBIDDEN',
+            error: `Administrator permission required to change ${blocked.join(', ')}.`,
+            blocked,
+          });
+          return;
+        }
+      }
       const { state, changes, revisionId } = saveConsoleState(bodyState);
       res.json({
         ok: true,
@@ -1738,7 +1755,19 @@ if (require.main === module) {
       // with EACCES. Fall back once to an unprivileged port so `npm start` works
       // for local development; an actually occupied port (EADDRINUSE) still
       // fails fast instead of silently moving.
-      listenWithFallback(initialPort, initialPort > 0 && initialPort < 1024 ? 1 : 0);
+      //
+      // In production (systemd/Docker set NODE_ENV=production) a reverse proxy
+      // is pointed at the configured PORT, so silently moving would turn every
+      // request into a 502. Fail loudly there instead.
+      const allowFallback = process.env.NODE_ENV !== 'production' && process.env.VAC_NO_PORT_FALLBACK !== '1';
+      if (!allowFallback && initialPort > 0 && initialPort < 1024) {
+        server.once('error', (err: NodeJS.ErrnoException) => {
+          if (err.code === 'EACCES') {
+            console.error(`[VoiceAgentConsole] Cannot bind privileged port ${initialPort} (EACCES). Grant CAP_NET_BIND_SERVICE (AmbientCapabilities in the systemd unit) or set PORT>=1024 and point the reverse proxy at it.`);
+          }
+        });
+      }
+      listenWithFallback(initialPort, allowFallback && initialPort > 0 && initialPort < 1024 ? 1 : 0);
     });
 
     let shuttingDown = false;

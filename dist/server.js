@@ -23,6 +23,7 @@ const release_bundle_1 = require("./release-bundle");
 const request_origin_1 = require("./request-origin");
 const db_1 = require("./db");
 const defaults_1 = require("./defaults");
+const state_guard_1 = require("./state-guard");
 const data_paths_1 = require("./data-paths");
 const deepgram_catalog_1 = require("./deepgram-catalog");
 const env_store_1 = require("./env-store");
@@ -773,6 +774,22 @@ function createApp(viciBridge) {
     app.put('/api/state', (req, res) => {
         try {
             const bodyState = req.body?.state ?? req.body;
+            // Only owners/admins may change where stored credentials are sent
+            // (VICIdial/AMI/SIP hosts, provider endpoints, webhook URLs). A legacy
+            // ADMIN_PASSWORD session has no account and is owner-equivalent.
+            const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+            if (account && account.role !== 'owner' && account.role !== 'admin') {
+                const blocked = (0, state_guard_1.credentialRoutingChanges)((0, db_1.getConsoleState)(), (0, defaults_1.normalizeState)(bodyState));
+                if (blocked.length) {
+                    res.status(403).json({
+                        ok: false,
+                        code: 'FORBIDDEN',
+                        error: `Administrator permission required to change ${blocked.join(', ')}.`,
+                        blocked,
+                    });
+                    return;
+                }
+            }
             const { state, changes, revisionId } = (0, db_1.saveConsoleState)(bodyState);
             res.json({
                 ok: true,
@@ -1561,7 +1578,19 @@ if (require.main === module) {
             // with EACCES. Fall back once to an unprivileged port so `npm start` works
             // for local development; an actually occupied port (EADDRINUSE) still
             // fails fast instead of silently moving.
-            listenWithFallback(initialPort, initialPort > 0 && initialPort < 1024 ? 1 : 0);
+            //
+            // In production (systemd/Docker set NODE_ENV=production) a reverse proxy
+            // is pointed at the configured PORT, so silently moving would turn every
+            // request into a 502. Fail loudly there instead.
+            const allowFallback = process.env.NODE_ENV !== 'production' && process.env.VAC_NO_PORT_FALLBACK !== '1';
+            if (!allowFallback && initialPort > 0 && initialPort < 1024) {
+                server.once('error', (err) => {
+                    if (err.code === 'EACCES') {
+                        console.error(`[VoiceAgentConsole] Cannot bind privileged port ${initialPort} (EACCES). Grant CAP_NET_BIND_SERVICE (AmbientCapabilities in the systemd unit) or set PORT>=1024 and point the reverse proxy at it.`);
+                    }
+                });
+            }
+            listenWithFallback(initialPort, allowFallback && initialPort > 0 && initialPort < 1024 ? 1 : 0);
         });
         let shuttingDown = false;
         const shutdown = async (signal) => {

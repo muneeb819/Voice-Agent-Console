@@ -2540,14 +2540,49 @@
     return [...new Set(blockers)];
   }
 
+  // Mirrors src/campaign-assignment.ts assignCampaignSlots: the telephone
+  // extension is aiExten + a stored per-campaign slot, never the list position,
+  // so deleting or reordering a campaign cannot re-route another one's calls.
+  function campaignSlotMap(list) {
+    const valid = (value) => {
+      const n = Number(value);
+      return Number.isInteger(n) && n >= 1 && n <= 9999 ? n : null;
+    };
+    const campaigns = Array.isArray(list) ? list : [];
+    const anyStored = campaigns.some((c) => valid(c && c.slot) !== null);
+    const used = new Set();
+    const slots = campaigns.map((c, idx) => {
+      const wanted = anyStored ? valid(c && c.slot) : idx + 1;
+      if (wanted === null || used.has(wanted)) return null;
+      used.add(wanted);
+      return wanted;
+    });
+    let next = used.size ? Math.max(...used) + 1 : 1;
+    const out = new Map();
+    campaigns.forEach((c, idx) => {
+      let slot = slots[idx];
+      if (slot === null) {
+        while (used.has(next)) next += 1;
+        slot = next;
+        used.add(slot);
+      }
+      out.set(c, slot);
+    });
+    return out;
+  }
+
   function buildViciConfigLocal() {
     const v = S.vici;
+    const slotMap = campaignSlotMap(S.campaigns);
+    const slotOf = (campaign, idx) => slotMap.get(campaign) || idx + 1;
     const selectedCampaign = C();
-    const selectedCampaignIndex = selectedCampaign ? S.campaigns.findIndex((campaign) => campaign.id === selectedCampaign.id) + 1 : 0;
+    const selectedCampaignPos = selectedCampaign ? S.campaigns.findIndex((campaign) => campaign.id === selectedCampaign.id) : -1;
+    const selectedCampaignSlot = selectedCampaign ? slotOf(S.campaigns[selectedCampaignPos], selectedCampaignPos) : 0;
     const selectedRemoteAgentUser = selectedCampaign
-      ? String(Number(v.remoteAgentUser || 9001) + selectedCampaignIndex - 1)
+      ? String(Number(v.remoteAgentUser || 9001) + selectedCampaignSlot - 1)
       : v.remoteAgentUser;
-    const selectedCampaignExten = selectedCampaign ? `${v.aiExten}${selectedCampaignIndex}` : '';
+    const selectedCampaignExten = selectedCampaign ? `${v.aiExten}${selectedCampaignSlot}` : '';
+    const firstCampaignExten = S.campaigns.length ? `${v.aiExten}${slotOf(S.campaigns[0], 0)}` : `${v.aiExten}1`;
     const nonAgentUrl = `${v.viciBaseUrl}${v.nonAgentApiPath}`;
     const agentApiUrl = `${v.viciBaseUrl}${v.agentApiPath}`;
     const campaignBlock = S.campaigns
@@ -2556,17 +2591,18 @@
         const pool = campaignAgentIds(c)
           .map((id) => S.agents.find((a) => a.id === id)?.name || id)
           .join(', ');
-        const ext = `${v.aiExten}${idx + 1}`;
+        const slot = slotOf(c, idx);
+        const ext = `${v.aiExten}${slot}`;
         const xfer =
           c.xferType === 'ingroup'
             ? `Agent API ra_call_control (stage=INGROUPTRANSFER, ingroup_choices=${c.xferTarget}) -> preserves closer screen-pop`
             : `Agent API ra_call_control (stage=EXTENSIONTRANSFER, consultative=NO, exten=${c.xferTarget})`;
         return [
-          `; [Campaign ${idx + 1}: ${c.name}]`,
+          `; [Campaign slot ${slot}: ${c.name}]`,
           `;  VICIdial Campaign ID: ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCalls}`,
           `;  Assigned Bot Pool: ${pool || '(missing)'}`,
           `;  Telephone Persona: ${ag ? ag.name : '(missing)'} (${ag?.mode || 'outbound'}); browser tests may select any assigned bot`,
-          `;  Remote Agent Exten: ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + idx})`,
+          `;  Remote Agent Exten: ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + slot - 1})`,
           `;  Live Closer Transfer: ${xfer}`,
           `;  Allowed Dispositions: ${c.dispos}`,
           `;  Campaign Rules: ${String(c.complianceRules || '').trim() ? `${String(c.complianceRules).trim().length} characters; injected into the assigned bot prompt` : 'MISSING — deployment blocked'}`,
@@ -2632,7 +2668,7 @@
         ? `; 3. Inbound Groups -> Configure approved ${selectedCampaign.xferType === 'ingroup' ? 'Closer In-Group' : 'transfer target'} "${selectedCampaign.xferTarget || '(unset in selected campaign)'}" for VICIdial campaign "${selectedCampaign.viciCampaign || selectedCampaign.name}".`
         : `; 3. Configure an explicit, approved transfer target for each campaign; none is selected.`,
 
-      `; 4. Inbound Routing -> Point "${v.inIngroup}" Drop/No-Agent Action -> EXTENSION ${v.aiExten}1`,
+      `; 4. Inbound Routing -> Point "${v.inIngroup}" Drop/No-Agent Action -> EXTENSION ${firstCampaignExten}`,
       ``,
       dialplan,
       ``,
@@ -8495,6 +8531,8 @@
         clone.id = uid('cp');
         clone.name = `${currentObj.name} (Copy)`;
         Object.assign(clone, { agentId: '', agentIds: [], viciCampaign: '', xferTarget: '', fallback: '' });
+        // A copy needs its own telephone slot; the server assigns the next free one.
+        delete clone.slot;
         arr.push(clone);
         cur.c = clone.id;
         render();
