@@ -59,6 +59,7 @@ const settings_builder_1 = require("./settings-builder");
 const persona_1 = require("./persona");
 const campaign_assignment_1 = require("./campaign-assignment");
 const barge_in_1 = require("./barge-in");
+const voice_isolation_1 = require("./voice-isolation");
 const call_limit_1 = require("./call-limit");
 var call_limit_2 = require("./call-limit");
 Object.defineProperty(exports, "CALL_LIMIT_CLOSING_LINE", { enumerable: true, get: function () { return call_limit_2.CALL_LIMIT_CLOSING_LINE; } });
@@ -1063,6 +1064,8 @@ class VicidialBridgeService {
         let performBargeInFlush = () => { };
         const bargeInGate = new barge_in_1.BargeInGate((0, barge_in_1.normalizeBargeInPct)(agent.behavior?.bargeInSensitivityPct, agent.behavior?.bargeInSensitivity), () => { if (!closed && agent.behavior?.bargeIn !== 'off')
             performBargeInFlush(); });
+        // Mutes quieter background voices (people near the customer) before STT.
+        const voiceFilter = new voice_isolation_1.BackgroundVoiceFilter(Number(agent.behavior?.backgroundVoiceFilterPct) || 0, 8000);
         let turns = 0;
         let lastUserTurnTs = null;
         let awaitingFirstAudioForTurn = false;
@@ -1800,11 +1803,12 @@ class VicidialBridgeService {
             void finalizeSession('bridge_session_error').catch(() => { });
         });
         return {
-            onCallerPcm8k: (pcm8k) => {
-                if (closed || pcm8k.length === 0)
+            onCallerPcm8k: (rawPcm8k) => {
+                if (closed || rawPcm8k.length === 0)
                     return;
                 lastCallerAudioAt = Date.now();
-                recorder.recordCallerPcm8k(pcm8k);
+                recorder.recordCallerPcm8k(rawPcm8k); // recording keeps the untouched audio
+                const pcm8k = voiceFilter.process(rawPcm8k);
                 bargeInGate.onCallerAudio(pcm8k);
                 if (!settingsApplied) {
                     if (preSettingsAudioQueue.length < 40) {

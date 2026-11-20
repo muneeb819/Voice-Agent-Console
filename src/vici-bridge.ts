@@ -22,6 +22,7 @@ import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCall
 import { createConversationMemory } from './persona';
 import { campaignExtension, campaignSlot, primaryCampaignAgent } from './campaign-assignment';
 import { BargeInGate, normalizeBargeInPct } from './barge-in';
+import { BackgroundVoiceFilter } from './voice-isolation';
 import { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
 export { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
 import { Agent, Campaign, ConsoleState } from './types';
@@ -1176,6 +1177,8 @@ export class VicidialBridgeService {
       normalizeBargeInPct(agent.behavior?.bargeInSensitivityPct, agent.behavior?.bargeInSensitivity),
       () => { if (!closed && agent.behavior?.bargeIn !== 'off') performBargeInFlush(); },
     );
+    // Mutes quieter background voices (people near the customer) before STT.
+    const voiceFilter = new BackgroundVoiceFilter(Number(agent.behavior?.backgroundVoiceFilterPct) || 0, 8000);
     let turns = 0;
     let lastUserTurnTs: number | null = null;
     let awaitingFirstAudioForTurn = false;
@@ -1943,10 +1946,11 @@ export class VicidialBridgeService {
     });
 
     return {
-      onCallerPcm8k: (pcm8k: Buffer) => {
-        if (closed || pcm8k.length === 0) return;
+      onCallerPcm8k: (rawPcm8k: Buffer) => {
+        if (closed || rawPcm8k.length === 0) return;
         lastCallerAudioAt = Date.now();
-        recorder.recordCallerPcm8k(pcm8k);
+        recorder.recordCallerPcm8k(rawPcm8k); // recording keeps the untouched audio
+        const pcm8k = voiceFilter.process(rawPcm8k);
         bargeInGate.onCallerAudio(pcm8k);
         if (!settingsApplied) {
           if (preSettingsAudioQueue.length < 40) {

@@ -15,6 +15,7 @@ exports.SENTINEL_QA_AGENT = {
         "bargeIn": "instant",
         "bargeInSensitivity": "balanced",
         "bargeInSensitivityPct": 50,
+        "backgroundVoiceFilterPct": 0,
         "latencyProfile": "balanced",
         "expressionStyle": "calm_concierge",
         "vocalGestures": false,
