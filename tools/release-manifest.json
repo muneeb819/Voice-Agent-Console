@@ -234,6 +234,7 @@
   "start.sh",
   "tests/account-lifecycle-verify.ts",
   "tests/backend-audit-verify.ts",
+  "tests/bot-functions-verify.ts",
   "tests/bridge-opening-verify.ts",
   "tests/greetings-verify.ts",
   "tests/hardening-verify.ts",

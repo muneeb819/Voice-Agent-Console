@@ -40,6 +40,28 @@
     ];
   }
 
+  // Universal hang-up policy. The telephone line never ends by itself: if the
+  // model says goodbye without calling end_call, the caller is left on an open
+  // line. Applies to every bot that has the end_call tool, whatever its own
+  // prompt covers.
+  function callEndingLines() {
+    return [
+      '',
+      '=== CALL ENDING (MANDATORY WHEN THE end_call TOOL IS AVAILABLE) ===',
+      '- The line never hangs up by itself. Saying goodbye is not enough: you must call the end_call tool, or the caller is left on an open line.',
+      '- Say one short, polite closing sentence, then call end_call in the same turn when ANY of these happens:',
+      '  1. The caller says goodbye, bye, "I have to go", or asks you to hang up or end the call.',
+      '  2. The caller is not interested, says stop, or asks not to be called again.',
+      '  3. Wrong person or wrong number, or the person you need is not available.',
+      '  4. You reach a voicemail greeting, answering machine, or automated system.',
+      '  5. The caller is disqualified under the campaign rules.',
+      '  6. The conversation is complete and the caller needs nothing else.',
+      '- If set_disposition is available, record the matching allowed disposition first (for example NI for not interested, DNC for do-not-call, NA for voicemail or no answer), then call end_call.',
+      '- Never call end_call after transfer_to_live_agent succeeded; the transfer releases you automatically.',
+      '- Silence alone never ends the call.',
+    ];
+  }
+
   function composeBehavioralPrompt(agent, campaign) {
     const basePrompt = String((agent && agent.prompt) || '').trim();
     const b = agent && agent.behavior;
@@ -110,6 +132,7 @@
       }
     }
 
+    lines.push(...callEndingLines());
     lines.push(...conversationIntegrityLines());
     const suffix = lines.join('\n').trim();
     if (!suffix) return basePrompt;
@@ -415,6 +438,7 @@
   return {
     composeBehavioralPrompt,
     conversationIntegrityLines,
+    callEndingLines,
     migrateLegacyQualificationPrompt,
     migrateLegacyCampaignRules,
     defaultSelfIntro,
