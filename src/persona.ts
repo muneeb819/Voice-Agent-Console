@@ -12,6 +12,7 @@ interface ConversationMemory {
 interface PersonaApi {
   composeBehavioralPrompt(agent: any, campaign?: any): string;
   conversationIntegrityLines(): string[];
+  callEndingLines(): string[];
   migrateLegacyQualificationPrompt(value: string, currentStock: string): string;
   migrateLegacyCampaignRules(value: string, currentStock: string, campaignId: string): string;
   defaultSelfIntro(id: string, name: string): string;
@@ -27,6 +28,7 @@ const api: PersonaApi = require('../public/persona.js');
 export const {
   composeBehavioralPrompt,
   conversationIntegrityLines,
+  callEndingLines,
   migrateLegacyQualificationPrompt,
   migrateLegacyCampaignRules,
   defaultSelfIntro,
