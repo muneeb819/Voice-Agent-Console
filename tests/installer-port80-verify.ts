@@ -86,6 +86,17 @@ run(keep);
 assert.equal(fs.readFileSync(keep, 'utf8'), before, 'servers that also listen elsewhere (443, the console on 533) are never touched');
 console.log('✓ Console (:533) and real sites (80+443) are left untouched');
 
+const vhost = write('vhost.conf', `server {
+    listen 80;
+    server_name shop.example.com;
+    root /var/www/shop;
+}
+`);
+const vhostBefore = fs.readFileSync(vhost, 'utf8');
+run(vhost);
+assert.equal(fs.readFileSync(vhost, 'utf8'), vhostBefore, 'a real HTTP-only virtual host is never moved');
+console.log('✓ Real HTTP-only virtual hosts are left untouched (only the distro default site moves)');
+
 const snapshot = fs.readFileSync(al2023Plain, 'utf8');
 run(al2023Plain);
 assert.equal(fs.readFileSync(al2023Plain, 'utf8'), snapshot, 'second run is a no-op');

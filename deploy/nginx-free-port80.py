@@ -60,6 +60,18 @@ def listen_port(spec):
     return int(tail) if tail.isdigit() else 80
 
 
+SERVER_NAME_RE = re.compile(r'^\s*server_name\s+([^;]*);', re.M)
+
+
+def is_distro_default(clean, specs):
+    """True only for the placeholder site distros ship: a default_server
+    listen, or a catch-all/absent server_name (`_`, `localhost`, empty)."""
+    if any('default_server' in spec.split() for spec in specs):
+        return True
+    names = [n for m in SERVER_NAME_RE.finditer(clean) for n in m.group(1).split()]
+    return all(n in ('_', 'localhost', '""', "''") for n in names)
+
+
 def rewrite_block(block):
     """Return the rewritten block, or None if it must not be touched."""
     clean = strip_comments(block)
@@ -67,6 +79,8 @@ def rewrite_block(block):
     ports = {listen_port(s) for s in specs}
     if specs and ports != {80}:
         return None  # listens elsewhere too (e.g. 443 or 533): not the idle default site
+    if not is_distro_default(clean, specs):
+        return None  # a real virtual host: never move it, even if it is HTTP-only
     lines = block.split('\n')
     out, replaced = [], False
     for line in lines:
