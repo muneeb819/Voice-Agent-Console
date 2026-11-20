@@ -398,6 +398,7 @@ function createDefaultState() {
             {
                 id: 'c1',
                 name: 'FE Fronter – Test',
+                slot: 1,
                 agentId: 'a1',
                 agentIds: ['a1', 'a_qa'],
                 viciCampaign: 'FETEST',
@@ -424,6 +425,7 @@ function createDefaultState() {
             {
                 id: 'c_medicare',
                 name: 'Medicare — Food & OTC Outbound',
+                slot: 2,
                 agentId: 'a_medicare',
                 agentIds: ['a_medicare', 'a_qa'],
                 viciCampaign: 'MEDICARE',
@@ -450,6 +452,7 @@ function createDefaultState() {
             {
                 id: 'c_nova',
                 name: 'Nova — Live Concierge & General Q&A',
+                slot: 3,
                 agentId: 'a_nova',
                 agentIds: ['a_nova', 'a_qa'],
                 viciCampaign: 'NOVACONC',
@@ -476,6 +479,7 @@ function createDefaultState() {
             {
                 "id": "c_builtin",
                 "name": "Build-In Bot – Default Campaign",
+                slot: 4,
                 "agentId": "a_builtin",
                 "agentIds": [
                     "a_builtin",
@@ -895,6 +899,7 @@ function normalizeState(raw) {
             return {
                 id: String(c.id || `c_${idx + 1}`),
                 name: cName,
+                slot: Number(c.slot),
                 // Missing assignments stay missing. Never silently attach a campaign to the first bot.
                 ...(0, campaign_assignment_1.normalizeCampaignAgents)(c, new Set((src.agents || []).map((a) => String(a?.id || '')))),
                 viciCampaign: String(c.viciCampaign ?? '').trim(),
@@ -989,8 +994,7 @@ function normalizeState(raw) {
     }
     const uniqueAgents = dedupe(agents);
     const agentIds = new Set(uniqueAgents.map((a) => a.id));
-    const uniqueCampaigns = dedupe(campaigns).map((c) => ({ ...c, ...(0, campaign_assignment_1.normalizeCampaignAgents)(c, agentIds) }));
-    const campaignIds = new Set(uniqueCampaigns.map((c) => c.id));
+    const uniqueCampaigns = (0, campaign_assignment_1.assignCampaignSlots)(dedupe(campaigns).map((c) => ({ ...c, ...(0, campaign_assignment_1.normalizeCampaignAgents)(c, agentIds) })));
     const uniqueFunctions = dedupe(functions);
     const functionIds = new Set(uniqueFunctions.map((f) => f.id));
     for (const agent of uniqueAgents)
@@ -999,7 +1003,6 @@ function normalizeState(raw) {
     for (const [aid, list] of Object.entries(tests))
         if (agentIds.has(aid))
             cleanTests[aid] = dedupe(list);
-    void campaignIds;
     return {
         version: 5,
         updatedAt: new Date().toISOString(),

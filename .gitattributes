@@ -1,2 +1,7 @@
 # Preserve the supplied CSV byte-for-byte, including its original CRLF line endings.
 datasets/Greetings-Dataset.csv -text whitespace=cr-at-eol
+# Shell scripts and the systemd unit run on Linux: never check them out with CRLF
+# (a Windows checkout would otherwise fail on EC2 with "$'\r': command not found").
+*.sh text eol=lf
+*.service text eol=lf
+Dockerfile text eol=lf

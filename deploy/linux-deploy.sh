@@ -26,6 +26,8 @@ SELF_SIGNED="yes"
 CERT_FILE=""
 KEY_FILE=""
 REAL_IP_FROM=()
+INSTALL_NODE="yes"
+OPEN_FIREWALL="yes"
 
 usage() {
   cat <<'USAGE'
@@ -48,6 +50,12 @@ Usage: sudo bash deploy/linux-deploy.sh --host <address> [options]
   --install-dir <dir>  Install root (default /opt/voice-agent-console).
   --cert <path>        Use an existing certificate instead of self-signed.
   --key <path>         Matching private key (required with --cert).
+  --no-install-node    Do not install Node.js 22 automatically when it is
+                       missing or older than 22.5 (default: install it from
+                       NodeSource on apt/dnf/yum hosts).
+  --no-firewall        Do not open the TLS port in an active host firewall
+                       (ufw or firewalld). Cloud security groups are never
+                       changed either way.
 
 Notes
   * Without --cert/--key this script creates a self-signed certificate, so
@@ -72,6 +80,8 @@ while [ $# -gt 0 ]; do
     --install-dir) INSTALL_DIR="${2:-}"; shift 2 ;;
     --cert) CERT_FILE="${2:-}"; SELF_SIGNED="no"; shift 2 ;;
     --key) KEY_FILE="${2:-}"; shift 2 ;;
+    --no-install-node) INSTALL_NODE="no"; shift ;;
+    --no-firewall) OPEN_FIREWALL="no"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
   esac
@@ -164,15 +174,36 @@ valid_cidr() {
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "=== [1/7] Checking prerequisites ==="
+node_ok() {
+  command -v node >/dev/null 2>&1 && \
+    node -e 'const [M,m]=process.versions.node.split(".").map(Number); process.exit(M>22||(M===22&&m>=5)?0:1)' 2>/dev/null
+}
+# A fresh EC2/VM has no Node.js; install Node 22 LTS from NodeSource so the
+# documented "clone + run this script" path works end to end.
+if ! node_ok && [ "$INSTALL_NODE" = "yes" ]; then
+  echo "Node.js 22.5+ not found; installing Node.js 22 from NodeSource..."
+  command -v curl >/dev/null 2>&1 || {
+    if command -v apt-get >/dev/null 2>&1; then apt-get update -qq && apt-get install -y curl ca-certificates;
+    elif command -v dnf >/dev/null 2>&1; then dnf install -y curl ca-certificates;
+    else yum install -y curl ca-certificates; fi; }
+  if command -v apt-get >/dev/null 2>&1; then
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs
+  elif command -v dnf >/dev/null 2>&1; then
+    curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - && dnf install -y nodejs
+  elif command -v yum >/dev/null 2>&1; then
+    curl -fsSL https://rpm.nodesource.com/setup_22.x | bash - && yum install -y nodejs
+  fi
+  hash -r
+fi
 if ! command -v node >/dev/null 2>&1; then
   echo "ERROR: Node.js 22.5+ is required (node:sqlite). Install it first:" >&2
   echo "  Debian/Ubuntu: curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs" >&2
-  echo "  RHEL/Amazon Linux 2023: sudo dnf install -y nodejs22   (or NodeSource setup_22.x)" >&2
+  echo "  RHEL/Amazon Linux 2023: curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - && sudo dnf install -y nodejs" >&2
   exit 1
 fi
 NODE_VERSION="$(node -p 'process.versions.node')"
-node -e 'const [M,m]=process.versions.node.split(".").map(Number); process.exit(M>22||(M===22&&m>=5)?0:1)' || {
-  echo "ERROR: Node ${NODE_VERSION} is too old; 22.5+ is required." >&2; exit 1; }
+node_ok || {
+  echo "ERROR: Node ${NODE_VERSION} is too old; 22.5+ is required (re-run without --no-install-node to upgrade)." >&2; exit 1; }
 echo "Node ${NODE_VERSION} OK"
 
 if ! command -v nginx >/dev/null 2>&1 || ! command -v openssl >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
@@ -271,7 +302,35 @@ if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
     echo "WARNING: could not label ${CERT_DIR} cert_t; nginx may fail to read the key under SELinux." >&2
 fi
 
+# SELinux (RHEL/Rocky/Alma enforcing): nginx may only bind labelled HTTP ports
+# and may not open upstream connections unless httpd_can_network_connect is on.
+# Without this, nginx -t passes but nginx fails to start or returns 502.
+if command -v selinuxenabled >/dev/null 2>&1 && selinuxenabled; then
+  if command -v setsebool >/dev/null 2>&1; then
+    setsebool -P httpd_can_network_connect 1 2>/dev/null || \
+      echo "WARNING: could not enable httpd_can_network_connect; nginx may return 502." >&2
+  fi
+  if ! command -v semanage >/dev/null 2>&1; then
+    (dnf install -y policycoreutils-python-utils || yum install -y policycoreutils-python-utils) >/dev/null 2>&1 || true
+  fi
+  if command -v semanage >/dev/null 2>&1; then
+    semanage port -a -t http_port_t -p tcp "$TLS_PORT" 2>/dev/null || \
+      semanage port -m -t http_port_t -p tcp "$TLS_PORT" 2>/dev/null || true
+  else
+    echo "WARNING: semanage unavailable; label TCP ${TLS_PORT} as http_port_t manually." >&2
+  fi
+fi
+
 echo "=== [5/7] Installing systemd service ==="
+# The service runs as an unprivileged user. A loopback APP_PORT below 1024
+# (default 534) needs CAP_NET_BIND_SERVICE, or Node gets EACCES and nginx
+# returns 502 for every request. Grant only that capability, only when needed.
+if [ "$APP_PORT" -lt 1024 ]; then
+  CAP_LINES="AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE"
+else
+  CAP_LINES="CapabilityBoundingSet="
+fi
 cat > /etc/systemd/system/voice-agent-console.service <<UNIT
 [Unit]
 Description=Voice Agent Console (loopback HTTP behind nginx TLS)
@@ -300,7 +359,7 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
-CapabilityBoundingSet=
+${CAP_LINES}
 StandardOutput=journal
 StandardError=journal
 
@@ -320,11 +379,26 @@ if [ "$PUBLIC_PORT" = "443" ]; then
 else
   FORWARDED_HOST="\$host:${PUBLIC_PORT}"
 fi
+# Only listen on IPv6 when the kernel supports it; "listen [::]:PORT" makes
+# nginx -t fail with "Address family not supported" on IPv6-disabled hosts.
+if [ -f /proc/net/if_inet6 ]; then
+  LISTEN_V6="    listen [::]:${TLS_PORT} ssl;"
+else
+  LISTEN_V6="    # IPv6 is disabled on this host; IPv4 listener only."
+  # The distro default site ships "listen [::]:80", which fails the same way
+  # and would block nginx -t. Disable only those lines, keeping a backup.
+  DEFAULT_SITE=/etc/nginx/sites-enabled/default
+  if [ -f "$DEFAULT_SITE" ] && grep -qE '^[[:space:]]*listen[[:space:]]+\[::\]' "$DEFAULT_SITE"; then
+    cp -p "$DEFAULT_SITE" "/etc/nginx/default-site.vac-ipv6.bak"
+    sed -i -E 's/^([[:space:]]*)(listen[[:space:]]+\[::\])/\1# (IPv6 disabled) \2/' "$DEFAULT_SITE"
+    echo "IPv6 is disabled: commented out IPv6 listeners in ${DEFAULT_SITE} (backup in /etc/nginx/default-site.vac-ipv6.bak)."
+  fi
+fi
 cat > /etc/nginx/conf.d/voice-agent-console.conf <<NGINX
 # Voice Agent Console — TLS termination for the loopback Node server.
 server {
     listen ${TLS_PORT} ssl;
-    listen [::]:${TLS_PORT} ssl;
+${LISTEN_V6}
     server_name ${PUBLIC_IP};
 
     ssl_certificate     ${TLS_CRT};
@@ -423,8 +497,23 @@ fi
 systemctl enable nginx
 systemctl reload nginx || systemctl restart nginx
 
+# Host firewall (not the cloud security group): open only the TLS port.
+if [ "$OPEN_FIREWALL" = "yes" ]; then
+  if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+    ufw allow "${TLS_PORT}/tcp" >/dev/null && echo "ufw: allowed ${TLS_PORT}/tcp"
+  elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+    firewall-cmd --permanent --add-port="${TLS_PORT}/tcp" >/dev/null && firewall-cmd --reload >/dev/null && \
+      echo "firewalld: allowed ${TLS_PORT}/tcp"
+  fi
+fi
+
 echo "=== [7/7] Verifying ==="
-sleep 3
+# A small instance can need more than a few seconds for the first start
+# (SQLite seed + greeting import); poll instead of a fixed sleep.
+for _ in $(seq 1 30); do
+  curl -fsS --max-time 2 "http://127.0.0.1:${APP_PORT}/api/health" >/dev/null 2>&1 && break
+  sleep 1
+done
 if ! systemctl is-active --quiet voice-agent-console.service; then
   echo "ERROR: service is not running. See: journalctl -u voice-agent-console.service -n 80" >&2
   exit 1

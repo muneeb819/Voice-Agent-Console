@@ -62,6 +62,7 @@ voice-agent-console/
 │   ├── step2-verify.ts           # Simulator WS, comfort silence & optional live Deepgram
 │   ├── step3-verify.ts           # G.711/RTP, mock bridge, AMI & Vici APIs
 │   └── step4-verify.ts           # Auth, guards, recordings, webhooks & mock Medicare scenarios
+│   └── hardening-verify.ts       # Stable campaign slots, credential-routing RBAC, RTP watchdog/NAT/port range
 ├── docs/
 │   ├── AUDIT-REPORT.md           # Original architectural & protocol audit report
 │   └── MEDICARE-BOT-TRAINING-BLUEPRINT.md # Full Medicare Food & OTC Lead Qualification Bot script & gate rules

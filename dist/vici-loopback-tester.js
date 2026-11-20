@@ -46,6 +46,7 @@ const db_1 = require("./db");
 const env_store_1 = require("./env-store");
 const g711_1 = require("./g711");
 const vici_bridge_1 = require("./vici-bridge");
+const campaign_assignment_1 = require("./campaign-assignment");
 async function synthesizeCallerVoice8kPcm(text, isSpanish = false) {
     const apiKey = (0, env_store_1.getSecret)('DEEPGRAM_API_KEY');
     if (!apiKey) {
@@ -78,7 +79,7 @@ async function runSimulatedViciBridgeCall(bridge, opts) {
     if (selectedCampaignIndex < 0)
         throw new Error('The selected loopback campaign no longer exists. Refresh and choose a campaign.');
     const selectedCampaign = stForExten.campaigns[selectedCampaignIndex];
-    const mappedExten = `${stForExten.vici.aiExten}${selectedCampaignIndex + 1}`;
+    const mappedExten = (0, campaign_assignment_1.campaignExtension)(stForExten.vici.aiExten, selectedCampaign, selectedCampaignIndex);
     if (opts.exten && String(opts.exten).trim() !== mappedExten) {
         throw new Error('The supplied campaign extension does not match the explicitly selected campaign.');
     }

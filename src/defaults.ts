@@ -1,7 +1,7 @@
 import { Agent,  AgentBehavior, AgentFunction, Campaign, ConsoleState, Provider } from './types';
 import { migrateStockMedicarePrompt, migrateStockOpening } from './opening';
 import { migrateLegacyQualificationPrompt, migrateLegacyCampaignRules, defaultSelfIntro, migrateLegacySelfIntro } from './persona';
-import { normalizeCampaignAgents } from './campaign-assignment';
+import { assignCampaignSlots, normalizeCampaignAgents } from './campaign-assignment';
 import { SENTINEL_QA_AGENT, SENTINEL_QA_TESTS } from './sentinel-qa';
 
 // SIP configuration is interpolated into raw UDP headers, so never let control
@@ -491,6 +491,7 @@ export function createDefaultState(): ConsoleState {
       {
         id: 'c1',
         name: 'FE Fronter – Test',
+        slot: 1,
         agentId: 'a1',
         agentIds: ['a1', 'a_qa'],
         viciCampaign: 'FETEST',
@@ -518,6 +519,7 @@ export function createDefaultState(): ConsoleState {
       {
         id: 'c_medicare',
         name: 'Medicare — Food & OTC Outbound',
+        slot: 2,
         agentId: 'a_medicare',
         agentIds: ['a_medicare', 'a_qa'],
         viciCampaign: 'MEDICARE',
@@ -545,6 +547,7 @@ export function createDefaultState(): ConsoleState {
       {
         id: 'c_nova',
         name: 'Nova — Live Concierge & General Q&A',
+        slot: 3,
         agentId: 'a_nova',
         agentIds: ['a_nova', 'a_qa'],
         viciCampaign: 'NOVACONC',
@@ -572,6 +575,7 @@ export function createDefaultState(): ConsoleState {
       {
         "id": "c_builtin",
         "name": "Build-In Bot – Default Campaign",
+        slot: 4,
         "agentId": "a_builtin",
         "agentIds": [
           "a_builtin",
@@ -1014,6 +1018,7 @@ export function normalizeState(raw: any): ConsoleState {
         return {
           id: String(c.id || `c_${idx + 1}`),
           name: cName,
+          slot: Number(c.slot),
           // Missing assignments stay missing. Never silently attach a campaign to the first bot.
           ...normalizeCampaignAgents(c, new Set((src.agents || []).map((a: any) => String(a?.id || '')))),
           viciCampaign: String(c.viciCampaign ?? '').trim(),
@@ -1113,14 +1118,12 @@ export function normalizeState(raw: any): ConsoleState {
   }
   const uniqueAgents = dedupe(agents);
   const agentIds = new Set(uniqueAgents.map((a) => a.id));
-  const uniqueCampaigns = dedupe(campaigns).map((c) => ({ ...c, ...normalizeCampaignAgents(c, agentIds) }));
-  const campaignIds = new Set(uniqueCampaigns.map((c) => c.id));
+  const uniqueCampaigns = assignCampaignSlots(dedupe(campaigns).map((c) => ({ ...c, ...normalizeCampaignAgents(c, agentIds) })));
   const uniqueFunctions = dedupe(functions);
   const functionIds = new Set(uniqueFunctions.map((f) => f.id));
   for (const agent of uniqueAgents) agent.fnIds = [...new Set(agent.fnIds.filter((id) => functionIds.has(id)))];
   const cleanTests: ConsoleState['tests'] = {};
   for (const [aid, list] of Object.entries(tests)) if (agentIds.has(aid)) cleanTests[aid] = dedupe(list);
-  void campaignIds;
 
   return {
     version: 5,

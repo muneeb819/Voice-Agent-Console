@@ -555,16 +555,17 @@ function generateViciConfig(state) {
         .map((c, idx) => {
         const ag = (0, campaign_assignment_1.primaryCampaignAgent)(state, c);
         const pool = (0, campaign_assignment_1.campaignAgentIds)(c).map((id) => state.agents.find((a) => a.id === id)?.name || id).join(', ');
-        const ext = `${v.aiExten}${idx + 1}`;
+        const slot = (0, campaign_assignment_1.campaignSlot)(c, idx);
+        const ext = (0, campaign_assignment_1.campaignExtension)(v.aiExten, c, idx);
         const xferNote = c.xferType === 'ingroup'
             ? `Agent API ra_call_control (stage=INGROUPTRANSFER, ingroup_choices=${c.xferTarget}) -> preserves Vici lead screen-pop`
             : `Agent API ra_call_control (stage=EXTENSIONTRANSFER, consultative=NO, exten=${c.xferTarget})`;
         return [
-            `; [Campaign ${idx + 1}: ${c.name}]`,
+            `; [Campaign slot ${slot}: ${c.name}]`,
             `;   VICIdial Campaign ID : ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCalls}`,
             `;   Assigned Bot Pool    : ${pool || '(missing)'}`,
             `;   Telephone Persona    : ${ag ? ag.name : '(missing)'} (${ag?.mode || 'outbound'}); browser tests may select any assigned bot`,
-            `;   Remote Agent Exten   : ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + idx})`,
+            `;   Remote Agent Exten   : ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + slot - 1})`,
             `;   Live Closer Transfer : ${xferNote}`,
             `;   Allowed Dispositions : ${c.dispos}`,
             `;   Campaign Rules       : ${String(c.complianceRules || '').trim() ? `${String(c.complianceRules).trim().length} characters; injected into the assigned bot prompt` : 'MISSING — deployment blocked'}`,
@@ -626,9 +627,9 @@ function generateViciConfig(state) {
         `; === VICIdial Admin Setup Checklist (Co-Located on ViciBox ${v.bridgeHost}) ===`,
         `; SIP connection model: ${v.sipConnectionMode || 'static_peer'}; registrar ${v.sipRegistrarHost || '(unset)'}:${v.sipRegistrarPort || 5060}; user ${v.sipUsername || '(unset)'}`,
         `; 1. Users -> API User "${v.apiUser}": User Level=8, Modify Leads=1, Modify Lists=1, Agent API Access=1`,
-        `; 2. Remote Agents -> Create Remote Agent User ${v.remoteAgentUser} (Lines=${state.campaigns[0]?.maxCalls || 10}, External Exten=${v.aiExten}1, On-Hook=N, Status=ACTIVE)`,
+        `; 2. Remote Agents -> Create Remote Agent User ${v.remoteAgentUser} (Lines=${state.campaigns[0]?.maxCalls || 10}, External Exten=${state.campaigns[0] ? (0, campaign_assignment_1.campaignExtension)(v.aiExten, state.campaigns[0], 0) : `${v.aiExten}1`}, On-Hook=N, Status=ACTIVE)`,
         `; 3. Inbound Groups -> Create Closer In-Group "${state.campaigns[0]?.xferTarget || 'FE_CLOSERS'}" & enable in Campaign "Allowed Transfer Groups"`,
-        `; 4. Inbound Routing -> Point "${v.inIngroup}" Drop/No-Agent Action -> EXTENSION ${v.aiExten}1`,
+        `; 4. Inbound Routing -> Point "${v.inIngroup}" Drop/No-Agent Action -> EXTENSION ${state.campaigns[0] ? (0, campaign_assignment_1.campaignExtension)(v.aiExten, state.campaigns[0], 0) : `${v.aiExten}1`}`,
         ``,
         dialplanBlock,
         ``,

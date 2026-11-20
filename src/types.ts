@@ -73,6 +73,7 @@ export interface Campaign {
   name: string;
   agentId: string; // Primary bot for the single telephone route.
   agentIds: string[]; // All bots allowed to use this campaign (browser tests and exports).
+  slot: number; // Stable telephone slot: extension = vici.aiExten + slot (never positional).
   viciCampaign: string;
   lists: string;
   start: string;
