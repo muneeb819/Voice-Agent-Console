@@ -27,6 +27,7 @@ export interface AgentBehavior {
   bargeIn: 'instant' | 'server' | 'off';
   bargeInSensitivity: 'high' | 'balanced' | 'low'; // legacy preset, kept in sync with the percentage
   bargeInSensitivityPct: number; // 0-100: how easily caller sound interrupts the bot (phone + Live Bot)
+  backgroundVoiceFilterPct: number; // 0-100: mute voices quieter than the customer (0 = off)
   latencyProfile: 'ultra' | 'balanced' | 'quality';
   expressionStyle: 'warm_empathetic' | 'energetic_upbeat' | 'charismatic_closer' | 'calm_concierge';
   vocalGestures: boolean;

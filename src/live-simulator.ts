@@ -1,5 +1,6 @@
 import http from 'http';
 import { BargeInGate, normalizeBargeInPct } from './barge-in';
+import { BackgroundVoiceFilter } from './voice-isolation';
 import { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
 import { getAuthenticatedUser, isRequestAuthorized } from './auth-guard';
 import crypto from 'crypto';
@@ -131,6 +132,11 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
     // Created on first use, after the agent and input sample rate are known.
     let bargeInGate: BargeInGate | null = null;
     let typedTurnAt = 0;
+    let voiceFilter: BackgroundVoiceFilter | null = null;
+    const getVoiceFilter = () => {
+      if (!voiceFilter) voiceFilter = new BackgroundVoiceFilter(Number(activeAgent?.behavior?.backgroundVoiceFilterPct) || 0, sampleRateIn);
+      return voiceFilter;
+    };
     const getBargeInGate = () => {
       if (!bargeInGate) {
         bargeInGate = new BargeInGate(
@@ -472,10 +478,12 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           }
           return;
         }
-        if (dgWs && dgWs.readyState === WebSocket.OPEN) {
-          dgWs.send(buf, { binary: true });
+        const even = buf.length % 2 ? buf.subarray(0, buf.length - 1) : buf;
+        const filtered = even.length >= 2 ? getVoiceFilter().process(even) : even;
+        if (dgWs && dgWs.readyState === WebSocket.OPEN && filtered.length) {
+          dgWs.send(filtered, { binary: true });
         }
-        if (buf.length >= 2) getBargeInGate().onCallerAudio(buf.length % 2 ? buf.subarray(0, buf.length - 1) : buf);
+        if (filtered.length >= 2) getBargeInGate().onCallerAudio(filtered);
         return;
       }
 
@@ -838,7 +846,10 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
               while (pendingPreSettingsAudio.length > 0) {
                 const chunk = pendingPreSettingsAudio.shift()!;
                 preSettingsBytes -= chunk.length;
-                if (dgWs?.readyState === WebSocket.OPEN) dgWs.send(chunk, { binary: true });
+                // Same background-voice filter as live audio (it also learns the caller's level here).
+                const even = chunk.length % 2 ? chunk.subarray(0, chunk.length - 1) : chunk;
+                const filtered = even.length >= 2 ? getVoiceFilter().process(even) : even;
+                if (dgWs?.readyState === WebSocket.OPEN && filtered.length) dgWs.send(filtered, { binary: true });
               }
               while (pendingInjectedMessages.length > 0) {
                 const injected = pendingInjectedMessages.shift()!;

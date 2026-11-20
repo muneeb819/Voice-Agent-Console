@@ -38,6 +38,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.attachLiveSimulator = attachLiveSimulator;
 const barge_in_1 = require("./barge-in");
+const voice_isolation_1 = require("./voice-isolation");
 const call_limit_1 = require("./call-limit");
 const auth_guard_1 = require("./auth-guard");
 const crypto_1 = __importDefault(require("crypto"));
@@ -147,6 +148,12 @@ function attachLiveSimulator(server, noServer = false) {
         // Created on first use, after the agent and input sample rate are known.
         let bargeInGate = null;
         let typedTurnAt = 0;
+        let voiceFilter = null;
+        const getVoiceFilter = () => {
+            if (!voiceFilter)
+                voiceFilter = new voice_isolation_1.BackgroundVoiceFilter(Number(activeAgent?.behavior?.backgroundVoiceFilterPct) || 0, sampleRateIn);
+            return voiceFilter;
+        };
         const getBargeInGate = () => {
             if (!bargeInGate) {
                 bargeInGate = new barge_in_1.BargeInGate((0, barge_in_1.normalizeBargeInPct)(activeAgent?.behavior?.bargeInSensitivityPct, activeAgent?.behavior?.bargeInSensitivity), () => {
@@ -492,11 +499,13 @@ function attachLiveSimulator(server, noServer = false) {
                     }
                     return;
                 }
-                if (dgWs && dgWs.readyState === ws_1.default.OPEN) {
-                    dgWs.send(buf, { binary: true });
+                const even = buf.length % 2 ? buf.subarray(0, buf.length - 1) : buf;
+                const filtered = even.length >= 2 ? getVoiceFilter().process(even) : even;
+                if (dgWs && dgWs.readyState === ws_1.default.OPEN && filtered.length) {
+                    dgWs.send(filtered, { binary: true });
                 }
-                if (buf.length >= 2)
-                    getBargeInGate().onCallerAudio(buf.length % 2 ? buf.subarray(0, buf.length - 1) : buf);
+                if (filtered.length >= 2)
+                    getBargeInGate().onCallerAudio(filtered);
                 return;
             }
             let msg;
@@ -837,8 +846,11 @@ function attachLiveSimulator(server, noServer = false) {
                             while (pendingPreSettingsAudio.length > 0) {
                                 const chunk = pendingPreSettingsAudio.shift();
                                 preSettingsBytes -= chunk.length;
-                                if (dgWs?.readyState === ws_1.default.OPEN)
-                                    dgWs.send(chunk, { binary: true });
+                                // Same background-voice filter as live audio (it also learns the caller's level here).
+                                const even = chunk.length % 2 ? chunk.subarray(0, chunk.length - 1) : chunk;
+                                const filtered = even.length >= 2 ? getVoiceFilter().process(even) : even;
+                                if (dgWs?.readyState === ws_1.default.OPEN && filtered.length)
+                                    dgWs.send(filtered, { binary: true });
                             }
                             while (pendingInjectedMessages.length > 0) {
                                 const injected = pendingInjectedMessages.shift();

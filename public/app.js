@@ -1117,6 +1117,7 @@
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
           bargeInSensitivityPct: 50,
+          backgroundVoiceFilterPct: 0,
           latencyProfile: 'ultra',
           expressionStyle: 'energetic_upbeat',
           vocalGestures: true,
@@ -1236,6 +1237,7 @@
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
           bargeInSensitivityPct: 50,
+          backgroundVoiceFilterPct: 0,
           latencyProfile: 'ultra',
           expressionStyle: ag.id === 'a_nova' ? 'energetic_upbeat' : 'warm_empathetic',
           vocalGestures: true,
@@ -1258,6 +1260,10 @@
         if (!['high', 'balanced', 'low'].includes(ag.behavior.bargeInSensitivity)) ag.behavior.bargeInSensitivity = 'balanced';
         if (ag.behavior.bargeInSensitivityPct === undefined || ag.behavior.bargeInSensitivityPct === null || ag.behavior.bargeInSensitivityPct === '') {
           ag.behavior.bargeInSensitivityPct = bargeInPctOf(ag.behavior);
+          mutated = true;
+        }
+        if (ag.behavior.backgroundVoiceFilterPct === undefined || ag.behavior.backgroundVoiceFilterPct === null || ag.behavior.backgroundVoiceFilterPct === '') {
+          ag.behavior.backgroundVoiceFilterPct = 0;
           mutated = true;
         }
         if (!['ultra', 'balanced', 'quality'].includes(ag.behavior.latencyProfile)) ag.behavior.latencyProfile = 'ultra';
@@ -5619,6 +5625,10 @@
         ['quality', ' Detailed Responses'],
       ])}
      </div>
+     <div class="row r3">
+      ${F('️ Background Voice Filter (%)', 'a.behavior.backgroundVoiceFilterPct', 'number', [], 'min="0" max="100" step="5"')}
+     </div>
+     <div class="note">Background voice filter: mutes people talking <b>behind</b> the customer (family, TV, coworkers) so the bot only hears the customer. It learns how loud the customer speaks and mutes voices that are clearly quieter. 0% = off; 50% = recommended (mutes voices ~13 dB quieter); 70-80% = stronger for busy homes/offices; 100% = maximum (may clip very soft words). Recordings keep the original audio.</div>
      <div class="note">Barge-in sensitivity applies to Live Bot <b>and</b> live phone calls. Higher % = the caller interrupts the bot with softer, shorter speech (quiet callers, clean lines). Lower % = the bot keeps talking through background noise, TV or a cough and stops only for clear, sustained speech. 50% is balanced; 80% / 20% equal the old High / Low presets.</div>
      <div class="row">
       ${F(' Vocal Expression & Persona Tone', 'a.behavior.expressionStyle', 'sel', [
@@ -8492,6 +8502,8 @@
             bargeIn: 'instant',
             bargeInSensitivity: 'balanced',
             bargeInSensitivityPct: 50,
+            backgroundVoiceFilterPct: 0,
+          backgroundVoiceFilterPct: 0,
             latencyProfile: 'ultra',
             expressionStyle: 'warm_empathetic',
             vocalGestures: true,
