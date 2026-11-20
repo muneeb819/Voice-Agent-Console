@@ -34,6 +34,7 @@ async function until(fn: () => boolean, label: string, timeout = 8000) {
 }
 
 type Step =
+  | { sleep: number }
   | { user: string }
   | { fn: string; args?: Record<string, unknown> }
   | { audioDone: true };
@@ -58,6 +59,10 @@ async function main() {
   const viciApi = http.createServer((req, res) => {
     const params = Object.fromEntries(new URL(req.url || '/', 'http://x').searchParams.entries());
     viciRequests.push(params);
+    if (params.function === 'update_lead' && Object.values(params).some((v) => /SLOWNOTES/.test(String(v)))) {
+      setTimeout(() => { res.writeHead(200, { 'Content-Type': 'text/plain' }); res.end('SUCCESS: synthetic slow'); }, 3000);
+      return;
+    }
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end(params.function === 'lead_all_info'
       ? 'lead_id|phone_number|first_name|last_name|state|date_of_birth|age|status|campaign_id\n104892|3055550192|Robert|Fixture|FL|1955-04-10|71|NEW|FETEST'
@@ -149,7 +154,9 @@ async function main() {
       await wait(1600); // let the opening gate release
       for (const step of scenario.steps) {
         if (ws.readyState !== WebSocket.OPEN) return;
-        if ('user' in step) {
+        if ('sleep' in step) {
+          await wait(step.sleep);
+        } else if ('user' in step) {
           ws.send(JSON.stringify({ type: 'ConversationText', role: 'user', content: step.user }));
           await wait(80);
         } else if ('fn' in step) {
@@ -318,6 +325,22 @@ async function main() {
     console.log(`✓ TIME LIMIT ${agent.name}: 30 s limit -> wrap-up instruction at 18 s, closing line at 24 s, hung up at ${secs.toFixed(1)}s`);
     call.close();
     viciRequests.length = 0;
+    // Codex P2: a transfer requested just before the limit, while the VICIdial
+    // notes update is still in flight, must not be hung up by the limit.
+    {
+      const late = await placeCall(`${inv.vici.aiExten}${campaign.slot}`, { steps: [
+        { user: "Yes, I'm interested, connect me." },
+        { sleep: 26500 },
+        { fn: 'set_disposition', args: { code: 'XFER', notes: 'Qualified' } },
+        { fn: 'transfer_to_live_agent', args: { reason: 'SLOWNOTES qualified late' } },
+        { audioDone: true },
+      ] });
+      await until(() => viciRequests.some((p) => p.function === 'ra_call_control' && p.value === late.callerCode && /TRANSFER/.test(p.stage || '')), 'late transfer still executed', 45000);
+      assert.ok(!viciRequests.some((p) => p.function === 'ra_call_control' && p.stage === 'HANGUP' && p.value === late.callerCode), 'time limit did not hang up the transfer');
+      console.log(`✓ TIME LIMIT ${agent.name}: transfer requested 1.5 s before the limit (slow VICIdial) still went through, not cut off`);
+      late.close();
+      viciRequests.length = 0;
+    }
     await putState((st) => { st.campaigns.find((c: any) => c.id === campaign.id).maxCallSec = 70; });
   }
 

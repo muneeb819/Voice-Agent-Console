@@ -1070,6 +1070,9 @@ class VicidialBridgeService {
         let resolveTransferCompletion = null;
         let pendingTransferArgs = null;
         let awaitingHangupAfterSpeech = false;
+        // Set as soon as a valid transfer is requested, before any awaited VICIdial
+        // call, so the call-time limit never hangs up a transfer in flight.
+        let transferRequested = false;
         const callLimitTimers = [];
         const conversationMemory = (0, persona_1.createConversationMemory)();
         const cancelledFnIds = new Set();
@@ -1287,7 +1290,7 @@ class VicidialBridgeService {
         // A transfer that is already underway is never cut off.
         const callLimitMs = (0, call_limit_1.callLimitMsForCampaign)(campaign);
         if (callLimitMs > 0) {
-            const transferUnderway = () => Boolean(pendingTransferArgs || transferCompletion || transferExecuted || transferredTo);
+            const transferUnderway = () => Boolean(transferRequested || pendingTransferArgs || transferCompletion || transferExecuted || transferredTo);
             const plan = (0, call_limit_1.callLimitSchedule)(callLimitMs);
             const elapsed = () => Date.now() - startedAtMs;
             const at = (ms, fn) => callLimitTimers.push(setTimeout(fn, Math.max(0, ms - elapsed())));
@@ -1559,7 +1562,9 @@ class VicidialBridgeService {
                                     pendingTransferArgs = null;
                                     executeTransferAction(args).catch(() => { });
                                 }
-                                else if (awaitingHangupAfterSpeech) {
+                                else if (awaitingHangupAfterSpeech && !(transferRequested && !transferExecuted)) {
+                                    // A transfer requested but not yet scheduled (VICIdial notes
+                                    // update in flight) owns the call; its own timer runs it.
                                     finalizeSession('bot_end_call').catch(() => { });
                                 }
                             }, Math.min(opts.hooks.pendingPlaybackMs() + 40, 9000));
@@ -1638,6 +1643,7 @@ class VicidialBridgeService {
                                     resultPayload = { ok: false, error: `Transfer requires the allowed XFER disposition for selected campaign ${campaign.viciCampaign}; current disposition is ${transferDisposition}. No transfer was scheduled.` };
                                 }
                                 else {
+                                    transferRequested = true;
                                     if (!disposition)
                                         disposition = 'XFER';
                                     args = sanitized.args;
@@ -1692,6 +1698,8 @@ class VicidialBridgeService {
                                 if (deferredActionTimer)
                                     clearTimeout(deferredActionTimer);
                                 deferredActionTimer = setTimeout(() => {
+                                    if (transferRequested && !transferExecuted)
+                                        return;
                                     finalizeSession('bot_end_call').catch(() => { });
                                 }, 9000);
                                 resultPayload = { ok: true, action: 'hangup_after_speech' };
