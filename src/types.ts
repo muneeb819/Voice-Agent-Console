@@ -145,6 +145,7 @@ export interface ConsoleState {
   vici: ViciConfig;
   tests: Record<string, TestScenario[]>;
   campaignSlotSeq: number; // Highest campaign telephone slot ever issued (never decreases).
+  seededBuiltins: string[]; // Built-in bots already offered to this install (added once, never re-added after a delete).
 }
 
 export type ValidationLevel = 'ok' | 'wn' | 'er';
