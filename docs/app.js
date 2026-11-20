@@ -1025,7 +1025,12 @@
     }
 
     // Deepgram Voice Agent listen models: Nova-3 baseline plus Flux v2.
-    const sttProviders = (state.providers || []).filter((p) => p.kind === 'stt');
+    // The built-in Local Speech Service (speech_service) is a separate STT
+    // engine, not a Voice Agent listen provider: converting it to Deepgram made
+    // every page load look like an unsaved provider change (operators' saves
+    // were then refused as a credential-routing change) and re-added a second
+    // provider with the same id.
+    const sttProviders = (state.providers || []).filter((p) => p.kind === 'stt' && p.type !== 'speech_service');
     for (const provider of sttProviders) {
       if (provider.type !== 'deepgram') {
         provider.type = 'deepgram';

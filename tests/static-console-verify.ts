@@ -367,6 +367,27 @@ async function run() {
   assert.deepEqual(secured.errors, []);
   secured.w.close();
 
+  // ---- Loading the real server state must not look like an unsaved edit ----
+  // Regression: the browser upgrade converted the built-in Local Speech Service
+  // STT provider to Deepgram on every load, re-added a duplicate s_local and
+  // showed "Unsaved changes"; an operator's next Save was then refused (403)
+  // as an admin-only provider change.
+  {
+    const { createDefaultState, normalizeState } = await import('../src/defaults');
+    const serverState = normalizeState(createDefaultState());
+    const loaded = await fixture({ api: { ...serverApi, '/api/state': () => ({ state: JSON.parse(JSON.stringify(serverState)), revisions: [], secrets: {} }) } });
+    await tick(); await tick();
+    assert.equal(loaded.d.getElementById('save-dock')!.hidden, true, 'Loading the server state must not open the unsaved-changes dock');
+    // Server mode keeps the state in memory; the plug-ins page shows exactly one
+    // Local Speech Service STT entry, still of type speech_service.
+    loaded.click(loaded.d.querySelector('[data-t="plugins"]')!); await tick();
+    const pluginText = loaded.d.getElementById('m')!.textContent || '';
+    assert.equal((pluginText.match(/Local Speech Service \(Faster-Whisper/g) || []).length <= 1, true, 'No duplicate Local Speech Service STT provider');
+    assert.deepEqual(loaded.errors, []);
+    loaded.w.close();
+    console.log('✓ Server state loads clean: no false "Unsaved changes", no provider rewrite (operators can save)');
+  }
+
   // ---- New / Duplicate bot & campaign creation (regression: dead buttons) ----
   {
     const crud = await fixture();
