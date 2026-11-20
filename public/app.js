@@ -2543,7 +2543,7 @@
   // Mirrors src/campaign-assignment.ts assignCampaignSlots: the telephone
   // extension is aiExten + a stored per-campaign slot, never the list position,
   // so deleting or reordering a campaign cannot re-route another one's calls.
-  function campaignSlotMap(list) {
+  function campaignSlotMap(list, highWater) {
     const valid = (value) => {
       const n = Number(value);
       return Number.isInteger(n) && n >= 1 && n <= 9999 ? n : null;
@@ -2557,7 +2557,8 @@
       used.add(wanted);
       return wanted;
     });
-    let next = used.size ? Math.max(...used) + 1 : 1;
+    const floor = Number.isInteger(Number(highWater)) && Number(highWater) > 0 ? Number(highWater) : 0;
+    let next = Math.max(used.size ? Math.max(...used) : 0, floor) + 1;
     const out = new Map();
     campaigns.forEach((c, idx) => {
       let slot = slots[idx];
@@ -2573,7 +2574,7 @@
 
   function buildViciConfigLocal() {
     const v = S.vici;
-    const slotMap = campaignSlotMap(S.campaigns);
+    const slotMap = campaignSlotMap(S.campaigns, S.campaignSlotSeq);
     const slotOf = (campaign, idx) => slotMap.get(campaign) || idx + 1;
     const selectedCampaign = C();
     const selectedCampaignPos = selectedCampaign ? S.campaigns.findIndex((campaign) => campaign.id === selectedCampaign.id) : -1;

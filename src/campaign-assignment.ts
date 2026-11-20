@@ -42,7 +42,7 @@ export function primaryCampaignAgent(state: Pick<ConsoleState, 'agents'>, campai
  *  - A duplicated slot (e.g. a copied campaign) keeps the first holder and moves
  *    the later one to a new number.
  */
-export function assignCampaignSlots<T extends { slot?: unknown }>(campaigns: T[]): Array<T & { slot: number }> {
+export function assignCampaignSlots<T extends { slot?: unknown }>(campaigns: T[], highWater = 0): Array<T & { slot: number }> {
   const valid = (value: unknown): number | null => {
     const n = Number(value);
     return Number.isInteger(n) && n >= 1 && n <= 9999 ? n : null;
@@ -55,7 +55,7 @@ export function assignCampaignSlots<T extends { slot?: unknown }>(campaigns: T[]
     used.add(wanted);
     return wanted;
   });
-  let next = used.size ? Math.max(...used) + 1 : 1;
+  let next = Math.max(used.size ? Math.max(...used) : 0, Number.isInteger(highWater) && highWater > 0 ? highWater : 0) + 1;
   return campaigns.map((c, idx) => {
     let slot = slots[idx];
     if (slot === null) {
@@ -75,4 +75,32 @@ export function campaignExtension(aiExten: string, campaign: { slot?: number }, 
 
 export function campaignSlot(campaign: { slot?: number }, index: number): number {
   return Number.isInteger(campaign?.slot) && (campaign.slot as number) > 0 ? campaign.slot as number : index + 1;
+}
+
+/**
+ * Never hand a retired extension to another campaign. `campaignSlotSeq` is a
+ * monotonic high-water mark of every slot ever issued, so deleting the
+ * highest-numbered campaign cannot free its number for the next one. Compared
+ * with the previously saved state, any campaign that now claims a slot that
+ * belonged to a different (or deleted) campaign is moved to a fresh number.
+ */
+export function reconcileCampaignSlots(
+  prev: { campaigns: Array<{ id: string; slot: number }>; campaignSlotSeq?: number } | null,
+  next: { campaigns: Array<{ id: string; slot: number }>; campaignSlotSeq: number }
+): void {
+  const maxSlot = (list: Array<{ slot: number }>) => list.reduce((m, c) => Math.max(m, c.slot || 0), 0);
+  let seq = Math.max(next.campaignSlotSeq || 0, prev?.campaignSlotSeq || 0, prev ? maxSlot(prev.campaigns) : 0, maxSlot(next.campaigns));
+  if (prev) {
+    const prevOwner = new Map(prev.campaigns.map((c) => [c.slot, c.id]));
+    const prevSeq = Math.max(prev.campaignSlotSeq || 0, maxSlot(prev.campaigns));
+    for (const c of next.campaigns) {
+      const owner = prevOwner.get(c.slot);
+      const retired = owner === undefined && c.slot <= prevSeq;
+      if ((owner !== undefined && owner !== c.id) || retired) {
+        seq += 1;
+        c.slot = seq;
+      }
+    }
+  }
+  next.campaignSlotSeq = seq;
 }

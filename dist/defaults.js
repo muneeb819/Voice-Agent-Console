@@ -129,6 +129,7 @@ function deepgramModelsForProviderType(providerType) {
 function createDefaultState() {
     return {
         version: 5,
+        campaignSlotSeq: 4, // four built-in campaigns use slots 1-4
         updatedAt: new Date().toISOString(),
         // Intentionally unset: an operator must select and save one global provider/model per service.
         services: {
@@ -994,7 +995,9 @@ function normalizeState(raw) {
     }
     const uniqueAgents = dedupe(agents);
     const agentIds = new Set(uniqueAgents.map((a) => a.id));
-    const uniqueCampaigns = (0, campaign_assignment_1.assignCampaignSlots)(dedupe(campaigns).map((c) => ({ ...c, ...(0, campaign_assignment_1.normalizeCampaignAgents)(c, agentIds) })));
+    const storedSlotSeq = Number.isInteger(Number(src.campaignSlotSeq)) && Number(src.campaignSlotSeq) > 0 ? Number(src.campaignSlotSeq) : 0;
+    const uniqueCampaigns = (0, campaign_assignment_1.assignCampaignSlots)(dedupe(campaigns).map((c) => ({ ...c, ...(0, campaign_assignment_1.normalizeCampaignAgents)(c, agentIds) })), storedSlotSeq);
+    const campaignSlotSeq = uniqueCampaigns.reduce((m, c) => Math.max(m, c.slot), storedSlotSeq);
     const uniqueFunctions = dedupe(functions);
     const functionIds = new Set(uniqueFunctions.map((f) => f.id));
     for (const agent of uniqueAgents)
@@ -1013,5 +1016,6 @@ function normalizeState(raw) {
         campaigns: uniqueCampaigns,
         vici,
         tests: cleanTests,
+        campaignSlotSeq,
     };
 }

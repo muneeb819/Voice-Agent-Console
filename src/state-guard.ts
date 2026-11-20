@@ -15,6 +15,13 @@ function credentialRoutingProjection(state: ConsoleState) {
   const v = state.vici;
   const byId = <T extends { id: string }>(items: T[]) => [...items].sort((a, b) => a.id.localeCompare(b.id));
   return {
+    // Selecting a different provider activates its endpoint/headers (and the
+    // API keys interpolated into them), so the selection is a route too.
+    services: {
+      stt: state.services.stt.providerId,
+      llm: state.services.llm.providerId,
+      tts: state.services.tts.providerId,
+    },
     vici: {
       viciBaseUrl: v.viciBaseUrl,
       nonAgentApiPath: v.nonAgentApiPath,
@@ -40,6 +47,7 @@ export function credentialRoutingChanges(prev: ConsoleState, next: ConsoleState)
   const a = credentialRoutingProjection(prev);
   const b = credentialRoutingProjection(next);
   const changed: string[] = [];
+  if (JSON.stringify(a.services) !== JSON.stringify(b.services)) changed.push('active STT/LLM/TTS provider selection');
   if (JSON.stringify(a.vici) !== JSON.stringify(b.vici)) changed.push('VICIdial/AMI/SIP connection settings');
   if (JSON.stringify(a.providers) !== JSON.stringify(b.providers)) changed.push('provider endpoints, headers or extra settings');
   if (JSON.stringify(a.functions) !== JSON.stringify(b.functions)) changed.push('function webhook URLs, methods or headers');

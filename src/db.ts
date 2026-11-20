@@ -8,6 +8,7 @@ import { diffStates } from './settings-builder';
 import { DATA_DIR } from './data-paths';
 import { GreetingRecord, loadBundledGreetings } from './greetings';
 import { composeOpening } from './opening';
+import { reconcileCampaignSlots } from './campaign-assignment';
 
 interface SqliteStatementLike {
   get: (...params: any[]) => any;
@@ -421,7 +422,7 @@ export function saveConsoleState(
   const conn = getDb();
   const nextState = normalizeState(rawState);
   nextState.updatedAt = new Date().toISOString();
-  const serialized = JSON.stringify(nextState);
+  let serialized = '';
   let changes: string[] = [];
   let summary = explicitSummary || '';
 
@@ -430,6 +431,9 @@ export function saveConsoleState(
     // concurrent console processes cannot lose a revision or diff stale state.
     const prevRow = conn.prepare('SELECT value FROM console_store WHERE key = ?').get('active_state') as { value: string } | undefined;
     const prevState = prevRow?.value ? normalizeState(JSON.parse(prevRow.value)) : null;
+    // Retired campaign extensions are never re-issued (stable telephone routing).
+    reconcileCampaignSlots(prevState, nextState);
+    serialized = JSON.stringify(nextState);
     changes = prevState ? diffStates(prevState, nextState) : ['Initial console configuration created'];
     summary = explicitSummary || (changes.length ? changes.join('; ') : 'Saved with verification check');
     conn

@@ -73,6 +73,34 @@ async function main() {
     if (typeof buildViciConfig === 'function') {
       assert.match(buildViciConfig(withoutFirst), new RegExp(`Remote Agent Exten\\s*: ${prefix}${second.slot}\\b`));
     }
+    // Codex P2: deleting the HIGHEST slot must not free it for the next campaign.
+    {
+      const { reconcileCampaignSlots } = await import('../src/campaign-assignment');
+      const prev = { campaigns: [{ id: 'a', slot: 1 }, { id: 'b', slot: 2 }, { id: 'c', slot: 3 }], campaignSlotSeq: 3 };
+      const normalizedNext = normalizeState({ ...base, campaignSlotSeq: 3, campaigns: [base.campaigns[0], base.campaigns[1], { ...base.campaigns[1], id: 'brand_new', slot: undefined }] });
+      assert.ok(normalizedNext.campaigns[2].slot > 3, 'normalize honours the stored high-water mark');
+      const next = { campaigns: [{ id: 'a', slot: 1 }, { id: 'b', slot: 2 }, { id: 'd', slot: 3 }], campaignSlotSeq: 3 };
+      reconcileCampaignSlots(prev, next);
+      assert.equal(next.campaigns[2].slot, 4, 'a stale client reusing a retired slot is moved to a fresh one');
+      assert.equal(next.campaignSlotSeq, 4);
+      const kept = { campaigns: [{ id: 'a', slot: 1 }, { id: 'b', slot: 2 }], campaignSlotSeq: 3 };
+      reconcileCampaignSlots(prev, kept);
+      assert.equal(kept.campaignSlotSeq, 3, 'the high-water mark never decreases after a delete');
+
+      // End to end through the store: delete the last campaign, add one.
+      const saved = getConsoleState();
+      const top = saved.campaigns.reduce((m, c) => Math.max(m, c.slot), 0);
+      saveConsoleState({ ...saved, campaigns: saved.campaigns.filter((c) => c.slot !== top) }, 'delete top slot');
+      const afterDel = getConsoleState();
+      // A client that does not send campaignSlotSeq (older browser tab) must not
+      // get the retired number either: the store reconciles against saved state.
+      const { campaignSlotSeq: _dropped, ...withoutSeq } = afterDel as any;
+      void _dropped;
+      saveConsoleState({ ...withoutSeq, campaigns: [...afterDel.campaigns, { ...afterDel.campaigns[0], id: 'cp_after_delete', slot: top }] }, 'add campaign');
+      const added2 = getConsoleState().campaigns.find((c) => c.id === 'cp_after_delete')!;
+      assert.ok(added2.slot > top, `retired slot ${top} is not re-issued (got ${added2.slot})`);
+      saveConsoleState(saved, 'restore fixture');
+    }
     console.log('✓ REL-01 campaign extensions are stable across delete, reorder and copy');
   }
 
@@ -117,6 +145,18 @@ async function main() {
       const after = getConsoleState();
       const r4 = await put(ownerCookie, { ...after, vici: { ...after.vici, viciBaseUrl: 'http://127.0.0.1:9' } });
       assert.equal(r4.status, 200, 'owner can change connection settings');
+      // Codex P1: switching the active provider is also a credential route.
+      {
+        const cur = getConsoleState();
+        const otherTts = cur.providers.find((p) => p.kind === 'tts' && p.id !== cur.services.tts.providerId && p.models.split(',')[0].trim());
+        assert.ok(otherTts, 'fixture has an alternative TTS provider');
+      if (otherTts) {
+          const r5 = await fetch(`${base}/api/state`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Cookie: operatorCookie },
+            body: JSON.stringify({ state: { ...cur, services: { ...cur.services, tts: { providerId: otherTts.id, model: otherTts.models.split(',')[0].trim() } } } }) });
+          assert.equal(r5.status, 403, 'operator cannot activate a different provider');
+        }
+        assert.ok(credentialRoutingChanges(cur, normalizeState({ ...cur, services: { ...cur.services, tts: { providerId: otherTts!.id, model: otherTts!.models.split(',')[0].trim() } } })).some((x) => /provider selection/.test(x)));
+      }
     } finally {
       await new Promise<void>((r) => server.close(() => r()));
     }
