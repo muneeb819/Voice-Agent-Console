@@ -56,15 +56,20 @@ export class BargeInGate {
   private readonly rms: number;
   private readonly minMs: number;
 
-  constructor(pct: number, private readonly onFlush: () => void, private readonly now: () => number = Date.now) {
+  constructor(
+    pct: number,
+    private readonly onFlush: () => void,
+    private readonly now: () => number = Date.now,
+    private readonly sampleRate = 8000,
+  ) {
     const t = bargeInThresholds(pct);
     this.rms = t.rms;
     this.minMs = pct >= 100 ? 0 : t.minMs;
   }
 
-  /** Feed 8 kHz 16-bit caller audio. */
+  /** Feed 16-bit mono caller audio at the gate's sample rate (8 kHz phone, 16 kHz browser). */
   onCallerAudio(pcm8k: Buffer): void {
-    const frameMs = (pcm8k.length / 2) / 8;
+    const frameMs = (pcm8k.length / 2) / (this.sampleRate / 1000);
     if (rmsOfPcm16(pcm8k) >= this.rms) this.loudMs += frameMs;
     else this.loudMs = Math.max(0, this.loudMs - frameMs);
     if (this.pendingSince) {

@@ -43,20 +43,22 @@ function rmsOfPcm16(pcm) {
 class BargeInGate {
     onFlush;
     now;
+    sampleRate;
     loudMs = 0;
     pendingSince = 0;
     rms;
     minMs;
-    constructor(pct, onFlush, now = Date.now) {
+    constructor(pct, onFlush, now = Date.now, sampleRate = 8000) {
         this.onFlush = onFlush;
         this.now = now;
+        this.sampleRate = sampleRate;
         const t = bargeInThresholds(pct);
         this.rms = t.rms;
         this.minMs = pct >= 100 ? 0 : t.minMs;
     }
-    /** Feed 8 kHz 16-bit caller audio. */
+    /** Feed 16-bit mono caller audio at the gate's sample rate (8 kHz phone, 16 kHz browser). */
     onCallerAudio(pcm8k) {
-        const frameMs = (pcm8k.length / 2) / 8;
+        const frameMs = (pcm8k.length / 2) / (this.sampleRate / 1000);
         if (rmsOfPcm16(pcm8k) >= this.rms)
             this.loudMs += frameMs;
         else

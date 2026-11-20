@@ -72,4 +72,99 @@ t += 1600;
 for (let i = 0; i < 10; i += 1) g2.onCallerAudio(speech);
 assert.equal(expired, 0, 'a stale pending barge-in does not fire later');
 console.log('✓ Phone gate: low % ignores coughs/background, high % reacts to any sound, real speech always interrupts');
-console.log('ALL BARGE-IN CHECKS PASSED');
+
+// Live Bot (server simulator) uses the same gate on 16 kHz browser audio.
+{
+  const frame16 = (amp: number) => {
+    const b = Buffer.alloc(640); // 20 ms at 16 kHz
+    for (let i = 0; i < 320; i += 1) b.writeInt16LE(Math.round(Math.sin(i / 6) * amp * 32767), i * 2);
+    return b;
+  };
+  let flushed = 0;
+  const g16 = new BargeInGate(20, () => { flushed += 1; }, () => t, 16000);
+  g16.onUserStartedSpeaking();
+  g16.onCallerAudio(frame16(0.12)); t += 20; // one 20 ms blip
+  for (let i = 0; i < 5; i += 1) { g16.onCallerAudio(frame16(0.02)); t += 20; }
+  assert.equal(flushed, 0, 'Live Bot 20%: a 20 ms blip is ignored at 16 kHz');
+  g16.onUserStartedSpeaking();
+  for (let i = 0; i < 10; i += 1) { g16.onCallerAudio(frame16(0.12)); t += 20; }
+  assert.equal(flushed, 1, 'Live Bot 20%: sustained speech interrupts at 16 kHz (duration measured correctly)');
+  console.log('✓ Live Bot server path: same percentage gate on 16 kHz browser audio');
+}
+console.log('ALL BARGE-IN UNIT CHECKS PASSED');
+
+// ---- End to end through the real Live Bot WebSocket (/ws/simulator) --------
+async function liveBotE2E() {
+  const fs = await import('node:fs');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const http = await import('node:http');
+  const { default: WebSocket, WebSocketServer } = await import('ws');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vac-barge-'));
+  process.env.VAC_DATA_DIR = dataDir;
+  process.env.VAC_ENV_FILE = path.join(dataDir, '.env');
+  process.env.ADMIN_PASSWORD = '';
+  const { getConsoleState, saveConsoleState } = await import('../src/db');
+  const { createServerWithSimulator } = await import('../src/server');
+
+  const state = getConsoleState();
+  const prov = (k: string, ty?: string) => state.providers.find((p) => p.kind === k && (!ty || p.type === ty))!;
+  state.services = {
+    stt: { providerId: prov('stt').id, model: 'nova-3' },
+    llm: { providerId: prov('llm', 'open_ai').id, model: 'gpt-4o-mini' },
+    tts: { providerId: prov('tts', 'deepgram').id, model: 'aura-2-thalia-en' },
+  };
+  const agent = state.agents[0];
+  const campaign = state.campaigns.find((c) => c.agentId === agent.id)!;
+  saveConsoleState(state, 'barge-in e2e fixture');
+
+  const dg = http.createServer();
+  const wss = new WebSocketServer({ server: dg });
+  wss.on('connection', (ws) => {
+    ws.send(JSON.stringify({ type: 'Welcome' }));
+    ws.on('message', (raw, isBinary) => {
+      if (isBinary) return;
+      const m = JSON.parse(raw.toString());
+      if (m.type === 'Settings') {
+        ws.send(JSON.stringify({ type: 'SettingsApplied' }));
+        setTimeout(() => {
+          ws.send(JSON.stringify({ type: 'AgentStartedSpeaking' }));
+          setTimeout(() => ws.send(JSON.stringify({ type: 'UserStartedSpeaking' })), 600);
+        }, 300);
+      }
+    });
+  });
+  await new Promise<void>((r) => dg.listen(0, '127.0.0.1', () => r()));
+  process.env.DEEPGRAM_API_KEY = 'dg_test_barge';
+  process.env.DEEPGRAM_AGENT_URL = `ws://127.0.0.1:${(dg.address() as any).port}/v1/agent/converse`;
+  const { server } = createServerWithSimulator();
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+  const port = (server.address() as any).port;
+
+  const session = async (pct: number, amp: number) => {
+    const s = getConsoleState();
+    s.agents.find((a) => a.id === agent.id)!.behavior.bargeInSensitivityPct = pct;
+    saveConsoleState(s, `barge ${pct}`);
+    const events: any[] = [];
+    const client = new WebSocket(`ws://127.0.0.1:${port}/ws/simulator`);
+    client.on('message', (d, bin) => { if (!bin) events.push(JSON.parse(d.toString())); });
+    await new Promise<void>((r, j) => { client.once('open', () => r()); client.once('error', j); });
+    client.send(JSON.stringify({ type: 'start', upstreamMode: 'deepgram', agentId: agent.id, campaignId: campaign.id, bandwidth: 'wideband', lead: {} }));
+    const frame = Buffer.alloc(640);
+    for (let i = 0; i < 320; i += 1) frame.writeInt16LE(Math.round(Math.sin(i / 6) * amp * 32767), i * 2);
+    for (let i = 0; i < 120; i += 1) { client.send(frame, { binary: true }); await new Promise((r) => setTimeout(r, 20)); }
+    client.send(JSON.stringify({ type: 'stop' }));
+    client.close();
+    return events.some((e) => e.type === 'barge_in' && e.source === 'deepgram_server');
+  };
+  try {
+    assert.equal(await session(10, 0.02), false, 'Live Bot 10%: quiet background does not interrupt');
+    assert.equal(await session(10, 0.15), true, 'Live Bot 10%: clear speech interrupts');
+    assert.equal(await session(100, 0.02), true, 'Live Bot 100%: any sound interrupts');
+    console.log('✓ Live Bot end to end (/ws/simulator): server barge-in honours the percentage');
+  } finally {
+    server.close(); wss.close(); dg.close();
+  }
+}
+
+liveBotE2E().then(() => { console.log('ALL BARGE-IN E2E CHECKS PASSED'); process.exit(0); }).catch((e) => { console.error(e); process.exit(1); });
