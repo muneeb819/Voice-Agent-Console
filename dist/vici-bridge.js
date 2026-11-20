@@ -58,6 +58,7 @@ const g711_1 = require("./g711");
 const settings_builder_1 = require("./settings-builder");
 const persona_1 = require("./persona");
 const campaign_assignment_1 = require("./campaign-assignment");
+const barge_in_1 = require("./barge-in");
 const call_limit_1 = require("./call-limit");
 var call_limit_2 = require("./call-limit");
 Object.defineProperty(exports, "CALL_LIMIT_CLOSING_LINE", { enumerable: true, get: function () { return call_limit_2.CALL_LIMIT_CLOSING_LINE; } });
@@ -1058,6 +1059,10 @@ class VicidialBridgeService {
         let speechDrainTimer = null;
         let openingGate = null;
         let lastCallerAudioAt = Date.now();
+        // Assigned once the provider session exists (it owns the stale-audio gate).
+        let performBargeInFlush = () => { };
+        const bargeInGate = new barge_in_1.BargeInGate((0, barge_in_1.normalizeBargeInPct)(agent.behavior?.bargeInSensitivityPct, agent.behavior?.bargeInSensitivity), () => { if (!closed && agent.behavior?.bargeIn !== 'off')
+            performBargeInFlush(); });
         let turns = 0;
         let lastUserTurnTs = null;
         let awaitingFirstAudioForTurn = false;
@@ -1456,6 +1461,13 @@ class VicidialBridgeService {
                 }, 6000);
             });
             let suppressStaleBotAudio = false;
+            performBargeInFlush = () => {
+                // Instant barge-in flush on the AudioSocket / RTP queue + gate trailing TTS chunks.
+                suppressStaleBotAudio = true;
+                recorder.onBargeIn();
+                opts.hooks.bargeInFlush();
+                updateState('caller_speaking');
+            };
             dgWs.on('message', async (raw, isBinary) => {
                 if (closed)
                     return;
@@ -1507,11 +1519,10 @@ class VicidialBridgeService {
                     case 'UserStartedSpeaking': {
                         openingGate?.userStarted();
                         if (agent.behavior?.bargeIn !== 'off') {
-                            // Instant <20ms barge-in flush on Asterisk AudioSocket / RTP queue + gate trailing TTS chunks!
-                            suppressStaleBotAudio = true;
-                            recorder.onBargeIn();
-                            opts.hooks.bargeInFlush();
-                            updateState('caller_speaking');
+                            // Flush only when the caller's own audio is loud and long enough
+                            // for this bot's barge-in sensitivity (%); a cough or TV blip
+                            // no longer cuts the bot off.
+                            bargeInGate.onUserStartedSpeaking();
                         }
                         break;
                     }
@@ -1794,6 +1805,7 @@ class VicidialBridgeService {
                     return;
                 lastCallerAudioAt = Date.now();
                 recorder.recordCallerPcm8k(pcm8k);
+                bargeInGate.onCallerAudio(pcm8k);
                 if (!settingsApplied) {
                     if (preSettingsAudioQueue.length < 40) {
                         preSettingsAudioQueue.push(Buffer.from(pcm8k));

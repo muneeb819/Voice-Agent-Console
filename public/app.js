@@ -201,6 +201,12 @@
     return dgLlmEntriesForType(providerType).map((m) => m.id);
   }
 
+  function bargeInPctOf(beh) {
+    const n = Number(beh && beh.bargeInSensitivityPct);
+    if (beh && beh.bargeInSensitivityPct !== undefined && beh.bargeInSensitivityPct !== '' && Number.isFinite(n)) return Math.min(100, Math.max(0, Math.round(n)));
+    return { high: 80, balanced: 50, low: 20 }[beh && beh.bargeInSensitivity] ?? 50;
+  }
+
   function enforceDeepgramOnlyLlms(state) {
     if (!state || !Array.isArray(state.providers)) return false;
     let mutated = false;
@@ -1110,6 +1116,7 @@
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
+          bargeInSensitivityPct: 50,
           latencyProfile: 'ultra',
           expressionStyle: 'energetic_upbeat',
           vocalGestures: true,
@@ -1228,6 +1235,7 @@
         ag.behavior = {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
+          bargeInSensitivityPct: 50,
           latencyProfile: 'ultra',
           expressionStyle: ag.id === 'a_nova' ? 'energetic_upbeat' : 'warm_empathetic',
           vocalGestures: true,
@@ -1248,6 +1256,10 @@
       } else {
         if (!['instant', 'server', 'off'].includes(ag.behavior.bargeIn)) ag.behavior.bargeIn = 'instant';
         if (!['high', 'balanced', 'low'].includes(ag.behavior.bargeInSensitivity)) ag.behavior.bargeInSensitivity = 'balanced';
+        if (ag.behavior.bargeInSensitivityPct === undefined || ag.behavior.bargeInSensitivityPct === null || ag.behavior.bargeInSensitivityPct === '') {
+          ag.behavior.bargeInSensitivityPct = bargeInPctOf(ag.behavior);
+          mutated = true;
+        }
         if (!['ultra', 'balanced', 'quality'].includes(ag.behavior.latencyProfile)) ag.behavior.latencyProfile = 'ultra';
         if (!['warm_empathetic', 'energetic_upbeat', 'charismatic_closer', 'calm_concierge'].includes(ag.behavior.expressionStyle)) {
           ag.behavior.expressionStyle = 'warm_empathetic';
@@ -3180,9 +3192,11 @@
       (sim.scheduledSources.length > 0 || sim.agentState === 'speaking') &&
       Date.now() - sim.lastLocalBargeInAt > 650
     ) {
-      const sens = beh.bargeInSensitivity || 'balanced';
-      const rmsThresh = sens === 'high' ? 0.022 : sens === 'low' ? 0.065 : 0.038;
-      const reqFrames = sens === 'high' ? 2 : sens === 'low' ? 4 : 3;
+      // Mirrors src/barge-in.ts bargeInThresholds(): 80% / 50% / 20% equal the
+      // old High / Balanced / Low presets exactly.
+      const pct = bargeInPctOf(beh);
+      const rmsThresh = Math.min(0.065, Math.exp(-2.733 - 0.01807 * (pct - 20)));
+      const reqFrames = Math.max(1, Math.round(5 - pct / 25));
       if (rawRms >= rmsThresh) {
         sim.vadConsecutiveFrames += 1;
         if (sim.vadConsecutiveFrames >= reqFrames) {
@@ -5598,17 +5612,14 @@
         ['server', ' Deepgram Server VAD Only'],
         ['off', ' Disabled (Finish Speaking First)'],
       ])}
-      ${F('️ Barge-In Mic Sensitivity', 'a.behavior.bargeInSensitivity', 'sel', [
-        ['high', 'High Sensitivity'],
-        ['balanced', 'Balanced (Echo-Safe Smart VAD)'],
-        ['low', 'Low (Noisy Background Safe)'],
-      ])}
+      ${F('️ Barge-In Sensitivity (%)', 'a.behavior.bargeInSensitivityPct', 'number', [], 'min="0" max="100" step="5"')}
       ${F(' Streaming Cadence Profile', 'a.behavior.latencyProfile', 'sel', [
         ['ultra', ' Ultra-Fast Front-Loaded Speech'],
         ['balanced', '️ Balanced Conversational'],
         ['quality', ' Detailed Responses'],
       ])}
      </div>
+     <div class="note">Barge-in sensitivity applies to Live Bot <b>and</b> live phone calls. Higher % = the caller interrupts the bot with softer, shorter speech (quiet callers, clean lines). Lower % = the bot keeps talking through background noise, TV or a cough and stops only for clear, sustained speech. 50% is balanced; 80% / 20% equal the old High / Low presets.</div>
      <div class="row">
       ${F(' Vocal Expression & Persona Tone', 'a.behavior.expressionStyle', 'sel', [
         ['warm_empathetic', ' Warm, Empathetic & Caring'],
@@ -8480,6 +8491,7 @@
           behavior: {
             bargeIn: 'instant',
             bargeInSensitivity: 'balanced',
+            bargeInSensitivityPct: 50,
             latencyProfile: 'ultra',
             expressionStyle: 'warm_empathetic',
             vocalGestures: true,

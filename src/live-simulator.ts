@@ -1,4 +1,5 @@
 import http from 'http';
+import { BargeInGate, normalizeBargeInPct } from './barge-in';
 import { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
 import { getAuthenticatedUser, isRequestAuthorized } from './auth-guard';
 import crypto from 'crypto';
@@ -127,6 +128,25 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
     let allowWebhooks = false;
     let recordingRequested = false;
     let sampleRateIn = 16000;
+    // Created on first use, after the agent and input sample rate are known.
+    let bargeInGate: BargeInGate | null = null;
+    let typedTurnAt = 0;
+    const getBargeInGate = () => {
+      if (!bargeInGate) {
+        bargeInGate = new BargeInGate(
+          normalizeBargeInPct(activeAgent?.behavior?.bargeInSensitivityPct, activeAgent?.behavior?.bargeInSensitivity),
+          () => {
+            if (closed || activeAgent?.behavior?.bargeIn === 'off') return;
+            suppressStaleAgentAudio = true;
+            sendClientJson({ type: 'barge_in', source: 'deepgram_server' });
+            sendClientJson({ type: 'agent_state', state: 'user_speaking' });
+          },
+          Date.now,
+          sampleRateIn,
+        );
+      }
+      return bargeInGate;
+    };
     let sampleRateOut = 24000;
 
     let turns = 0;
@@ -455,6 +475,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         if (dgWs && dgWs.readyState === WebSocket.OPEN) {
           dgWs.send(buf, { binary: true });
         }
+        if (buf.length >= 2) getBargeInGate().onCallerAudio(buf.length % 2 ? buf.subarray(0, buf.length - 1) : buf);
         return;
       }
 
@@ -497,6 +518,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         if (!content) return;
         suppressStaleAgentAudio = false;
 
+        typedTurnAt = Date.now();
         const injectPayload = JSON.stringify({ type: 'InjectUserMessage', content });
         if (!settingsApplied) {
           if (pendingInjectedMessages.length < 32) pendingInjectedMessages.push(injectPayload);
@@ -846,9 +868,18 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
             case 'UserStartedSpeaking': {
               openingGate?.userStarted();
               if (activeAgent?.behavior?.bargeIn !== 'off') {
-                suppressStaleAgentAudio = true;
-                sendClientJson({ type: 'barge_in', source: 'deepgram_server' });
-                sendClientJson({ type: 'agent_state', state: 'user_speaking' });
+                // Same percentage gate as live phone calls: a cough or background
+                // sound no longer interrupts a low-sensitivity bot.
+                if (Date.now() - typedTurnAt < 3000) {
+                  // A typed message is an unambiguous interruption: no mic
+                  // audio to measure, so bypass the loudness gate.
+                  typedTurnAt = 0;
+                  suppressStaleAgentAudio = true;
+                  sendClientJson({ type: 'barge_in', source: 'deepgram_server' });
+                  sendClientJson({ type: 'agent_state', state: 'user_speaking' });
+                } else {
+                  getBargeInGate().onUserStartedSpeaking();
+                }
               }
               break;
             }
