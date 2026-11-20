@@ -143,6 +143,7 @@ export interface ConsoleState {
   campaigns: Campaign[];
   vici: ViciConfig;
   tests: Record<string, TestScenario[]>;
+  campaignSlotSeq: number; // Highest campaign telephone slot ever issued (never decreases).
 }
 
 export type ValidationLevel = 'ok' | 'wn' | 'er';

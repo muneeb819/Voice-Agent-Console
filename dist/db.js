@@ -31,6 +31,7 @@ const settings_builder_1 = require("./settings-builder");
 const data_paths_1 = require("./data-paths");
 const greetings_1 = require("./greetings");
 const opening_1 = require("./opening");
+const campaign_assignment_1 = require("./campaign-assignment");
 function openSqliteEngine(dbPath) {
     const normArgs = (args) => args.map((v) => (v === undefined ? null : v));
     // 1) Primary engine: better-sqlite3 (fast C++ native binding with prebuilds for Node 20..25)
@@ -342,7 +343,7 @@ function saveConsoleState(rawState, explicitSummary) {
     const conn = getDb();
     const nextState = (0, defaults_1.normalizeState)(rawState);
     nextState.updatedAt = new Date().toISOString();
-    const serialized = JSON.stringify(nextState);
+    let serialized = '';
     let changes = [];
     let summary = explicitSummary || '';
     const tx = conn.transactionImmediate(() => {
@@ -350,6 +351,9 @@ function saveConsoleState(rawState, explicitSummary) {
         // concurrent console processes cannot lose a revision or diff stale state.
         const prevRow = conn.prepare('SELECT value FROM console_store WHERE key = ?').get('active_state');
         const prevState = prevRow?.value ? (0, defaults_1.normalizeState)(JSON.parse(prevRow.value)) : null;
+        // Retired campaign extensions are never re-issued (stable telephone routing).
+        (0, campaign_assignment_1.reconcileCampaignSlots)(prevState, nextState);
+        serialized = JSON.stringify(nextState);
         changes = prevState ? (0, settings_builder_1.diffStates)(prevState, nextState) : ['Initial console configuration created'];
         summary = explicitSummary || (changes.length ? changes.join('; ') : 'Saved with verification check');
         conn
