@@ -93,20 +93,6 @@
     ];
   }
 
-  // Background voices: Deepgram transcribes everyone near the phone, so the
-  // model must not treat a side remark from someone else as the customer's answer.
-  function backgroundVoiceLines() {
-    return [
-      '',
-      '=== BACKGROUND VOICES (ALWAYS) ===',
-      '- You are speaking with ONE customer on the phone. Other people, a TV or a radio may be heard near them, and their words can appear in what you hear.',
-      '- Only respond to words that are clearly part of the customer\'s conversation with you. Ignore side remarks aimed at someone else (for example "turn that down", "who is it?", "I\'m on the phone", "dinner is ready", names called out) and TV or radio lines.',
-      '- If a fragment does not fit what you just asked, do not treat it as an answer and do not change topic; continue from where you were or briefly re-ask your last question.',
-      '- If two answers conflict or the line sounds busy, ask once: "Sorry, it sounds a little busy there, was that a yes?" Never ask more than once per question.',
-      '- Never record a qualification answer, disposition or transfer from words that may have come from someone else.',
-    ];
-  }
-
   function composeBehavioralPrompt(agent, campaign) {
     const basePrompt = String((agent && agent.prompt) || '').trim();
     const b = agent && agent.behavior;
@@ -183,7 +169,6 @@
       }
     }
 
-    lines.push(...backgroundVoiceLines());
     lines.push(...callEndingLines());
     lines.push(...conversationIntegrityLines());
     const suffix = lines.join('\n').trim();
@@ -491,7 +476,6 @@
     composeBehavioralPrompt,
     conversationIntegrityLines,
     callEndingLines,
-    backgroundVoiceLines,
     callTimeLimitLines,
     humanSpeechLines,
     migrateLegacyQualificationPrompt,

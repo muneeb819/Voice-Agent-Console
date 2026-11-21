@@ -13,7 +13,6 @@ interface PersonaApi {
   composeBehavioralPrompt(agent: any, campaign?: any): string;
   conversationIntegrityLines(): string[];
   callEndingLines(): string[];
-  backgroundVoiceLines(): string[];
   callTimeLimitLines(maxCallSec: number): string[];
   humanSpeechLines(): string[];
   migrateLegacyQualificationPrompt(value: string, currentStock: string): string;
@@ -32,7 +31,6 @@ export const {
   composeBehavioralPrompt,
   conversationIntegrityLines,
   callEndingLines,
-  backgroundVoiceLines,
   callTimeLimitLines,
   humanSpeechLines,
   migrateLegacyQualificationPrompt,
