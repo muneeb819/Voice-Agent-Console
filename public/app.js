@@ -2566,6 +2566,43 @@
     return items;
   }
 
+  // Readiness blockers used to render as one run-on paragraph (hundreds of
+  // "Agent “X”: …" fragments). Group them per bot / campaign, lift checks that
+  // fail for every bot into one "All bots" group, and fold the detail away.
+  function renderBlockerList(intro, blockers, cls) {
+    const groups = new Map();
+    const add = (name, text) => {
+      if (!groups.has(name)) groups.set(name, []);
+      const list = groups.get(name);
+      if (!list.includes(text)) list.push(text);
+    };
+    for (const raw of blockers) {
+      const m = /^(Agent|Campaign) “(.+?)”[:]?\s*(.*)$/.exec(String(raw));
+      const text = (m ? m[3] : String(raw)).replace(/\.$/, '');
+      add(m ? `${m[1] === 'Agent' ? 'Bot' : 'Campaign'}: ${m[2]}` : 'General', text || String(raw));
+    }
+    const botGroups = [...groups.keys()].filter((k) => k.startsWith('Bot: '));
+    if (botGroups.length > 1) {
+      const shared = groups.get(botGroups[0]).filter((t) => botGroups.every((k) => groups.get(k).includes(t)));
+      if (shared.length) {
+        for (const k of botGroups) {
+          const rest = groups.get(k).filter((t) => !shared.includes(t));
+          if (rest.length) groups.set(k, rest); else groups.delete(k);
+        }
+        const ordered = new Map([[`All ${botGroups.length} bots`, shared], ...groups]);
+        groups.clear();
+        ordered.forEach((v, k) => groups.set(k, v));
+      }
+    }
+    const total = [...groups.values()].reduce((n, l) => n + l.length, 0);
+    return `<div class="note ${cls} blocker-list" style="margin-top:8px">
+      <b>${esc(intro)}</b> — ${total} check${total === 1 ? '' : 's'} not passing yet.
+      <details><summary>Show what to fix</summary>${[...groups.entries()]
+        .map(([name, items]) => `<div class="blocker-group"><b>${esc(name)}</b><ul>${items.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>`)
+        .join('')}</details>
+    </div>`;
+  }
+
   function deploymentReadinessBlockersLocal() {
     const blockers = [];
     for (const agent of S.agents || []) {
@@ -2752,6 +2789,7 @@
     const val = getPath(path);
     const fieldId = `vac-field-${++fieldSerial}`;
     const dp = `data-p="${path}" id="${fieldId}"`;
+    label = String(label).replace(/\uFE0F/g, '').trim(); // stray emoji residue made labels look misaligned
     if (type === 'chk') {
       return `<label class="chk-label"><input type="checkbox" style="width:auto" ${dp} ${val ? 'checked' : ''}>${label}</label>`;
     }
@@ -2774,7 +2812,9 @@
       const stepAttr = type === 'number' && !attrs.includes('step=') ? 'step="any"' : '';
       fieldHtml = `<input type="${type}" ${dp} ${stepAttr} ${attrs} value="${esc(val ?? '')}">`;
     }
-    return `<label for="${fieldId}">${label}</label>${fieldHtml}`;
+    // Label and control are ONE grid item; as siblings, a 2/3-column row put
+    // labels and boxes into different cells (labels floated over other fields).
+    return `<div class="fld"><label for="${fieldId}">${label}</label>${fieldHtml}</div>`;
   };
 
   const providersByKind = (kind) => S.providers.filter((p) => p.kind === kind).map((p) => [p.id, p.name]);
@@ -5536,13 +5576,27 @@
     </div>
 
     <div class="readiness-issues"><h2>${T.issues.length ? 'What still needs attention' : 'All configuration checks passed'}</h2>
-     ${T.issues.map((issue) => `<div class="ck"><span class="${issue.level}">${issue.level === 'er' ? '✗' : '!'}</span><span><b>${esc(issue.scope)}:</b> ${esc(issue.message)} <a class="g" href="${esc(sectionHref(issue.tab, { agentId: issue.entityId, campaignId: issue.entityId }))}" data-cmd-tab="${issue.tab}">Open setup</a></span></div>`).join('')}
+     ${groupIssues(T.issues).map((g) => `<div class="ck"><span class="${g.level}">${g.level === 'er' ? '✗' : '!'}</span><span>${g.scopes.length > 1 ? `<b>${g.scopes.length} ${g.kind}:</b> ` : `<b>${esc(g.scopes[0])}:</b> `}${esc(g.message)}${g.scopes.length > 1 ? ` <span class="ck-scopes">(${esc(g.scopes.join(', '))})</span>` : ''} <a class="g" href="${esc(sectionHref(g.tab, { agentId: g.entityId, campaignId: g.entityId }))}" data-cmd-tab="${g.tab}">Open setup</a></span></div>`).join('')}
      <div class="note">QA: ${T.testsPassed}/${T.testsTotal} passed, ${T.testsPending} pending. <a class="g" href="${esc(sectionHref('test', { agentId: A()?.id }))}" data-cmd-tab="test">Open Live Bot</a></div>
     </div>
     ${renderFleetMatrix()}
    </div>
   `;
     startReadyStage(T);
+  }
+
+  // The same problem used to be listed once per bot (5 bots × 10 checks = 50
+  // rows for 10 real problems). Group identical messages and name who is affected.
+  function groupIssues(issues) {
+    const groups = new Map();
+    for (const issue of issues || []) {
+      const key = `${issue.level}|${issue.tab}|${issue.message}`;
+      if (!groups.has(key)) groups.set(key, { ...issue, scopes: [] });
+      const scope = String(issue.scope || '').replace(/^(?:Agent|Campaign)\s+/, '').replace(/^["“](.*)["”]$/, '$1');
+      if (!groups.get(key).scopes.includes(scope)) groups.get(key).scopes.push(scope);
+    }
+    return [...groups.values()].map((g) => ({ ...g, kind: g.tab === 'campaigns' ? 'campaigns' : 'bots' }))
+      .sort((a, b) => (a.level === b.level ? b.scopes.length - a.scopes.length : a.level === 'er' ? -1 : 1));
   }
 
   function renderAgentCampaignAssignment(agent) {
@@ -5678,6 +5732,31 @@
       smokeRunning[kind] = false;
       paint();
     }
+  }
+
+  // Header status pill: it always said "LIVE", even with the server down. It now
+  // reflects a real health check (every 20 s): LIVE / OFFLINE / DEMO.
+  let livePillTimer = null;
+  async function refreshLivePill() {
+    const pill = document.getElementById('hdr-live-pill');
+    const txt = document.getElementById('hdr-live-txt');
+    if (!pill || !txt) return;
+    const set = (state, label, title) => { pill.dataset.state = state; txt.textContent = label; pill.title = title; };
+    if (serverlessCloudMode) { set('demo', 'DEMO', 'Browser-only demo: no server connection.'); return; }
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+      const res = await fetch('./health/live', { cache: 'no-store', signal: ctrl.signal });
+      clearTimeout(t);
+      if (res.ok) set('live', 'LIVE', `Server reachable · checked ${new Date().toLocaleTimeString()}`);
+      else set('down', 'OFFLINE', `Server answered ${res.status} · checked ${new Date().toLocaleTimeString()}`);
+    } catch {
+      set('down', 'OFFLINE', `Server not reachable · checked ${new Date().toLocaleTimeString()}`);
+    }
+  }
+  function startLivePill() {
+    refreshLivePill();
+    if (!livePillTimer) livePillTimer = setInterval(refreshLivePill, 20000);
   }
 
   function render() {
@@ -6398,12 +6477,12 @@
       </div>
       ${
         loopbackBlockers.length
-          ? `<div class="note er" style="margin-top:8px">Selected campaign call test blocked: ${esc(loopbackBlockers.join(' • '))}</div>`
+          ? renderBlockerList('This campaign’s test call is blocked', loopbackBlockers, 'er')
           : '<div class="note ok" style="margin-top:8px">Selected campaign and assigned agent passed call-readiness checks.</div>'
       }
       ${
         deployBlockers.length
-          ? `<div class="note wn" style="margin-top:8px">Release downloads remain blocked until every agent and campaign is ready: ${esc(deployBlockers.join(' • '))}</div>`
+          ? renderBlockerList('Downloads stay locked until every bot and campaign is ready', deployBlockers, 'wn')
           : ''
       }
       <div class="bar" style="margin-top:10px;margin-bottom:0">
@@ -7016,6 +7095,7 @@
       } catch {}
       renderLinkedView();
       updateHeaderStatus();
+      startLivePill();
       syncDeepgramManagedLlms(true).then((ok) => {
         if (ok) render();
       });
@@ -7088,6 +7168,7 @@
     }
 
     renderLinkedView();
+    startLivePill();
   }
 
   function showSaveReport({ ok, wn, er, items = [], storage, revisionId, changes = [] }) {

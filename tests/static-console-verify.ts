@@ -445,6 +445,18 @@ async function run() {
   assert.match(rulesFx.d.getElementById('rules-reach')!.textContent || '', /Campaign rules: [\d,]+ \/ 8,000/, 'Campaign rules show a character meter');
   rulesFx.w.close();
   console.log('✓ Reach meters warn before new lines are cut; Run Smoke Test on Bots and Campaigns');
+  // UI fixes: label/control stay together; grouped dashboard issues; header pill is a real status.
+  const uiFx = await fixture({ query: '?tab=agents&agent=a1' });
+  for (const label of uiFx.d.querySelectorAll('.row > label[for]')) assert.fail(`label "${label.textContent}" sits apart from its control`);
+  assert.ok(uiFx.d.querySelectorAll('.fld').length > 10, 'fields render as label+control units');
+  await tick();
+  assert.equal(uiFx.d.getElementById('hdr-live-txt')!.textContent, 'DEMO', 'Browser-only build says DEMO, not LIVE');
+  uiFx.w.close();
+  const dash = await fixture({ tab: 'dashboard' });
+  const rows = [...dash.d.querySelectorAll('.readiness-issues .ck')].map((r) => r.textContent || '');
+  assert.equal(new Set(rows.map((r) => r.replace(/^\W*\d+ bots:|\(.*\)/g, ''))).size, rows.length, 'each dashboard problem is listed once');
+  dash.w.close();
+  console.log('✓ UI: labels stay with their fields, dashboard problems grouped once, header pill shows real status (DEMO offline build)');
   console.log('✓ Static console: house crest header lockup, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
 }
 run().catch((error) => { console.error(error); process.exit(1); });
