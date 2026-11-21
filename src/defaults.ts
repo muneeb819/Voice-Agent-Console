@@ -920,7 +920,12 @@ export function normalizeState(raw: any): ConsoleState {
   // Keep Deepgram-backed and Local Speech Service TTS routes; drop unsupported legacy BYO TTS providers.
   for (let i = providers.length - 1; i >= 0; i -= 1) {
     const p = providers[i];
-    if (p.kind === 'tts' && p.type !== 'deepgram' && p.type !== 'speech_service') providers.splice(i, 1);
+    // ElevenLabs is kept only in the exact form Voice Lab cloning creates: the
+    // ElevenLabs streaming endpoint with the key from the stored secret.
+    const isCloneVoice = p.kind === 'tts' && p.type === 'eleven_labs' &&
+      /^wss:\/\/api\.elevenlabs\.io\/v1\/text-to-speech\/[A-Za-z0-9]{8,64}\/multi-stream-input$/.test(String(p.endpoint || '')) &&
+      /\{\{ELEVENLABS_API_KEY\}\}/.test(String(p.headers || ''));
+    if (p.kind === 'tts' && p.type !== 'deepgram' && p.type !== 'speech_service' && !isCloneVoice) providers.splice(i, 1);
   }
 
   // Ensure at least one provider per kind exists, plus built-in Local Speech Service providers (s_local, t_local)

@@ -11,6 +11,8 @@ exports.trySelectGreeting = trySelectGreeting;
 exports.getConsoleState = getConsoleState;
 exports.saveConsoleState = saveConsoleState;
 exports.recentRevisionSnapshots = recentRevisionSnapshots;
+exports.recordVoiceCloneConsent = recordVoiceCloneConsent;
+exports.listVoiceCloneConsents = listVoiceCloneConsents;
 exports.listRevisions = listRevisions;
 exports.saveSimulatorCallLog = saveSimulatorCallLog;
 exports.listSimulatorCallLogs = listSimulatorCallLogs;
@@ -124,6 +126,18 @@ function getDb() {
       saved_at TEXT NOT NULL,
       summary TEXT NOT NULL,
       snapshot TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS voice_clone_consents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      voice_id TEXT NOT NULL,
+      voice_name TEXT NOT NULL,
+      speaker_name TEXT NOT NULL,
+      consent_statement TEXT NOT NULL,
+      recorded_by TEXT NOT NULL,
+      sample_sha256 TEXT NOT NULL,
+      sample_bytes INTEGER NOT NULL
     );
     CREATE TABLE IF NOT EXISTS greeting_library (
       greeting_id TEXT PRIMARY KEY,
@@ -394,6 +408,17 @@ function recentRevisionSnapshots(limit = 50) {
         catch { /* skip unreadable */ }
     }
     return out;
+}
+/** Consent record kept for every cloned voice (who, whose voice, how permission was given, which sample). */
+function recordVoiceCloneConsent(entry) {
+    const info = getDb()
+        .prepare(`INSERT INTO voice_clone_consents (created_at, provider, voice_id, voice_name, speaker_name, consent_statement, recorded_by, sample_sha256, sample_bytes)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(new Date().toISOString(), entry.provider, entry.voice_id, entry.voice_name, entry.speaker_name, entry.consent_statement, entry.recorded_by, entry.sample_sha256, entry.sample_bytes);
+    return Number(info.lastInsertRowid);
+}
+function listVoiceCloneConsents(limit = 200) {
+    return getDb().prepare('SELECT * FROM voice_clone_consents ORDER BY id DESC LIMIT ?').all(limit);
 }
 function listRevisions(limit = 15) {
     const conn = getDb();

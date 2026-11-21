@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.asyncRoute = asyncRoute;
 exports.createApp = createApp;
 exports.createServerWithSimulator = createServerWithSimulator;
+const voice_clone_1 = require("./voice-clone");
 const smoke_test_1 = require("./smoke-test");
 const dns_1 = __importDefault(require("dns"));
 const fs_1 = __importDefault(require("fs"));
@@ -1305,6 +1306,131 @@ function createApp(viciBridge) {
         }
         catch (err) {
             res.status(err?.statusCode || 400).json({ ok: false, code: err?.code, error: err?.message || 'Unable to stream sample audio' });
+        }
+    }));
+    // ==================== VOICE LAB: CONSENTED VOICE CLONING ====================
+    // ElevenLabs (cloud; usable on live calls) and the self-hosted speech service
+    // (Chatterbox on a GPU; Voice Lab previews). Creating, deleting and switching
+    // the call voice are owner/admin actions; listing and previewing are not.
+    const isOwnerOrAdmin = (req) => {
+        if (!(0, auth_guard_1.isAuthEnabled)() && (0, auth_guard_1.isRequestAuthorized)(req))
+            return true;
+        const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+        return !account || account.role === 'owner' || account.role === 'admin';
+    };
+    const cloneFail = (res, err) => {
+        const status = err instanceof voice_clone_1.CloneError ? err.statusCode : 500;
+        res.status(status).json({ ok: false, code: err?.code || 'VOICE_CLONE_FAILED', error: err?.message || String(err) });
+    };
+    const sampleBody = express_1.default.raw({ type: () => true, limit: voice_clone_1.MAX_SAMPLE_BYTES });
+    app.get('/api/voice-clone', asyncRoute(async (_req, res) => {
+        const settle = async (fn) => {
+            try {
+                return { ok: true, voices: await fn() };
+            }
+            catch (err) {
+                return { ok: false, code: err?.code || 'ERROR', error: err?.message || String(err) };
+            }
+        };
+        const [elevenlabs, selfhosted] = await Promise.all([settle(() => (0, voice_clone_1.elevenListClones)()), settle(() => (0, voice_clone_1.selfHostedListClones)())]);
+        const state = (0, db_1.getConsoleState)();
+        const tts = state.providers.find((p) => p.kind === 'tts' && p.id === state.services?.tts?.providerId);
+        const liveVoiceId = tts?.type === 'eleven_labs' ? (String(tts.endpoint || '').match(/text-to-speech\/([A-Za-z0-9]+)\//)?.[1] || null) : null;
+        res.json({ ok: true, elevenlabs, selfhosted, liveVoiceId, consents: (0, db_1.listVoiceCloneConsents)(100) });
+    }));
+    app.post('/api/voice-clone', sampleBody, asyncRoute(async (req, res) => {
+        if (!isOwnerOrAdmin(req)) {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Only an owner or admin can create cloned voices.' });
+            return;
+        }
+        try {
+            const q = req.query;
+            const provider = q.provider === 'selfhosted' ? 'selfhosted' : q.provider === 'elevenlabs' ? 'elevenlabs' : '';
+            if (!provider)
+                throw new voice_clone_1.CloneError('Choose ElevenLabs or Self-hosted.');
+            const clone = (0, voice_clone_1.validateCloneRequest)({
+                name: q.name, speakerName: q.speaker, consentStatement: q.statement, consentConfirmed: q.confirm === '1',
+                description: q.description, removeBackgroundNoise: q.noise === '1', filename: q.filename,
+                mimeType: String(req.headers['content-type'] || q.mime || ''), sample: Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0),
+            });
+            const voice = provider === 'elevenlabs' ? await (0, voice_clone_1.elevenCreateClone)(clone) : await (0, voice_clone_1.selfHostedCreateClone)(clone);
+            const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+            (0, db_1.recordVoiceCloneConsent)({
+                provider, voice_id: voice.id, voice_name: clone.name, speaker_name: clone.speakerName, consent_statement: clone.consentStatement,
+                recorded_by: account?.email || account?.fullName || 'admin', sample_sha256: (0, voice_clone_1.sampleSha256)(clone.sample), sample_bytes: clone.sample.length,
+            });
+            res.json({ ok: true, voice });
+        }
+        catch (err) {
+            cloneFail(res, err);
+        }
+    }));
+    app.post('/api/voice-clone/preview', asyncRoute(async (req, res) => {
+        try {
+            const provider = String(req.body?.provider || '');
+            const text = String(req.body?.text || 'Hello! This is a preview of my cloned voice.').slice(0, 600);
+            if (provider === 'elevenlabs') {
+                const audio = await (0, voice_clone_1.elevenPreview)(String(req.body?.id || ''), text);
+                res.setHeader('Content-Type', 'audio/mpeg');
+                res.setHeader('Cache-Control', 'no-store');
+                res.send(audio);
+            }
+            else if (provider === 'selfhosted') {
+                const id = String(req.body?.id || '');
+                if (!/^[0-9a-f]{32}$/.test(id))
+                    throw new voice_clone_1.CloneError('Unknown self-hosted voice id.');
+                const out = await (0, speech_service_client_1.synthesizeWithSpeechService)({ text, voice: `clone:${id}`, format: 'mp3' });
+                res.setHeader('Content-Type', out.contentType);
+                res.setHeader('Cache-Control', 'no-store');
+                res.send(out.buffer);
+            }
+            else
+                throw new voice_clone_1.CloneError('Choose ElevenLabs or Self-hosted.');
+        }
+        catch (err) {
+            cloneFail(res, err);
+        }
+    }));
+    app.delete('/api/voice-clone/:provider/:id', asyncRoute(async (req, res) => {
+        if (!isOwnerOrAdmin(req)) {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Only an owner or admin can delete cloned voices.' });
+            return;
+        }
+        try {
+            const id = String(req.params.id || '');
+            if (req.params.provider === 'elevenlabs')
+                await (0, voice_clone_1.elevenDelete)(id);
+            else if (req.params.provider === 'selfhosted')
+                await (0, voice_clone_1.selfHostedDelete)(id);
+            else
+                throw new voice_clone_1.CloneError('Unknown provider.');
+            res.json({ ok: true });
+        }
+        catch (err) {
+            cloneFail(res, err);
+        }
+    }));
+    // Make an ElevenLabs cloned voice the voice of live calls (Deepgram speaks through ElevenLabs).
+    app.post('/api/voice-clone/use', asyncRoute(async (req, res) => {
+        if (!isOwnerOrAdmin(req)) {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Only an owner or admin can change the call voice.' });
+            return;
+        }
+        try {
+            const id = String(req.body?.id || '');
+            const name = String(req.body?.name || 'Cloned voice').slice(0, 80);
+            if (!/^[A-Za-z0-9]{8,64}$/.test(id))
+                throw new voice_clone_1.CloneError('Unknown ElevenLabs voice id.');
+            const state = (0, db_1.getConsoleState)();
+            const provider = (0, voice_clone_1.elevenLabsLiveProvider)(id, name);
+            const providers = state.providers.filter((p) => p.id !== provider.id);
+            providers.push(provider);
+            const next = { ...state, providers, services: { ...state.services, tts: { providerId: provider.id, model: 'eleven_flash_v2_5' } } };
+            const saved = (0, db_1.saveConsoleState)(next, `Live call voice set to ElevenLabs cloned voice “${name}”`);
+            res.json({ ok: true, revisionId: saved.revisionId, provider: provider.id, model: 'eleven_flash_v2_5' });
+        }
+        catch (err) {
+            cloneFail(res, err);
         }
     }));
     app.post('/api/tts/preview', asyncRoute(async (req, res) => {

@@ -2822,7 +2822,7 @@
   const SUPPORTED_PROVIDER_TYPES = {
     stt: ['deepgram', 'speech_service'],
     llm: ['open_ai', 'anthropic', 'google', 'groq', 'nvidia'],
-    tts: ['deepgram', 'speech_service'],
+    tts: ['deepgram', 'speech_service', 'eleven_labs'],
   };
   const isSupportedProvider = (p) => (SUPPORTED_PROVIDER_TYPES[p.kind] || []).includes(p.type);
   const supportedProvidersByKind = (kind) =>
@@ -5759,6 +5759,200 @@
     if (!livePillTimer) livePillTimer = setInterval(refreshLivePill, 20000);
   }
 
+  // ── Voice Lab: consented voice cloning (ElevenLabs + self-hosted) ──────────
+  const vclone = {
+    loaded: false, loading: false, data: null, error: '', busy: '', msg: '', msgLevel: '',
+    provider: 'elevenlabs', name: '', speaker: '', statement: '', confirm: false, noise: true,
+    sample: null, sampleName: '', sampleType: '', recording: null, recStart: 0, recTimer: null,
+    previewText: 'Hi, this is a quick preview of my cloned voice. How does it sound?',
+  };
+
+  async function loadVoiceClones(force = false) {
+    if (serverlessCloudMode) return;
+    if (vclone.loading || (vclone.loaded && !force)) return;
+    vclone.loading = true;
+    try {
+      const res = await fetch('./api/voice-clone', { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      vclone.data = data; vclone.error = '';
+    } catch (err) { vclone.error = err instanceof Error ? err.message : String(err); }
+    vclone.loaded = true; vclone.loading = false;
+    repaintVoiceClone();
+  }
+
+  function repaintVoiceClone() {
+    const box = document.getElementById('vclone');
+    if (box) box.outerHTML = renderVoiceClonePanel();
+  }
+
+  function cloneRows(group, provider) {
+    if (!group) return '<div class="note">Loading…</div>';
+    if (!group.ok) {
+      const hint = group.code === 'ELEVENLABS_KEY_MISSING' ? ' Add <b>ELEVENLABS_API_KEY</b> in API Keys (key icon, bottom-left).'
+        : group.code === 'SELFHOSTED_CLONE_OFF' || group.code === 'SELFHOSTED_NOT_CONFIGURED' ? ' This needs the self-hosted speech service with its clone container on an NVIDIA GPU server.' : '';
+      return `<div class="note wn">${esc(group.error)}${hint}</div>`;
+    }
+    if (!group.voices.length) return '<div class="note">No cloned voices yet.</div>';
+    const live = vclone.data?.liveVoiceId;
+    return group.voices.map((v) => `<div class="vclone-row">
+      <div class="vclone-name"><b>${esc(v.name)}</b>${provider === 'elevenlabs' && live === v.id ? ' <span class="pill ok">Live on calls</span>' : ''}<small>${esc(v.id)}${v.durationSec ? ` · ${Math.round(v.durationSec)} s sample` : ''}</small></div>
+      <div class="vclone-actions">
+        <button class="g" type="button" data-vclone-preview="${esc(provider)}|${esc(v.id)}" ${vclone.busy ? 'disabled' : ''}>▶ Preview</button>
+        ${provider === 'elevenlabs' && live !== v.id ? `<button class="b" type="button" data-vclone-use="${esc(v.id)}" data-vclone-name="${esc(v.name)}" ${vclone.busy ? 'disabled' : ''}>Use for live calls</button>` : ''}
+        <button class="g danger" type="button" data-vclone-del="${esc(provider)}|${esc(v.id)}" data-vclone-name="${esc(v.name)}" ${vclone.busy ? 'disabled' : ''}>Delete</button>
+      </div>
+    </div>`).join('');
+  }
+
+  function renderVoiceClonePanel() {
+    if (serverlessCloudMode) {
+      return '<div class="card vclone" id="vclone"><h2>Voice Cloning</h2><div class="note">Voice cloning needs the deployed console (server), not the browser-only demo.</div></div>';
+    }
+    if (!vclone.loaded) setTimeout(() => loadVoiceClones(), 0);
+    const d = vclone.data;
+    const recSecs = vclone.recording ? Math.round((Date.now() - vclone.recStart) / 1000) : 0;
+    const isEleven = vclone.provider === 'elevenlabs';
+    return `<div class="card vclone" id="vclone">
+     <h2>Voice Cloning</h2>
+     <div class="note">Create a voice from a short recording of a real person — <b>only with their permission</b>. A consent record is kept for every voice.</div>
+     <div class="vclone-grid">
+      <div class="vclone-form">
+       <div class="row">
+        <div class="fld"><label for="vc-provider">Cloning service</label>
+         <select id="vc-provider">
+          <option value="elevenlabs" ${isEleven ? 'selected' : ''}>ElevenLabs — usable on live calls</option>
+          <option value="selfhosted" ${!isEleven ? 'selected' : ''}>Self-hosted (GPU server) — Voice Lab previews</option>
+         </select></div>
+        <div class="fld"><label for="vc-name">Voice name</label><input id="vc-name" maxlength="80" placeholder="e.g. Jessica – warm" value="${esc(vclone.name)}"></div>
+       </div>
+       <div class="fld"><label for="vc-speaker">Whose voice is this?</label><input id="vc-speaker" maxlength="120" placeholder="Speaker's full name" value="${esc(vclone.speaker)}"></div>
+       <div class="fld"><label for="vc-statement">How did they give permission?</label><textarea id="vc-statement" maxlength="1000" style="min-height:64px" placeholder="e.g. Signed voice-use consent form on 21 Nov 2026 for Med Benefits outbound calls">${esc(vclone.statement)}</textarea></div>
+       <div class="fld"><label>Voice sample (1–2 minutes of clear speech, one speaker, no music)</label>
+        <div class="vclone-sample">
+         <label class="g vclone-file" for="vc-file">Upload audio file</label>
+         <input id="vc-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm" hidden>
+         <button class="g" type="button" id="vc-rec">${vclone.recording ? `■ Stop recording (${recSecs}s)` : '● Record with microphone'}</button>
+         <span class="note" id="vc-sample-lbl" style="margin:0">${vclone.sample ? `✓ ${esc(vclone.sampleName)} (${(vclone.sample.size / 1024 / 1024).toFixed(1)} MB)` : 'No sample yet'}</span>
+        </div>
+        ${vclone.sample ? `<audio id="vc-sample-audio" controls src="${esc(vclone.sampleUrl || '')}"></audio>` : ''}
+       </div>
+       ${isEleven ? `<label class="chk-label"><input type="checkbox" id="vc-noise" style="width:auto" ${vclone.noise ? 'checked' : ''}>Remove background noise from the sample</label>` : ''}
+       <label class="chk-label"><input type="checkbox" id="vc-confirm" style="width:auto" ${vclone.confirm ? 'checked' : ''}>I confirm this person gave permission to clone their voice for this use</label>
+       <div class="bar" style="margin-top:8px"><button class="b" type="button" id="vc-create" ${vclone.busy ? 'disabled' : ''}>${vclone.busy === 'create' ? 'Creating voice…' : 'Create cloned voice'}</button></div>
+       ${vclone.msg ? `<div class="note ${vclone.msgLevel}">${vclone.msg}</div>` : ''}
+      </div>
+      <div class="vclone-list">
+       <div class="fld"><label for="vc-preview-text">Preview text</label><input id="vc-preview-text" maxlength="300" value="${esc(vclone.previewText)}"></div>
+       <h3>ElevenLabs voices <small>(live calls)</small></h3>
+       ${vclone.error ? `<div class="note er">${esc(vclone.error)}</div>` : cloneRows(d?.elevenlabs, 'elevenlabs')}
+       <h3>Self-hosted voices <small>(previews)</small></h3>
+       ${vclone.error ? '' : cloneRows(d?.selfhosted, 'selfhosted')}
+       <audio id="vc-preview-audio" controls hidden></audio>
+       <div class="note">“Use for live calls” switches the shared call voice for every bot to that ElevenLabs voice (Deepgram speaks through ElevenLabs with your key). Pick a Deepgram voice below to switch back.</div>
+      </div>
+     </div>
+    </div>`;
+  }
+
+  function setCloneMsg(msg, level = '') { vclone.msg = msg; vclone.msgLevel = level; repaintVoiceClone(); }
+
+  function setCloneSample(blob, name) {
+    if (vclone.sampleUrl) URL.revokeObjectURL(vclone.sampleUrl);
+    vclone.sample = blob; vclone.sampleName = name; vclone.sampleType = blob.type || 'application/octet-stream';
+    vclone.sampleUrl = URL.createObjectURL(blob);
+    repaintVoiceClone();
+  }
+
+  async function toggleCloneRecording() {
+    if (vclone.recording) { vclone.recording.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      const rec = new MediaRecorder(stream);
+      const chunks = [];
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        clearInterval(vclone.recTimer); vclone.recording = null;
+        setCloneSample(new Blob(chunks, { type: rec.mimeType || 'audio/webm' }), `Microphone recording (${Math.round((Date.now() - vclone.recStart) / 1000)}s)`);
+      };
+      vclone.recording = rec; vclone.recStart = Date.now();
+      vclone.recTimer = setInterval(() => { const b = document.getElementById('vc-rec'); if (b) b.textContent = `■ Stop recording (${Math.round((Date.now() - vclone.recStart) / 1000)}s)`; }, 500);
+      rec.start(1000);
+      repaintVoiceClone();
+    } catch (err) { setCloneMsg(`Microphone unavailable: ${esc(err instanceof Error ? err.message : String(err))}`, 'er'); }
+  }
+
+  function readCloneForm() {
+    vclone.provider = document.getElementById('vc-provider')?.value || vclone.provider;
+    vclone.name = document.getElementById('vc-name')?.value || '';
+    vclone.speaker = document.getElementById('vc-speaker')?.value || '';
+    vclone.statement = document.getElementById('vc-statement')?.value || '';
+    vclone.confirm = Boolean(document.getElementById('vc-confirm')?.checked);
+    const noise = document.getElementById('vc-noise');
+    if (noise) vclone.noise = noise.checked;
+    vclone.previewText = document.getElementById('vc-preview-text')?.value || vclone.previewText;
+  }
+
+  async function createClonedVoice() {
+    readCloneForm();
+    if (!vclone.sample) return setCloneMsg('Upload or record a voice sample first.', 'er');
+    if (!vclone.confirm) return setCloneMsg('Confirm that the speaker gave permission.', 'er');
+    vclone.busy = 'create'; setCloneMsg('Uploading the sample and creating the voice…');
+    try {
+      const q = new URLSearchParams({ provider: vclone.provider, name: vclone.name, speaker: vclone.speaker, statement: vclone.statement,
+        confirm: vclone.confirm ? '1' : '0', noise: vclone.noise ? '1' : '0', filename: vclone.sampleName.replace(/\s*\(.*\)$/, '') || 'sample' });
+      const res = await fetch(`./api/voice-clone?${q}`, { method: 'POST', headers: { 'Content-Type': vclone.sampleType || 'application/octet-stream' }, body: vclone.sample });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      vclone.busy = ''; vclone.name = ''; vclone.confirm = false;
+      await loadVoiceClones(true);
+      setCloneMsg(`✓ Created “${esc(data.voice.name)}”. ${data.voice.liveCalls ? 'Preview it, then press <b>Use for live calls</b>.' : 'Preview it on the right.'}`, 'ok');
+    } catch (err) { vclone.busy = ''; setCloneMsg(esc(err instanceof Error ? err.message : String(err)), 'er'); }
+  }
+
+  async function previewClonedVoice(provider, id) {
+    readCloneForm();
+    vclone.busy = 'preview'; repaintVoiceClone();
+    try {
+      const res = await fetch('./api/voice-clone/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, id, text: vclone.previewText }) });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Server answered ${res.status}`); }
+      const url = URL.createObjectURL(await res.blob());
+      vclone.busy = ''; repaintVoiceClone();
+      const audio = document.getElementById('vc-preview-audio');
+      if (audio) { audio.hidden = false; audio.src = url; audio.play().catch(() => {}); }
+    } catch (err) { vclone.busy = ''; setCloneMsg(esc(err instanceof Error ? err.message : String(err)), 'er'); }
+  }
+
+  async function useClonedVoice(id, name) {
+    if (!window.confirm(`Make “${name}” the voice of live calls for every bot?\n\nCalls will speak through ElevenLabs using your API key.`)) return;
+    vclone.busy = 'use'; repaintVoiceClone();
+    try {
+      const res = await fetch('./api/voice-clone/use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      const st = await fetch('./api/state', { cache: 'no-store' }).then((r) => r.json());
+      if (st?.state) { S = st.state; snap = comparableSnapshot(S); }
+      vclone.busy = '';
+      setCloneMsg(`✓ “${esc(name)}” is now the live-call voice. The next call uses it — no restart needed.`, 'ok');
+      await loadVoiceClones(true);
+      render();
+    } catch (err) { vclone.busy = ''; setCloneMsg(esc(err instanceof Error ? err.message : String(err)), 'er'); }
+  }
+
+  async function deleteClonedVoice(provider, id, name) {
+    if (!window.confirm(`Delete the cloned voice “${name}”? This cannot be undone.`)) return;
+    vclone.busy = 'delete'; repaintVoiceClone();
+    try {
+      const res = await fetch(`./api/voice-clone/${encodeURIComponent(provider)}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      vclone.busy = '';
+      await loadVoiceClones(true);
+      setCloneMsg(`Deleted “${esc(name)}”.`, '');
+    } catch (err) { vclone.busy = ''; setCloneMsg(esc(err instanceof Error ? err.message : String(err)), 'er'); }
+  }
+
   function render() {
     if (!S) return;
     renderSideNav();
@@ -6001,6 +6195,8 @@
        </div>
       </div>
      </div>
+
+     ${renderVoiceClonePanel()}
 
      <h2>Deepgram Real Voice Catalog (Flux v2 &amp; Aura-2) <button class="g" id="btn-refresh-voices" style="font-size:11px;padding:3px 8px;text-transform:none">↻ Refresh from Deepgram API</button></h2>
      <div class="row r4" style="margin-bottom:10px">
@@ -8492,6 +8688,12 @@
       return;
     }
 
+    if (b.id === 'vc-rec') { await toggleCloneRecording(); return; }
+    if (b.id === 'vc-create') { await createClonedVoice(); return; }
+    if (b.dataset.vclonePreview) { const [pv, id] = b.dataset.vclonePreview.split('|'); await previewClonedVoice(pv, id); return; }
+    if (b.dataset.vcloneUse) { await useClonedVoice(b.dataset.vcloneUse, b.dataset.vcloneName || 'Cloned voice'); return; }
+    if (b.dataset.vcloneDel) { const [pv, id] = b.dataset.vcloneDel.split('|'); await deleteClonedVoice(pv, id, b.dataset.vcloneName || id); return; }
+
     if (b.id === 'btn-synth-active') {
       await synthesizeWithApi();
       return;
@@ -8890,6 +9092,8 @@
 
   document.addEventListener('change', (e) => {
     const t = e.target;
+    if (t.id === 'vc-provider') { readCloneForm(); repaintVoiceClone(); return; }
+    if (t.id === 'vc-file' && t.files && t.files[0]) { readCloneForm(); setCloneSample(t.files[0], t.files[0].name); return; }
     if (t.id && t.id.startsWith('sel-')) {
       stopAllAudio();
       const kind = t.id.slice(4);

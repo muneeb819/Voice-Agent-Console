@@ -456,6 +456,9 @@ async function run() {
   const rows = [...dash.d.querySelectorAll('.readiness-issues .ck')].map((r) => r.textContent || '');
   assert.equal(new Set(rows.map((r) => r.replace(/^\W*\d+ bots:|\(.*\)/g, ''))).size, rows.length, 'each dashboard problem is listed once');
   dash.w.close();
+  const voiceFx = await fixture({ tab: 'voice' });
+  assert.match(voiceFx.d.getElementById('vclone')!.textContent || '', /needs the deployed console/, 'Voice Lab explains cloning needs the server in the demo build');
+  voiceFx.w.close();
   console.log('✓ UI: labels stay with their fields, dashboard problems grouped once, header pill shows real status (DEMO offline build)');
   console.log('✓ Static console: house crest header lockup, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
 }

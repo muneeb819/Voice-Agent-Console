@@ -192,6 +192,18 @@ export function getDb(): SqliteDbLike {
       summary TEXT NOT NULL,
       snapshot TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS voice_clone_consents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created_at TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      voice_id TEXT NOT NULL,
+      voice_name TEXT NOT NULL,
+      speaker_name TEXT NOT NULL,
+      consent_statement TEXT NOT NULL,
+      recorded_by TEXT NOT NULL,
+      sample_sha256 TEXT NOT NULL,
+      sample_bytes INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS greeting_library (
       greeting_id TEXT PRIMARY KEY,
       persona TEXT NOT NULL,
@@ -475,6 +487,24 @@ export function recentRevisionSnapshots(limit = 50): Array<{ id: number; saved_a
     try { out.push({ id: row.id, saved_at: row.saved_at, state: JSON.parse(row.snapshot) }); } catch { /* skip unreadable */ }
   }
   return out;
+}
+
+export interface VoiceCloneConsent {
+  id: number; created_at: string; provider: string; voice_id: string; voice_name: string;
+  speaker_name: string; consent_statement: string; recorded_by: string; sample_sha256: string; sample_bytes: number;
+}
+
+/** Consent record kept for every cloned voice (who, whose voice, how permission was given, which sample). */
+export function recordVoiceCloneConsent(entry: Omit<VoiceCloneConsent, 'id' | 'created_at'>): number {
+  const info = getDb()
+    .prepare(`INSERT INTO voice_clone_consents (created_at, provider, voice_id, voice_name, speaker_name, consent_statement, recorded_by, sample_sha256, sample_bytes)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(new Date().toISOString(), entry.provider, entry.voice_id, entry.voice_name, entry.speaker_name, entry.consent_statement, entry.recorded_by, entry.sample_sha256, entry.sample_bytes);
+  return Number(info.lastInsertRowid);
+}
+
+export function listVoiceCloneConsents(limit = 200): VoiceCloneConsent[] {
+  return getDb().prepare('SELECT * FROM voice_clone_consents ORDER BY id DESC LIMIT ?').all(limit) as unknown as VoiceCloneConsent[];
 }
 
 export function listRevisions(limit = 15): Array<{ id: number; saved_at: string; summary: string }> {
