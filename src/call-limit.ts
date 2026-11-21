@@ -18,7 +18,8 @@ export const CALL_LIMIT_CLOSING_LINE = "I'm sorry, I have to let you go now. Tha
 export function callLimitWrapUpPrompt(secondsLeft: number): string {
   return [
     `TIME CHECK: about ${secondsLeft} seconds remain before this call ends automatically.`,
-    'Wrap up NOW, warmly and without sounding rushed. If the caller is interested and qualified (or already agreed), say one short, happy handoff line and call set_disposition with "XFER" and transfer_to_live_agent in the same turn, without any more questions. An interested caller must be transferred, never let go.',
+    'Wrap up NOW, warmly and without sounding rushed. If the caller is qualified AND has clearly agreed to speak with the specialist (or asked for one), say one short, happy handoff line and call set_disposition with "XFER" and transfer_to_live_agent in the same turn, without any more questions.',
+    'If the caller is qualified and sounds interested but has not agreed yet, ask once, warmly, whether they would like to be connected now; transfer only if they say yes. Never transfer without the caller\'s agreement.',
     'If one single answer is still needed to qualify, ask only that one short question.',
     'Otherwise say one short, polite closing sentence, record the matching allowed disposition, and call end_call.',
   ].join(' ');
@@ -39,6 +40,8 @@ export function announcesTransfer(text: string): boolean {
   const sentences = t.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
   return sentences.some((s) => {
     if (s.endsWith('?')) return false;
+    // Negated or conditional: "I'm not transferring you", "I won't connect you", "I can't transfer you yet".
+    if (/\b(?:not|never|no longer|unable|cannot|can't|won't|don't|didn't|isn't|aren't|wouldn't|shouldn't|couldn't|unless|once you|after you|when you|if you)\b/.test(s)) return false;
     if (/\b(?:would you like|do you want|want me to|shall i|should i|can i|may i|if you(?:'d| would)? like|if that's okay|are you interested|would that be|happy to connect you if)\b/.test(s)) return false;
     return /\b(?:i(?:'ll| will| am|'m) (?:now )?(?:connect|connecting|transfer|transferring|put(?:ting)? you through|bring(?:ing)?)|let me (?:connect|transfer|get you over|put you through|bring)|(?:connecting|transferring) you(?: now| over| right now)?|(?:please )?(?:hold|stay on) (?:the line|on|for (?:just )?(?:a|one) (?:moment|second|sec))[^.!]*(?:connect|transfer|specialist|agent|representative|licensed)|one moment while i (?:connect|transfer|get)|i'm (?:getting|bringing) (?:a|our|my|one of our) (?:licensed )?(?:specialist|agent|representative))/.test(s);
   });
