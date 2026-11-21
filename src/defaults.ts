@@ -3,7 +3,6 @@ import { migrateStockMedicarePrompt, migrateStockOpening } from './opening';
 import { migrateLegacyQualificationPrompt, migrateLegacyCampaignRules, defaultSelfIntro, migrateLegacySelfIntro } from './persona';
 import { assignCampaignSlots, normalizeCampaignAgents } from './campaign-assignment';
 import { normalizeBargeInPct, presetForPct } from './barge-in';
-import { normalizeVoiceFilterPct } from './voice-isolation';
 import { SENTINEL_QA_AGENT, SENTINEL_QA_TESTS } from './sentinel-qa';
 
 // SIP configuration is interpolated into raw UDP headers, so never let control
@@ -296,7 +295,6 @@ export function createDefaultState(): ConsoleState {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
           bargeInSensitivityPct: 50,
-          backgroundVoiceFilterPct: 0,
           latencyProfile: 'ultra',
           expressionStyle: 'warm_empathetic',
           vocalGestures: true,
@@ -375,7 +373,6 @@ export function createDefaultState(): ConsoleState {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
           bargeInSensitivityPct: 50,
-          backgroundVoiceFilterPct: 0,
           latencyProfile: 'ultra',
           expressionStyle: 'warm_empathetic',
           vocalGestures: true,
@@ -429,7 +426,6 @@ export function createDefaultState(): ConsoleState {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
           bargeInSensitivityPct: 50,
-          backgroundVoiceFilterPct: 0,
           latencyProfile: 'ultra',
           expressionStyle: 'energetic_upbeat',
           vocalGestures: true,
@@ -473,7 +469,6 @@ export function createDefaultState(): ConsoleState {
           "bargeIn": "instant",
           "bargeInSensitivity": "balanced",
           "bargeInSensitivityPct": 50,
-          "backgroundVoiceFilterPct": 0,
           "latencyProfile": "ultra",
           "expressionStyle": "warm_empathetic",
           "vocalGestures": true,
@@ -1042,7 +1037,6 @@ export function normalizeState(raw: any): ConsoleState {
           bargeIn: ['instant', 'server', 'off'].includes(rawBeh.bargeIn) ? rawBeh.bargeIn : 'instant',
           bargeInSensitivity: presetForPct(normalizeBargeInPct(rawBeh.bargeInSensitivityPct, rawBeh.bargeInSensitivity)),
           bargeInSensitivityPct: normalizeBargeInPct(rawBeh.bargeInSensitivityPct, rawBeh.bargeInSensitivity),
-          backgroundVoiceFilterPct: normalizeVoiceFilterPct(rawBeh.backgroundVoiceFilterPct),
           latencyProfile: ['ultra', 'balanced', 'quality'].includes(rawBeh.latencyProfile)
             ? rawBeh.latencyProfile
             : 'ultra',

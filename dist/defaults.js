@@ -12,7 +12,6 @@ const opening_1 = require("./opening");
 const persona_1 = require("./persona");
 const campaign_assignment_1 = require("./campaign-assignment");
 const barge_in_1 = require("./barge-in");
-const voice_isolation_1 = require("./voice-isolation");
 const sentinel_qa_1 = require("./sentinel-qa");
 // SIP configuration is interpolated into raw UDP headers, so never let control
 // characters, quotes or angle brackets reach the registrar client. These are
@@ -210,7 +209,6 @@ function createDefaultState() {
                     bargeIn: 'instant',
                     bargeInSensitivity: 'balanced',
                     bargeInSensitivityPct: 50,
-                    backgroundVoiceFilterPct: 0,
                     latencyProfile: 'ultra',
                     expressionStyle: 'warm_empathetic',
                     vocalGestures: true,
@@ -287,7 +285,6 @@ function createDefaultState() {
                     bargeIn: 'instant',
                     bargeInSensitivity: 'balanced',
                     bargeInSensitivityPct: 50,
-                    backgroundVoiceFilterPct: 0,
                     latencyProfile: 'ultra',
                     expressionStyle: 'warm_empathetic',
                     vocalGestures: true,
@@ -339,7 +336,6 @@ function createDefaultState() {
                     bargeIn: 'instant',
                     bargeInSensitivity: 'balanced',
                     bargeInSensitivityPct: 50,
-                    backgroundVoiceFilterPct: 0,
                     latencyProfile: 'ultra',
                     expressionStyle: 'energetic_upbeat',
                     vocalGestures: true,
@@ -383,7 +379,6 @@ function createDefaultState() {
                     "bargeIn": "instant",
                     "bargeInSensitivity": "balanced",
                     "bargeInSensitivityPct": 50,
-                    "backgroundVoiceFilterPct": 0,
                     "latencyProfile": "ultra",
                     "expressionStyle": "warm_empathetic",
                     "vocalGestures": true,
@@ -937,7 +932,6 @@ function normalizeState(raw) {
                 bargeIn: ['instant', 'server', 'off'].includes(rawBeh.bargeIn) ? rawBeh.bargeIn : 'instant',
                 bargeInSensitivity: (0, barge_in_1.presetForPct)((0, barge_in_1.normalizeBargeInPct)(rawBeh.bargeInSensitivityPct, rawBeh.bargeInSensitivity)),
                 bargeInSensitivityPct: (0, barge_in_1.normalizeBargeInPct)(rawBeh.bargeInSensitivityPct, rawBeh.bargeInSensitivity),
-                backgroundVoiceFilterPct: (0, voice_isolation_1.normalizeVoiceFilterPct)(rawBeh.backgroundVoiceFilterPct),
                 latencyProfile: ['ultra', 'balanced', 'quality'].includes(rawBeh.latencyProfile)
                     ? rawBeh.latencyProfile
                     : 'ultra',
