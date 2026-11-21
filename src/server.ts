@@ -5,6 +5,10 @@ import {
   elevenDelete,
   elevenLabsLiveProvider,
   elevenListClones,
+  elevenListLibrary,
+  elevenSetExpressiveness,
+  EXPRESSIVE_PRESETS,
+  ELEVEN_LIVE_MODELS,
   elevenPreview,
   sampleSha256,
   selfHostedCreateClone,
@@ -1498,11 +1502,13 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     const settle = async (fn: () => Promise<any>) => {
       try { return { ok: true, voices: await fn() }; } catch (err: any) { return { ok: false, code: err?.code || 'ERROR', error: err?.message || String(err) }; }
     };
-    const [elevenlabs, selfhosted] = await Promise.all([settle(() => elevenListClones()), settle(() => selfHostedListClones())]);
+    const [elevenlabs, elevenlabsLibrary, selfhosted] = await Promise.all([settle(() => elevenListClones()), settle(() => elevenListLibrary()), settle(() => selfHostedListClones())]);
     const state = getConsoleState();
     const tts = state.providers.find((p) => p.kind === 'tts' && p.id === state.services?.tts?.providerId);
     const liveVoiceId = tts?.type === 'eleven_labs' ? (String(tts.endpoint || '').match(/text-to-speech\/([A-Za-z0-9]+)\//)?.[1] || null) : null;
-    res.json({ ok: true, elevenlabs, selfhosted, liveVoiceId, consents: listVoiceCloneConsents(100) });
+    const liveModel = liveVoiceId ? String(state.services?.tts?.model || ELEVEN_LIVE_MODELS[0]) : null;
+    const presets = Object.entries(EXPRESSIVE_PRESETS).map(([id, p]) => ({ id, label: p.label }));
+    res.json({ ok: true, elevenlabs, elevenlabsLibrary, selfhosted, liveVoiceId, liveModel, presets, consents: listVoiceCloneConsents(100) });
   }));
 
   app.post('/api/voice-clone', sampleBody, asyncRoute(async (req: Request, res: Response) => {
@@ -1570,15 +1576,27 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     if (!isOwnerOrAdmin(req)) { res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Only an owner or admin can change the call voice.' }); return; }
     try {
       const id = String(req.body?.id || '');
-      const name = String(req.body?.name || 'Cloned voice').slice(0, 80);
+      const name = String(req.body?.name || 'ElevenLabs voice').slice(0, 80);
       if (!/^[A-Za-z0-9]{8,64}$/.test(id)) throw new CloneError('Unknown ElevenLabs voice id.');
+      const model = (ELEVEN_LIVE_MODELS as readonly string[]).includes(String(req.body?.model)) ? String(req.body.model) : ELEVEN_LIVE_MODELS[0];
+      // Expressiveness is written onto the voice first, so the very next call already sounds right.
+      const preset = req.body?.preset ? await elevenSetExpressiveness(id, String(req.body.preset)) : null;
       const state = getConsoleState();
       const provider = elevenLabsLiveProvider(id, name);
       const providers = state.providers.filter((p) => p.id !== provider.id);
       providers.push(provider as any);
-      const next = { ...state, providers, services: { ...state.services, tts: { providerId: provider.id, model: 'eleven_flash_v2_5' } } };
-      const saved = saveConsoleState(next, `Live call voice set to ElevenLabs cloned voice “${name}”`);
-      res.json({ ok: true, revisionId: saved.revisionId, provider: provider.id, model: 'eleven_flash_v2_5' });
+      const next = { ...state, providers, services: { ...state.services, tts: { providerId: provider.id, model } } };
+      const saved = saveConsoleState(next, `Live call voice set to ElevenLabs voice “${name}” (${model}${preset ? `, ${preset}` : ''})`);
+      res.json({ ok: true, revisionId: saved.revisionId, provider: provider.id, model, preset });
+    } catch (err) { cloneFail(res, err); }
+  }));
+
+  // Change how expressive an ElevenLabs voice sounds (applies to live calls and previews).
+  app.post('/api/voice-clone/expressive', asyncRoute(async (req: Request, res: Response) => {
+    if (!isOwnerOrAdmin(req)) { res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Only an owner or admin can change the call voice.' }); return; }
+    try {
+      const preset = await elevenSetExpressiveness(String(req.body?.id || ''), String(req.body?.preset || ''));
+      res.json({ ok: true, preset });
     } catch (err) { cloneFail(res, err); }
   }));
 

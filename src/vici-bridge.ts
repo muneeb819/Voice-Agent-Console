@@ -22,7 +22,7 @@ import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCall
 import { createConversationMemory } from './persona';
 import { campaignExtension, campaignSlot, primaryCampaignAgent } from './campaign-assignment';
 import { BargeInGate, normalizeBargeInPct } from './barge-in';
-import { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
+import { CALL_LIMIT_CLOSING_LINE, TRANSFER_INTENT_AUTOCOMPLETE_MS, TRANSFER_INTENT_GRACE_MS, announcesTransfer, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt, transferBlockedPrompt } from './call-limit';
 export { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
 import { Agent, Campaign, ConsoleState } from './types';
 import { SipRegistrationClient } from './vici-sip-registration';
@@ -1166,6 +1166,13 @@ export class VicidialBridgeService {
     let keepAliveTimer: NodeJS.Timeout | null = null;
     let comfortSilenceTimer: NodeJS.Timeout | null = null;
     let deferredActionTimer: NodeJS.Timeout | null = null;
+    // The bot announced "I'm connecting you" (see announcesTransfer). Protects the
+    // call from the length limit; the bridge completes the transfer if the bot
+    // does not call transfer_to_live_agent itself.
+    let transferIntentAt = 0;
+    let transferIntentTimer: NodeJS.Timeout | null = null;
+    let autoTransfer: ((reason: string) => Promise<{ ok: boolean; error: string; blockers: string[] }>) | null = null;
+    const transferIntentActive = () => transferIntentAt > 0 && Date.now() - transferIntentAt < TRANSFER_INTENT_GRACE_MS;
     let speechDrainTimer: NodeJS.Timeout | null = null;
     let openingGate: OpeningGate | null = null;
 
@@ -1338,6 +1345,7 @@ export class VicidialBridgeService {
       }
       if (speechDrainTimer) { clearTimeout(speechDrainTimer); speechDrainTimer = null; }
       for (const t of callLimitTimers) clearTimeout(t);
+      if (transferIntentTimer) { clearTimeout(transferIntentTimer); transferIntentTimer = null; }
       callLimitTimers.length = 0;
       openingGate?.cancel();
       openingGate = null;
@@ -1431,7 +1439,7 @@ export class VicidialBridgeService {
     // A transfer that is already underway is never cut off.
     const callLimitMs = callLimitMsForCampaign(campaign);
     if (callLimitMs > 0) {
-      const transferUnderway = () => Boolean(transferRequested || pendingTransferArgs || transferCompletion || transferExecuted || transferredTo);
+      const transferUnderway = () => Boolean(transferRequested || pendingTransferArgs || transferCompletion || transferExecuted || transferredTo || transferIntentActive());
       const plan = callLimitSchedule(callLimitMs);
       const elapsed = () => Date.now() - startedAtMs;
       const at = (ms: number, fn: () => void) => callLimitTimers.push(setTimeout(fn, Math.max(0, ms - elapsed())));
@@ -1500,6 +1508,75 @@ export class VicidialBridgeService {
           sourceApi: 'fallback',
         };
       }
+      // One transfer path for both the bot's transfer_to_live_agent call and the
+      // bridge completing a transfer the bot announced but did not call.
+      const scheduleTransfer = async (rawArgs: Record<string, any>, onSanitized?: (a: Record<string, any>) => void): Promise<Record<string, any>> => {
+        let args: Record<string, any> = rawArgs;
+                  const allowedCodes = allowedCampaignDispositionCodes(campaign);
+                  const transferDisposition = disposition || 'XFER';
+                  const sanitized = conversationMemory.sanitizeTransferArgs(args);
+                  const qualificationBlockers = conversationMemory.qualificationBlockers(campaign);
+                  if (qualificationBlockers.length) {
+                    return { ok: false, error: `Transfer blocked: ${qualificationBlockers.join(' ')} No transfer was scheduled.`, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}) };
+                  } else if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
+                    return { ok: false, error: `Transfer requires the allowed XFER disposition for selected campaign ${campaign.viciCampaign}; current disposition is ${transferDisposition}. No transfer was scheduled.` };
+                  } else {
+                    transferRequested = true;
+                    if (!disposition) disposition = 'XFER';
+                    args = sanitized.args;
+                    onSanitized?.(args);
+                    const reason = String(args.reason || 'Qualified & interested lead');
+                  const metaParts = [
+                    args.prospect_name ? `Name:${args.prospect_name}` : hydratedLead.first_name ? `Name:${hydratedLead.first_name}` : '',
+                    args.confirmed_age ? `Age:${args.confirmed_age}` : '',
+                    args.medicare_status ? `Medicare:${args.medicare_status}` : '',
+                    args.hook_type ? `Hook:${args.hook_type}` : '',
+                  ].filter(Boolean);
+                  const noteSummary = `[AI Qualified${metaParts.length ? ' | ' + metaParts.join(' | ') : ''}] ${reason}`;
+
+                  // Push structured metadata into vicidial_list BEFORE transfer so closer screen-pop shows Name, Age, Medicare Status & Hook Type!
+                  const notesUpdate = await viciClient.updateLeadDisposition({
+                    leadId: summary.leadId,
+                    phone: summary.phone,
+                    status: disposition,
+                    notes: noteSummary,
+                  });
+
+                  pendingTransferArgs = {
+                    reason,
+                    prospect_name: args.prospect_name || hydratedLead.first_name || undefined,
+                    confirmed_age: args.confirmed_age,
+                    medicare_status: args.medicare_status,
+                    hook_type: args.hook_type,
+                  };
+                  if (deferredActionTimer) clearTimeout(deferredActionTimer);
+                  deferredActionTimer = setTimeout(() => {
+                    if (pendingTransferArgs) {
+                      const p = pendingTransferArgs;
+                      pendingTransferArgs = null;
+                      executeTransferAction(p).catch(() => {});
+                    }
+                  }, 9000);
+
+                  return {
+                    ok: true,
+                    ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
+                    ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
+                    transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
+                    closer_screen_pop_notes_saved: notesUpdate.ok,
+                    metadata_passed: {
+                      prospect_name: args.prospect_name || hydratedLead.first_name || null,
+                      confirmed_age: args.confirmed_age || null,
+                      medicare_status: args.medicare_status || null,
+                      hook_type: args.hook_type || null,
+                    },
+                  };
+                  }
+      };
+      autoTransfer = async (reason: string) => {
+        const payload = await scheduleTransfer({ reason });
+        return { ok: Boolean(payload.ok), error: String(payload.error || ''), blockers: conversationMemory.qualificationBlockers(campaign) };
+      };
 
       if (closed) return;
 
@@ -1685,6 +1762,10 @@ export class VicidialBridgeService {
             if (role === 'user') conversationMemory.addUserText(content);
             else conversationMemory.addAssistantText(content);
             addTranscript(role, content);
+            if (role === 'assistant' && !transferRequested && !transferIntentAt && announcesTransfer(content)) {
+              transferIntentAt = Date.now();
+              addTranscript('system', 'Bot announced a transfer: call protected from the time limit until it completes');
+            }
             break;
           }
 
@@ -1704,6 +1785,23 @@ export class VicidialBridgeService {
             openingGate?.afterRelease(() => {
               if (closed) return;
               updateState('listening');
+              // Announced a transfer but did not call the function: complete it.
+              if (transferIntentAt && !transferRequested && !transferIntentTimer && autoTransfer) {
+                transferIntentTimer = setTimeout(async () => {
+                  transferIntentTimer = null;
+                  if (closed || transferRequested || !autoTransfer) return;
+                  const outcome = await autoTransfer('Bot told the caller it was connecting them');
+                  if (outcome.ok) {
+                    addTranscript('system', 'Transfer started by the bridge after the bot announced it');
+                  } else {
+                    transferIntentAt = 0; // not protected any more; the bot must fix the gap first
+                    addTranscript('system', `Announced transfer not started: ${outcome.error}`);
+                    if (dgWs && dgWs.readyState === WebSocket.OPEN && outcome.blockers.length) {
+                      dgWs.send(JSON.stringify({ type: 'UpdatePrompt', prompt: transferBlockedPrompt(outcome.blockers) }));
+                    }
+                  }
+                }, Math.min(opts.hooks.pendingPlaybackMs() + TRANSFER_INTENT_AUTOCOMPLETE_MS, 12000));
+              }
               if (!pendingTransferArgs && !awaitingHangupAfterSpeech) return;
               // AgentAudioDone means the provider finished generating audio,
               // not that our paced SIP/AudioSocket queue has reached the caller.
@@ -1784,65 +1882,7 @@ export class VicidialBridgeService {
                   };
                 }
               } else if (fnItem.name === 'transfer_to_live_agent') {
-                const allowedCodes = allowedCampaignDispositionCodes(campaign);
-                const transferDisposition = disposition || 'XFER';
-                const sanitized = conversationMemory.sanitizeTransferArgs(args);
-                const qualificationBlockers = conversationMemory.qualificationBlockers(campaign);
-                if (qualificationBlockers.length) {
-                  resultPayload = { ok: false, error: `Transfer blocked: ${qualificationBlockers.join(' ')} No transfer was scheduled.`, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}) };
-                } else if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
-                  resultPayload = { ok: false, error: `Transfer requires the allowed XFER disposition for selected campaign ${campaign.viciCampaign}; current disposition is ${transferDisposition}. No transfer was scheduled.` };
-                } else {
-                  transferRequested = true;
-                  if (!disposition) disposition = 'XFER';
-                  args = sanitized.args;
-                  const reason = String(args.reason || 'Qualified & interested lead');
-                const metaParts = [
-                  args.prospect_name ? `Name:${args.prospect_name}` : hydratedLead.first_name ? `Name:${hydratedLead.first_name}` : '',
-                  args.confirmed_age ? `Age:${args.confirmed_age}` : '',
-                  args.medicare_status ? `Medicare:${args.medicare_status}` : '',
-                  args.hook_type ? `Hook:${args.hook_type}` : '',
-                ].filter(Boolean);
-                const noteSummary = `[AI Qualified${metaParts.length ? ' | ' + metaParts.join(' | ') : ''}] ${reason}`;
-
-                // Push structured metadata into vicidial_list BEFORE transfer so closer screen-pop shows Name, Age, Medicare Status & Hook Type!
-                const notesUpdate = await viciClient.updateLeadDisposition({
-                  leadId: summary.leadId,
-                  phone: summary.phone,
-                  status: disposition,
-                  notes: noteSummary,
-                });
-
-                pendingTransferArgs = {
-                  reason,
-                  prospect_name: args.prospect_name || hydratedLead.first_name || undefined,
-                  confirmed_age: args.confirmed_age,
-                  medicare_status: args.medicare_status,
-                  hook_type: args.hook_type,
-                };
-                if (deferredActionTimer) clearTimeout(deferredActionTimer);
-                deferredActionTimer = setTimeout(() => {
-                  if (pendingTransferArgs) {
-                    const p = pendingTransferArgs;
-                    pendingTransferArgs = null;
-                    executeTransferAction(p).catch(() => {});
-                  }
-                }, 9000);
-
-                resultPayload = {
-                  ok: true,
-                  ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
-                  ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
-                  transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
-                  closer_screen_pop_notes_saved: notesUpdate.ok,
-                  metadata_passed: {
-                    prospect_name: args.prospect_name || hydratedLead.first_name || null,
-                    confirmed_age: args.confirmed_age || null,
-                    medicare_status: args.medicare_status || null,
-                    hook_type: args.hook_type || null,
-                  },
-                };
-                }
+                resultPayload = await scheduleTransfer(args, (a) => { args = a; });
               } else if (fnItem.name === 'end_call') {
                 awaitingHangupAfterSpeech = true;
                 if (deferredActionTimer) clearTimeout(deferredActionTimer);

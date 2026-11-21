@@ -109,6 +109,55 @@ export async function elevenListClones(fetchImpl: typeof fetch = fetch): Promise
     }));
 }
 
+/** Ready-made voices on the ElevenLabs account (premade, library, generated): not clones. */
+export async function elevenListLibrary(fetchImpl: typeof fetch = fetch): Promise<Array<ClonedVoice & { description: string }>> {
+  const res = await fetchImpl(`${ELEVEN_API}/v1/voices`, { headers: { 'xi-api-key': elevenKey() } });
+  if (!res.ok) throw await elevenError(res);
+  const data: any = await res.json();
+  return (Array.isArray(data?.voices) ? data.voices : [])
+    .filter((v: any) => v?.voice_id && !['cloned', 'professional'].includes(String(v?.category || '')))
+    .map((v: any) => {
+      const l = v?.labels && typeof v.labels === 'object' ? v.labels : {};
+      const description = [l.gender, l.age, l.accent, l.description || l.descriptive, l.use_case || l.use_case].filter(Boolean).map(String).join(' · ');
+      return {
+        provider: 'elevenlabs' as const,
+        id: String(v.voice_id),
+        name: String(v.name || v.voice_id),
+        voice: String(v.voice_id),
+        liveCalls: true,
+        createdAt: null,
+        description: description.slice(0, 160),
+      };
+    })
+    .sort((a: any, b: any) => a.name.localeCompare(b.name));
+}
+
+/**
+ * How expressive the live-call voice sounds. ElevenLabs uses a voice's saved
+ * settings whenever a request sends none (Deepgram's speak provider sends none),
+ * so these are written onto the voice itself.
+ * Lower stability = more emotion and pitch movement; style adds delivery flair.
+ */
+export const EXPRESSIVE_PRESETS = {
+  warm: { label: 'Warm & expressive', stability: 0.32, similarity_boost: 0.8, style: 0.45, use_speaker_boost: true, speed: 1.0 },
+  balanced: { label: 'Balanced', stability: 0.5, similarity_boost: 0.75, style: 0.2, use_speaker_boost: true, speed: 1.0 },
+  steady: { label: 'Steady & calm', stability: 0.7, similarity_boost: 0.75, style: 0.0, use_speaker_boost: true, speed: 0.97 },
+} as const;
+export type ExpressivePreset = keyof typeof EXPRESSIVE_PRESETS;
+
+export async function elevenSetExpressiveness(voiceId: string, preset: string, fetchImpl: typeof fetch = fetch): Promise<ExpressivePreset> {
+  if (!/^[A-Za-z0-9]{8,64}$/.test(voiceId)) throw new CloneError('Unknown ElevenLabs voice id.');
+  if (!Object.prototype.hasOwnProperty.call(EXPRESSIVE_PRESETS, preset)) throw new CloneError('Choose Warm, Balanced or Steady.');
+  const { label: _label, ...settings } = EXPRESSIVE_PRESETS[preset as ExpressivePreset];
+  const res = await fetchImpl(`${ELEVEN_API}/v1/voices/${voiceId}/settings/edit`, {
+    method: 'POST',
+    headers: { 'xi-api-key': elevenKey(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) throw await elevenError(res);
+  return preset as ExpressivePreset;
+}
+
 export async function elevenCreateClone(req: CloneRequest, fetchImpl: typeof fetch = fetch): Promise<ClonedVoice> {
   const form = new FormData();
   form.append('name', req.name);

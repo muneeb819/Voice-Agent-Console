@@ -347,6 +347,23 @@ async function main() {
       late.close();
       viciRequests.length = 0;
     }
+    // Bot SAYS it is connecting the caller but never calls transfer_to_live_agent,
+    // close to the limit (the screenshot case: hung up at the limit mid-handoff).
+    // The bridge must protect the call and complete the transfer itself.
+    {
+      const announced = await placeCall(`${inv.vici.aiExten}${campaign.slot}`, { steps: [
+        { user: "Yes, I'm 70 and I have Medicare Part A and Part B. My name is Mary Jones, ZIP 94601, please connect me." },
+        { sleep: 21000 },
+        { raw: { type: 'ConversationText', role: 'assistant', content: 'You meet all the requirements! Please hold the line for just a brief moment while I connect you with our licensed specialist.' } },
+        { audioDone: true },
+      ] });
+      await until(() => viciRequests.some((p) => p.function === 'ra_call_control' && p.value === announced.callerCode && /TRANSFER/.test(p.stage || '')), 'announced transfer completed by the bridge', 45000);
+      assert.ok(!viciRequests.some((p) => p.function === 'ra_call_control' && p.stage === 'HANGUP' && p.value === announced.callerCode), 'time limit did not hang up the announced transfer');
+      assert.ok(!announced.session.messages.some((m) => m.type === 'InjectAgentMessage' && /have to let you go/.test(m.message || '')), 'no closing line spoken over the handoff');
+      console.log(`✓ TIME LIMIT ${agent.name}: bot announced "I'm connecting you" without calling the transfer → bridge completed the transfer, no hang-up at the limit`);
+      announced.close();
+      viciRequests.length = 0;
+    }
     await putState((st) => { st.campaigns.find((c: any) => c.id === campaign.id).maxCallSec = 70; });
   }
 

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 process.env.ELEVENLABS_API_KEY = 'test-eleven-key';
 process.env.SPEECH_SERVICE_URL = 'http://speech.local:8000';
 import {
-  CloneError, elevenCreateClone, elevenLabsLiveProvider, elevenListClones, selfHostedCreateClone, validateCloneRequest,
+  CloneError, elevenCreateClone, elevenLabsLiveProvider, elevenListClones, elevenListLibrary, elevenSetExpressiveness, selfHostedCreateClone, validateCloneRequest,
 } from '../src/voice-clone';
 import { createDefaultState, normalizeState } from '../src/defaults';
 import { buildDeepgramSettings, validateAgent } from '../src/settings-builder';
@@ -46,6 +46,19 @@ async function main() {
   await assert.rejects(elevenCreateClone(validateCloneRequest(good), planFail), (e: any) => e.code === 'ELEVENLABS_PLAN');
   console.log('✓ ElevenLabs: sample uploaded with your key, only cloned voices listed, plan limits explained');
 
+  // Ready-made voices + expressiveness written onto the voice (Deepgram sends no voice settings)
+  const lib = await elevenListLibrary(fakeFetch);
+  assert.deepEqual(lib.map((v) => v.id), ['Premade1'], 'library lists ready-made voices, not clones');
+  let edited: any = null;
+  const editFetch: any = async (url: string, init: any) => { edited = { url, body: JSON.parse(init.body), key: init.headers['xi-api-key'] }; return new Response('{"status":"ok"}', { status: 200 }); };
+  assert.equal(await elevenSetExpressiveness('CloneAbc12345', 'warm', editFetch), 'warm');
+  assert.ok(edited.url.endsWith('/v1/voices/CloneAbc12345/settings/edit'));
+  assert.equal(edited.key, 'test-eleven-key');
+  assert.ok(edited.body.stability < 0.4 && edited.body.style > 0.3 && edited.body.use_speaker_boost === true, 'warm = low stability, real style');
+  assert.ok(!('label' in edited.body));
+  await assert.rejects(elevenSetExpressiveness('CloneAbc12345', 'robotic', editFetch), /Warm, Balanced or Steady/);
+  console.log('✓ ElevenLabs: ready-made voices listed; Warm & expressive preset written onto the voice (stability 0.32, style 0.45)');
+
   // Live calls: Deepgram speaks through ElevenLabs with the cloned voice
   const state: any = normalizeState(createDefaultState());
   state.providers.push(elevenLabsLiveProvider('CloneAbc12345', 'Jessica Warm'));
@@ -80,6 +93,13 @@ async function main() {
   const off: any = async () => new Response(JSON.stringify({ detail: 'Voice cloning is not enabled on this deployment' }), { status: 501 });
   await assert.rejects(selfHostedCreateClone(validateCloneRequest(good), off), (e: any) => e.code === 'SELFHOSTED_CLONE_OFF');
   console.log('✓ Self-hosted: consent record sent to the speech service; "needs a GPU clone container" explained when it is off');
+  // Transfer announcements (the bot SAYS it is connecting) vs offers/questions
+  const { announcesTransfer } = await import('../src/call-limit');
+  for (const t of ['You meet all the requirements! Please hold the line for just a brief moment while I connect you with our licensed specialist.', "Great, I'll connect you now.", 'Let me transfer you to my supervisor.'])
+    assert.ok(announcesTransfer(t), `announced: ${t}`);
+  for (const t of ['Would you like me to connect you with a specialist?', "I can connect you if you'd like.", 'Do you have Medicare Part A and B?'])
+    assert.ok(!announcesTransfer(t), `not announced: ${t}`);
+  console.log('✓ Transfer announcements detected ("hold while I connect you"); offers and questions are not');
   console.log('\nVoice clone verification passed.');
 }
 main().catch((e) => { console.error(e); process.exit(1); });

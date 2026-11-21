@@ -1,6 +1,6 @@
 import http from 'http';
 import { BargeInGate, normalizeBargeInPct } from './barge-in';
-import { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
+import { CALL_LIMIT_CLOSING_LINE, TRANSFER_INTENT_AUTOCOMPLETE_MS, TRANSFER_INTENT_GRACE_MS, announcesTransfer, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt, transferBlockedPrompt } from './call-limit';
 import { getAuthenticatedUser, isRequestAuthorized } from './auth-guard';
 import crypto from 'crypto';
 import WebSocket, { WebSocketServer } from 'ws';
@@ -162,6 +162,13 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
     let transferredTo: string | null = null;
     let awaitingHangupAudioDone = false;
     const callLimitTimers: NodeJS.Timeout[] = [];
+    // Mirrors the phone bridge: an announced or simulated transfer owns the call,
+    // so the length limit never hangs up on a caller being handed to a closer.
+    let transferIntentAt = 0;
+    let transferIntentTimer: NodeJS.Timeout | null = null;
+    let simulatedTransfer = false;
+    let endAfterTransferSpeech = false;
+    const transferUnderway = () => simulatedTransfer || (transferIntentAt > 0 && Date.now() - transferIntentAt < TRANSFER_INTENT_GRACE_MS);
     let pendingEndFunctionId: string | null = null;
     let fatalErrorMessage: string | null = null;
     let suppressStaleAgentAudio = false;
@@ -286,13 +293,19 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           : !allowedCodes.includes('XFER')
           ? { ok: false, error: 'XFER is not allowed by the explicitly selected campaign. No transfer was simulated.' }
           : {
-              ok: false,
+              ok: true,
               simulated: true,
-              requested_target: activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : null,
-              error: 'Browser tests cannot transfer a real call. No VICIdial or PBX transfer was made.',
+              real_transfer_made: false,
+              transfer_scheduled: activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : null,
+              note: 'Browser test: on a real call the caller is now connected to the closer. Say one short, warm handoff line and stop.',
               ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
               ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
             };
+        if (!blockers.length && allowedCodes.includes('XFER')) {
+          simulatedTransfer = true;
+          endAfterTransferSpeech = true;
+          recordTranscript('system', `Transfer reached: a real call would now be connected to ${activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : 'the closer'} (browser test ends after this line)`);
+        }
       } else if (fnReq.name === 'end_call') {
         awaitingHangupAudioDone = true;
         pendingEndFunctionId = fnReq.id;
@@ -379,6 +392,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
       }
       for (const t of callLimitTimers) clearTimeout(t);
       callLimitTimers.length = 0;
+      if (transferIntentTimer) { clearTimeout(transferIntentTimer); transferIntentTimer = null; }
       if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
       if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
       if (startTimer) { clearTimeout(startTimer); startTimer = null; }
@@ -795,21 +809,25 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
                 const t0 = Date.now();
                 const at = (ms: number, fn: () => void) => callLimitTimers.push(setTimeout(fn, Math.max(0, ms - (Date.now() - t0))));
                 at(plan.wrapUpAtMs, () => {
-                  if (closed) return;
+                  if (closed || transferUnderway()) return;
                   const left = Math.round((limitMs - plan.wrapUpAtMs) / 1000);
                   recordTranscript('system', `Call time limit: ${left}s left, wrap-up instruction sent to the bot`);
                   if (dgWs && dgWs.readyState === WebSocket.OPEN) dgWs.send(JSON.stringify({ type: 'UpdatePrompt', prompt: callLimitWrapUpPrompt(left) }));
                 });
                 at(plan.closingAtMs, () => {
-                  if (closed || awaitingHangupAudioDone) return;
+                  if (closed || awaitingHangupAudioDone || transferUnderway()) return;
                   awaitingHangupAudioDone = true;
                   recordTranscript('system', 'Call time limit: closing line spoken, ending after it');
                   if (dgWs && dgWs.readyState === WebSocket.OPEN) dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message: CALL_LIMIT_CLOSING_LINE }));
                 });
                 at(limitMs, () => {
-                  if (closed) return;
+                  if (closed || transferUnderway()) return;
                   recordTranscript('system', `Call time limit of ${Math.round(limitMs / 1000)}s reached, call ended`);
                   finalizeCall('max_call_duration');
+                });
+                at(limitMs + 25000, () => {
+                  if (closed) return;
+                  finalizeCall(simulatedTransfer ? 'transfer_simulated' : 'max_call_duration');
                 });
               }
               if (connectTimer) { clearTimeout(connectTimer); connectTimer = null; }
@@ -896,6 +914,10 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
               } else {
                 conversationMemory.addAssistantText(String(evt.content || ''));
                 suppressStaleAgentAudio = false;
+                if (!simulatedTransfer && !transferIntentAt && announcesTransfer(String(evt.content || ''))) {
+                  transferIntentAt = Date.now();
+                  recordTranscript('system', 'Bot announced a transfer: call protected from the time limit until it completes');
+                }
               }
               recordTranscript(role, String(evt.content || ''), {
                 languages: evt.languages,
@@ -920,7 +942,27 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
               openingGate?.afterRelease(() => {
                 if (closed) return;
                 sendClientJson({ type: 'agent_state', state: 'listening' });
+                if (endAfterTransferSpeech) { finalizeCall('transfer_simulated'); return; }
                 if (awaitingHangupAudioDone) finalizeCall('bot_end_call');
+                // Announced a transfer but did not call the function: complete it here too.
+                if (transferIntentAt && !simulatedTransfer && !transferIntentTimer) {
+                  transferIntentTimer = setTimeout(() => {
+                    transferIntentTimer = null;
+                    if (closed || simulatedTransfer) return;
+                    const blockers = conversationMemory.qualificationBlockers(activeCampaign);
+                    const allowed = allowedCampaignDispositionCodes(activeCampaign).includes('XFER');
+                    if (!blockers.length && allowed) {
+                      simulatedTransfer = true;
+                      recordTranscript('system', `Transfer started after the bot announced it: a real call would now be connected to ${activeCampaign ? `${activeCampaign.xferType}:${activeCampaign.xferTarget}` : 'the closer'} (browser test ends)`);
+                      finalizeCall('transfer_simulated');
+                    } else {
+                      transferIntentAt = 0;
+                      const why = blockers.length ? blockers : ['XFER is not an allowed disposition on this campaign.'];
+                      recordTranscript('system', `Announced transfer not started: ${why.join(' ')}`);
+                      if (dgWs && dgWs.readyState === WebSocket.OPEN) dgWs.send(JSON.stringify({ type: 'UpdatePrompt', prompt: transferBlockedPrompt(why) }));
+                    }
+                  }, TRANSFER_INTENT_AUTOCOMPLETE_MS);
+                }
               });
               break;
             }
