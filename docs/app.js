@@ -2437,6 +2437,11 @@
     push((agent.greeting || '').trim().length > 10, 'Greeting is set (> 10 chars)');
     const promptOk = (agent.prompt || '').trim().length > 0 && agent.prompt.length <= 25000;
     push(promptOk, 'System prompt within 25,000-character managed limit');
+    for (const campaign of campaignsForAgent(agent.id)) {
+      const r = promptReach(agent, campaign);
+      if (r.instructionsCutChars > 0) push(false, `On “${campaign.name}”, the last ${r.cutLines.length} line(s) of the instructions do not reach calls — shorten the instructions or the campaign rules`);
+      else if (r.callWillFail) push(false, `On “${campaign.name}”, the call prompt is over 25,000 characters with the opening — calls cannot start`);
+    }
 
     if (sttModel.startsWith('flux')) {
       const eot = Number(agent.stt.eot);
@@ -2559,6 +2564,43 @@
       'Campaign-specific compliance & rules are written and reviewed (20–8,000 characters)',
     );
     return items;
+  }
+
+  // Readiness blockers used to render as one run-on paragraph (hundreds of
+  // "Agent “X”: …" fragments). Group them per bot / campaign, lift checks that
+  // fail for every bot into one "All bots" group, and fold the detail away.
+  function renderBlockerList(intro, blockers, cls) {
+    const groups = new Map();
+    const add = (name, text) => {
+      if (!groups.has(name)) groups.set(name, []);
+      const list = groups.get(name);
+      if (!list.includes(text)) list.push(text);
+    };
+    for (const raw of blockers) {
+      const m = /^(Agent|Campaign) “(.+?)”[:]?\s*(.*)$/.exec(String(raw));
+      const text = (m ? m[3] : String(raw)).replace(/\.$/, '');
+      add(m ? `${m[1] === 'Agent' ? 'Bot' : 'Campaign'}: ${m[2]}` : 'General', text || String(raw));
+    }
+    const botGroups = [...groups.keys()].filter((k) => k.startsWith('Bot: '));
+    if (botGroups.length > 1) {
+      const shared = groups.get(botGroups[0]).filter((t) => botGroups.every((k) => groups.get(k).includes(t)));
+      if (shared.length) {
+        for (const k of botGroups) {
+          const rest = groups.get(k).filter((t) => !shared.includes(t));
+          if (rest.length) groups.set(k, rest); else groups.delete(k);
+        }
+        const ordered = new Map([[`All ${botGroups.length} bots`, shared], ...groups]);
+        groups.clear();
+        ordered.forEach((v, k) => groups.set(k, v));
+      }
+    }
+    const total = [...groups.values()].reduce((n, l) => n + l.length, 0);
+    return `<div class="note ${cls} blocker-list" style="margin-top:8px">
+      <b>${esc(intro)}</b> — ${total} check${total === 1 ? '' : 's'} not passing yet.
+      <details><summary>Show what to fix</summary>${[...groups.entries()]
+        .map(([name, items]) => `<div class="blocker-group"><b>${esc(name)}</b><ul>${items.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>`)
+        .join('')}</details>
+    </div>`;
   }
 
   function deploymentReadinessBlockersLocal() {
@@ -2747,6 +2789,7 @@
     const val = getPath(path);
     const fieldId = `vac-field-${++fieldSerial}`;
     const dp = `data-p="${path}" id="${fieldId}"`;
+    label = String(label).replace(/\uFE0F/g, '').trim(); // stray emoji residue made labels look misaligned
     if (type === 'chk') {
       return `<label class="chk-label"><input type="checkbox" style="width:auto" ${dp} ${val ? 'checked' : ''}>${label}</label>`;
     }
@@ -2769,7 +2812,9 @@
       const stepAttr = type === 'number' && !attrs.includes('step=') ? 'step="any"' : '';
       fieldHtml = `<input type="${type}" ${dp} ${stepAttr} ${attrs} value="${esc(val ?? '')}">`;
     }
-    return `<label for="${fieldId}">${label}</label>${fieldHtml}`;
+    // Label and control are ONE grid item; as siblings, a 2/3-column row put
+    // labels and boxes into different cells (labels floated over other fields).
+    return `<div class="fld"><label for="${fieldId}">${label}</label>${fieldHtml}</div>`;
   };
 
   const providersByKind = (kind) => S.providers.filter((p) => p.kind === kind).map((p) => [p.id, p.name]);
@@ -2777,7 +2822,7 @@
   const SUPPORTED_PROVIDER_TYPES = {
     stt: ['deepgram', 'speech_service'],
     llm: ['open_ai', 'anthropic', 'google', 'groq', 'nvidia'],
-    tts: ['deepgram', 'speech_service'],
+    tts: ['deepgram', 'speech_service', 'eleven_labs'],
   };
   const isSupportedProvider = (p) => (SUPPORTED_PROVIDER_TYPES[p.kind] || []).includes(p.type);
   const supportedProvidersByKind = (kind) =>
@@ -5531,13 +5576,27 @@
     </div>
 
     <div class="readiness-issues"><h2>${T.issues.length ? 'What still needs attention' : 'All configuration checks passed'}</h2>
-     ${T.issues.map((issue) => `<div class="ck"><span class="${issue.level}">${issue.level === 'er' ? '✗' : '!'}</span><span><b>${esc(issue.scope)}:</b> ${esc(issue.message)} <a class="g" href="${esc(sectionHref(issue.tab, { agentId: issue.entityId, campaignId: issue.entityId }))}" data-cmd-tab="${issue.tab}">Open setup</a></span></div>`).join('')}
+     ${groupIssues(T.issues).map((g) => `<div class="ck"><span class="${g.level}">${g.level === 'er' ? '✗' : '!'}</span><span>${g.scopes.length > 1 ? `<b>${g.scopes.length} ${g.kind}:</b> ` : `<b>${esc(g.scopes[0])}:</b> `}${esc(g.message)}${g.scopes.length > 1 ? ` <span class="ck-scopes">(${esc(g.scopes.join(', '))})</span>` : ''} <a class="g" href="${esc(sectionHref(g.tab, { agentId: g.entityId, campaignId: g.entityId }))}" data-cmd-tab="${g.tab}">Open setup</a></span></div>`).join('')}
      <div class="note">QA: ${T.testsPassed}/${T.testsTotal} passed, ${T.testsPending} pending. <a class="g" href="${esc(sectionHref('test', { agentId: A()?.id }))}" data-cmd-tab="test">Open Live Bot</a></div>
     </div>
     ${renderFleetMatrix()}
    </div>
   `;
     startReadyStage(T);
+  }
+
+  // The same problem used to be listed once per bot (5 bots × 10 checks = 50
+  // rows for 10 real problems). Group identical messages and name who is affected.
+  function groupIssues(issues) {
+    const groups = new Map();
+    for (const issue of issues || []) {
+      const key = `${issue.level}|${issue.tab}|${issue.message}`;
+      if (!groups.has(key)) groups.set(key, { ...issue, scopes: [] });
+      const scope = String(issue.scope || '').replace(/^(?:Agent|Campaign)\s+/, '').replace(/^["“](.*)["”]$/, '$1');
+      if (!groups.get(key).scopes.includes(scope)) groups.get(key).scopes.push(scope);
+    }
+    return [...groups.values()].map((g) => ({ ...g, kind: g.tab === 'campaigns' ? 'campaigns' : 'bots' }))
+      .sort((a, b) => (a.level === b.level ? b.scopes.length - a.scopes.length : a.level === 'er' ? -1 : 1));
   }
 
   function renderAgentCampaignAssignment(agent) {
@@ -5564,6 +5623,336 @@
 
   // ==================== MAIN VIEW RENDERER ====================
 
+  // ── Does what I saved actually reach calls? ────────────────────────────────
+  // Over budget, the call composer shortens the bot instructions FROM THE END,
+  // so newly added lines were dropped silently. These meters make it visible.
+  function promptReach(agent, campaign) {
+    const greeting = window.VacOpening.composeOpening(agent.greeting, '', agent.injectCampaignDisclosure, campaign.disclosure || '');
+    const opening = greeting ? window.VacOpening.openingInstruction(greeting).length : 0;
+    return window.VacPersona.callPromptReport(agent, campaign, opening);
+  }
+  const fmtN = (n) => Number(n || 0).toLocaleString('en-US');
+
+  function renderAgentReachMeter(agent) {
+    if (!agent) return '';
+    const camps = campaignsForAgent(agent.id);
+    if (!camps.length) return `<div class="reach-meter"><span class="reach-wn">Not assigned to a campaign yet — calls can't use these instructions.</span></div>`;
+    return `<div class="reach-meter">${camps.map((c) => {
+      const r = promptReach(agent, c);
+      if (r.instructionsCutChars > 0) {
+        return `<div class="reach-er">✗ <b>${esc(c.name)}:</b> the last ${r.cutLines.length} line${r.cutLines.length === 1 ? '' : 's'} (${fmtN(r.instructionsCutChars)} characters) will <b>not</b> reach calls — the call prompt is full. Shorten these instructions or the campaign rules.${r.cutLines.length ? ` First line cut: “${esc(r.cutLines[0].slice(0, 90))}${r.cutLines[0].length > 90 ? '…' : ''}”` : ''}</div>`;
+      }
+      if (r.callWillFail) return `<div class="reach-er">✗ <b>${esc(c.name)}:</b> ${fmtN(r.phoneChars)} of ${fmtN(r.phoneLimit)} characters with the opening — calls cannot start. Shorten the instructions.</div>`;
+      const cls = r.phoneRoom < 1000 ? 'reach-wn' : 'reach-ok';
+      return `<div class="${cls}">${cls === 'reach-ok' ? '✓' : '!'} <b>${esc(c.name)}:</b> all ${fmtN(r.instructionsLines)} lines reach calls · call prompt ${fmtN(r.phoneChars)} / ${fmtN(r.phoneLimit)} (${fmtN(r.phoneRoom)} to spare)</div>`;
+    }).join('')}</div>`;
+  }
+
+  function renderRulesReachMeter(campaign) {
+    if (!campaign) return '';
+    const rules = String(campaign.complianceRules || '').trim();
+    const full = rules.length >= 8000;
+    const rows = [`<div class="${full ? 'reach-er' : rules.length > 7000 ? 'reach-wn' : 'reach-ok'}">${full ? '✗' : rules.length > 7000 ? '!' : '✓'} Campaign rules: ${fmtN(rules.length)} / 8,000 characters${full ? ' — the box is full; anything typed or pasted beyond this is dropped' : ''}</div>`];
+    const bots = campaignAgentIds(campaign).map((id) => S.agents.find((a) => a.id === id)).filter((a) => a && a.id !== 'a_qa');
+    for (const agent of bots) {
+      const r = promptReach(agent, campaign);
+      if (r.instructionsCutChars > 0) rows.push(`<div class="reach-er">✗ With these rules, the last ${r.cutLines.length} line(s) of <b>${esc(agent.name)}</b>’s instructions do not reach calls.</div>`);
+      else if (r.callWillFail) rows.push(`<div class="reach-er">✗ <b>${esc(agent.name)}</b>: call prompt over 25,000 characters — calls cannot start.</div>`);
+      else rows.push(`<div class="${r.phoneRoom < 1000 ? 'reach-wn' : 'reach-ok'}">${r.phoneRoom < 1000 ? '!' : '✓'} <b>${esc(agent.name)}</b>: rules and instructions reach calls (${fmtN(r.phoneRoom)} characters to spare)</div>`);
+    }
+    return `<div class="reach-meter">${rows.join('')}</div>`;
+  }
+
+  function refreshReachMeters() {
+    const am = document.getElementById('agent-reach');
+    if (am && tab === 'agents') am.innerHTML = renderAgentReachMeter(A());
+    const cm = document.getElementById('rules-reach');
+    if (cm && tab === 'campaigns') cm.innerHTML = renderRulesReachMeter(C());
+  }
+
+  // ── Smoke test: saved → live on the next call, no restart ──────────────────
+  const smokeResults = { agent: {}, campaign: {} };
+  const smokeRunning = { agent: false, campaign: false };
+
+  function renderSmokeResult(kind, id) {
+    if (smokeRunning[kind]) return '<div class="note">Running smoke test…</div>';
+    const r = smokeResults[kind][id];
+    if (!r) return '';
+    if (r.error) return `<div class="note er">${esc(r.error)}</div>`;
+    const icon = { ok: '✓', wn: '!', er: '✗' };
+    const head = r.ok
+      ? `<b class="smoke-pass">✓ Passed</b> — the next call uses these saved settings (${r.summary.passed} checks${r.summary.warnings ? `, ${r.summary.warnings} warning${r.summary.warnings === 1 ? '' : 's'}` : ''}).`
+      : `<b class="smoke-fail">✗ Failed</b> — ${r.summary.failed} problem${r.summary.failed === 1 ? '' : 's'} to fix${r.summary.warnings ? `, ${r.summary.warnings} warning${r.summary.warnings === 1 ? '' : 's'}` : ''}.`;
+    return `<div class="smoke-result ${r.ok ? 'pass' : 'fail'}">
+      <div>${head} <span class="smoke-time">${esc(new Date(r.ranAt).toLocaleTimeString())}</span></div>
+      <ul>${r.checks.map((c, i) => `${c.group && c.group !== r.checks[i - 1]?.group ? `<li class="smoke-group">${esc(c.group)}</li>` : ''}<li class="smoke-${c.level}"><span class="smoke-ic">${icon[c.level] || '•'}</span><span><b>${esc(c.label)}</b> — ${esc(String(c.detail).replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z/g, (iso) => new Date(iso).toLocaleString()))}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+
+  function renderSmokePanel(kind) {
+    const item = kind === 'agent' ? A() : C();
+    if (!item) return '';
+    return `<div class="smoke-panel">
+      <div class="smoke-head">
+        <button class="b" id="btn-smoke-${kind}" type="button" ${smokeRunning[kind] ? 'disabled' : ''}>Run Smoke Test</button>
+        <span class="note" style="margin:0">After you <b>Save</b>, check that the running server has your changes and the next call will use them. No restart needed.</span>
+      </div>
+      <div id="smoke-out-${kind}">${renderSmokeResult(kind, item.id)}</div>
+    </div>`;
+  }
+
+  async function runSmokeTest(kind) {
+    const item = kind === 'agent' ? A() : C();
+    if (!item) return;
+    const paint = () => {
+      const out = document.getElementById(`smoke-out-${kind}`);
+      if (out) out.innerHTML = renderSmokeResult(kind, item.id);
+      const btn = document.getElementById(`btn-smoke-${kind}`);
+      if (btn) btn.disabled = smokeRunning[kind];
+    };
+    if (serverlessCloudMode) {
+      smokeResults[kind][item.id] = { error: 'The smoke test reads the server’s saved settings, so it needs the deployed console (not the browser-only demo).' };
+      paint();
+      return;
+    }
+    smokeRunning[kind] = true;
+    paint();
+    try {
+      const res = await fetch('./api/smoke-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, id: item.id, draft: JSON.parse(JSON.stringify(item)) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      smokeResults[kind][item.id] = { ...data.result, ranAt: Date.now() };
+    } catch (error) {
+      smokeResults[kind][item.id] = { error: `Smoke test could not run: ${error instanceof Error ? error.message : String(error)}` };
+    } finally {
+      smokeRunning[kind] = false;
+      paint();
+    }
+  }
+
+  // Header status pill: it always said "LIVE", even with the server down. It now
+  // reflects a real health check (every 20 s): LIVE / OFFLINE / DEMO.
+  let livePillTimer = null;
+  async function refreshLivePill() {
+    const pill = document.getElementById('hdr-live-pill');
+    const txt = document.getElementById('hdr-live-txt');
+    if (!pill || !txt) return;
+    const set = (state, label, title) => { pill.dataset.state = state; txt.textContent = label; pill.title = title; };
+    if (serverlessCloudMode) { set('demo', 'DEMO', 'Browser-only demo: no server connection.'); return; }
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 6000);
+      const res = await fetch('./health/live', { cache: 'no-store', signal: ctrl.signal });
+      clearTimeout(t);
+      if (res.ok) set('live', 'LIVE', `Server reachable · checked ${new Date().toLocaleTimeString()}`);
+      else set('down', 'OFFLINE', `Server answered ${res.status} · checked ${new Date().toLocaleTimeString()}`);
+    } catch {
+      set('down', 'OFFLINE', `Server not reachable · checked ${new Date().toLocaleTimeString()}`);
+    }
+  }
+  function startLivePill() {
+    refreshLivePill();
+    if (!livePillTimer) livePillTimer = setInterval(refreshLivePill, 20000);
+  }
+
+  // ── Voice Lab: consented voice cloning (ElevenLabs + self-hosted) ──────────
+  const vclone = {
+    loaded: false, loading: false, data: null, error: '', busy: '', msg: '', msgLevel: '',
+    provider: 'elevenlabs', name: '', speaker: '', statement: '', confirm: false, noise: true,
+    sample: null, sampleName: '', sampleType: '', recording: null, recStart: 0, recTimer: null,
+    previewText: 'Hi, this is a quick preview of my cloned voice. How does it sound?',
+  };
+
+  async function loadVoiceClones(force = false) {
+    if (serverlessCloudMode) return;
+    if (vclone.loading || (vclone.loaded && !force)) return;
+    vclone.loading = true;
+    try {
+      const res = await fetch('./api/voice-clone', { cache: 'no-store' });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      vclone.data = data; vclone.error = '';
+    } catch (err) { vclone.error = err instanceof Error ? err.message : String(err); }
+    vclone.loaded = true; vclone.loading = false;
+    repaintVoiceClone();
+  }
+
+  function repaintVoiceClone() {
+    const box = document.getElementById('vclone');
+    if (box) box.outerHTML = renderVoiceClonePanel();
+  }
+
+  function cloneRows(group, provider) {
+    if (!group) return '<div class="note">Loading…</div>';
+    if (!group.ok) {
+      const hint = group.code === 'ELEVENLABS_KEY_MISSING' ? ' Add <b>ELEVENLABS_API_KEY</b> in API Keys (key icon, bottom-left).'
+        : group.code === 'SELFHOSTED_CLONE_OFF' || group.code === 'SELFHOSTED_NOT_CONFIGURED' ? ' This needs the self-hosted speech service with its clone container on an NVIDIA GPU server.' : '';
+      return `<div class="note wn">${esc(group.error)}${hint}</div>`;
+    }
+    if (!group.voices.length) return '<div class="note">No cloned voices yet.</div>';
+    const live = vclone.data?.liveVoiceId;
+    return group.voices.map((v) => `<div class="vclone-row">
+      <div class="vclone-name"><b>${esc(v.name)}</b>${provider === 'elevenlabs' && live === v.id ? ' <span class="pill ok">Live on calls</span>' : ''}<small>${esc(v.id)}${v.durationSec ? ` · ${Math.round(v.durationSec)} s sample` : ''}</small></div>
+      <div class="vclone-actions">
+        <button class="g" type="button" data-vclone-preview="${esc(provider)}|${esc(v.id)}" ${vclone.busy ? 'disabled' : ''}>▶ Preview</button>
+        ${provider === 'elevenlabs' && live !== v.id ? `<button class="b" type="button" data-vclone-use="${esc(v.id)}" data-vclone-name="${esc(v.name)}" ${vclone.busy ? 'disabled' : ''}>Use for live calls</button>` : ''}
+        ${provider === 'elevenlabs' && live === v.id ? '' : `<button class="g danger" type="button" data-vclone-del="${esc(provider)}|${esc(v.id)}" data-vclone-name="${esc(v.name)}" ${vclone.busy ? 'disabled' : ''}>Delete</button>`}
+      </div>
+    </div>`).join('');
+  }
+
+  function renderVoiceClonePanel() {
+    if (serverlessCloudMode) {
+      return '<div class="card vclone" id="vclone"><h2>Voice Cloning</h2><div class="note">Voice cloning needs the deployed console (server), not the browser-only demo.</div></div>';
+    }
+    if (!vclone.loaded) setTimeout(() => loadVoiceClones(), 0);
+    const d = vclone.data;
+    const recSecs = vclone.recording ? Math.round((Date.now() - vclone.recStart) / 1000) : 0;
+    const isEleven = vclone.provider === 'elevenlabs';
+    return `<div class="card vclone" id="vclone">
+     <h2>Voice Cloning</h2>
+     <div class="note">Create a voice from a short recording of a real person — <b>only with their permission</b>. A consent record is kept for every voice.</div>
+     <div class="vclone-grid">
+      <div class="vclone-form">
+       <div class="row">
+        <div class="fld"><label for="vc-provider">Cloning service</label>
+         <select id="vc-provider">
+          <option value="elevenlabs" ${isEleven ? 'selected' : ''}>ElevenLabs — usable on live calls</option>
+          <option value="selfhosted" ${!isEleven ? 'selected' : ''}>Self-hosted (GPU server) — Voice Lab previews</option>
+         </select></div>
+        <div class="fld"><label for="vc-name">Voice name</label><input id="vc-name" maxlength="80" placeholder="e.g. Jessica – warm" value="${esc(vclone.name)}"></div>
+       </div>
+       <div class="fld"><label for="vc-speaker">Whose voice is this?</label><input id="vc-speaker" maxlength="120" placeholder="Speaker's full name" value="${esc(vclone.speaker)}"></div>
+       <div class="fld"><label for="vc-statement">How did they give permission?</label><textarea id="vc-statement" maxlength="1000" style="min-height:64px" placeholder="e.g. Signed voice-use consent form on 21 Nov 2026 for Med Benefits outbound calls">${esc(vclone.statement)}</textarea></div>
+       <div class="fld"><label>Voice sample (1–2 minutes of clear speech, one speaker, no music)</label>
+        <div class="vclone-sample">
+         <label class="g vclone-file" for="vc-file">Upload audio file</label>
+         <input id="vc-file" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.webm" hidden>
+         <button class="g" type="button" id="vc-rec">${vclone.recording ? `■ Stop recording (${recSecs}s)` : '● Record with microphone'}</button>
+         <span class="note" id="vc-sample-lbl" style="margin:0">${vclone.sample ? `✓ ${esc(vclone.sampleName)} (${(vclone.sample.size / 1024 / 1024).toFixed(1)} MB)` : 'No sample yet'}</span>
+        </div>
+        ${vclone.sample ? `<audio id="vc-sample-audio" controls src="${esc(vclone.sampleUrl || '')}"></audio>` : ''}
+       </div>
+       ${isEleven ? `<label class="chk-label"><input type="checkbox" id="vc-noise" style="width:auto" ${vclone.noise ? 'checked' : ''}>Remove background noise from the sample</label>` : ''}
+       <label class="chk-label"><input type="checkbox" id="vc-confirm" style="width:auto" ${vclone.confirm ? 'checked' : ''}>I confirm this person gave permission to clone their voice for this use</label>
+       <div class="bar" style="margin-top:8px"><button class="b" type="button" id="vc-create" ${vclone.busy ? 'disabled' : ''}>${vclone.busy === 'create' ? 'Creating voice…' : 'Create cloned voice'}</button></div>
+       ${vclone.msg ? `<div class="note ${vclone.msgLevel}">${vclone.msg}</div>` : ''}
+      </div>
+      <div class="vclone-list">
+       <div class="fld"><label for="vc-preview-text">Preview text</label><input id="vc-preview-text" maxlength="300" value="${esc(vclone.previewText)}"></div>
+       <h3>ElevenLabs voices <small>(live calls)</small></h3>
+       ${vclone.error ? `<div class="note er">${esc(vclone.error)}</div>` : cloneRows(d?.elevenlabs, 'elevenlabs')}
+       <h3>Self-hosted voices <small>(previews)</small></h3>
+       ${vclone.error ? '' : cloneRows(d?.selfhosted, 'selfhosted')}
+       <audio id="vc-preview-audio" controls hidden></audio>
+       <div class="note">“Use for live calls” switches the shared call voice for every bot to that ElevenLabs voice (Deepgram speaks through ElevenLabs with your key). Pick a Deepgram voice below to switch back.</div>
+      </div>
+     </div>
+    </div>`;
+  }
+
+  function setCloneMsg(msg, level = '') { vclone.msg = msg; vclone.msgLevel = level; repaintVoiceClone(); }
+
+  function setCloneSample(blob, name) {
+    if (vclone.sampleUrl) URL.revokeObjectURL(vclone.sampleUrl);
+    vclone.sample = blob; vclone.sampleName = name; vclone.sampleType = blob.type || 'application/octet-stream';
+    vclone.sampleUrl = URL.createObjectURL(blob);
+    repaintVoiceClone();
+  }
+
+  async function toggleCloneRecording() {
+    if (vclone.recording) { vclone.recording.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+      const rec = new MediaRecorder(stream);
+      const chunks = [];
+      rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+      rec.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        clearInterval(vclone.recTimer); vclone.recording = null;
+        setCloneSample(new Blob(chunks, { type: rec.mimeType || 'audio/webm' }), `Microphone recording (${Math.round((Date.now() - vclone.recStart) / 1000)}s)`);
+      };
+      vclone.recording = rec; vclone.recStart = Date.now();
+      vclone.recTimer = setInterval(() => { const b = document.getElementById('vc-rec'); if (b) b.textContent = `■ Stop recording (${Math.round((Date.now() - vclone.recStart) / 1000)}s)`; }, 500);
+      rec.start(1000);
+      repaintVoiceClone();
+    } catch (err) { setCloneMsg(`Microphone unavailable: ${esc(err instanceof Error ? err.message : String(err))}`, 'er'); }
+  }
+
+  function readCloneForm() {
+    vclone.provider = document.getElementById('vc-provider')?.value || vclone.provider;
+    vclone.name = document.getElementById('vc-name')?.value || '';
+    vclone.speaker = document.getElementById('vc-speaker')?.value || '';
+    vclone.statement = document.getElementById('vc-statement')?.value || '';
+    vclone.confirm = Boolean(document.getElementById('vc-confirm')?.checked);
+    const noise = document.getElementById('vc-noise');
+    if (noise) vclone.noise = noise.checked;
+    vclone.previewText = document.getElementById('vc-preview-text')?.value || vclone.previewText;
+  }
+
+  async function createClonedVoice() {
+    readCloneForm();
+    if (!vclone.sample) return setCloneMsg('Upload or record a voice sample first.', 'er');
+    if (!vclone.confirm) return setCloneMsg('Confirm that the speaker gave permission.', 'er');
+    vclone.busy = 'create'; setCloneMsg('Uploading the sample and creating the voice…');
+    try {
+      const q = new URLSearchParams({ provider: vclone.provider, name: vclone.name, speaker: vclone.speaker, statement: vclone.statement,
+        confirm: vclone.confirm ? '1' : '0', noise: vclone.noise ? '1' : '0', filename: vclone.sampleName.replace(/\s*\(.*\)$/, '') || 'sample' });
+      const res = await fetch(`./api/voice-clone?${q}`, { method: 'POST', headers: { 'Content-Type': vclone.sampleType || 'application/octet-stream' }, body: vclone.sample });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      vclone.busy = ''; vclone.name = ''; vclone.confirm = false;
+      await loadVoiceClones(true);
+      setCloneMsg(`✓ Created “${esc(data.voice.name)}”. ${data.voice.liveCalls ? 'Preview it, then press <b>Use for live calls</b>.' : 'Preview it on the right.'}`, 'ok');
+    } catch (err) { vclone.busy = ''; setCloneMsg(esc(err instanceof Error ? err.message : String(err)), 'er'); }
+  }
+
+  async function previewClonedVoice(provider, id) {
+    readCloneForm();
+    vclone.busy = 'preview'; repaintVoiceClone();
+    try {
+      const res = await fetch('./api/voice-clone/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider, id, text: vclone.previewText }) });
+      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `Server answered ${res.status}`); }
+      const url = URL.createObjectURL(await res.blob());
+      vclone.busy = ''; repaintVoiceClone();
+      const audio = document.getElementById('vc-preview-audio');
+      if (audio) { audio.hidden = false; audio.src = url; audio.play().catch(() => {}); }
+    } catch (err) { vclone.busy = ''; setCloneMsg(esc(err instanceof Error ? err.message : String(err)), 'er'); }
+  }
+
+  async function useClonedVoice(id, name) {
+    if (!window.confirm(`Make “${name}” the voice of live calls for every bot?\n\nCalls will speak through ElevenLabs using your API key.`)) return;
+    vclone.busy = 'use'; repaintVoiceClone();
+    try {
+      const res = await fetch('./api/voice-clone/use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      const st = await fetch('./api/state', { cache: 'no-store' }).then((r) => r.json());
+      if (st?.state) { S = st.state; snap = comparableSnapshot(S); }
+      vclone.busy = '';
+      setCloneMsg(`✓ “${esc(name)}” is now the live-call voice. The next call uses it — no restart needed.`, 'ok');
+      await loadVoiceClones(true);
+      render();
+    } catch (err) { vclone.busy = ''; setCloneMsg(esc(err instanceof Error ? err.message : String(err)), 'er'); }
+  }
+
+  async function deleteClonedVoice(provider, id, name) {
+    if (!window.confirm(`Delete the cloned voice “${name}”? This cannot be undone.`)) return;
+    vclone.busy = 'delete'; repaintVoiceClone();
+    try {
+      const res = await fetch(`./api/voice-clone/${encodeURIComponent(provider)}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      vclone.busy = '';
+      await loadVoiceClones(true);
+      setCloneMsg(`Deleted “${esc(name)}”.`, '');
+    } catch (err) { vclone.busy = ''; setCloneMsg(esc(err instanceof Error ? err.message : String(err)), 'er'); }
+  }
+
   function render() {
     if (!S) return;
     renderSideNav();
@@ -5588,6 +5977,7 @@
       m.innerHTML = `
     <div class="card">
      ${renderSelectorBar('a')}
+     ${renderSmokePanel('agent')}
      ${F('Agent name', 'a.name')}
      ${renderAgentCampaignAssignment(a)}
      ${F('Call handling direction', 'a.mode', 'sel', [
@@ -5601,6 +5991,7 @@
      ${F('Saved opening and identity (keep it brief)', 'a.greeting', 'ta')}
      ${F('Vary this opening using the imported greeting library', 'a.randomGreetingEnabled', 'chk')}
      ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
+     <div id="agent-reach">${renderAgentReachMeter(a)}</div>
      <div class="note wn">Verify every factual claim before calling.</div>
 
      <h2> Barge-In, Expressions, Gestures, Speed &amp; General Q&amp;A</h2>
@@ -5710,6 +6101,7 @@
         m.innerHTML = `
     <div class="card">
      ${renderSelectorBar('c')}
+     ${renderSmokePanel('campaign')}
      ${F('Campaign display name', 'c.name')}
      ${renderCampaignAgentAssignment(C())}
      <div class="row">
@@ -5743,6 +6135,7 @@
      <h2>️ Compliance &amp; Rules</h2>
      <div class="note wn">These rules are attached to this campaign and injected into its assigned bot’s live prompt. Write campaign-specific, actionable rules and review all claims with your compliance owner. This console is not legal advice or a compliance certification.</div>
      ${F('Mandatory campaign-specific rules and prohibited claims (20–8,000 characters)', 'c.complianceRules', 'ta', [], 'style="min-height:180px" maxlength="8000"')}
+     <div id="rules-reach">${renderRulesReachMeter(C())}</div>
      ${F('Allowed VICIdial disposition codes for this campaign (comma-separated)', 'c.dispos')}
      <div class="note">These codes control explicit agent disposition requests. Caller silence does not select a code or end the call.</div>
      ${F('Scrub leads against DNC list before dialing', 'c.dnc', 'chk')}
@@ -5802,6 +6195,8 @@
        </div>
       </div>
      </div>
+
+     ${renderVoiceClonePanel()}
 
      <h2>Deepgram Real Voice Catalog (Flux v2 &amp; Aura-2) <button class="g" id="btn-refresh-voices" style="font-size:11px;padding:3px 8px;text-transform:none">↻ Refresh from Deepgram API</button></h2>
      <div class="row r4" style="margin-bottom:10px">
@@ -6278,12 +6673,12 @@
       </div>
       ${
         loopbackBlockers.length
-          ? `<div class="note er" style="margin-top:8px">Selected campaign call test blocked: ${esc(loopbackBlockers.join(' • '))}</div>`
+          ? renderBlockerList('This campaign’s test call is blocked', loopbackBlockers, 'er')
           : '<div class="note ok" style="margin-top:8px">Selected campaign and assigned agent passed call-readiness checks.</div>'
       }
       ${
         deployBlockers.length
-          ? `<div class="note wn" style="margin-top:8px">Release downloads remain blocked until every agent and campaign is ready: ${esc(deployBlockers.join(' • '))}</div>`
+          ? renderBlockerList('Downloads stay locked until every bot and campaign is ready', deployBlockers, 'wn')
           : ''
       }
       <div class="bar" style="margin-top:10px;margin-bottom:0">
@@ -6617,6 +7012,7 @@
   }
 
   function updateLivePreview() {
+    refreshReachMeters();
     const pv = document.getElementById('pv');
     if (pv) {
       if (tab === 'agents') pv.textContent = JSON.stringify(buildSettings(A()), null, 2);
@@ -6895,6 +7291,7 @@
       } catch {}
       renderLinkedView();
       updateHeaderStatus();
+      startLivePill();
       syncDeepgramManagedLlms(true).then((ok) => {
         if (ok) render();
       });
@@ -6967,6 +7364,7 @@
     }
 
     renderLinkedView();
+    startLivePill();
   }
 
   function showSaveReport({ ok, wn, er, items = [], storage, revisionId, changes = [] }) {
@@ -8285,6 +8683,17 @@
       return;
     }
 
+    if (b.id === 'btn-smoke-agent' || b.id === 'btn-smoke-campaign') {
+      await runSmokeTest(b.id === 'btn-smoke-agent' ? 'agent' : 'campaign');
+      return;
+    }
+
+    if (b.id === 'vc-rec') { await toggleCloneRecording(); return; }
+    if (b.id === 'vc-create') { await createClonedVoice(); return; }
+    if (b.dataset.vclonePreview) { const [pv, id] = b.dataset.vclonePreview.split('|'); await previewClonedVoice(pv, id); return; }
+    if (b.dataset.vcloneUse) { await useClonedVoice(b.dataset.vcloneUse, b.dataset.vcloneName || 'Cloned voice'); return; }
+    if (b.dataset.vcloneDel) { const [pv, id] = b.dataset.vcloneDel.split('|'); await deleteClonedVoice(pv, id, b.dataset.vcloneName || id); return; }
+
     if (b.id === 'btn-synth-active') {
       await synthesizeWithApi();
       return;
@@ -8683,6 +9092,8 @@
 
   document.addEventListener('change', (e) => {
     const t = e.target;
+    if (t.id === 'vc-provider') { readCloneForm(); repaintVoiceClone(); return; }
+    if (t.id === 'vc-file' && t.files && t.files[0]) { readCloneForm(); setCloneSample(t.files[0], t.files[0].name); return; }
     if (t.id && t.id.startsWith('sel-')) {
       stopAllAudio();
       const kind = t.id.slice(4);

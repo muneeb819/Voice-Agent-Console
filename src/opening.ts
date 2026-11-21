@@ -16,6 +16,7 @@ interface OpeningApi {
   migrateStockMedicarePrompt(value: string, correctedStockPrompt: string): string;
   composeOpening(saved: string, variation: string, includeDisclosure: boolean, disclosure: string): string;
   prepareDelayedOpening(settings: any): { settings: any; greeting: string };
+  openingInstruction(greeting: string): string;
   createOpeningGate(options: {
     greeting: string;
     sendOpening(text: string): void;
@@ -33,5 +34,6 @@ export const {
   migrateStockMedicarePrompt,
   composeOpening,
   prepareDelayedOpening,
+  openingInstruction,
   createOpeningGate,
 } = api;

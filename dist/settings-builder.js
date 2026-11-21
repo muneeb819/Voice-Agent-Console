@@ -7,6 +7,7 @@ exports.isValidFluxSpeed = isValidFluxSpeed;
 exports.normalizeFluxSpeed = normalizeFluxSpeed;
 exports.allowedCampaignDispositionCodes = allowedCampaignDispositionCodes;
 exports.buildDeepgramSettings = buildDeepgramSettings;
+exports.promptReachReport = promptReachReport;
 exports.validateAgent = validateAgent;
 exports.validateCampaign = validateCampaign;
 exports.getCampaignDeploymentBlockers = getCampaignDeploymentBlockers;
@@ -311,6 +312,11 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
         },
     };
 }
+/** What of an agent's saved instructions and a campaign's rules reaches a phone call. */
+function promptReachReport(agent, campaign) {
+    const greeting = (0, opening_1.composeOpening)(agent.greeting, '', agent.injectCampaignDisclosure, campaign.disclosure || '');
+    return (0, persona_1.callPromptReport)(agent, campaign, greeting ? (0, opening_1.openingInstruction)(greeting).length : 0);
+}
 function validateAgent(state, agent) {
     const items = [];
     const push = (ok, message, warnOnly = false) => {
@@ -345,6 +351,17 @@ function validateAgent(state, agent) {
     push(agent.greeting.trim().length > 10, 'Greeting is set (> 10 chars)');
     const maxPromptOk = agent.prompt.trim().length > 0 && agent.prompt.length <= 25000;
     push(maxPromptOk, 'System prompt is non-empty and within Deepgram 25,000-char managed limit');
+    // Over budget, the composer shortens the instructions from the END, so newly
+    // added lines were dropped without any warning. Report it per campaign.
+    for (const campaign of state.campaigns.filter((c) => (0, campaign_assignment_1.campaignHasAgent)(c, agent.id))) {
+        const r = promptReachReport(agent, campaign);
+        if (r.instructionsCutChars > 0) {
+            push(false, `On campaign “${campaign.name}”, the last ${r.cutLines.length} line(s) of the bot instructions (${r.instructionsCutChars.toLocaleString('en-US')} characters) do not reach calls — shorten the instructions or the campaign rules`);
+        }
+        else if (r.callWillFail) {
+            push(false, `On campaign “${campaign.name}”, the call prompt is ${r.phoneChars.toLocaleString('en-US')} characters with the opening — over the 25,000 limit, so calls cannot start`);
+        }
+    }
     if (sttModel.startsWith('flux')) {
         const eot = Number(agent.stt.eot);
         const eager = Number(agent.stt.eager);

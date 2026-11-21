@@ -104,19 +104,24 @@
   }
 
   /** Deepgram Settings is sent immediately, without its automatic greeting. */
+  /** Text a phone call appends to the prompt for the opening turn (counted in the prompt budget). */
+  function openingInstruction(greeting) {
+    return '\n\n[Call opening sequence] The bridge listens for the caller’s first speech for one full second before the bot speaks. ' +
+        'If the caller speaks during that listen, respond to their actual words and begin the assigned campaign greeting naturally in the first response when appropriate. ' +
+        'If the caller is silent, the bridge injects this one assigned campaign opening; say it once, then listen for the caller. ' +
+        'Do not repeat it or end the call merely because the caller is silent. The assigned opening is: ' +
+        JSON.stringify(String(greeting || '').trim()) +
+        '. Honor requests to stop, urgent concerns, and other safety instructions instead of insisting on a script. ' +
+        'Never assume an eligibility question was asked or answered unless it actually appears in the conversation.';
+  }
+
   function prepareDelayedOpening(settings) {
     const wire = JSON.parse(JSON.stringify(settings));
     const greeting = String(wire?.agent?.greeting || '').trim();
     if (!wire.agent || !wire.agent.think) throw new Error('Agent settings are incomplete.');
     delete wire.agent.greeting;
     if (greeting) {
-      const instruction = '\n\n[Call opening sequence] The bridge listens for the caller’s first speech for one full second before the bot speaks. ' +
-        'If the caller speaks during that listen, respond to their actual words and begin the assigned campaign greeting naturally in the first response when appropriate. ' +
-        'If the caller is silent, the bridge injects this one assigned campaign opening; say it once, then listen for the caller. ' +
-        'Do not repeat it or end the call merely because the caller is silent. The assigned opening is: ' +
-        JSON.stringify(greeting) +
-        '. Honor requests to stop, urgent concerns, and other safety instructions instead of insisting on a script. ' +
-        'Never assume an eligibility question was asked or answered unless it actually appears in the conversation.';
+      const instruction = openingInstruction(greeting);
       const prompt = String(wire.agent.think.prompt || '');
       if (prompt.length + instruction.length > 25000) {
         throw new Error('The agent prompt is too long to add opening-turn instructions. Shorten it before starting a call.');
@@ -239,5 +244,5 @@
     };
   }
 
-  return { OPENING_DELAY_MS, NO_TRANSCRIPT_FALLBACK_MS, migrateStockOpening, migrateStockMedicarePrompt, composeOpening, prepareDelayedOpening, createOpeningGate };
+  return { OPENING_DELAY_MS, NO_TRANSCRIPT_FALLBACK_MS, migrateStockOpening, migrateStockMedicarePrompt, composeOpening, prepareDelayedOpening, openingInstruction, createOpeningGate };
 });

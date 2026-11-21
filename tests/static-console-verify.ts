@@ -428,6 +428,38 @@ async function run() {
     assert.equal(beforeCampaigns + 2, beforeCampaigns + 2, 'Fixture sanity');
   }
 
+  // Reach meters + smoke test panel (bot instructions / campaign rules).
+  const reachFx = await fixture({ query: '?tab=agents&agent=a1' });
+  assert.ok(reachFx.d.getElementById('btn-smoke-agent'), 'Bot page has Run Smoke Test');
+  assert.match(reachFx.d.getElementById('agent-reach')!.textContent || '', /reach calls/, 'Bot page shows whether the instructions reach calls');
+  const box = reachFx.d.querySelector('[data-p="a.prompt"]') as HTMLTextAreaElement;
+  box.value += `\n${'Long operator rule that fills the prompt budget. '.repeat(400)}\nNEWEST LINE`;
+  change(box, 'input');
+  assert.match(reachFx.d.getElementById('agent-reach')!.textContent || '', /will not reach calls/, 'Meter warns when the newest lines would be cut');
+  click(reachFx.d.getElementById('btn-smoke-agent')!);
+  await tick();
+  assert.match(reachFx.d.getElementById('smoke-out-agent')!.textContent || '', /needs the deployed console/, 'Browser-only demo explains the smoke test needs the server');
+  reachFx.w.close();
+  const rulesFx = await fixture({ query: '?tab=campaigns&campaign=c1' });
+  assert.ok(rulesFx.d.getElementById('btn-smoke-campaign'), 'Campaign page has Run Smoke Test');
+  assert.match(rulesFx.d.getElementById('rules-reach')!.textContent || '', /Campaign rules: [\d,]+ \/ 8,000/, 'Campaign rules show a character meter');
+  rulesFx.w.close();
+  console.log('✓ Reach meters warn before new lines are cut; Run Smoke Test on Bots and Campaigns');
+  // UI fixes: label/control stay together; grouped dashboard issues; header pill is a real status.
+  const uiFx = await fixture({ query: '?tab=agents&agent=a1' });
+  for (const label of uiFx.d.querySelectorAll('.row > label[for]')) assert.fail(`label "${label.textContent}" sits apart from its control`);
+  assert.ok(uiFx.d.querySelectorAll('.fld').length > 10, 'fields render as label+control units');
+  await tick();
+  assert.equal(uiFx.d.getElementById('hdr-live-txt')!.textContent, 'DEMO', 'Browser-only build says DEMO, not LIVE');
+  uiFx.w.close();
+  const dash = await fixture({ tab: 'dashboard' });
+  const rows = [...dash.d.querySelectorAll('.readiness-issues .ck')].map((r) => r.textContent || '');
+  assert.equal(new Set(rows.map((r) => r.replace(/^\W*\d+ bots:|\(.*\)/g, ''))).size, rows.length, 'each dashboard problem is listed once');
+  dash.w.close();
+  const voiceFx = await fixture({ tab: 'voice' });
+  assert.match(voiceFx.d.getElementById('vclone')!.textContent || '', /needs the deployed console/, 'Voice Lab explains cloning needs the server in the demo build');
+  voiceFx.w.close();
+  console.log('✓ UI: labels stay with their fields, dashboard problems grouped once, header pill shows real status (DEMO offline build)');
   console.log('✓ Static console: house crest header lockup, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
 }
 run().catch((error) => { console.error(error); process.exit(1); });
