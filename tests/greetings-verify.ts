@@ -66,7 +66,10 @@ async function main() {
   // Sentinel is an internal QA reviewer with a fixed opening; it is not a
   // customer-facing call bot and must not draw a random sales greeting.
   const callAgents = (state: typeof defaults) => state.agents.filter((agent) => agent.id !== 'a_qa');
-  assert.ok(callAgents(defaults).every((agent) => agent.randomGreetingEnabled));
+  // Jessica (Medicare verification) must open with the compliant AI disclosure and the age
+  // question, so a random library greeting would break her campaign rules.
+  assert.ok(callAgents(defaults).filter((agent) => agent.id !== 'a_medicare').every((agent) => agent.randomGreetingEnabled));
+  assert.equal(defaults.agents.find((agent) => agent.id === 'a_medicare')!.randomGreetingEnabled, false, 'Jessica keeps her compliant opening');
   const oldState: any = structuredClone(defaults);
   for (const agent of oldState.agents) delete agent.randomGreetingEnabled;
   oldState.agents.push({ ...structuredClone(oldState.agents[0]), id: 'new-bot', name: 'New Bot' });

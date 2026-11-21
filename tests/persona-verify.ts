@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { createDefaultState, normalizeState } from '../src/defaults';
+import { createDefaultState, normalizeState, LEGACY_STOCK_MEDICARE_PROMPT, LEGACY_STOCK_MEDICARE_RULES } from '../src/defaults';
+import { MED_BENEFITS_RULE_MARKER } from '../src/persona';
 import { buildDeepgramSettings } from '../src/settings-builder';
 import {
   composeBehavioralPrompt,
@@ -94,10 +95,10 @@ function run() {
   // Exact stock prompt/rule migration; customized operator text is preserved.
   assert.equal(fingerprint(legacyMedicarePrompt), '4096:1042707137:116207873');
   assert.equal(fingerprint(legacyJessicaPrompt), '629:3652710674:4038630760');
-  assert.equal(migrateLegacyQualificationPrompt(legacyMedicarePrompt, medicare.prompt), medicare.prompt);
+  assert.equal(migrateLegacyQualificationPrompt(legacyMedicarePrompt, LEGACY_STOCK_MEDICARE_PROMPT), LEGACY_STOCK_MEDICARE_PROMPT);
   assert.equal(migrateLegacyQualificationPrompt(legacyJessicaPrompt, jessica.prompt), jessica.prompt);
   assert.equal(migrateLegacyQualificationPrompt('Custom Medicare script.', medicare.prompt), 'Custom Medicare script.');
-  assert.equal(migrateLegacyCampaignRules(legacyMedicareRules, campaign.complianceRules, 'c_medicare'), campaign.complianceRules);
+  assert.equal(migrateLegacyCampaignRules(legacyMedicareRules, LEGACY_STOCK_MEDICARE_RULES, 'c_medicare'), LEGACY_STOCK_MEDICARE_RULES);
   assert.equal(migrateLegacyCampaignRules(legacyFronterRules, fronter.complianceRules, 'c_med_fronter'), fronter.complianceRules);
   assert.equal(migrateLegacyCampaignRules('Custom campaign rules.', campaign.complianceRules, 'c_medicare'), 'Custom campaign rules.');
 
@@ -105,22 +106,25 @@ function run() {
   legacyState.agents.find((a) => a.id === 'a_medicare')!.prompt = legacyMedicarePrompt;
   legacyState.campaigns.find((c) => c.id === 'c_medicare')!.complianceRules = legacyMedicareRules;
   const normalized = normalizeState(legacyState);
-  assert.equal(normalized.agents.find((a) => a.id === 'a_medicare')!.prompt, medicare.prompt);
-  assert.equal(normalized.campaigns.find((c) => c.id === 'c_medicare')!.complianceRules, campaign.complianceRules);
+  // Existing installs: retired stock text upgrades to the frozen previous stock, never to the new Jessica template.
+  assert.equal(normalized.agents.find((a) => a.id === 'a_medicare')!.prompt, LEGACY_STOCK_MEDICARE_PROMPT);
+  assert.equal(normalized.campaigns.find((c) => c.id === 'c_medicare')!.complianceRules, LEGACY_STOCK_MEDICARE_RULES);
 
   // Caller-fact memory: only explicit caller statements become transfer metadata.
+  // (Previous stock policy: Part A or B, 65-85 band.)
+  const legacyStockCampaign = { complianceRules: LEGACY_STOCK_MEDICARE_RULES };
   const memory = createConversationMemory();
   memory.addUserText('Do I have Medicare Part A?');
   memory.addUserText("I'm not sure if I have Medicare.");
   memory.addUserText('My wife has Medicare Part B.');
   assert.deepEqual(memory.facts(), { statedAge: null, medicareStatus: null, userTurns: 3 });
-  assert(memory.qualificationBlockers(campaign).length > 0, 'Unconfirmed Medicare must block the stock Medicare transfer');
+  assert(memory.qualificationBlockers(legacyStockCampaign).length > 0, 'Unconfirmed Medicare must block the stock Medicare transfer');
   assert.deepEqual(memory.qualificationBlockers({ complianceRules: 'Custom campaign rules.' }), [], 'Custom campaigns are not guessed from a name');
 
   memory.addUserText('Yes, I have Medicare Part A and Part B.');
   assert.equal(memory.facts().medicareStatus, 'Part A & B');
   assert.equal(memory.facts().statedAge, null);
-  assert.deepEqual(memory.qualificationBlockers(campaign), []);
+  assert.deepEqual(memory.qualificationBlockers(legacyStockCampaign), []);
   let sanitized = memory.sanitizeTransferArgs({ reason: 'review', confirmed_age: '71', medicare_status: 'Part A & B' });
   assert.equal(sanitized.args.confirmed_age, undefined);
   assert.deepEqual(sanitized.omitted, ['confirmed_age']);
@@ -128,11 +132,45 @@ function run() {
 
   memory.addUserText('Actually I am 61 years old.');
   assert.equal(memory.facts().statedAge, '61');
-  assert(memory.qualificationBlockers(campaign).some((b) => b.includes('65-85')));
+  assert(memory.qualificationBlockers(legacyStockCampaign).some((b) => b.includes('65-85')));
   sanitized = memory.sanitizeTransferArgs({ confirmed_age: '71', medicare_status: 'Part A' });
   assert.equal(sanitized.args.confirmed_age, undefined);
   assert.equal(sanitized.args.medicare_status, 'Part A & B', 'Model metadata is corrected to the caller-confirmed parts');
   assert.deepEqual(sanitized.corrected, ['medicare_status']);
+  // Med Benefits (Jessica) gate: same matrix as the campaign rules, from what the caller actually said.
+  assert.ok(campaign.complianceRules.includes(MED_BENEFITS_RULE_MARKER), 'Shipped Medicare campaign uses the Med Benefits rules');
+  const jx = createConversationMemory();
+  jx.addAssistantText('Hello! This is Jessica, an AI assistant calling on behalf of Med Benefits. First, how old are you?');
+  jx.addUserText('72.');
+  assert.equal(jx.facts().statedAge, '72', 'A bare number answers the age question');
+  assert.ok(jx.qualificationBlockers(campaign).some((b) => /BOTH Medicare Part A and Part B/.test(b)));
+  jx.addAssistantText('Are you currently enrolled in both Medicare Part A and Medicare Part B?');
+  jx.addUserText('Yes.');
+  assert.equal(jx.facts().medicareStatus, 'Part A & B', 'A bare yes to the both-parts question confirms both');
+  assert.deepEqual(jx.qualificationBlockers(campaign), [], '72 + Part A & B passes');
+  const young = createConversationMemory();
+  young.addAssistantText('May I ask how old you are?');
+  young.addUserText('fifty-five');
+  young.addUserText('I have Medicare Part A and Part B.');
+  assert.ok(young.qualificationBlockers(campaign).some((b) => /disability/.test(b)), '30-64 needs a disability yes');
+  young.addAssistantText('Thank you. Do you currently have a disability?');
+  young.addUserText('Yes');
+  assert.deepEqual(young.qualificationBlockers(campaign), [], '55 + disability + A & B passes');
+  const noDis = createConversationMemory();
+  noDis.addUserText("I'm 50 years old, I have Medicare Part A and Part B, and I'm not disabled.");
+  assert.ok(noDis.qualificationBlockers(campaign).some((b) => /disability/.test(b)));
+  const onlyA = createConversationMemory();
+  onlyA.addUserText("I'm 70 and I have Medicare Part A but not Part B.");
+  assert.ok(onlyA.qualificationBlockers(campaign).some((b) => /BOTH/.test(b)), 'Part A only fails');
+  const tooYoung = createConversationMemory();
+  tooYoung.addUserText("I'm 25 years old, I'm disabled and I have Medicare Part A and Part B.");
+  assert.ok(tooYoung.qualificationBlockers(campaign).some((b) => /30-100/.test(b)), 'Below 30 fails');
+  const orQuestion = createConversationMemory();
+  orQuestion.addAssistantText('Are you currently on Medicare Part A or Part B?');
+  orQuestion.addUserText('Yes');
+  assert.notEqual(orQuestion.facts().medicareStatus, 'Part A & B', 'A yes to an either/or question never confirms both');
+  console.log('✓ Med Benefits gate: age (incl. bare "72"), disability for 30-64, BOTH Part A and Part B — enforced server-side before any transfer');
+
   const generic = createConversationMemory();
   generic.addUserText('Yes, I have Medicare.');
   sanitized = generic.sanitizeTransferArgs({ medicare_status: 'Part A' });
@@ -151,7 +189,7 @@ function run() {
   contextual.addAssistantText('Are you currently on Medicare Part A or Part B?');
   contextual.addUserText('Yes.');
   assert.equal(contextual.facts().medicareStatus, 'Medicare', 'A bare yes answers the pending Medicare question');
-  assert.deepEqual(contextual.qualificationBlockers(campaign), []);
+  assert.deepEqual(contextual.qualificationBlockers(legacyStockCampaign), []);
   contextual.addAssistantText('Are you currently on Medicare Part A or Part B?');
   contextual.addUserText('No.');
   assert.equal(contextual.facts().medicareStatus, null);

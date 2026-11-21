@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.asyncRoute = asyncRoute;
 exports.createApp = createApp;
 exports.createServerWithSimulator = createServerWithSimulator;
+const smoke_test_1 = require("./smoke-test");
 const dns_1 = __importDefault(require("dns"));
 const fs_1 = __importDefault(require("fs"));
 const http_1 = __importDefault(require("http"));
@@ -770,6 +771,24 @@ function createApp(viciBridge) {
     app.post('/api/demo-tunnel/stop', (_req, res) => {
         (0, demo_tunnel_1.stopPublicDemoTunnel)();
         res.json({ ok: true, active: false, publicUrl: null });
+    });
+    // Smoke test: is this bot/campaign saved, and does the saved JSON reach the call prompt?
+    // Read-only; any signed-in role may run it. `draft` is what is on screen, to flag unsaved edits.
+    app.post('/api/smoke-test', (req, res) => {
+        const kind = String(req.body?.kind || '');
+        const id = String(req.body?.id || '').slice(0, 200);
+        if ((kind !== 'agent' && kind !== 'campaign') || !id) {
+            res.status(400).json({ ok: false, error: 'kind must be "agent" or "campaign", with an id.' });
+            return;
+        }
+        try {
+            const state = (0, db_1.getConsoleState)();
+            const draft = req.body?.draft && typeof req.body.draft === 'object' ? req.body.draft : undefined;
+            res.json({ ok: true, result: kind === 'agent' ? (0, smoke_test_1.smokeTestAgent)(state, id, draft) : (0, smoke_test_1.smokeTestCampaign)(state, id, draft) });
+        }
+        catch (error) {
+            res.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+        }
     });
     app.put('/api/state', (req, res) => {
         try {

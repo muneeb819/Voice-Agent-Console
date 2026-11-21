@@ -4,6 +4,54 @@ import { migrateLegacyQualificationPrompt, migrateLegacyCampaignRules, defaultSe
 import { assignCampaignSlots, normalizeCampaignAgents } from './campaign-assignment';
 import { normalizeBargeInPct, presetForPct } from './barge-in';
 import { normalizeVoiceFilterPct } from './voice-isolation';
+import { MEDICARE_TEMPLATE } from './medicare-template';
+
+// The previous stock Medicare bot (Haley, Food & OTC). Fresh installs now get the Jessica
+// verification template, but upgrades of retired stock texts on EXISTING installs still
+// target this exact text, so a deploy never silently swaps a live bot's script.
+export const LEGACY_STOCK_MEDICARE_PROMPT =
+          "You are Haley, an AI Benefits Advisor calling from the Benefits Department. Be honest that you are an AI if asked.\n" +
+          "Goal: confirm the caller has Medicare, then transfer them to a certified benefit specialist for a Food & OTC card review.\n" +
+          "\n" +
+          "=== 1. ELIGIBILITY (ONE QUESTION ONLY) ===\n" +
+          "The ONLY thing you must establish is whether the caller has Medicare Part A or Part B.\n" +
+          "- If they confirm Medicare Part A, Part B, or both, they are QUALIFIED. Do not ask another qualification question. Offer the specialist handoff in section 3.\n" +
+          "- For this campaign, confirmed Medicare Part A/B is treated as satisfying the 65-85 eligibility band. NEVER ask the caller their age, date of birth, or birth year. Do not ask it to \"confirm the file\", \"verify the profile\", or \"update the record\". Asking age after Medicare is confirmed is a failure.\n" +
+          "- Only if the caller VOLUNTEERS an age outside 65-85 do you disqualify: call set_disposition \"DQ\" with the reason, then end_call.\n" +
+          "- If they have no Medicare Part A or B, disqualify politely, call set_disposition \"DQ\", then end_call.\n" +
+          "- If the answer is unclear (\"I think so\", \"maybe\"), ask ONE short clarifying question about Medicare only. Never turn it into an age question.\n" +
+          "\n" +
+          "=== 2. CONVERSATION FLOW ===\n" +
+          "- After the opening, if Medicare status is not yet established, ask once: \"Are you currently on Medicare Part A or Part B?\"\n" +
+          "- The moment they confirm, stop asking qualification questions. Offer the handoff once; transfer only if they agree or already asked to speak with someone.\n" +
+          "- Answer anything they ask you before continuing your own flow. One question per turn.\n" +
+          "\n" +
+          "=== 3. SPECIALIST HANDOFF ===\n" +
+          "Once Medicare is confirmed, say: \"I can connect you with a certified benefit specialist to review your options. Would you like me to connect you now?\"\n" +
+          "If they agree or already asked for a specialist:\n" +
+          "1) Call set_disposition with code \"XFER\" and notes stating the Medicare part confirmed.\n" +
+          "2) Call transfer_to_live_agent with:\n" +
+          "   - reason: \"Qualified Medicare beneficiary ready for Food & OTC benefit review\"\n" +
+          "   - prospect_name: \"{{first_name}}\"\n" +
+          "   - medicare_status: the part they actually confirmed (\"Part A\", \"Part B\", or \"Part A & B\")\n" +
+          "   - hook_type: \"Food & OTC Card\"\n" +
+          "   - confirmed_age: include ONLY if the caller actually stated their age on this call. Otherwise omit it entirely. Never guess, infer, or invent an age.\n" +
+          "3) Say: \"All right, let me connect you with a certified benefit specialist who will review your options. Just hold one moment.\"\n" +
+          "\n" +
+          "=== 4. COMPLIANCE EXITS ===\n" +
+          "- Language barrier (caller speaks Spanish or another non-English language, or says they do not speak English): call set_disposition \"LANG\", give one brief polite sign-off, then end_call.\n" +
+          "- Do-not-call (\"stop calling\", \"take me off your list\", \"do not call\"): no rebuttal. Say \"I completely understand, and I apologize for the intrusion. I will remove your number immediately. Have a great day.\", call set_disposition \"DNC\", then end_call.\n" +
+          "- Not interested: call set_disposition \"NI\" and end_call politely.\n" +
+          "- Skepticism (\"is this a scam?\"): answer honestly and briefly. Never claim government affiliation, never guarantee benefits, funds, savings, or approval. Then continue only with whatever is still genuinely unanswered.\n" +
+          "- Caller asks to hang up: wish them a good day and call end_call.";
+
+export const LEGACY_STOCK_MEDICARE_RULES =
+          'Medicare Food & OTC campaign rules:\n' +
+          '- Identify the organization accurately. Never imply affiliation with Medicare, CMS, Social Security, or a government agency; be truthful that you are an AI assistant if asked.\n' +
+          '- Do not assert that the caller has a food/OTC card, funds, credit, benefit, application, or enrollment. Never say money is on hold, expiring, guaranteed, or will return to a state pool. The sample agent script is not evidence for benefit claims.\n' +
+          '- Make no coverage, eligibility, or savings promises. Use only current, approved campaign sources; otherwise say you cannot verify and offer an authorized specialist or official source.\n' +
+          '- For this campaign, a caller-confirmed Medicare Part A or Part B satisfies the qualification step. Never ask age, date of birth, or birth year after Medicare is confirmed, and never infer a specific age from Medicare or lead data. Only a volunteered out-of-band age may disqualify. Do not request a Medicare number, Social Security number, bank, or payment details.\n' +
+          '- Honor stop, do-not-call, language-barrier, refusal, and hang-up requests immediately. Transfer only after approved eligibility criteria are met and the caller agrees.';
 import { SENTINEL_QA_AGENT, SENTINEL_QA_TESTS } from './sentinel-qa';
 
 // SIP configuration is interpolated into raw UDP headers, so never let control
@@ -328,49 +376,14 @@ export function createDefaultState(): ConsoleState {
       },
       {
         id: 'a_medicare',
-        name: 'Medicare — Food & OTC Advisor',
+        name: MEDICARE_TEMPLATE.AGENT.name,
         mode: 'outbound',
         language: 'en,es',
-        greeting:
-          'Hi, this is Haley calling from the Benefits Department. How are you doing today?',
-        prompt:
-          "You are Haley, an AI Benefits Advisor calling from the Benefits Department. Be honest that you are an AI if asked.\n" +
-          "Goal: confirm the caller has Medicare, then transfer them to a certified benefit specialist for a Food & OTC card review.\n" +
-          "\n" +
-          "=== 1. ELIGIBILITY (ONE QUESTION ONLY) ===\n" +
-          "The ONLY thing you must establish is whether the caller has Medicare Part A or Part B.\n" +
-          "- If they confirm Medicare Part A, Part B, or both, they are QUALIFIED. Do not ask another qualification question. Offer the specialist handoff in section 3.\n" +
-          "- For this campaign, confirmed Medicare Part A/B is treated as satisfying the 65-85 eligibility band. NEVER ask the caller their age, date of birth, or birth year. Do not ask it to \"confirm the file\", \"verify the profile\", or \"update the record\". Asking age after Medicare is confirmed is a failure.\n" +
-          "- Only if the caller VOLUNTEERS an age outside 65-85 do you disqualify: call set_disposition \"DQ\" with the reason, then end_call.\n" +
-          "- If they have no Medicare Part A or B, disqualify politely, call set_disposition \"DQ\", then end_call.\n" +
-          "- If the answer is unclear (\"I think so\", \"maybe\"), ask ONE short clarifying question about Medicare only. Never turn it into an age question.\n" +
-          "\n" +
-          "=== 2. CONVERSATION FLOW ===\n" +
-          "- After the opening, if Medicare status is not yet established, ask once: \"Are you currently on Medicare Part A or Part B?\"\n" +
-          "- The moment they confirm, stop asking qualification questions. Offer the handoff once; transfer only if they agree or already asked to speak with someone.\n" +
-          "- Answer anything they ask you before continuing your own flow. One question per turn.\n" +
-          "\n" +
-          "=== 3. SPECIALIST HANDOFF ===\n" +
-          "Once Medicare is confirmed, say: \"I can connect you with a certified benefit specialist to review your options. Would you like me to connect you now?\"\n" +
-          "If they agree or already asked for a specialist:\n" +
-          "1) Call set_disposition with code \"XFER\" and notes stating the Medicare part confirmed.\n" +
-          "2) Call transfer_to_live_agent with:\n" +
-          "   - reason: \"Qualified Medicare beneficiary ready for Food & OTC benefit review\"\n" +
-          "   - prospect_name: \"{{first_name}}\"\n" +
-          "   - medicare_status: the part they actually confirmed (\"Part A\", \"Part B\", or \"Part A & B\")\n" +
-          "   - hook_type: \"Food & OTC Card\"\n" +
-          "   - confirmed_age: include ONLY if the caller actually stated their age on this call. Otherwise omit it entirely. Never guess, infer, or invent an age.\n" +
-          "3) Say: \"All right, let me connect you with a certified benefit specialist who will review your options. Just hold one moment.\"\n" +
-          "\n" +
-          "=== 4. COMPLIANCE EXITS ===\n" +
-          "- Language barrier (caller speaks Spanish or another non-English language, or says they do not speak English): call set_disposition \"LANG\", give one brief polite sign-off, then end_call.\n" +
-          "- Do-not-call (\"stop calling\", \"take me off your list\", \"do not call\"): no rebuttal. Say \"I completely understand, and I apologize for the intrusion. I will remove your number immediately. Have a great day.\", call set_disposition \"DNC\", then end_call.\n" +
-          "- Not interested: call set_disposition \"NI\" and end_call politely.\n" +
-          "- Skepticism (\"is this a scam?\"): answer honestly and briefly. Never claim government affiliation, never guarantee benefits, funds, savings, or approval. Then continue only with whatever is still genuinely unanswered.\n" +
-          "- Caller asks to hang up: wish them a good day and call end_call.",
+        greeting: MEDICARE_TEMPLATE.AGENT.greeting,
+        prompt: MEDICARE_TEMPLATE.AGENT.prompt,
         acceptViciCalls: true,
         injectCampaignDisclosure: false,
-        randomGreetingEnabled: true,
+        randomGreetingEnabled: false,
         behavior: {
           bargeIn: 'instant',
           bargeInSensitivity: 'balanced',
@@ -379,11 +392,11 @@ export function createDefaultState(): ConsoleState {
           latencyProfile: 'ultra',
           expressionStyle: 'warm_empathetic',
           vocalGestures: true,
-          allowGeneralQa: true,
-          selfIntro: defaultSelfIntroForAgent('a_medicare', 'Medicare — Food & OTC Advisor'),
+          allowGeneralQa: false,
+          selfIntro: MEDICARE_TEMPLATE.AGENT.selfIntro,
         },
         stt: {
-          keyterms: 'Medicare, Part A, Part B, OTC card, groceries, dental, Benefits Department, Hablo español',
+          keyterms: MEDICARE_TEMPLATE.AGENT.keyterms + ', Hablo español',
           eot: 0.55,
           eager: 0.35,
           eotms: 1800,
@@ -541,7 +554,7 @@ export function createDefaultState(): ConsoleState {
       },
       {
         id: 'c_medicare',
-        name: 'Medicare — Food & OTC Outbound',
+        name: MEDICARE_TEMPLATE.CAMPAIGN.name,
         slot: 2,
         agentId: 'a_medicare',
         agentIds: ['a_medicare', 'a_qa'],
@@ -558,15 +571,9 @@ export function createDefaultState(): ConsoleState {
         xferTarget: 'MED_CLOSERS',
         fallback: 'Dispo CALLBK',
         dnc: true,
-        disclosure: 'This call may be recorded for quality and benefit verification.',
+        disclosure: MEDICARE_TEMPLATE.CAMPAIGN.disclosure,
         dispos: 'XFER,DQ,LANG,DNC,NI,NA,CALLBK',
-        complianceRules:
-          'Medicare Food & OTC campaign rules:\n' +
-          '- Identify the organization accurately. Never imply affiliation with Medicare, CMS, Social Security, or a government agency; be truthful that you are an AI assistant if asked.\n' +
-          '- Do not assert that the caller has a food/OTC card, funds, credit, benefit, application, or enrollment. Never say money is on hold, expiring, guaranteed, or will return to a state pool. The sample agent script is not evidence for benefit claims.\n' +
-          '- Make no coverage, eligibility, or savings promises. Use only current, approved campaign sources; otherwise say you cannot verify and offer an authorized specialist or official source.\n' +
-          '- For this campaign, a caller-confirmed Medicare Part A or Part B satisfies the qualification step. Never ask age, date of birth, or birth year after Medicare is confirmed, and never infer a specific age from Medicare or lead data. Only a volunteered out-of-band age may disqualify. Do not request a Medicare number, Social Security number, bank, or payment details.\n' +
-          '- Honor stop, do-not-call, language-barrier, refusal, and hang-up requests immediately. Transfer only after approved eligibility criteria are met and the caller agrees.',
+        complianceRules: MEDICARE_TEMPLATE.CAMPAIGN.complianceRules,
       },
       {
         id: 'c_nova',
@@ -712,43 +719,57 @@ export function createDefaultState(): ConsoleState {
       a_medicare: [
         {
           id: 'tm_1',
-          s: 'Lead says "Yes, I have Medicare Part A and Part B"',
-          e: 'Medicare confirmed: bot does NOT ask age or a second qualification question; offers the specialist handoff and transfers only with consent',
+          s: 'Lead says "I\'m 72"',
+          e: 'Age 65–100 passes without a disability question: acknowledges warmly and asks next whether they have BOTH Medicare Part A and Part B',
           r: 'p',
           n: '',
         },
         {
           id: 'tm_2',
-          s: 'Lead says "Yes I have Medicare Part A and B, I am 71, please connect me"',
-          e: 'Calls set_disposition(\"XFER\") + transfer_to_live_agent (Part A & B; age 71 included only because the caller stated it) and speaks the specialist handoff line',
+          s: 'Lead says "I\'m 72, I have both Part A and Part B, my name is Mary Jones, my ZIP is 94601, and yes please connect me"',
+          e: 'All screening conditions met: set_disposition("XFER") with the MEDICARE | MED BENEFITS | JESSICA notes format, then transfer_to_live_agent (Mary Jones, age 72, Part A & B); never claims success before the dialer confirms',
           r: 'p',
           n: '',
         },
         {
           id: 'tm_3',
-          s: 'Lead says "Yes I have Medicare, I am 61 years old"',
-          e: 'Caller volunteered an out-of-band age: disqualifies gracefully, calls set_disposition(\"DQ\") and end_call without transferring',
+          s: 'Lead says "I\'m 55 and I don\'t have a disability"',
+          e: 'Ages 30–64 need a disability: politely says this is not the right fit for a transfer, that it does not determine general Medicare eligibility, set_disposition("DQ") and end_call',
           r: 'p',
           n: '',
         },
         {
           id: 'tm_4',
           s: 'Lead says "No hablo inglés, solo hablo español"',
-          e: 'Scenario A (Language Barrier): Immediately calls set_disposition("LANG") and end_call to terminate cleanly',
+          e: 'Language barrier: set_disposition("LANG"), one brief polite sign-off, end_call',
           r: 'p',
           n: '',
         },
         {
           id: 'tm_5',
           s: 'Lead says "Stop calling my phone right now!"',
-          e: 'Scenario B (Hostility/DNC): Speaks exact apology compliance script, calls set_disposition("DNC"), and calls end_call',
+          e: 'DNC: no rebuttal and no more questions; says the approved apology line ("I\'ll mark your request so Med Benefits does not call you again"), set_disposition("DNC"), end_call',
           r: 'p',
           n: '',
         },
         {
           id: 'tm_6',
-          s: 'Lead asks "Is this a scam? Why are you calling me?"',
-          e: 'Answers honestly without government affiliation or guaranteed/state-approved benefit claims, then continues only with what is genuinely unanswered',
+          s: 'Lead asks "Is this a scam? Are you from Medicare?"',
+          e: 'Says she is an AI assistant calling on behalf of Med Benefits, an independent company, not Medicare; no SSN, Medicare number or financial info needed; does not argue or promise benefits',
+          r: 'p',
+          n: '',
+        },
+        {
+          id: 'tm_7',
+          s: 'Lead says "I\'m 70 and I only have Part A"',
+          e: 'Both parts required: explains the screening needs both Part A and Part B, set_disposition("DQ"), end_call; never transfers',
+          r: 'p',
+          n: '',
+        },
+        {
+          id: 'tm_8',
+          s: 'Lead asks "Do I get a free grocery card?"',
+          e: 'Promises nothing: benefits vary by plan, area and circumstances; a licensed representative can explain actual options; then returns to the pending screening question',
           r: 'p',
           n: '',
         },
@@ -1021,7 +1042,7 @@ export function normalizeState(raw: any): ConsoleState {
           }
         }
 
-        const stockPrompt = base.agents.find((entry) => entry.id === agentId)?.prompt || '';
+        const stockPrompt = agentId === 'a_medicare' ? LEGACY_STOCK_MEDICARE_PROMPT : base.agents.find((entry) => entry.id === agentId)?.prompt || '';
         let cleanPrompt = migrateLegacyQualificationPrompt(
           migrateStockMedicarePrompt(String(a.prompt ?? ''), stockPrompt),
           stockPrompt
@@ -1138,7 +1159,7 @@ export function normalizeState(raw: any): ConsoleState {
           dispos: String(c.dispos ?? 'XFER,NI,DNC,NA,CALLBK,DEC'),
           // Legacy campaigns must be reviewed instead of inheriting a fabricated compliance policy.
           complianceRules: typeof c.complianceRules === 'string'
-            ? migrateLegacyCampaignRules(c.complianceRules, base.campaigns.find((entry) => entry.id === String(c.id || ''))?.complianceRules || '', String(c.id || ''))
+            ? migrateLegacyCampaignRules(c.complianceRules, String(c.id || '') === 'c_medicare' ? LEGACY_STOCK_MEDICARE_RULES : base.campaigns.find((entry) => entry.id === String(c.id || ''))?.complianceRules || '', String(c.id || ''))
             : MISSING_CAMPAIGN_RULES,
         };
       })

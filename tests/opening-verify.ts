@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
-import { createDefaultState, normalizeState } from '../src/defaults';
+import { createDefaultState, normalizeState, LEGACY_STOCK_MEDICARE_PROMPT, LEGACY_STOCK_MEDICARE_RULES } from '../src/defaults';
 import { getConsoleState, saveConsoleState } from '../src/db';
 import { loadBundledGreetings } from '../src/greetings';
 import { composeOpening, createOpeningGate, migrateStockMedicarePrompt, migrateStockOpening, OPENING_DELAY_MS, prepareDelayedOpening } from '../src/opening';
@@ -41,7 +41,9 @@ async function main() {
   const oldMed = 'Hi, this is Haley calling from the Benefits Department. Your new food and OTC card is on hold right now, loaded with funds for groceries and dental. If unclaimed today, it gets returned to the state pool. To release your card immediately, do you have Medicare Part A and B?';
   const legacy = createDefaultState();
   const stockMed = legacy.agents.find((a) => a.id === 'a_medicare')!;
-  const correctedPrompt = stockMed.prompt;
+  void LEGACY_STOCK_MEDICARE_RULES;
+  // Upgrades of retired stock text target the frozen previous stock (fresh installs ship Jessica).
+  const correctedPrompt = LEGACY_STOCK_MEDICARE_PROMPT;
   assert.ok(correctedPrompt.includes('NEVER ask the caller their age'), 'Current stock Medicare policy must not ask age after confirmation');
   assert.ok(correctedPrompt.includes('Would you like me to connect you now?'), 'Current stock Medicare policy offers a consent handoff');
   const customizedPrompt = `${correctedPrompt}\nAn operator customization.`;

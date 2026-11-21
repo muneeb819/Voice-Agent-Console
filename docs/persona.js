@@ -235,6 +235,13 @@
     return String((campaign && campaign.complianceRules) || '').includes(MEDICARE_RULE_MARKER);
   }
 
+  // Med Benefits Medicare verification template (Jessica): the campaign rules
+  // themselves carry this heading, so the backend enforces the same matrix.
+  const MED_BENEFITS_RULE_MARKER = 'MED BENEFITS MEDICARE — MANDATORY CAMPAIGN RULES';
+  function campaignUsesMedBenefitsScreening(campaign) {
+    return String((campaign && campaign.complianceRules) || '').includes(MED_BENEFITS_RULE_MARKER);
+  }
+
   const SMALL_NUMBERS = {
     zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
     ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16,
@@ -311,6 +318,10 @@
     let hasPartB = false;
     let hasGenericMedicare = false;
     let pendingMedicareQuestion = false;
+    let pendingBothPartsQuestion = false;
+    let pendingAgeQuestion = false;
+    let pendingDisabilityQuestion = false;
+    let hasDisability = null;
 
     function currentMedicareStatus() {
       if (hasPartA && hasPartB) return 'Part A & B';
@@ -323,6 +334,11 @@
     function addAssistantText(value) {
       const text = String(value || '').toLowerCase();
       pendingMedicareQuestion = /\bmedicare\b/.test(text) && /\?|\b(?:do you have|are you on|are you enrolled|have you got)\b/.test(text);
+      // "Are you enrolled in both Medicare Part A and Part B?" -> a bare "yes" confirms both.
+      pendingBothPartsQuestion = pendingMedicareQuestion && /\bpart\s*a\b/.test(text) && /\bpart\s*b\b/.test(text) &&
+        /\bboth\b|\bpart\s*a\s*(?:and|&)\s*(?:medicare\s+)?part\s*b\b/.test(text) && !/\bpart\s*a\s*or\b/.test(text);
+      pendingAgeQuestion = /\?/.test(text) && /\b(?:how old|your (?:current )?age|what age|age are you)\b/.test(text);
+      pendingDisabilityQuestion = /\?/.test(text) && /\bdisabilit(?:y|ies)\b|\bdisabled\b/.test(text);
     }
 
     function addUserText(value) {
@@ -338,8 +354,20 @@
       const bareAffirmative = /^(?:yes|yeah|yep|yes i do|i do|correct|that's right|that is right)[.!]?$/i.test(text);
       const bareNegative = /^(?:no|nope|not really|i don't|i do not)[.!]?$/i.test(text);
       if (pendingMedicareQuestion && bareAffirmative) hasGenericMedicare = true;
+      if (pendingBothPartsQuestion && bareAffirmative) { hasPartA = true; hasPartB = true; }
       if (pendingMedicareQuestion && bareNegative) { hasPartA = false; hasPartB = false; hasGenericMedicare = false; }
+      if (pendingDisabilityQuestion && bareAffirmative) hasDisability = true;
+      if (pendingDisabilityQuestion && bareNegative) hasDisability = false;
+      if (pendingAgeQuestion) {
+        // A bare answer to "How old are you?": "72", "72.", "seventy-two", "I'm 72" (handled below).
+        const bare = text.toLowerCase().replace(/[.!]+$/, '').trim();
+        const n = /^\d{1,3}$/.test(bare) ? Number(bare) : new RegExp('^' + SPOKEN_AGE + '$').test(bare) ? parseSpokenNumber(bare) : null;
+        if (n !== null && n >= 0 && n <= 120) statedAge = String(n);
+      }
       pendingMedicareQuestion = false;
+      pendingBothPartsQuestion = false;
+      pendingAgeQuestion = false;
+      pendingDisabilityQuestion = false;
 
       const sentences = text.toLowerCase().match(/[^.!?\n]+[.!?]?/g) || [];
       for (const sentence of sentences) {
@@ -347,6 +375,11 @@
         const age = extractStatedAge(sentence);
         if (age !== null) statedAge = age;
         if (isUncertainOrReported(sentence)) continue;
+        if (/\b(?:i\s+(?:have|do have)\s+a\s+disability|i\s*(?:am|['’]m)\s+(?:disabled|on disability)|i\s+(?:get|receive)\s+(?:disability|ssdi))\b/.test(sentence)) {
+          hasDisability = !/\b(?:no|not|never|don't|do not|doesn't|does not)\b[^]{0,25}\bdisab/.test(sentence);
+        } else if (/\b(?:i\s+(?:don't|do not)\s+have\s+a\s+disability|i\s*(?:am|['’]m)\s+not\s+disabled|no disability)\b/.test(sentence)) {
+          hasDisability = false;
+        }
 
         const mentionsMedicare = /\bmedicare\b/.test(sentence);
         const medicareNegated = /\b(?:no|not|never|without|don't|do not|doesn't|does not|didn't|did not|lost|cancelled|canceled|disenrolled|no longer)\b[^]{0,50}\bmedicare\b/.test(sentence);
@@ -378,7 +411,7 @@
     }
 
     function facts() {
-      return { statedAge, medicareStatus: currentMedicareStatus(), userTurns: userTexts.length };
+      return { statedAge, medicareStatus: currentMedicareStatus(), userTurns: userTexts.length, ...(hasDisability === null ? {} : { disability: hasDisability }) };
     }
 
     function normalizeMedicareStatus(value) {
@@ -427,6 +460,16 @@
 
     /** Backend guard for the reviewed stock Medicare policy only. */
     function qualificationBlockers(campaign) {
+      if (campaignUsesMedBenefitsScreening(campaign)) {
+        // Same matrix as the campaign rules; enforced here so a prompt slip cannot transfer.
+        const blockers = [];
+        const age = statedAge === null ? null : Number(statedAge);
+        if (age === null) blockers.push('Caller has not stated their age on this call.');
+        else if (age < 30 || age > 100) blockers.push(`Caller stated age ${age}, outside this campaign's 30-100 screening range.`);
+        else if (age < 65 && hasDisability !== true) blockers.push(`Caller aged ${age} has not confirmed a disability (required for ages 30-64).`);
+        if (currentMedicareStatus() !== 'Part A & B') blockers.push('Caller has not confirmed BOTH Medicare Part A and Part B on this call.');
+        return blockers;
+      }
       if (!campaignRequiresMedicareConfirmation(campaign)) return [];
       const blockers = [];
       if (currentMedicareStatus() === null) {
@@ -503,5 +546,6 @@
     TONE_MAP,
     MAX_PROMPT_LENGTH,
     MAX_CAMPAIGN_RULES,
+    MED_BENEFITS_RULE_MARKER,
   };
 });

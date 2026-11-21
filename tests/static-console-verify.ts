@@ -54,6 +54,7 @@ async function fixture(options: { state?: any; storageFails?: boolean; tab?: str
   (w as any).indexedDB = undefined;
   w.eval(read('opening.js'));
   w.eval(read('persona.js'));
+  w.eval(read('medicare-template.js'));
   w.eval(read('brand-logos.js'));
   w.eval(read('app.js'));
   for (let i = 0; i < 30 && !w.document.getElementById('m')?.children.length; i++) await tick();
@@ -279,7 +280,9 @@ async function run() {
   const personaMigrated = await fixture({ state: personaLegacy });
   const shippedDefaults = JSON.parse(read('default-state.json'));
   assert(personaMigrated.state().agents.find((a: any) => a.id === 'a_jessica').behavior.selfIntro.includes("I'm Jessica"));
-  assert.equal(personaMigrated.state().campaigns.find((c: any) => c.id === 'c_medicare').complianceRules, shippedDefaults.campaigns.find((c: any) => c.id === 'c_medicare').complianceRules);
+  // The shipped Medicare rules are now the Med Benefits template: old saved rules are never
+  // silently swapped into it (operators use "Load Medicare template" on purpose).
+  assert.equal(personaMigrated.state().campaigns.find((c: any) => c.id === 'c_medicare').complianceRules, personaLegacy.campaigns.find((c: any) => c.id === 'c_medicare').complianceRules);
   assert.equal(personaMigrated.state().campaigns.find((c: any) => c.id === 'c_med_fronter').complianceRules, shippedDefaults.campaigns.find((c: any) => c.id === 'c_med_fronter').complianceRules);
   assert.deepEqual(personaMigrated.errors, []);
   personaMigrated.w.close();
@@ -451,6 +454,32 @@ async function run() {
   const vici = await fixture({ tab: 'vici' });
   assert.ok(!/ • Agent “/.test(vici.d.body.textContent || ''), 'readiness blockers are grouped, not one run-on paragraph');
   vici.w.close();
+
+  // Smoke-test panel + Load Medicare template (Jessica) on the bot and campaign pages.
+  const med = await fixture({ query: '?tab=agents&agent=a_medicare' });
+  (med.w as any).confirm = () => true;
+  assert.ok(med.d.getElementById('btn-smoke-agent'), 'Bot page has a Run Smoke Test button');
+  const tplBtn = med.d.getElementById('btn-medicare-template-agent');
+  assert.ok(tplBtn, 'Medicare bot offers Load Medicare template');
+  const promptBox = med.d.querySelector('[data-p="a.prompt"]') as HTMLTextAreaElement;
+  promptBox.value = 'An operator edit'; change(promptBox, 'input'); change(promptBox);
+  click(med.d.getElementById('btn-medicare-template-agent')!);
+  await tick();
+  const tpl = (med.w as any).VacMedicareTemplate;
+  assert.equal((med.d.querySelector('[data-p="a.prompt"]') as HTMLTextAreaElement).value, tpl.AGENT.prompt, 'Template fills the instructions on screen');
+  assert.equal((med.d.querySelector('[data-p="a.greeting"]') as HTMLTextAreaElement).value, tpl.AGENT.greeting);
+  assert.match(med.d.getElementById('smoke-out-agent')!.textContent || '', /press Save/i, 'Template is a draft until Save');
+  click(med.d.getElementById('btn-smoke-agent')!);
+  await tick();
+  assert.match(med.d.getElementById('smoke-out-agent')!.textContent || '', /needs the deployed console/, 'Browser-only demo explains the smoke test needs the server');
+  med.w.close();
+  const nova = await fixture({ query: '?tab=agents&agent=a_nova' });
+  assert.ok(nova.d.getElementById('btn-smoke-agent') && !nova.d.getElementById('btn-medicare-template-agent'), 'Non-Medicare bots get the smoke test but not the Medicare template');
+  nova.w.close();
+  const medCamp = await fixture({ query: '?tab=campaigns&campaign=c_medicare' });
+  assert.ok(medCamp.d.getElementById('btn-smoke-campaign') && medCamp.d.getElementById('btn-medicare-template-campaign'), 'Campaign page has smoke test + Medicare template');
+  medCamp.w.close();
+  console.log('✓ Smoke Test button on Bots and Campaigns; Load Medicare template fills a reviewable draft (Medicare bots/campaigns only)');
 
   console.log('✓ Settings forms: every label stays with its control, every field has a one-line purpose, readiness blockers are grouped');
   console.log('✓ Static console: house crest header lockup, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');

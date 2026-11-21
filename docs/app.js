@@ -5692,6 +5692,108 @@
 
   // ==================== MAIN VIEW RENDERER ====================
 
+  // ── Smoke test: "are my changes saved and live on calls?" ─────────────────
+  // The server reads its saved JSON and builds the exact prompt a phone call
+  // sends (same builder as the bridge). The screen's copy is sent too, so an
+  // unsaved edit is reported instead of a false pass.
+  const smokeResults = { agent: {}, campaign: {} };
+  const smokeRunning = { agent: false, campaign: false };
+
+  function renderSmokeResult(kind, id) {
+    if (smokeRunning[kind]) return '<div class="note">Running smoke test…</div>';
+    const r = smokeResults[kind][id];
+    if (!r) return '';
+    if (r.error) return `<div class="note er">${esc(r.error)}</div>`;
+    const icon = { ok: '✓', wn: '!', er: '✗' };
+    const head = r.ok
+      ? `<b class="smoke-pass">✓ Smoke test passed</b> — ${r.summary.passed} checks passed${r.summary.warnings ? `, ${r.summary.warnings} warning${r.summary.warnings === 1 ? '' : 's'}` : ''}.`
+      : `<b class="smoke-fail">✗ Smoke test failed</b> — ${r.summary.failed} problem${r.summary.failed === 1 ? '' : 's'} to fix${r.summary.warnings ? `, ${r.summary.warnings} warning${r.summary.warnings === 1 ? '' : 's'}` : ''}.`;
+    return `<div class="smoke-result ${r.ok ? 'pass' : 'fail'}">
+      <div>${head} <span class="smoke-time">${esc(new Date(r.ranAt).toLocaleTimeString())}</span></div>
+      <ul>${r.checks.map((c, i) => `${c.group && c.group !== r.checks[i - 1]?.group ? `<li class="smoke-group">${esc(c.group)}</li>` : ''}<li class="smoke-${c.level}"><span class="smoke-ic">${icon[c.level] || '•'}</span><span><b>${esc(c.label)}</b> — ${esc(c.detail)}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+
+  function renderSmokePanel(kind) {
+    const item = kind === 'agent' ? A() : C();
+    if (!item) return '';
+    const isMedicare = kind === 'agent'
+      ? /medicare|jessica|jesica/i.test(`${item.id} ${item.name}`)
+      : /medicare/i.test(`${item.id} ${item.name} ${item.viciCampaign || ''}`);
+    const tpl = window.VacMedicareTemplate;
+    return `<div class="smoke-panel">
+      <div class="bar" style="margin:0 0 6px">
+        <button class="b" id="btn-smoke-${kind}" data-smoke-kind="${kind}" ${smokeRunning[kind] ? 'disabled' : ''}>Run Smoke Test</button>
+        ${tpl && isMedicare ? `<button class="g" id="btn-medicare-template-${kind}" title="Fill this ${kind === 'agent' ? 'bot' : 'campaign'} with the Med Benefits Medicare verification template. Nothing is saved until you press Save.">Load Medicare template${kind === 'agent' ? ' (Jessica)' : ''}</button>` : ''}
+      </div>
+      <div class="note">Checks that this ${kind === 'agent' ? 'bot' : 'campaign'} is saved on the server and that the saved settings reach the exact prompt a phone call sends. Press <b>Save</b> first, then run it.</div>
+      <div id="smoke-out-${kind}">${renderSmokeResult(kind, item.id)}</div>
+    </div>`;
+  }
+
+  async function runSmokeTest(kind) {
+    const item = kind === 'agent' ? A() : C();
+    if (!item) return;
+    const paint = () => {
+      const out = document.getElementById(`smoke-out-${kind}`);
+      if (out) out.innerHTML = renderSmokeResult(kind, item.id);
+      const btn = document.getElementById(`btn-smoke-${kind}`);
+      if (btn) btn.disabled = smokeRunning[kind];
+    };
+    if (serverlessCloudMode) {
+      smokeResults[kind][item.id] = { error: 'The smoke test checks the server’s saved JSON, so it needs the deployed console (not the browser-only demo).' };
+      paint();
+      return;
+    }
+    smokeRunning[kind] = true;
+    paint();
+    try {
+      const res = await fetch('./api/smoke-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, id: item.id, draft: JSON.parse(JSON.stringify(item)) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      smokeResults[kind][item.id] = { ...data.result, ranAt: Date.now() };
+    } catch (error) {
+      smokeResults[kind][item.id] = { error: `Smoke test could not run: ${error instanceof Error ? error.message : String(error)}` };
+    } finally {
+      smokeRunning[kind] = false;
+      paint();
+    }
+  }
+
+  function loadMedicareTemplate(kind) {
+    const tpl = window.VacMedicareTemplate;
+    const item = kind === 'agent' ? A() : C();
+    if (!tpl || !item) return;
+    const what = kind === 'agent'
+      ? `Replace “${item.name}” name, opening line, instructions and self-introduction with the Med Benefits Jessica template?`
+      : `Replace “${item.name}” name, recording notice, call results and campaign rules with the Med Benefits Medicare template?`;
+    if (!window.confirm(`${what}\n\nNothing is saved until you press Save, so you can review it first.`)) return;
+    if (kind === 'agent') {
+      item.name = tpl.AGENT.name;
+      item.greeting = tpl.AGENT.greeting;
+      item.prompt = tpl.AGENT.prompt;
+      item.randomGreetingEnabled = false; // the opening must disclose AI and ask age first
+      item.behavior = { ...(item.behavior || {}), selfIntro: tpl.AGENT.selfIntro, allowGeneralQa: false };
+      item.stt = { ...(item.stt || {}), keyterms: tpl.AGENT.keyterms };
+    } else {
+      item.name = tpl.CAMPAIGN.name;
+      item.disclosure = tpl.CAMPAIGN.disclosure;
+      item.dispos = tpl.CAMPAIGN.dispos;
+      item.complianceRules = tpl.CAMPAIGN.complianceRules;
+    }
+    delete smokeResults[kind][item.id];
+    render();
+    updateHeaderStatus();
+    const out = document.getElementById(`smoke-out-${kind}`);
+    if (out) {
+      out.innerHTML = `<div class="note wn">Template loaded on screen — review it, press <b>Save</b>, then <b>Run Smoke Test</b>.${kind === 'agent' ? ' Load the matching campaign rules on the Campaigns page too.' : ''}</div>`;
+    }
+  }
+
   function render() {
     if (!S) return;
     renderSideNav();
@@ -5716,6 +5818,7 @@
       m.innerHTML = `
     <div class="card">
      ${renderSelectorBar('a')}
+     ${renderSmokePanel('agent')}
      ${F('Bot name', 'a.name')}
      ${renderAgentCampaignAssignment(a)}
      ${F('Call direction', 'a.mode', 'sel', [
@@ -5835,6 +5938,7 @@
         m.innerHTML = `
     <div class="card">
      ${renderSelectorBar('c')}
+     ${renderSmokePanel('campaign')}
      ${F('Campaign name', 'c.name')}
      ${renderCampaignAgentAssignment(C())}
      <div class="row">
@@ -6985,7 +7089,9 @@
       S = loadedState;
       let mig3 = false;
       for (const ag of S.agents || []) {
-        const stockPrompt = shippedState?.agents?.find((entry) => entry.id === ag.id)?.prompt || '';
+        // The shipped Medicare bot is now the Jessica template; never auto-swap an existing
+        // browser bot's script into it (the Load-template button does that on request).
+        const stockPrompt = ag.id === 'a_medicare' ? '' : shippedState?.agents?.find((entry) => entry.id === ag.id)?.prompt || '';
         const migrated = window.VacPersona.migrateLegacyQualificationPrompt(
           window.VacOpening.migrateStockMedicarePrompt(ag.prompt, stockPrompt),
           stockPrompt,
@@ -8406,6 +8512,16 @@
       await commitSave();
       const vsAfter = document.getElementById('vs');
       if (vsAfter) vsAfter.textContent = `✓ ${label} is now the saved voice for every bot.`;
+      return;
+    }
+
+    if (b.id === 'btn-smoke-agent' || b.id === 'btn-smoke-campaign') {
+      await runSmokeTest(b.id === 'btn-smoke-agent' ? 'agent' : 'campaign');
+      return;
+    }
+
+    if (b.id === 'btn-medicare-template-agent' || b.id === 'btn-medicare-template-campaign') {
+      loadMedicareTemplate(b.id.endsWith('agent') ? 'agent' : 'campaign');
       return;
     }
 

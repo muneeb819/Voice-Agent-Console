@@ -4,7 +4,7 @@
 interface ConversationMemory {
   addUserText(value: string): void;
   addAssistantText(value: string): void;
-  facts(): { statedAge: string | null; medicareStatus: string | null; userTurns: number };
+  facts(): { statedAge: string | null; medicareStatus: string | null; userTurns: number; disability?: boolean };
   sanitizeTransferArgs(args: Record<string, any>): { args: Record<string, any>; omitted: string[]; corrected: string[] };
   qualificationBlockers(campaign?: { complianceRules?: string } | null): string[];
 }
@@ -25,6 +25,7 @@ interface PersonaApi {
   TONE_MAP: Record<string, string>;
   MAX_PROMPT_LENGTH: number;
   MAX_CAMPAIGN_RULES: number;
+  MED_BENEFITS_RULE_MARKER: string;
 }
 
 const api: PersonaApi = require('../public/persona.js');
@@ -44,4 +45,5 @@ export const {
   TONE_MAP,
   MAX_PROMPT_LENGTH,
   MAX_CAMPAIGN_RULES,
+  MED_BENEFITS_RULE_MARKER,
 } = api;

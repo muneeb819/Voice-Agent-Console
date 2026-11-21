@@ -4280,3 +4280,15 @@ body.has-unsaved-changes .workspace-stage {
 .blocker-group { margin-top: 8px; }
 .blocker-group ul { margin: 3px 0 0; padding-left: 18px; }
 .blocker-group li { margin: 2px 0; }
+
+/* Smoke test panel (Bots / Campaigns) */
+.smoke-panel { margin: 4px 0 14px; padding: 12px 14px; border: 1px solid var(--bd, rgba(0,0,0,.12)); border-radius: 12px; }
+.smoke-result { margin-top: 8px; font-size: 13px; }
+.smoke-result ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.smoke-result li { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; border-top: 1px solid var(--bd, rgba(0,0,0,.08)); line-height: 1.45; }
+.smoke-ic { width: 14px; flex: none; font-weight: 700; }
+.smoke-ok .smoke-ic, .smoke-pass { color: #2e7d32; }
+.smoke-wn .smoke-ic { color: #b26a00; }
+.smoke-er .smoke-ic, .smoke-fail { color: #c62828; }
+.smoke-time { color: var(--mu); font-size: 11.5px; margin-left: 6px; }
+.smoke-result li.smoke-group { display: block; margin-top: 8px; padding-top: 8px; font-weight: 700; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--mu); }
