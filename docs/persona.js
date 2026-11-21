@@ -472,7 +472,8 @@
       return blockers;
     }
 
-    return { addUserText, addAssistantText, facts, sanitizeTransferArgs, qualificationBlockers };
+    function lastUserText() { return userTexts.length ? userTexts[userTexts.length - 1] : ''; }
+    return { addUserText, addAssistantText, facts, sanitizeTransferArgs, qualificationBlockers, lastUserText };
   }
 
   function fingerprint(text) {

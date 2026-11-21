@@ -954,7 +954,9 @@ function attachLiveSimulator(server, noServer = false) {
                                         transferIntentTimer = null;
                                         if (closed || simulatedTransfer)
                                             return;
-                                        const blockers = conversationMemory.qualificationBlockers(activeCampaign);
+                                        const blockers = (0, call_limit_1.callerDeclined)(conversationMemory.lastUserText())
+                                            ? ['The caller did not agree to be connected. Do not transfer; respect their answer and close politely or ask once if they would like to speak with the specialist.']
+                                            : conversationMemory.qualificationBlockers(activeCampaign);
                                         const allowed = (0, settings_builder_1.allowedCampaignDispositionCodes)(activeCampaign).includes('XFER');
                                         if (!blockers.length && allowed) {
                                             simulatedTransfer = true;

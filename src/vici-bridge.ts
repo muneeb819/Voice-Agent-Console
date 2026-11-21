@@ -22,7 +22,7 @@ import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCall
 import { createConversationMemory } from './persona';
 import { campaignExtension, campaignSlot, primaryCampaignAgent } from './campaign-assignment';
 import { BargeInGate, normalizeBargeInPct } from './barge-in';
-import { CALL_LIMIT_CLOSING_LINE, TRANSFER_INTENT_AUTOCOMPLETE_MS, TRANSFER_INTENT_GRACE_MS, announcesTransfer, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt, transferBlockedPrompt } from './call-limit';
+import { CALL_LIMIT_CLOSING_LINE, TRANSFER_INTENT_AUTOCOMPLETE_MS, TRANSFER_INTENT_GRACE_MS, announcesTransfer, callerDeclined, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt, transferBlockedPrompt } from './call-limit';
 export { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
 import { Agent, Campaign, ConsoleState } from './types';
 import { SipRegistrationClient } from './vici-sip-registration';
@@ -1574,6 +1574,9 @@ export class VicidialBridgeService {
                   }
       };
       autoTransfer = async (reason: string) => {
+        if (callerDeclined(conversationMemory.lastUserText())) {
+          return { ok: false, error: 'caller declined', blockers: ['The caller did not agree to be connected. Do not transfer; respect their answer and close politely or ask once if they would like to speak with the specialist.'] };
+        }
         const payload = await scheduleTransfer({ reason });
         return { ok: Boolean(payload.ok), error: String(payload.error || ''), blockers: conversationMemory.qualificationBlockers(campaign) };
       };

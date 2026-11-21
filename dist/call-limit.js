@@ -6,6 +6,7 @@ exports.callLimitMsForCampaign = callLimitMsForCampaign;
 exports.callLimitSchedule = callLimitSchedule;
 exports.callLimitWrapUpPrompt = callLimitWrapUpPrompt;
 exports.announcesTransfer = announcesTransfer;
+exports.callerDeclined = callerDeclined;
 exports.transferBlockedPrompt = transferBlockedPrompt;
 /** Per-campaign hard call-length limit in ms (0 = no limit). */
 function callLimitMsForCampaign(campaign) {
@@ -51,6 +52,17 @@ function announcesTransfer(text) {
             return false;
         return /\b(?:i(?:'ll| will| am|'m) (?:now )?(?:connect|connecting|transfer|transferring|put(?:ting)? you through|bring(?:ing)?)|let me (?:connect|transfer|get you over|put you through|bring)|(?:connecting|transferring) you(?: now| over| right now)?|(?:please )?(?:hold|stay on) (?:the line|on|for (?:just )?(?:a|one) (?:moment|second|sec))[^.!]*(?:connect|transfer|specialist|agent|representative|licensed)|one moment while i (?:connect|transfer|get)|i'm (?:getting|bringing) (?:a|our|my|one of our) (?:licensed )?(?:specialist|agent|representative))/.test(s);
     });
+}
+/**
+ * The caller's latest words decline the handoff ("no", "not interested",
+ * "don't transfer me", "stop calling"). An announced transfer is never
+ * auto-completed over a refusal: consent stays the caller's.
+ */
+function callerDeclined(text) {
+    const t = String(text || '').toLowerCase().replace(/[’']/g, "'").trim();
+    if (!t)
+        return false;
+    return /^(?:no|nope|nah|no thanks?|no thank you)\b|\b(?:not interested|no thank|don't (?:transfer|connect|want)|do not (?:transfer|connect|call)|i don't want|stop calling|take me off|remove me|hang up|not now|maybe later|call (?:me )?(?:back )?later|i'm (?:busy|good|fine)|not today)\b/.test(t);
 }
 /** How long an announced transfer protects the call from the call-length limit. */
 exports.TRANSFER_INTENT_GRACE_MS = 45000;

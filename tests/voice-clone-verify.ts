@@ -99,9 +99,13 @@ async function main() {
     assert.ok(announcesTransfer(t), `announced: ${t}`);
   for (const t of ['Would you like me to connect you with a specialist?', "I can connect you if you'd like.", 'Do you have Medicare Part A and B?', "No problem, I'm not transferring you.", "I won't connect you, have a nice day.", "I can't transfer you until you confirm Part A and B.", "I'll connect you once you confirm your ZIP code."])
     assert.ok(!announcesTransfer(t), `not announced: ${t}`);
-  const { callLimitWrapUpPrompt } = await import('../src/call-limit');
+  const { callLimitWrapUpPrompt, callerDeclined } = await import('../src/call-limit');
+  for (const t of ["No, I'm not interested.", "Don't transfer me.", 'Nah, call me later.', 'Please take me off your list.'])
+    assert.ok(callerDeclined(t), `declined: ${t}`);
+  for (const t of ['Yes, please connect me.', 'Sure, go ahead.', 'I have Part A and B, yes.', "Yes, I'm interested."])
+    assert.ok(!callerDeclined(t), `not declined: ${t}`);
   assert.match(callLimitWrapUpPrompt(20), /Never transfer without the caller's agreement/);
-  console.log('✓ Transfer announcements detected ("hold while I connect you"); offers, questions and negated/conditional statements are not; wrap-up keeps consent mandatory');
+  console.log('✓ Transfer announcements detected ("hold while I connect you"); offers, questions and negated/conditional statements are not; a caller refusal is recognised; wrap-up keeps consent mandatory');
   console.log('\nVoice clone verification passed.');
 }
 main().catch((e) => { console.error(e); process.exit(1); });

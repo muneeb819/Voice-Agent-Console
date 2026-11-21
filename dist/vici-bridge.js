@@ -1446,6 +1446,9 @@ class VicidialBridgeService {
                 }
             };
             autoTransfer = async (reason) => {
+                if ((0, call_limit_1.callerDeclined)(conversationMemory.lastUserText())) {
+                    return { ok: false, error: 'caller declined', blockers: ['The caller did not agree to be connected. Do not transfer; respect their answer and close politely or ask once if they would like to speak with the specialist.'] };
+                }
                 const payload = await scheduleTransfer({ reason });
                 return { ok: Boolean(payload.ok), error: String(payload.error || ''), blockers: conversationMemory.qualificationBlockers(campaign) };
             };

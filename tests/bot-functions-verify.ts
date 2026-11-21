@@ -364,6 +364,21 @@ async function main() {
       announced.close();
       viciRequests.length = 0;
     }
+    // Consent: the caller refused, the bot (wrongly) announces a transfer anyway → no transfer.
+    {
+      const refused = await placeCall(`${inv.vici.aiExten}${campaign.slot}`, { steps: [
+        { user: "I'm 70 with Medicare Part A and Part B, ZIP 94601." },
+        { user: "No, I'm not interested. Don't transfer me." },
+        { raw: { type: 'ConversationText', role: 'assistant', content: 'Please hold the line while I connect you with our licensed specialist.' } },
+        { audioDone: true },
+        { sleep: 4000 },
+      ] });
+      await until(() => refused.session.messages.some((m) => m.type === 'UpdatePrompt' && /TRANSFER NOT STARTED/.test(m.prompt || '') && /did not agree/.test(m.prompt || '')), 'bot told the caller refused', 20000);
+      assert.ok(!viciRequests.some((p) => p.function === 'ra_call_control' && p.value === refused.callerCode && /TRANSFER/.test(p.stage || '')), 'no transfer over a refusal');
+      console.log(`✓ CONSENT ${agent.name}: caller said "not interested", bot announced a transfer anyway → bridge refused to transfer and corrected the bot`);
+      refused.close();
+      viciRequests.length = 0;
+    }
     await putState((st) => { st.campaigns.find((c: any) => c.id === campaign.id).maxCallSec = 70; });
   }
 

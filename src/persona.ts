@@ -7,6 +7,7 @@ interface ConversationMemory {
   facts(): { statedAge: string | null; medicareStatus: string | null; userTurns: number };
   sanitizeTransferArgs(args: Record<string, any>): { args: Record<string, any>; omitted: string[]; corrected: string[] };
   qualificationBlockers(campaign?: { complianceRules?: string } | null): string[];
+  lastUserText(): string;
 }
 
 interface PersonaApi {

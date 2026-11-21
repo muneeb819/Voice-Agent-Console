@@ -1,6 +1,6 @@
 import http from 'http';
 import { BargeInGate, normalizeBargeInPct } from './barge-in';
-import { CALL_LIMIT_CLOSING_LINE, TRANSFER_INTENT_AUTOCOMPLETE_MS, TRANSFER_INTENT_GRACE_MS, announcesTransfer, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt, transferBlockedPrompt } from './call-limit';
+import { CALL_LIMIT_CLOSING_LINE, TRANSFER_INTENT_AUTOCOMPLETE_MS, TRANSFER_INTENT_GRACE_MS, announcesTransfer, callerDeclined, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt, transferBlockedPrompt } from './call-limit';
 import { getAuthenticatedUser, isRequestAuthorized } from './auth-guard';
 import crypto from 'crypto';
 import WebSocket, { WebSocketServer } from 'ws';
@@ -949,7 +949,9 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
                   transferIntentTimer = setTimeout(() => {
                     transferIntentTimer = null;
                     if (closed || simulatedTransfer) return;
-                    const blockers = conversationMemory.qualificationBlockers(activeCampaign);
+                    const blockers = callerDeclined(conversationMemory.lastUserText())
+                      ? ['The caller did not agree to be connected. Do not transfer; respect their answer and close politely or ask once if they would like to speak with the specialist.']
+                      : conversationMemory.qualificationBlockers(activeCampaign);
                     const allowed = allowedCampaignDispositionCodes(activeCampaign).includes('XFER');
                     if (!blockers.length && allowed) {
                       simulatedTransfer = true;
