@@ -5800,7 +5800,7 @@
       <div class="vclone-actions">
         <button class="g" type="button" data-vclone-preview="${esc(provider)}|${esc(v.id)}" ${vclone.busy ? 'disabled' : ''}>▶ Preview</button>
         ${provider === 'elevenlabs' && live !== v.id ? `<button class="b" type="button" data-vclone-use="${esc(v.id)}" data-vclone-name="${esc(v.name)}" ${vclone.busy ? 'disabled' : ''}>Use for live calls</button>` : ''}
-        <button class="g danger" type="button" data-vclone-del="${esc(provider)}|${esc(v.id)}" data-vclone-name="${esc(v.name)}" ${vclone.busy ? 'disabled' : ''}>Delete</button>
+        ${provider === 'elevenlabs' && live === v.id ? '' : `<button class="g danger" type="button" data-vclone-del="${esc(provider)}|${esc(v.id)}" data-vclone-name="${esc(v.name)}" ${vclone.busy ? 'disabled' : ''}>Delete</button>`}
       </div>
     </div>`).join('');
   }

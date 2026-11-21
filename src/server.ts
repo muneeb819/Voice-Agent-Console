@@ -1550,7 +1550,15 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     if (!isOwnerOrAdmin(req)) { res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Only an owner or admin can delete cloned voices.' }); return; }
     try {
       const id = String(req.params.id || '');
-      if (req.params.provider === 'elevenlabs') await elevenDelete(id);
+      if (req.params.provider === 'elevenlabs') {
+        // Never delete the voice live calls are using: calls would point at a voice that no longer exists.
+        const st = getConsoleState();
+        const tts = st.providers.find((p) => p.kind === 'tts' && p.id === st.services?.tts?.providerId);
+        if (tts?.type === 'eleven_labs' && String(tts.endpoint || '').includes(`/text-to-speech/${id}/`)) {
+          throw new CloneError('This voice is live on calls. Pick another call voice in Voice Lab first, then delete it.', 409, 'VOICE_IN_USE');
+        }
+        await elevenDelete(id);
+      }
       else if (req.params.provider === 'selfhosted') await selfHostedDelete(id);
       else throw new CloneError('Unknown provider.');
       res.json({ ok: true });

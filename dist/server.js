@@ -1398,8 +1398,15 @@ function createApp(viciBridge) {
         }
         try {
             const id = String(req.params.id || '');
-            if (req.params.provider === 'elevenlabs')
+            if (req.params.provider === 'elevenlabs') {
+                // Never delete the voice live calls are using: calls would point at a voice that no longer exists.
+                const st = (0, db_1.getConsoleState)();
+                const tts = st.providers.find((p) => p.kind === 'tts' && p.id === st.services?.tts?.providerId);
+                if (tts?.type === 'eleven_labs' && String(tts.endpoint || '').includes(`/text-to-speech/${id}/`)) {
+                    throw new voice_clone_1.CloneError('This voice is live on calls. Pick another call voice in Voice Lab first, then delete it.', 409, 'VOICE_IN_USE');
+                }
                 await (0, voice_clone_1.elevenDelete)(id);
+            }
             else if (req.params.provider === 'selfhosted')
                 await (0, voice_clone_1.selfHostedDelete)(id);
             else
