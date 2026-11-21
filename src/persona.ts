@@ -24,6 +24,11 @@ interface PersonaApi {
   TONE_MAP: Record<string, string>;
   MAX_PROMPT_LENGTH: number;
   MAX_CAMPAIGN_RULES: number;
+  callPromptReport(agent: any, campaign: any, openingChars?: number): {
+    instructionsChars: number; instructionsCutChars: number; instructionsLines: number; cutLines: string[];
+    rulesChars: number; rulesCutChars: number; rulesLimit: number; callChars: number; phoneChars: number;
+    phoneLimit: number; phoneRoom: number; callWillFail: boolean; builtInChars: number;
+  };
 }
 
 const api: PersonaApi = require('../public/persona.js');
@@ -42,4 +47,5 @@ export const {
   TONE_MAP,
   MAX_PROMPT_LENGTH,
   MAX_CAMPAIGN_RULES,
+  callPromptReport,
 } = api;

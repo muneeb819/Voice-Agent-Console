@@ -2437,6 +2437,11 @@
     push((agent.greeting || '').trim().length > 10, 'Greeting is set (> 10 chars)');
     const promptOk = (agent.prompt || '').trim().length > 0 && agent.prompt.length <= 25000;
     push(promptOk, 'System prompt within 25,000-character managed limit');
+    for (const campaign of campaignsForAgent(agent.id)) {
+      const r = promptReach(agent, campaign);
+      if (r.instructionsCutChars > 0) push(false, `On “${campaign.name}”, the last ${r.cutLines.length} line(s) of the instructions do not reach calls — shorten the instructions or the campaign rules`);
+      else if (r.callWillFail) push(false, `On “${campaign.name}”, the call prompt is over 25,000 characters with the opening — calls cannot start`);
+    }
 
     if (sttModel.startsWith('flux')) {
       const eot = Number(agent.stt.eot);
@@ -5564,6 +5569,117 @@
 
   // ==================== MAIN VIEW RENDERER ====================
 
+  // ── Does what I saved actually reach calls? ────────────────────────────────
+  // Over budget, the call composer shortens the bot instructions FROM THE END,
+  // so newly added lines were dropped silently. These meters make it visible.
+  function promptReach(agent, campaign) {
+    const greeting = window.VacOpening.composeOpening(agent.greeting, '', agent.injectCampaignDisclosure, campaign.disclosure || '');
+    const opening = greeting ? window.VacOpening.openingInstruction(greeting).length : 0;
+    return window.VacPersona.callPromptReport(agent, campaign, opening);
+  }
+  const fmtN = (n) => Number(n || 0).toLocaleString('en-US');
+
+  function renderAgentReachMeter(agent) {
+    if (!agent) return '';
+    const camps = campaignsForAgent(agent.id);
+    if (!camps.length) return `<div class="reach-meter"><span class="reach-wn">Not assigned to a campaign yet — calls can't use these instructions.</span></div>`;
+    return `<div class="reach-meter">${camps.map((c) => {
+      const r = promptReach(agent, c);
+      if (r.instructionsCutChars > 0) {
+        return `<div class="reach-er">✗ <b>${esc(c.name)}:</b> the last ${r.cutLines.length} line${r.cutLines.length === 1 ? '' : 's'} (${fmtN(r.instructionsCutChars)} characters) will <b>not</b> reach calls — the call prompt is full. Shorten these instructions or the campaign rules.${r.cutLines.length ? ` First line cut: “${esc(r.cutLines[0].slice(0, 90))}${r.cutLines[0].length > 90 ? '…' : ''}”` : ''}</div>`;
+      }
+      if (r.callWillFail) return `<div class="reach-er">✗ <b>${esc(c.name)}:</b> ${fmtN(r.phoneChars)} of ${fmtN(r.phoneLimit)} characters with the opening — calls cannot start. Shorten the instructions.</div>`;
+      const cls = r.phoneRoom < 1000 ? 'reach-wn' : 'reach-ok';
+      return `<div class="${cls}">${cls === 'reach-ok' ? '✓' : '!'} <b>${esc(c.name)}:</b> all ${fmtN(r.instructionsLines)} lines reach calls · call prompt ${fmtN(r.phoneChars)} / ${fmtN(r.phoneLimit)} (${fmtN(r.phoneRoom)} to spare)</div>`;
+    }).join('')}</div>`;
+  }
+
+  function renderRulesReachMeter(campaign) {
+    if (!campaign) return '';
+    const rules = String(campaign.complianceRules || '').trim();
+    const full = rules.length >= 8000;
+    const rows = [`<div class="${full ? 'reach-er' : rules.length > 7000 ? 'reach-wn' : 'reach-ok'}">${full ? '✗' : rules.length > 7000 ? '!' : '✓'} Campaign rules: ${fmtN(rules.length)} / 8,000 characters${full ? ' — the box is full; anything typed or pasted beyond this is dropped' : ''}</div>`];
+    const bots = campaignAgentIds(campaign).map((id) => S.agents.find((a) => a.id === id)).filter((a) => a && a.id !== 'a_qa');
+    for (const agent of bots) {
+      const r = promptReach(agent, campaign);
+      if (r.instructionsCutChars > 0) rows.push(`<div class="reach-er">✗ With these rules, the last ${r.cutLines.length} line(s) of <b>${esc(agent.name)}</b>’s instructions do not reach calls.</div>`);
+      else if (r.callWillFail) rows.push(`<div class="reach-er">✗ <b>${esc(agent.name)}</b>: call prompt over 25,000 characters — calls cannot start.</div>`);
+      else rows.push(`<div class="${r.phoneRoom < 1000 ? 'reach-wn' : 'reach-ok'}">${r.phoneRoom < 1000 ? '!' : '✓'} <b>${esc(agent.name)}</b>: rules and instructions reach calls (${fmtN(r.phoneRoom)} characters to spare)</div>`);
+    }
+    return `<div class="reach-meter">${rows.join('')}</div>`;
+  }
+
+  function refreshReachMeters() {
+    const am = document.getElementById('agent-reach');
+    if (am && tab === 'agents') am.innerHTML = renderAgentReachMeter(A());
+    const cm = document.getElementById('rules-reach');
+    if (cm && tab === 'campaigns') cm.innerHTML = renderRulesReachMeter(C());
+  }
+
+  // ── Smoke test: saved → live on the next call, no restart ──────────────────
+  const smokeResults = { agent: {}, campaign: {} };
+  const smokeRunning = { agent: false, campaign: false };
+
+  function renderSmokeResult(kind, id) {
+    if (smokeRunning[kind]) return '<div class="note">Running smoke test…</div>';
+    const r = smokeResults[kind][id];
+    if (!r) return '';
+    if (r.error) return `<div class="note er">${esc(r.error)}</div>`;
+    const icon = { ok: '✓', wn: '!', er: '✗' };
+    const head = r.ok
+      ? `<b class="smoke-pass">✓ Passed</b> — the next call uses these saved settings (${r.summary.passed} checks${r.summary.warnings ? `, ${r.summary.warnings} warning${r.summary.warnings === 1 ? '' : 's'}` : ''}).`
+      : `<b class="smoke-fail">✗ Failed</b> — ${r.summary.failed} problem${r.summary.failed === 1 ? '' : 's'} to fix${r.summary.warnings ? `, ${r.summary.warnings} warning${r.summary.warnings === 1 ? '' : 's'}` : ''}.`;
+    return `<div class="smoke-result ${r.ok ? 'pass' : 'fail'}">
+      <div>${head} <span class="smoke-time">${esc(new Date(r.ranAt).toLocaleTimeString())}</span></div>
+      <ul>${r.checks.map((c, i) => `${c.group && c.group !== r.checks[i - 1]?.group ? `<li class="smoke-group">${esc(c.group)}</li>` : ''}<li class="smoke-${c.level}"><span class="smoke-ic">${icon[c.level] || '•'}</span><span><b>${esc(c.label)}</b> — ${esc(String(c.detail).replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z/g, (iso) => new Date(iso).toLocaleString()))}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+
+  function renderSmokePanel(kind) {
+    const item = kind === 'agent' ? A() : C();
+    if (!item) return '';
+    return `<div class="smoke-panel">
+      <div class="smoke-head">
+        <button class="b" id="btn-smoke-${kind}" type="button" ${smokeRunning[kind] ? 'disabled' : ''}>Run Smoke Test</button>
+        <span class="note" style="margin:0">After you <b>Save</b>, check that the running server has your changes and the next call will use them. No restart needed.</span>
+      </div>
+      <div id="smoke-out-${kind}">${renderSmokeResult(kind, item.id)}</div>
+    </div>`;
+  }
+
+  async function runSmokeTest(kind) {
+    const item = kind === 'agent' ? A() : C();
+    if (!item) return;
+    const paint = () => {
+      const out = document.getElementById(`smoke-out-${kind}`);
+      if (out) out.innerHTML = renderSmokeResult(kind, item.id);
+      const btn = document.getElementById(`btn-smoke-${kind}`);
+      if (btn) btn.disabled = smokeRunning[kind];
+    };
+    if (serverlessCloudMode) {
+      smokeResults[kind][item.id] = { error: 'The smoke test reads the server’s saved settings, so it needs the deployed console (not the browser-only demo).' };
+      paint();
+      return;
+    }
+    smokeRunning[kind] = true;
+    paint();
+    try {
+      const res = await fetch('./api/smoke-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, id: item.id, draft: JSON.parse(JSON.stringify(item)) }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      smokeResults[kind][item.id] = { ...data.result, ranAt: Date.now() };
+    } catch (error) {
+      smokeResults[kind][item.id] = { error: `Smoke test could not run: ${error instanceof Error ? error.message : String(error)}` };
+    } finally {
+      smokeRunning[kind] = false;
+      paint();
+    }
+  }
+
   function render() {
     if (!S) return;
     renderSideNav();
@@ -5588,6 +5704,7 @@
       m.innerHTML = `
     <div class="card">
      ${renderSelectorBar('a')}
+     ${renderSmokePanel('agent')}
      ${F('Agent name', 'a.name')}
      ${renderAgentCampaignAssignment(a)}
      ${F('Call handling direction', 'a.mode', 'sel', [
@@ -5601,6 +5718,7 @@
      ${F('Saved opening and identity (keep it brief)', 'a.greeting', 'ta')}
      ${F('Vary this opening using the imported greeting library', 'a.randomGreetingEnabled', 'chk')}
      ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
+     <div id="agent-reach">${renderAgentReachMeter(a)}</div>
      <div class="note wn">Verify every factual claim before calling.</div>
 
      <h2> Barge-In, Expressions, Gestures, Speed &amp; General Q&amp;A</h2>
@@ -5710,6 +5828,7 @@
         m.innerHTML = `
     <div class="card">
      ${renderSelectorBar('c')}
+     ${renderSmokePanel('campaign')}
      ${F('Campaign display name', 'c.name')}
      ${renderCampaignAgentAssignment(C())}
      <div class="row">
@@ -5743,6 +5862,7 @@
      <h2>️ Compliance &amp; Rules</h2>
      <div class="note wn">These rules are attached to this campaign and injected into its assigned bot’s live prompt. Write campaign-specific, actionable rules and review all claims with your compliance owner. This console is not legal advice or a compliance certification.</div>
      ${F('Mandatory campaign-specific rules and prohibited claims (20–8,000 characters)', 'c.complianceRules', 'ta', [], 'style="min-height:180px" maxlength="8000"')}
+     <div id="rules-reach">${renderRulesReachMeter(C())}</div>
      ${F('Allowed VICIdial disposition codes for this campaign (comma-separated)', 'c.dispos')}
      <div class="note">These codes control explicit agent disposition requests. Caller silence does not select a code or end the call.</div>
      ${F('Scrub leads against DNC list before dialing', 'c.dnc', 'chk')}
@@ -6617,6 +6737,7 @@
   }
 
   function updateLivePreview() {
+    refreshReachMeters();
     const pv = document.getElementById('pv');
     if (pv) {
       if (tab === 'agents') pv.textContent = JSON.stringify(buildSettings(A()), null, 2);
@@ -8282,6 +8403,11 @@
       await commitSave();
       const vsAfter = document.getElementById('vs');
       if (vsAfter) vsAfter.textContent = `✓ ${label} is now the saved voice for every bot.`;
+      return;
+    }
+
+    if (b.id === 'btn-smoke-agent' || b.id === 'btn-smoke-campaign') {
+      await runSmokeTest(b.id === 'btn-smoke-agent' ? 'agent' : 'campaign');
       return;
     }
 

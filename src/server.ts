@@ -1,3 +1,4 @@
+import { smokeTestAgent, smokeTestCampaign } from './smoke-test';
 import dns from 'dns';
 import fs from 'fs';
 import http from 'http';
@@ -45,6 +46,7 @@ import {
   listRevisions,
   listSimulatorCallLogs,
   saveConsoleState,
+  recentRevisionSnapshots,
 } from './db';
 import { createDefaultState, normalizeState } from './defaults';
 import { credentialRoutingChanges } from './state-guard';
@@ -906,6 +908,25 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   app.post('/api/demo-tunnel/stop', (_req: Request, res: Response) => {
     stopPublicDemoTunnel();
     res.json({ ok: true, active: false, publicUrl: null });
+  });
+
+  // Smoke test: did my saved change reach the running server and the next call?
+  // Read-only; any signed-in role may run it. `draft` is the on-screen copy, to flag unsaved edits.
+  app.post('/api/smoke-test', (req: Request, res: Response) => {
+    const kind = String(req.body?.kind || '');
+    const id = String(req.body?.id || '').slice(0, 200);
+    if ((kind !== 'agent' && kind !== 'campaign') || !id) {
+      res.status(400).json({ ok: false, error: 'kind must be "agent" or "campaign", with an id.' });
+      return;
+    }
+    try {
+      const state = getConsoleState();
+      const draft = req.body?.draft && typeof req.body.draft === 'object' ? req.body.draft : undefined;
+      const revisions = recentRevisionSnapshots(50);
+      res.json({ ok: true, result: kind === 'agent' ? smokeTestAgent(state, id, draft, revisions) : smokeTestCampaign(state, id, draft, revisions) });
+    } catch (error) {
+      res.status(500).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+    }
   });
 
   app.put('/api/state', (req: Request, res: Response) => {

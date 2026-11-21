@@ -10,6 +10,7 @@ exports.selectGreetingForAgent = selectGreetingForAgent;
 exports.trySelectGreeting = trySelectGreeting;
 exports.getConsoleState = getConsoleState;
 exports.saveConsoleState = saveConsoleState;
+exports.recentRevisionSnapshots = recentRevisionSnapshots;
 exports.listRevisions = listRevisions;
 exports.saveSimulatorCallLog = saveSimulatorCallLog;
 exports.listSimulatorCallLogs = listSimulatorCallLogs;
@@ -378,6 +379,21 @@ function saveConsoleState(rawState, explicitSummary) {
         console.error('[state] SQLite save succeeded but JSON mirror write failed:', err instanceof Error ? err.message : err);
     }
     return { state: nextState, changes, revisionId };
+}
+/** Recent saved snapshots (newest first), for "what did my last save change?". */
+function recentRevisionSnapshots(limit = 50) {
+    const conn = getDb();
+    const rows = conn
+        .prepare('SELECT id, saved_at, snapshot FROM state_revisions ORDER BY id DESC LIMIT ?')
+        .all(limit);
+    const out = [];
+    for (const row of rows) {
+        try {
+            out.push({ id: row.id, saved_at: row.saved_at, state: JSON.parse(row.snapshot) });
+        }
+        catch { /* skip unreadable */ }
+    }
+    return out;
 }
 function listRevisions(limit = 15) {
     const conn = getDb();

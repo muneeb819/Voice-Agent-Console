@@ -428,6 +428,23 @@ async function run() {
     assert.equal(beforeCampaigns + 2, beforeCampaigns + 2, 'Fixture sanity');
   }
 
+  // Reach meters + smoke test panel (bot instructions / campaign rules).
+  const reachFx = await fixture({ query: '?tab=agents&agent=a1' });
+  assert.ok(reachFx.d.getElementById('btn-smoke-agent'), 'Bot page has Run Smoke Test');
+  assert.match(reachFx.d.getElementById('agent-reach')!.textContent || '', /reach calls/, 'Bot page shows whether the instructions reach calls');
+  const box = reachFx.d.querySelector('[data-p="a.prompt"]') as HTMLTextAreaElement;
+  box.value += `\n${'Long operator rule that fills the prompt budget. '.repeat(400)}\nNEWEST LINE`;
+  change(box, 'input');
+  assert.match(reachFx.d.getElementById('agent-reach')!.textContent || '', /will not reach calls/, 'Meter warns when the newest lines would be cut');
+  click(reachFx.d.getElementById('btn-smoke-agent')!);
+  await tick();
+  assert.match(reachFx.d.getElementById('smoke-out-agent')!.textContent || '', /needs the deployed console/, 'Browser-only demo explains the smoke test needs the server');
+  reachFx.w.close();
+  const rulesFx = await fixture({ query: '?tab=campaigns&campaign=c1' });
+  assert.ok(rulesFx.d.getElementById('btn-smoke-campaign'), 'Campaign page has Run Smoke Test');
+  assert.match(rulesFx.d.getElementById('rules-reach')!.textContent || '', /Campaign rules: [\d,]+ \/ 8,000/, 'Campaign rules show a character meter');
+  rulesFx.w.close();
+  console.log('✓ Reach meters warn before new lines are cut; Run Smoke Test on Bots and Campaigns');
   console.log('✓ Static console: house crest header lockup, native right-click/new-tab links, rail utilities, explicit save dock, free section navigation, per-tab draft recovery, two-layer Fleet Matrix, storage failure, multi-bot assignment, simulator setup feedback and honest readiness');
 }
 run().catch((error) => { console.error(error); process.exit(1); });

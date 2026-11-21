@@ -4237,3 +4237,22 @@ body.has-unsaved-changes .workspace-stage {
     max-width: none;
   }
 }
+
+/* Does it reach calls? meters (bot instructions / campaign rules) */
+.reach-meter { margin: 6px 0 10px; font-size: 12px; line-height: 1.5; }
+.reach-meter > div { padding: 2px 0; }
+.reach-ok { color: #2e7d32; }
+.reach-wn { color: #a15c00; }
+.reach-er { color: #c62828; }
+/* Smoke test panel */
+.smoke-panel { margin: 4px 0 14px; padding: 12px 14px; border: 1px solid var(--bd, rgba(0,0,0,.12)); border-radius: 12px; }
+.smoke-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.smoke-result { margin-top: 10px; font-size: 13px; }
+.smoke-result ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.smoke-result li { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; border-top: 1px solid var(--bd, rgba(0,0,0,.08)); line-height: 1.45; }
+.smoke-result li.smoke-group { display: block; margin-top: 8px; padding-top: 8px; font-weight: 700; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--mu); }
+.smoke-ic { width: 14px; flex: none; font-weight: 700; }
+.smoke-ok .smoke-ic, .smoke-pass { color: #2e7d32; }
+.smoke-wn .smoke-ic { color: #a15c00; }
+.smoke-er .smoke-ic, .smoke-fail { color: #c62828; }
+.smoke-time { color: var(--mu); font-size: 11.5px; margin-left: 6px; }

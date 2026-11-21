@@ -94,6 +94,10 @@
   }
 
   function composeBehavioralPrompt(agent, campaign) {
+    return composePromptParts(agent, campaign).prompt;
+  }
+
+  function composePromptParts(agent, campaign) {
     const basePrompt = String((agent && agent.prompt) || '').trim();
     const b = agent && agent.behavior;
     const lines = [];
@@ -172,12 +176,49 @@
     lines.push(...callEndingLines());
     lines.push(...conversationIntegrityLines());
     const suffix = lines.join('\n').trim();
-    if (!suffix) return basePrompt;
+    if (!suffix) return { basePrompt, safeBase: basePrompt, suffix: '', prompt: basePrompt };
     const truncationNote = '\n[Agent prompt shortened to preserve the mandatory campaign rules below.]';
     const availableBaseLength = Math.max(0, MAX_PROMPT_LENGTH - suffix.length - 1 - truncationNote.length);
     const safeBase = basePrompt.slice(0, availableBaseLength);
     const note = basePrompt.length > safeBase.length ? truncationNote : '';
-    return `${safeBase}${note}\n${suffix}`.trim();
+    return { basePrompt, safeBase, suffix, prompt: `${safeBase}${note}\n${suffix}`.trim() };
+  }
+
+  /**
+   * What of the saved instructions and rules actually reaches a call. The
+   * composer shortens the bot instructions FROM THE END when the call prompt is
+   * over budget, which silently dropped newly added lines; this makes it visible.
+   * `openingChars` = what the phone call appends for the opening turn.
+   */
+  function callPromptReport(agent, campaign, openingChars) {
+    const parts = composePromptParts(agent, campaign);
+    const base = parts.basePrompt;
+    const lines = base.split('\n');
+    let offset = 0;
+    const cutLines = [];
+    for (const line of lines) {
+      const end = offset + line.length;
+      if (line.trim() && end > parts.safeBase.length) cutLines.push(line.trim());
+      offset = end + 1;
+    }
+    const rules = String((campaign && campaign.complianceRules) || '').trim();
+    const extra = Math.max(0, Number(openingChars) || 0);
+    const phoneChars = parts.prompt.length + extra;
+    return {
+      instructionsChars: base.length,
+      instructionsCutChars: Math.max(0, base.length - parts.safeBase.length),
+      instructionsLines: lines.filter((l) => l.trim()).length,
+      cutLines,
+      rulesChars: rules.length,
+      rulesCutChars: Math.max(0, rules.length - MAX_CAMPAIGN_RULES),
+      rulesLimit: MAX_CAMPAIGN_RULES,
+      callChars: parts.prompt.length,
+      phoneChars,
+      phoneLimit: 25000,
+      phoneRoom: 25000 - phoneChars,
+      callWillFail: phoneChars > 25000,
+      builtInChars: Math.max(0, parts.suffix.length - Math.min(rules.length, MAX_CAMPAIGN_RULES)),
+    };
   }
 
   function defaultSelfIntro(id, name) {
@@ -487,5 +528,6 @@
     TONE_MAP,
     MAX_PROMPT_LENGTH,
     MAX_CAMPAIGN_RULES,
+    callPromptReport,
   };
 });

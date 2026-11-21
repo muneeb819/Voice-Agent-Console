@@ -464,6 +464,19 @@ export function saveConsoleState(
   return { state: nextState, changes, revisionId };
 }
 
+/** Recent saved snapshots (newest first), for "what did my last save change?". */
+export function recentRevisionSnapshots(limit = 50): Array<{ id: number; saved_at: string; state: any }> {
+  const conn = getDb();
+  const rows = conn
+    .prepare('SELECT id, saved_at, snapshot FROM state_revisions ORDER BY id DESC LIMIT ?')
+    .all(limit) as Array<{ id: number; saved_at: string; snapshot: string }>;
+  const out: Array<{ id: number; saved_at: string; state: any }> = [];
+  for (const row of rows) {
+    try { out.push({ id: row.id, saved_at: row.saved_at, state: JSON.parse(row.snapshot) }); } catch { /* skip unreadable */ }
+  }
+  return out;
+}
+
 export function listRevisions(limit = 15): Array<{ id: number; saved_at: string; summary: string }> {
   const conn = getDb();
   return conn
