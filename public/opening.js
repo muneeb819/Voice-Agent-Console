@@ -103,25 +103,67 @@
     return result;
   }
 
+  // ── Short greeting lines (front-end "Greeting lines" list or the library) ──
+  function wordCount(text) {
+    return String(text || '').trim().split(/\s+/).filter(Boolean).length;
+  }
+
+  function timeOfDay(timeZone, now) {
+    let hour = (now || new Date()).getHours();
+    try {
+      const h = new Intl.DateTimeFormat('en-US', { hour: 'numeric', hourCycle: 'h23', timeZone: timeZone || undefined }).format(now || new Date());
+      if (Number.isFinite(Number(h))) hour = Number(h);
+    } catch { /* unknown time zone: server clock */ }
+    return hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening';
+  }
+
+  /** Fill {timeOfDay} and correct a hard-coded "Good morning/afternoon/evening" to the caller's local time. */
+  function localizeGreeting(line, timeZone, now) {
+    const tod = timeOfDay(timeZone, now);
+    return String(line || '')
+      .replace(/\{\s*timeOfDay\s*\}/gi, tod)
+      .replace(/\bgood\s+(morning|afternoon|evening)\b/gi, (m) => (m[0] === 'G' ? 'Good ' : 'good ') + tod)
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /** The operator's greeting list: one line per greeting, blanks and over-long lines left out. */
+  function greetingLineList(text, maxWords) {
+    const limit = Number(maxWords) > 0 ? Number(maxWords) : 20;
+    return String(text || '')
+      .split(/\r?\n/)
+      .map((line) => line.replace(/\s+/g, ' ').trim())
+      .filter((line) => line && wordCount(line) <= limit);
+  }
+
   /** Deepgram Settings is sent immediately, without its automatic greeting. */
   /** Text a phone call appends to the prompt for the opening turn (counted in the prompt budget). */
-  function openingInstruction(greeting) {
+  function openingInstruction(greeting, options) {
+    const line = JSON.stringify(String(greeting || '').trim());
+    const noAnswer = String((options && options.noAnswerText) || '').trim();
+    if (options && options.waitForCaller) {
+      return '\n\n[Call opening] Wait for the caller to speak first. When they do (for example "Hello?"), your first reply is exactly this one greeting line and nothing more: ' + line + '. ' +
+        (noAnswer ? 'If nobody speaks, the line says ' + JSON.stringify(noAnswer) + ' for you; when the caller then answers, reply with the greeting line. ' : 'If nobody speaks, the greeting line is said for you. ') +
+        'Then wait for their answer. Never end the call just because the caller is silent. ' +
+        'Honor requests to stop and other safety instructions instead of insisting on a script. ' +
+        'Never assume an eligibility question was asked or answered unless it actually appears in the conversation.';
+    }
     return '\n\n[Call opening sequence] The bridge listens for the caller’s first speech for one full second before the bot speaks. ' +
         'If the caller speaks during that listen, respond to their actual words and begin the assigned campaign greeting naturally in the first response when appropriate. ' +
         'If the caller is silent, the bridge injects this one assigned campaign opening; say it once, then listen for the caller. ' +
         'Do not repeat it or end the call merely because the caller is silent. The assigned opening is: ' +
-        JSON.stringify(String(greeting || '').trim()) +
+        line +
         '. Honor requests to stop, urgent concerns, and other safety instructions instead of insisting on a script. ' +
         'Never assume an eligibility question was asked or answered unless it actually appears in the conversation.';
   }
 
-  function prepareDelayedOpening(settings) {
+  function prepareDelayedOpening(settings, options) {
     const wire = JSON.parse(JSON.stringify(settings));
     const greeting = String(wire?.agent?.greeting || '').trim();
     if (!wire.agent || !wire.agent.think) throw new Error('Agent settings are incomplete.');
     delete wire.agent.greeting;
     if (greeting) {
-      const instruction = openingInstruction(greeting);
+      const instruction = openingInstruction(greeting, options);
       const prompt = String(wire.agent.think.prompt || '');
       if (prompt.length + instruction.length > 25000) {
         throw new Error('The agent prompt is too long to add opening-turn instructions. Shorten it before starting a call.');
@@ -140,7 +182,13 @@
   function createOpeningGate(options) {
     let started = false, stopped = false, listenComplete = false, outputReleased = false;
     let callerStarted = false, callerTurn = false, openingSent = false;
-    let delayTimer = null, fallbackTimer = null;
+    let delayTimer = null, fallbackTimer = null, presenceTimer = null, presencePrompts = 0;
+    // Wait-for-hello: listen this long for the caller first; if nobody speaks,
+    // say the "are you there?" line (up to N times) instead of the greeting.
+    const waitMs = Math.max(OPENING_DELAY_MS, Math.min(15000, Number(options.waitForCallerMs) || OPENING_DELAY_MS));
+    const noAnswerText = String(options.noAnswerText || '').trim();
+    const maxPresencePrompts = Math.max(0, Math.min(5, Math.floor(Number(options.noAnswerRepeats) || 0)));
+    const waitForCaller = Boolean(options.waitForCaller);
     let queuedBytes = 0, overflowReported = false;
     const queuedAudio = [];
     const releaseCallbacks = [];
@@ -149,8 +197,23 @@
     function clearTimers() {
       if (delayTimer !== null) clearTimeout(delayTimer);
       if (fallbackTimer !== null) clearTimeout(fallbackTimer);
+      if (presenceTimer !== null) clearTimeout(presenceTimer);
       delayTimer = null;
       fallbackTimer = null;
+      presenceTimer = null;
+    }
+    function askIfAnyoneThere() {
+      presenceTimer = null;
+      if (stopped || callerTurn || callerStarted || presencePrompts >= maxPresencePrompts || !noAnswerText) return;
+      presencePrompts += 1;
+      openingSent = true;            // the line is now open for the bot to speak
+      clearQueuedAudio();
+      if (typeof options.sendOpening === 'function') {
+        try { options.sendOpening(noAnswerText); }
+        catch (error) { try { if (typeof options.onSendError === 'function') options.onSendError(error); } catch {} }
+      }
+      releaseOutput();
+      if (presencePrompts < maxPresencePrompts) presenceTimer = setTimeout(askIfAnyoneThere, waitMs);
     }
     function clearQueuedAudio() {
       queuedAudio.length = 0;
@@ -192,6 +255,7 @@
       listenComplete = true;
       if (callerTurn) releaseOutput();
       else if (callerStarted) scheduleTranscriptGrace();
+      else if (waitForCaller && noAnswerText && maxPresencePrompts > 0) askIfAnyoneThere();
       else sendConfiguredOpening();
     }
     return {
@@ -201,7 +265,7 @@
         delayTimer = setTimeout(() => {
           delayTimer = null;
           completeListen();
-        }, OPENING_DELAY_MS);
+        }, waitForCaller ? waitMs : OPENING_DELAY_MS);
       },
       userStarted() {
         if (stopped || callerTurn) return;
@@ -214,7 +278,15 @@
         callerStarted = true;
         callerTurn = true;
         if (fallbackTimer !== null) clearTimeout(fallbackTimer);
+        if (presenceTimer !== null) clearTimeout(presenceTimer);
         fallbackTimer = null;
+        presenceTimer = null;
+        // Wait-for-hello: the caller answered before the listen ended; the bot replies now.
+        if (waitForCaller && !listenComplete) {
+          listenComplete = true;
+          if (delayTimer !== null) clearTimeout(delayTimer);
+          delayTimer = null;
+        }
         releaseOutput();
       },
       audio(chunk) {
@@ -244,5 +316,5 @@
     };
   }
 
-  return { OPENING_DELAY_MS, NO_TRANSCRIPT_FALLBACK_MS, migrateStockOpening, migrateStockMedicarePrompt, composeOpening, prepareDelayedOpening, openingInstruction, createOpeningGate };
+  return { OPENING_DELAY_MS, NO_TRANSCRIPT_FALLBACK_MS, migrateStockOpening, migrateStockMedicarePrompt, composeOpening, prepareDelayedOpening, openingInstruction, createOpeningGate, wordCount, timeOfDay, localizeGreeting, greetingLineList };
 });

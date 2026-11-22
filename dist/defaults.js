@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SEEDED_BUILTIN_BOTS = exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.DEFAULT_MAX_CALL_SEC = exports.SPEECH_SERVICE_DEFAULT_VOICES = exports.SPEECH_SERVICE_STT_MODELS = exports.MISSING_CAMPAIGN_RULES = exports.VOICE_AGENT_STT_MODELS = void 0;
+exports.SEEDED_BUILTIN_BOTS = exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.DEFAULT_MAX_CALL_SEC = exports.SPEECH_SERVICE_DEFAULT_VOICES = exports.SPEECH_SERVICE_STT_MODELS = exports.MISSING_CAMPAIGN_RULES = exports.VOICE_AGENT_STT_MODELS = exports.DEFAULT_GREETING_LINES = exports.DEFAULT_SPEAKING_STYLE = void 0;
 exports.defaultVoiceAgentSttModel = defaultVoiceAgentSttModel;
 exports.normalizeVoiceAgentSttModel = normalizeVoiceAgentSttModel;
 exports.defaultSelfIntroForAgent = defaultSelfIntroForAgent;
@@ -10,9 +10,29 @@ exports.createDefaultState = createDefaultState;
 exports.normalizeState = normalizeState;
 const opening_1 = require("./opening");
 const persona_1 = require("./persona");
+exports.DEFAULT_SPEAKING_STYLE = persona_1.FLOW_DEFAULTS.speakingStyle;
+exports.DEFAULT_GREETING_LINES = persona_1.FLOW_DEFAULTS.greetingLines;
+const DEFAULT_REPEAT_LINE = persona_1.FLOW_DEFAULTS.repeatLine;
+const DEFAULT_NO_ANSWER_LINE = persona_1.FLOW_DEFAULTS.noAnswerLine;
 const campaign_assignment_1 = require("./campaign-assignment");
 const barge_in_1 = require("./barge-in");
 const sentinel_qa_1 = require("./sentinel-qa");
+function normalizeFlow(raw) {
+    const f = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+    const text = (v, fallback, max) => (typeof v === 'string' ? v : fallback).slice(0, max);
+    const num = (v, fallback, min, max) => { const n = Number(v); return v !== null && v !== '' && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; };
+    return {
+        waitForHello: f.waitForHello !== undefined ? Boolean(f.waitForHello) : true,
+        waitForHelloSec: Math.round(num(f.waitForHelloSec, 3, 1, 10) * 10) / 10,
+        noAnswerLine: text(f.noAnswerLine, DEFAULT_NO_ANSWER_LINE, 200),
+        noAnswerRepeats: Math.round(num(f.noAnswerRepeats, 2, 0, 5)),
+        greetingLines: text(f.greetingLines, exports.DEFAULT_GREETING_LINES, 20000),
+        greetingMaxWords: Math.round(num(f.greetingMaxWords, 20, 5, 40)),
+        introLine: text(f.introLine, '', 600),
+        transferOnYes: Boolean(f.transferOnYes),
+        repeatLine: text(f.repeatLine, DEFAULT_REPEAT_LINE, 300),
+    };
+}
 /**
  * A saved text field: keeps real text (and finite numbers), and falls back for
  * blanks and junk types such as [] or {} that a damaged file can contain.
@@ -973,6 +993,7 @@ function normalizeState(raw) {
                 vocalGestures: rawBeh.vocalGestures !== undefined ? Boolean(rawBeh.vocalGestures) : true,
                 allowGeneralQa: rawBeh.allowGeneralQa !== undefined ? Boolean(rawBeh.allowGeneralQa) : true,
                 selfIntro: (0, persona_1.migrateLegacySelfIntro)(rawBeh.selfIntro, agentId, agentName),
+                speakingStyle: typeof rawBeh.speakingStyle === 'string' ? rawBeh.speakingStyle.slice(0, 6000) : exports.DEFAULT_SPEAKING_STYLE,
             };
             const rawInRate = Math.round(num(a.audio?.inRate, 8000));
             const rawOutRate = Math.round(num(a.audio?.outRate, 8000));
@@ -987,6 +1008,7 @@ function normalizeState(raw) {
                 acceptViciCalls: isNovaAgent ? true : a.acceptViciCalls !== undefined ? Boolean(a.acceptViciCalls) : hadLegacyAccept,
                 injectCampaignDisclosure: a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : false,
                 behavior,
+                flow: normalizeFlow(a.flow),
                 stt: {
                     keyterms: String(a.stt?.keyterms ?? ''),
                     eot: num(a.stt?.eot, 0.55, 0.1, 0.9),
@@ -1001,6 +1023,8 @@ function normalizeState(raw) {
                 tts: {
                     speed: num(a.tts?.speed, 1.0, 0.5, 1.5),
                     expr: Math.round(num(a.tts?.expr, 0, -2, 2)),
+                    expressiveness: Math.round(num(a.tts?.expressiveness, 0.5, 0.25, 2) * 100) / 100,
+                    variation: Math.round(num(a.tts?.variation, 0.8, 0.3, 1.5) * 100) / 100,
                 },
                 audio: {
                     inEnc: ['linear16', 'mulaw', 'alaw'].includes(a.audio?.inEnc) ? a.audio.inEnc : 'linear16',

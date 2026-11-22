@@ -151,6 +151,7 @@ async function main() {
   campaign.agentId = state.agents[0].id;
   campaign.complianceRules = 'Reviewed test campaign rules: be truthful, do not claim unverified benefits, and honor do-not-call requests immediately.';
   state.agents[0].greeting = 'Hi, this is Jessi from Example Services. How are you doing?';
+  (state.agents[0] as any).flow = { ...((state.agents[0] as any).flow || {}), waitForHello: false, greetingLines: '' }; // legacy speak-after-one-second opening
   state.agents[0].injectCampaignDisclosure = false;
   saveConsoleState(state, 'Early caller timing fixture');
   const upstream = http.createServer();

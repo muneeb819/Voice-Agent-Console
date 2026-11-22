@@ -42,7 +42,7 @@ console.log('✓ Unsaved edits fail the smoke test and are named');
 // 3) Root cause: over budget, the newest lines at the END were cut silently. Now reported.
 const big = clone(base);
 const bigBot = big.agents.find((a) => a.id === 'a1')!;
-bigBot.prompt += `\n${'Long operator rule that fills the prompt budget. '.repeat(330)}\nNEW-RULE-Z: the newest line at the end.`;
+bigBot.prompt += `\n${'Long operator rule that fills the prompt budget. '.repeat(450)}\nNEW-RULE-Z: the newest line at the end.`;
 const reach = promptReachReport(bigBot as any, big.campaigns.find((c) => c.id === 'c1') as any);
 assert.ok(reach.instructionsCutChars > 0 && reach.cutLines.includes('NEW-RULE-Z: the newest line at the end.'), 'the cut lines are identified');
 assert.ok(validateAgent(big as any, bigBot as any).some((v) => v.level === 'er' && /do not reach calls/.test(v.message)), 'pre-flight error');

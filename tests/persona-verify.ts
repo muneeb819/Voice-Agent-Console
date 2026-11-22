@@ -75,7 +75,7 @@ function run() {
   const restricted = { ...medicare, behavior: { ...medicare.behavior, allowGeneralQa: false, vocalGestures: false } };
   const restrictedPrompt = composeBehavioralPrompt(restricted, campaign);
   assert(restrictedPrompt.includes('GENERAL Q&A DISABLED'));
-  assert(restrictedPrompt.includes('VOCAL GESTURES DISABLED'));
+  assert(restrictedPrompt.includes('No filler reactions'));
   assert(!restrictedPrompt.includes('GENERAL KNOWLEDGE & OPEN Q&A'));
   assert(!restrictedPrompt.includes('NATURAL VOCAL GESTURES:'));
 

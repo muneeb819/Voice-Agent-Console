@@ -115,10 +115,14 @@ class CloneClient:
             headers={"X-Clone-Token": token},
         )
 
-    async def synthesize(self, voice_id: str, text: str) -> tuple[np.ndarray, int]:
+    async def synthesize(self, voice_id: str, text: str, style: dict | None = None) -> tuple[np.ndarray, int]:
         if not self.enabled:
             raise CloneDisabled()
-        r = await self._c.post("/synthesize", json={"voice_id": voice_id, "text": text})
+        payload = {"voice_id": voice_id, "text": text}
+        for key in ("exaggeration", "temperature"):
+            if style and style.get(key) is not None:
+                payload[key] = float(style[key])
+        r = await self._c.post("/synthesize", json=payload)
         if r.status_code != 200:
             raise RuntimeError(f"clone service error {r.status_code}")
         audio, sr = sf.read(io.BytesIO(r.content), dtype="float32")

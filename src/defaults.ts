@@ -1,9 +1,32 @@
 import { Agent,  AgentBehavior, AgentFunction, Campaign, ConsoleState, Provider } from './types';
 import { migrateStockMedicarePrompt, migrateStockOpening } from './opening';
-import { migrateLegacyQualificationPrompt, migrateLegacyCampaignRules, defaultSelfIntro, migrateLegacySelfIntro } from './persona';
+import { migrateLegacyQualificationPrompt, migrateLegacyCampaignRules, defaultSelfIntro, migrateLegacySelfIntro, FLOW_DEFAULTS } from './persona';
+
+export const DEFAULT_SPEAKING_STYLE = FLOW_DEFAULTS.speakingStyle;
+export const DEFAULT_GREETING_LINES = FLOW_DEFAULTS.greetingLines;
+const DEFAULT_REPEAT_LINE = FLOW_DEFAULTS.repeatLine;
+const DEFAULT_NO_ANSWER_LINE = FLOW_DEFAULTS.noAnswerLine;
 import { assignCampaignSlots, normalizeCampaignAgents } from './campaign-assignment';
 import { normalizeBargeInPct, presetForPct } from './barge-in';
 import { SENTINEL_QA_AGENT, SENTINEL_QA_TESTS } from './sentinel-qa';
+
+
+function normalizeFlow(raw: any): import('./types').AgentFlow {
+  const f = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const text = (v: unknown, fallback: string, max: number) => (typeof v === 'string' ? v : fallback).slice(0, max);
+  const num = (v: unknown, fallback: number, min: number, max: number) => { const n = Number(v); return v !== null && v !== '' && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; };
+  return {
+    waitForHello: f.waitForHello !== undefined ? Boolean(f.waitForHello) : true,
+    waitForHelloSec: Math.round(num(f.waitForHelloSec, 3, 1, 10) * 10) / 10,
+    noAnswerLine: text(f.noAnswerLine, DEFAULT_NO_ANSWER_LINE, 200),
+    noAnswerRepeats: Math.round(num(f.noAnswerRepeats, 2, 0, 5)),
+    greetingLines: text(f.greetingLines, DEFAULT_GREETING_LINES, 20000),
+    greetingMaxWords: Math.round(num(f.greetingMaxWords, 20, 5, 40)),
+    introLine: text(f.introLine, '', 600),
+    transferOnYes: Boolean(f.transferOnYes),
+    repeatLine: text(f.repeatLine, DEFAULT_REPEAT_LINE, 300),
+  };
+}
 
 /**
  * A saved text field: keeps real text (and finite numbers), and falls back for
@@ -1076,6 +1099,7 @@ export function normalizeState(raw: any): ConsoleState {
           vocalGestures: rawBeh.vocalGestures !== undefined ? Boolean(rawBeh.vocalGestures) : true,
           allowGeneralQa: rawBeh.allowGeneralQa !== undefined ? Boolean(rawBeh.allowGeneralQa) : true,
           selfIntro: migrateLegacySelfIntro(rawBeh.selfIntro, agentId, agentName),
+          speakingStyle: typeof rawBeh.speakingStyle === 'string' ? rawBeh.speakingStyle.slice(0, 6000) : DEFAULT_SPEAKING_STYLE,
         };
 
         const rawInRate = Math.round(num(a.audio?.inRate, 8000));
@@ -1093,6 +1117,7 @@ export function normalizeState(raw: any): ConsoleState {
           injectCampaignDisclosure:
             a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : false,
           behavior,
+          flow: normalizeFlow(a.flow),
           stt: {
             keyterms: String(a.stt?.keyterms ?? ''),
             eot: num(a.stt?.eot, 0.55, 0.1, 0.9),
@@ -1110,6 +1135,8 @@ export function normalizeState(raw: any): ConsoleState {
           tts: {
             speed: num(a.tts?.speed, 1.0, 0.5, 1.5),
             expr: Math.round(num(a.tts?.expr, 0, -2, 2)),
+            expressiveness: Math.round(num(a.tts?.expressiveness, 0.5, 0.25, 2) * 100) / 100,
+            variation: Math.round(num(a.tts?.variation, 0.8, 0.3, 1.5) * 100) / 100,
           },
           audio: {
             inEnc: ['linear16', 'mulaw', 'alaw'].includes(a.audio?.inEnc) ? a.audio.inEnc : 'linear16',

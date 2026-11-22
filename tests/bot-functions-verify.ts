@@ -246,7 +246,7 @@ async function main() {
     assert.ok(fnNames.includes('end_call') && fnNames.includes('transfer_to_live_agent') && fnNames.includes('set_disposition'), `${agent.name}: functions declared to the provider`);
     assert.ok(prompt.includes(promptMark('v1', agent.id)), `${agent.name}: saved prompt reached the call`);
     assert.ok(/CALL ENDING \(MANDATORY/.test(prompt) && /says goodbye, bye/.test(prompt), `${agent.name}: universal call-ending policy is in the live prompt`);
-    assert.ok(/SOUND LIKE A REAL PERSON/.test(prompt) && /CALL TIME LIMIT \(70 SECONDS\)/.test(prompt), `${agent.name}: human-speech and 70 s fast-transfer policy in the live prompt`);
+    assert.ok(/PERSONALITY & SPEAKING STYLE/.test(prompt) && /CALL TIME LIMIT \(70 SECONDS\)/.test(prompt), `${agent.name}: the bot's speaking style and the 70 s time limit in the live prompt`);
     assert.ok(prompt.includes(ruleMark('v1', campaign.id)), `${agent.name}: saved campaign rules reached the call`);
     for (const other of inv.campaigns.filter((c) => c.id !== campaign.id)) {
       assert.ok(!prompt.includes(ruleMark('v1', other.id)), `${agent.name}: no rules leaked from ${other.name}`);
@@ -319,7 +319,7 @@ async function main() {
     await putState((st) => { st.campaigns.find((c: any) => c.id === campaign.id).maxCallSec = 30; });
     const call = await placeCall(`${inv.vici.aiExten}${campaign.slot}`, { steps: [{ user: 'Haha, tell me a joke and keep talking.' }], speakInjected: true });
     const prompt = String(call.session.settings?.agent?.think?.prompt || '');
-    assert.match(prompt, /CALL TIME LIMIT \(30 SECONDS\) & FAST TRANSFER/, 'time-limit and fast-transfer policy is in the prompt');
+    assert.match(prompt, /CALL TIME LIMIT \(30 SECONDS\)/, 'time-limit policy is in the prompt');
     await until(() => call.result.byeAt > 0, `${agent.name}: call ended by the time limit`, 40000);
     const secs = (call.result.byeAt - call.result.startedAt) / 1000;
     const wrap = call.session.messages.find((m) => m.type === 'UpdatePrompt');

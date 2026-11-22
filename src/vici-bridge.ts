@@ -5,9 +5,9 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { AsteriskAmiClient } from './ami-client';
 import { isBridgePeerIpAllowed, isLoopbackIp } from './auth-guard';
 import { StereoCallRecorder8k } from './call-recorder';
-import { getConsoleState, saveBridgeCallLog, trySelectGreeting } from './db';
+import { chooseOpeningLine, getConsoleState, saveBridgeCallLog } from './db';
 import { GreetingRecord } from './greetings';
-import { createOpeningGate, OpeningGate, prepareDelayedOpening } from './opening';
+import { createOpeningGate, OpeningGate, openingGateOptionsFor, openingOptionsFor, prepareDelayedOpening } from './opening';
 import { getSecret, interpolateProviderPlaceholders } from './env-store';
 import { executeCustomFunctionWebhook } from './webhook-executor';
 import {
@@ -1602,8 +1602,11 @@ export class VicidialBridgeService {
         return;
       }
 
-      selectedGreeting = trySelectGreeting(agent.id, agent.randomGreetingEnabled !== false, agent.greeting);
-      if (selectedGreeting) {
+      const picked = chooseOpeningLine(agent);
+      selectedGreeting = picked ? (picked.row || { greeting_id: 'bot-list', persona: 'Bot greeting list', context: '', greeting_text: picked.line, tone: '' }) : null;
+      if (picked?.line) {
+        addTranscript('system', `Greeting picked from the bot's list: "${picked.line}"`);
+      } else if (selectedGreeting) {
         addTranscript('system', `Selected greeting #${selectedGreeting.greeting_id} (${selectedGreeting.persona}; ${selectedGreeting.context}; ${selectedGreeting.tone}).`);
       } else if (agent.randomGreetingEnabled !== false) {
         addTranscript('system', 'Greeting library unavailable; using the configured opening.');
@@ -1611,7 +1614,8 @@ export class VicidialBridgeService {
 
       const rawSettings = buildDeepgramSettings(state, agent, campaign, {
         forceClientSideWebhooks: true,
-        greetingText: selectedGreeting?.greeting_text,
+        openingLine: picked?.line || '',
+        greetingText: picked?.row?.greeting_text,
       });
       // Telephony is strictly 8000 Hz linear16 mono in & out
       rawSettings.audio = {
@@ -1622,7 +1626,7 @@ export class VicidialBridgeService {
       let wireSettings: any;
       let openingText = '';
       try {
-        const prepared = prepareDelayedOpening(interpolateProviderPlaceholders(rawSettings));
+        const prepared = prepareDelayedOpening(interpolateProviderPlaceholders(rawSettings), openingOptionsFor(agent));
         openingText = prepared.greeting;
         wireSettings = prepared.settings;
       } catch (err: any) {
@@ -1633,6 +1637,7 @@ export class VicidialBridgeService {
       }
       openingGate = createOpeningGate({
         greeting: openingText,
+        ...openingGateOptionsFor(agent),
         sendOpening: (message) => {
           if (!closed && dgWs?.readyState === WebSocket.OPEN) {
             dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));

@@ -1090,6 +1090,9 @@
       }
       agent.tts.speed ??= 1;
       agent.tts.expr ??= 0;
+      agent.tts.expressiveness ??= 0.5;
+      agent.tts.variation ??= 0.8;
+      ensureAgentFlow(agent);
     }
 
     // Ensure built-in Nova Live Concierge exists for existing localStorage users (one-time seed)
@@ -2378,12 +2381,18 @@
       speak.endpoint = { url: tp.endpoint.trim(), headers: th.ok ? th.value : {} };
     }
 
-    const finalGreeting = window.VacOpening.composeOpening(
-      agent.greeting,
-      agent.randomGreetingEnabled !== false ? greetingText : '',
-      agent.injectCampaignDisclosure,
-      linkedCampaign?.disclosure || '',
-    );
+    // Preview: the first usable line of the bot's greeting list (calls pick one at random).
+    const sampleLine = agent.randomGreetingEnabled !== false
+      ? window.VacOpening.greetingLineList(agent.flow?.greetingLines || '', agent.flow?.greetingMaxWords)[0] || ''
+      : '';
+    const finalGreeting = sampleLine
+      ? window.VacOpening.composeOpening(window.VacOpening.localizeGreeting(sampleLine, linkedCampaign?.tz), '', agent.injectCampaignDisclosure, linkedCampaign?.disclosure || '')
+      : window.VacOpening.composeOpening(
+        agent.greeting,
+        agent.randomGreetingEnabled !== false ? greetingText : '',
+        agent.injectCampaignDisclosure,
+        linkedCampaign?.disclosure || '',
+      );
 
     return {
       type: 'Settings',
@@ -2785,6 +2794,26 @@
     arr.map((x) => `<div class="ck"><span class="${x[0]}">${x[1]}</span><span>${x[2]}</span></div>`).join('');
 
   let fieldSerial = 0;
+  // Per-bot call-start and speaking-style settings (saved with the bot; the
+  // server fills the same defaults when it loads the state).
+  function ensureAgentFlow(agent) {
+    const D = window.VacPersona.FLOW_DEFAULTS;
+    if (!agent.flow || typeof agent.flow !== 'object') agent.flow = {};
+    for (const key of Object.keys(D)) if (key !== 'speakingStyle' && agent.flow[key] === undefined) agent.flow[key] = D[key];
+    if (agent.behavior && typeof agent.behavior === 'object' && typeof agent.behavior.speakingStyle !== 'string') agent.behavior.speakingStyle = D.speakingStyle;
+    return agent;
+  }
+
+  function greetingListStatus(agent) {
+    const f = agent.flow || {};
+    const max = Number(f.greetingMaxWords) || 20;
+    const lines = String(f.greetingLines || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const long = lines.filter((l) => l.split(/\s+/).length > max);
+    if (!lines.length) return '<div class="note">No greeting lines: each call uses a short line from the shared greeting library instead.</div>';
+    const used = lines.length - long.length;
+    return `<div class="note ${long.length ? 'wn' : ''}">${used} greeting line${used === 1 ? '' : 's'} in use, picked at random with no repeats until all have been used.${long.length ? ` ${long.length} line${long.length === 1 ? ' is' : 's are'} over ${max} words and will be skipped.` : ''} Write <code>{timeOfDay}</code> to say morning, afternoon or evening for the caller's time zone.</div>`;
+  }
+
   const F = (label, path, type = 'text', opts = [], attrs = '') => {
     const val = getPath(path);
     const fieldId = `vac-field-${++fieldSerial}`;
@@ -6039,8 +6068,22 @@
      ${F('Bridge VICIdial call-connect & automatic lead hydration (recommended — replaces hallucinated LLM accept tool)', 'a.acceptViciCalls', 'chk')}
      ${F('Include the linked campaign recording notice (optional)', 'a.injectCampaignDisclosure', 'chk')}
      <div class="note wn">Spoken campaign notice only — does not turn off recording.</div>
-     ${F('Saved opening and identity (keep it brief)', 'a.greeting', 'ta')}
-     ${F('Vary this opening using the imported greeting library', 'a.randomGreetingEnabled', 'chk')}
+     <h2>Call start &amp; greeting</h2>
+     <div class="note">How the call opens. Everything here is saved with this bot and used on the next call, with no restart.</div>
+     <div class="row r3">
+      ${F('Wait for the caller to speak first', 'a.flow.waitForHello', 'chk')}
+      ${F('Seconds to wait before asking if anyone is there', 'a.flow.waitForHelloSec', 'number', [], 'min="1" max="10" step="0.5"')}
+      ${F('How many times to ask (0 = say the greeting instead)', 'a.flow.noAnswerRepeats', 'number', [], 'min="0" max="5" step="1"')}
+     </div>
+     ${F('Said when nobody speaks', 'a.flow.noAnswerLine')}
+     ${F('Pick a random greeting for each call', 'a.randomGreetingEnabled', 'chk')}
+     ${F('Greeting lines: one per line, short, ending in a question', 'a.flow.greetingLines', 'ta', [], 'style="min-height:120px"')}
+     <div id="greeting-list-status">${greetingListStatus(a)}</div>
+     ${F('Longest greeting allowed (words)', 'a.flow.greetingMaxWords', 'number', [], 'min="5" max="40" step="1"')}
+     ${F('Introduction after the caller answers the greeting (for example: My name is Jessica, I&#39;m calling from the Medicare Marketplace. I believe you have Medicare Part A and B?)', 'a.flow.introLine', 'ta')}
+     ${F('Transfer straight away when the caller says yes to the introduction question', 'a.flow.transferOnYes', 'chk')}
+     ${F('Said when the bot did not catch what the caller said', 'a.flow.repeatLine')}
+     ${F('Fallback opening (used when random greetings are off or no line fits)', 'a.greeting', 'ta')}
      ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
      <div id="agent-reach">${renderAgentReachMeter(a)}</div>
      <div class="note wn">Verify every factual claim before calling.</div>
@@ -6075,6 +6118,7 @@
       </div>
      </div>
      ${F(' Self-Introduction Bio (spoken naturally when asked "Who are you?" or "Introduce yourself")', 'a.behavior.selfIntro', 'ta')}
+     ${F('Personality &amp; speaking style (the only tone guidance the bot gets; the tone menu above is used only when this is empty)', 'a.behavior.speakingStyle', 'ta', [], 'style="min-height:110px"')}
 
      <h2>Speech-to-Text (Listen)</h2>
      <div class="note">Global STT: <b>${esc(globalServiceProvider('stt')?.name || 'Not selected')}</b> · <code>${esc(S.services?.stt?.model || 'not selected')}</code> (Plug-Ins)</div>
@@ -6218,8 +6262,8 @@
         <span class="pill ok">Model: <code>${esc(S.services?.tts?.model || 'not selected')}</code></span>
        </div>
        <div class="row">
-        ${F('Preview speed (0.5–1.5, Speak Text only)', 'a.tts.speed', 'number', [], 'min="0.5" max="1.5" step="0.05"')}
-        ${F('Preview expressivity, Flux v2 (−2..+2, Speak Text only)', 'a.tts.expr', 'sel', [
+        ${F('Speaking speed, Flux voices (0.5–1.5; used on calls and in preview)', 'a.tts.speed', 'number', [], 'min="0.5" max="1.5" step="0.05"')}
+        ${F('Expressivity, Flux voices (−2 flat to +2 lively; used on calls and in preview)', 'a.tts.expr', 'sel', [
           [-2, '-2 (Calmest)'],
           [-1, '-1 (Calm)'],
           [0, '0 (Default)'],
@@ -6227,6 +6271,11 @@
           [2, '+2 (Expressive)'],
         ])}
        </div>
+       <div class="row">
+        ${F('Emotion intensity, self-hosted voices (0.25–2: 0.5 natural, 0.7+ more expressive)', 'a.tts.expressiveness', 'number', [], 'min="0.25" max="2" step="0.05"')}
+        ${F('Delivery variation, self-hosted voices (0.3–1.5: higher is livelier and less repetitive)', 'a.tts.variation', 'number', [], 'min="0.3" max="1.5" step="0.05"')}
+       </div>
+       <div class="note">Self-hosted voices run on your own speech server (Chatterbox). Speed applies to them too. Deepgram reaches the server through the speech provider's public HTTPS address in Plug-Ins.</div>
        <label for="vt">Greeting / Script to Synthesize</label>
        <textarea id="vt">${esc(voiceCatalog.previewText)}</textarea>
        <div class="bar" style="margin-top:10px;margin-bottom:4px">
@@ -6242,7 +6291,7 @@
        <h2>Active Agent <code>agent.speak</code> Payload</h2>
        <pre id="pv">${esc(JSON.stringify(settingsSpeak, null, 2))}</pre>
        <div class="note">
-        Pick a voice below with <b>✓ Use This Voice</b> — it is saved immediately and becomes the shared TTS voice for every bot. <b>Speed and expressivity apply to the Speak Text preview only</b> (Deepgram speak API). They are not sent on live Voice Agent calls — the live speak channel accepts only {type, version, model}.
+        Pick a voice below with <b>✓ Use This Voice</b> — it is saved immediately and becomes the shared TTS voice for every bot. <b>Speed and expressivity are sent on live calls for Flux voices</b> (Deepgram accepts them for Flux only; Aura voices ignore them). For a more human sound, pick a Flux voice and try expressivity +1.
        </div>
       </div>
      </div>
@@ -9138,6 +9187,10 @@
     if (!t.dataset?.p || t.type === 'checkbox' || t.tagName === 'SELECT') return;
     const value = t.type === 'number' ? (t.value === '' || !Number.isFinite(Number(t.value)) ? 0 : Number(t.value)) : t.value;
     setPath(t.dataset.p, value);
+    if (/^a\.flow\.(greetingLines|greetingMaxWords)$/.test(t.dataset.p)) {
+      const box = document.getElementById('greeting-list-status');
+      if (box) box.innerHTML = greetingListStatus(A());
+    }
     updateLivePreview();
     updateHeaderStatus();
   });

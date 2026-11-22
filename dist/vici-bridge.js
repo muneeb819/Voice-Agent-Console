@@ -1468,8 +1468,12 @@ class VicidialBridgeService {
                 await finalizeSession('missing_deepgram_key');
                 return;
             }
-            selectedGreeting = (0, db_1.trySelectGreeting)(agent.id, agent.randomGreetingEnabled !== false, agent.greeting);
-            if (selectedGreeting) {
+            const picked = (0, db_1.chooseOpeningLine)(agent);
+            selectedGreeting = picked ? (picked.row || { greeting_id: 'bot-list', persona: 'Bot greeting list', context: '', greeting_text: picked.line, tone: '' }) : null;
+            if (picked?.line) {
+                addTranscript('system', `Greeting picked from the bot's list: "${picked.line}"`);
+            }
+            else if (selectedGreeting) {
                 addTranscript('system', `Selected greeting #${selectedGreeting.greeting_id} (${selectedGreeting.persona}; ${selectedGreeting.context}; ${selectedGreeting.tone}).`);
             }
             else if (agent.randomGreetingEnabled !== false) {
@@ -1477,7 +1481,8 @@ class VicidialBridgeService {
             }
             const rawSettings = (0, settings_builder_1.buildDeepgramSettings)(state, agent, campaign, {
                 forceClientSideWebhooks: true,
-                greetingText: selectedGreeting?.greeting_text,
+                openingLine: picked?.line || '',
+                greetingText: picked?.row?.greeting_text,
             });
             // Telephony is strictly 8000 Hz linear16 mono in & out
             rawSettings.audio = {
@@ -1488,7 +1493,7 @@ class VicidialBridgeService {
             let wireSettings;
             let openingText = '';
             try {
-                const prepared = (0, opening_1.prepareDelayedOpening)((0, env_store_1.interpolateProviderPlaceholders)(rawSettings));
+                const prepared = (0, opening_1.prepareDelayedOpening)((0, env_store_1.interpolateProviderPlaceholders)(rawSettings), (0, opening_1.openingOptionsFor)(agent));
                 openingText = prepared.greeting;
                 wireSettings = prepared.settings;
             }
@@ -1500,6 +1505,7 @@ class VicidialBridgeService {
             }
             openingGate = (0, opening_1.createOpeningGate)({
                 greeting: openingText,
+                ...(0, opening_1.openingGateOptionsFor)(agent),
                 sendOpening: (message) => {
                     if (!closed && dgWs?.readyState === ws_1.default.OPEN) {
                         dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));

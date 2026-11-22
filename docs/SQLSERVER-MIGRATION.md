@@ -78,3 +78,31 @@ The following nested `ConsoleState` collections are projected from `console_stor
 ## Current status
 
 **Foundation only — not cut over.** The SQL Server DDL and this migration runbook are committed on a feature branch. The Node application still uses SQLite. No SQL Server instance, credentials, network endpoint, or test database was supplied, so schema execution, data loading, app adapter parity, and performance testing remain pending. No production data has been changed.
+
+## 002: per-bot call settings (call start, greeting lines, speaking style, voice)
+
+Run `database/sqlserver/002_bot_call_settings.sql` after `001_schema.sql`.
+
+| Front-end field (bot page) | Console JSON (`agents[].…`) | SQL Server column |
+|---|---|---|
+| Wait for the caller to speak first | `flow.waitForHello` | `vac.BotCallSettings.WaitForHello` |
+| Seconds to wait before asking if anyone is there | `flow.waitForHelloSec` | `WaitForHelloSec` |
+| Said when nobody speaks / how many times | `flow.noAnswerLine`, `flow.noAnswerRepeats` | `NoAnswerLine`, `NoAnswerRepeats` |
+| Greeting lines (one per line) | `flow.greetingLines` | `vac.BotGreetingLines` (one row per line) |
+| Longest greeting allowed (words) | `flow.greetingMaxWords` | `GreetingMaxWords` |
+| Introduction after the caller answers | `flow.introLine` | `IntroLine` |
+| Transfer straight away on yes | `flow.transferOnYes` | `TransferOnYes` |
+| Said when the bot did not catch the caller | `flow.repeatLine` | `RepeatLine` |
+| Personality & speaking style | `behavior.speakingStyle` | `SpeakingStyle` |
+| Speaking speed / Flux expressivity | `tts.speed`, `tts.expr` | `VoiceSpeed`, `FluxExpressivity` |
+| Self-hosted voice emotion / variation | `tts.expressiveness`, `tts.variation` | `Expressiveness`, `Variation` |
+
+Procedures:
+- `vac.usp_BotCallSettings_Save`: saves one bot's settings and greeting lines in one transaction. Greetings that no longer exist leave the shuffle bag.
+- `vac.usp_BotCallSettings_Get`: reads everything a call needs about one bot.
+- `vac.usp_BotGreeting_Pick`: picks one greeting for this call.
+  - It picks at random from the lines not yet used in the current cycle, skipping lines over the word limit.
+  - Once every line is used it starts a new cycle, never repeating the last line.
+  - It is serialised per bot with `sp_getapplock`, so two calls starting together never take the same line.
+
+The running console keeps using SQLite, where these settings are saved with each bot (`console_store.active_state`). The rotation lives in `greeting_line_used`. The SQL Server objects mirror that for the planned migration. Every front-end save already reaches the database, and the next call reads it back. The T-SQL was syntax-checked with sqlfluff (T-SQL dialect) but has not been run on a SQL Server instance yet. Run it once on a test database first.

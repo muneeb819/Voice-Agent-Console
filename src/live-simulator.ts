@@ -4,9 +4,9 @@ import { CALL_LIMIT_CLOSING_LINE, TRANSFER_INTENT_AUTOCOMPLETE_MS, TRANSFER_INTE
 import { getAuthenticatedUser, isRequestAuthorized } from './auth-guard';
 import crypto from 'crypto';
 import WebSocket, { WebSocketServer } from 'ws';
-import { getConsoleState, saveSimulatorCallLog, SimulatorCallLogRecord, trySelectGreeting } from './db';
+import { chooseOpeningLine, getConsoleState, saveSimulatorCallLog, SimulatorCallLogRecord } from './db';
 import { GreetingRecord } from './greetings';
-import { createOpeningGate, OpeningGate, prepareDelayedOpening } from './opening';
+import { createOpeningGate, OpeningGate, openingGateOptionsFor, openingOptionsFor, prepareDelayedOpening } from './opening';
 import { normalizeState } from './defaults';
 import { getSecret, interpolateProviderPlaceholders } from './env-store';
 import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCallReadinessBlockers } from './settings-builder';
@@ -124,6 +124,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
     let activeAgent: Agent | null = null;
     let activeCampaign: Campaign | undefined;
     let selectedGreeting: GreetingRecord | null = null;
+    let openingLine = '';
     let testLead: Record<string, string> = {};
     let allowWebhooks = false;
     let recordingRequested = false;
@@ -615,8 +616,10 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         const activeTtsProv = activeState.providers.find(
           (p) => p.kind === 'tts' && p.id === activeState!.services?.tts?.providerId
         );
-        const usesLocalSpeechService =
-          activeSttProv?.type === 'speech_service' || activeTtsProv?.type === 'speech_service';
+        // A self-hosted voice (TTS) is reached by Deepgram through its public
+        // endpoint; only a self-hosted listener (STT) cannot run a Live Bot call.
+        void activeTtsProv;
+        const usesLocalSpeechService = activeSttProv?.type === 'speech_service';
 
         const requestedMode =
           startMsg.upstreamMode || (usesLocalSpeechService ? 'speech_service' : 'deepgram');
@@ -648,16 +651,20 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           return;
         }
 
-        selectedGreeting = trySelectGreeting(activeAgent.id, activeAgent.randomGreetingEnabled !== false, activeAgent.greeting);
+        const picked = chooseOpeningLine(activeAgent);
+        openingLine = picked?.line || '';
+        selectedGreeting = picked ? (picked.row || { greeting_id: 'bot-list', persona: 'Bot greeting list', context: '', greeting_text: picked.line, tone: '' }) : null;
         if (activeAgent.randomGreetingEnabled !== false && !selectedGreeting) {
           sendClientJson({ type: 'warning', code: 'GREETING_LIBRARY_UNAVAILABLE',
             message: 'The greeting library is unavailable; this test will use the configured opening.' });
         }
 
-        const displaySettings = buildDeepgramSettings(activeState, activeAgent, activeCampaign, { greetingText: selectedGreeting?.greeting_text });
+        const libraryText = picked?.row?.greeting_text;
+        const displaySettings = buildDeepgramSettings(activeState, activeAgent, activeCampaign, { openingLine, greetingText: libraryText });
         const rawSettings = buildDeepgramSettings(activeState, activeAgent, activeCampaign, {
           forceClientSideWebhooks: true,
-          greetingText: selectedGreeting?.greeting_text,
+          openingLine,
+          greetingText: libraryText,
         });
         rawSettings.audio = {
           input: { encoding: 'linear16', sample_rate: sampleRateIn },
@@ -693,7 +700,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         let wireSettings: any;
         let openingText = '';
         try {
-          const prepared = prepareDelayedOpening(interpolateProviderPlaceholders(rawSettings));
+          const prepared = prepareDelayedOpening(interpolateProviderPlaceholders(rawSettings), openingOptionsFor(activeAgent));
           openingText = prepared.greeting;
           wireSettings = prepared.settings;
         } catch (err: any) {
@@ -703,6 +710,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
         }
         openingGate = createOpeningGate({
           greeting: openingText,
+          ...openingGateOptionsFor(activeAgent),
           sendOpening: (message) => {
             if (!closed && dgWs?.readyState === WebSocket.OPEN) {
               dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));

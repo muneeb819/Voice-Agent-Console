@@ -154,6 +154,8 @@ async function main() {
   }
   a1.greeting = 'Hello {{first_name}}, from the example team.';
   a1.randomGreetingEnabled = true;
+  // This fixture tests the shared-library path with the speak-after-one-second opening.
+  for (const bot of state.agents as any[]) bot.flow = { ...(bot.flow || {}), waitForHello: false, greetingLines: '' };
   a1.injectCampaignDisclosure = true;
   saveConsoleState(state, 'Greeting integration fixture');
   const savedState = getConsoleState();

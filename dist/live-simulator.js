@@ -140,6 +140,7 @@ function attachLiveSimulator(server, noServer = false) {
         let activeAgent = null;
         let activeCampaign;
         let selectedGreeting = null;
+        let openingLine = '';
         let testLead = {};
         let allowWebhooks = false;
         let recordingRequested = false;
@@ -634,7 +635,10 @@ function attachLiveSimulator(server, noServer = false) {
                 sampleRateOut = bandwidth === 'telephony' ? 8000 : 24000;
                 const activeSttProv = activeState.providers.find((p) => p.kind === 'stt' && p.id === activeState.services?.stt?.providerId);
                 const activeTtsProv = activeState.providers.find((p) => p.kind === 'tts' && p.id === activeState.services?.tts?.providerId);
-                const usesLocalSpeechService = activeSttProv?.type === 'speech_service' || activeTtsProv?.type === 'speech_service';
+                // A self-hosted voice (TTS) is reached by Deepgram through its public
+                // endpoint; only a self-hosted listener (STT) cannot run a Live Bot call.
+                void activeTtsProv;
+                const usesLocalSpeechService = activeSttProv?.type === 'speech_service';
                 const requestedMode = startMsg.upstreamMode || (usesLocalSpeechService ? 'speech_service' : 'deepgram');
                 const customAgentUrl = (process.env.DEEPGRAM_AGENT_URL || '').trim();
                 const dgApiKey = (0, env_store_1.getSecret)('DEEPGRAM_API_KEY');
@@ -659,15 +663,19 @@ function attachLiveSimulator(server, noServer = false) {
                     finalizeCall('missing_api_key');
                     return;
                 }
-                selectedGreeting = (0, db_1.trySelectGreeting)(activeAgent.id, activeAgent.randomGreetingEnabled !== false, activeAgent.greeting);
+                const picked = (0, db_1.chooseOpeningLine)(activeAgent);
+                openingLine = picked?.line || '';
+                selectedGreeting = picked ? (picked.row || { greeting_id: 'bot-list', persona: 'Bot greeting list', context: '', greeting_text: picked.line, tone: '' }) : null;
                 if (activeAgent.randomGreetingEnabled !== false && !selectedGreeting) {
                     sendClientJson({ type: 'warning', code: 'GREETING_LIBRARY_UNAVAILABLE',
                         message: 'The greeting library is unavailable; this test will use the configured opening.' });
                 }
-                const displaySettings = (0, settings_builder_1.buildDeepgramSettings)(activeState, activeAgent, activeCampaign, { greetingText: selectedGreeting?.greeting_text });
+                const libraryText = picked?.row?.greeting_text;
+                const displaySettings = (0, settings_builder_1.buildDeepgramSettings)(activeState, activeAgent, activeCampaign, { openingLine, greetingText: libraryText });
                 const rawSettings = (0, settings_builder_1.buildDeepgramSettings)(activeState, activeAgent, activeCampaign, {
                     forceClientSideWebhooks: true,
-                    greetingText: selectedGreeting?.greeting_text,
+                    openingLine,
+                    greetingText: libraryText,
                 });
                 rawSettings.audio = {
                     input: { encoding: 'linear16', sample_rate: sampleRateIn },
@@ -692,7 +700,7 @@ function attachLiveSimulator(server, noServer = false) {
                 let wireSettings;
                 let openingText = '';
                 try {
-                    const prepared = (0, opening_1.prepareDelayedOpening)((0, env_store_1.interpolateProviderPlaceholders)(rawSettings));
+                    const prepared = (0, opening_1.prepareDelayedOpening)((0, env_store_1.interpolateProviderPlaceholders)(rawSettings), (0, opening_1.openingOptionsFor)(activeAgent));
                     openingText = prepared.greeting;
                     wireSettings = prepared.settings;
                 }
@@ -703,6 +711,7 @@ function attachLiveSimulator(server, noServer = false) {
                 }
                 openingGate = (0, opening_1.createOpeningGate)({
                     greeting: openingText,
+                    ...(0, opening_1.openingGateOptionsFor)(activeAgent),
                     sendOpening: (message) => {
                         if (!closed && dgWs?.readyState === ws_1.default.OPEN) {
                             dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));

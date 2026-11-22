@@ -60,6 +60,10 @@ app = FastAPI(title="clone-worker", docs_url=None, redoc_url=None, openapi_url=N
 class Req(BaseModel):
     voice_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     text: str = Field(min_length=1)
+    # Emotion intensity, applied when the reference voice is prepared (Turbo reads
+    # it from the conditionals); and sampling temperature (livelier when higher).
+    exaggeration: float = Field(0.5, ge=0.25, le=2.0)
+    temperature: float = Field(0.8, ge=0.3, le=1.5)
 
 
 @app.get("/healthz")
@@ -86,11 +90,12 @@ def synthesize(req: Req, x_clone_token: str = Header("")):
 
     with _lock, torch.inference_mode():
         if hasattr(_model, "prepare_conditionals"):  # cache reference conditioning between requests
-            if _prepared != req.voice_id:
-                _model.prepare_conditionals(str(ref))
-                _prepared = req.voice_id
-            wav = _model.generate(req.text)
+            key = f"{req.voice_id}:{req.exaggeration:.2f}"
+            if _prepared != key:
+                _model.prepare_conditionals(str(ref), exaggeration=req.exaggeration)
+                _prepared = key
+            wav = _model.generate(req.text, temperature=req.temperature)
         else:
-            wav = _model.generate(req.text, audio_prompt_path=str(ref))
+            wav = _model.generate(req.text, audio_prompt_path=str(ref), exaggeration=req.exaggeration, temperature=req.temperature)
     sf.write(buf, wav.detach().cpu().numpy().reshape(-1), _sr, format="WAV", subtype="PCM_16")
     return Response(buf.getvalue(), media_type="audio/wav")

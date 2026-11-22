@@ -348,3 +348,30 @@ def test_clone_requires_consent_and_audits(client, tmp_path):
     vid = voice[6:]
     assert client.delete(f"/v1/voices/{vid}", headers=H).status_code == 204
     assert client.post("/v1/audio/speech", json={"input": "hello", "voice": voice}, headers=H).status_code == 404
+
+
+def test_clone_delivery_settings_reach_the_worker(client, tmp_path):
+    """Each bot's expressiveness (exaggeration) and variation (temperature) reach Chatterbox,
+    from the JSON body or from query parameters (how Deepgram's OpenAI-compatible provider calls)."""
+    _enable_clone(client, tmp_path)
+    ref = {"file": ("ref.wav", wav_bytes(8, sr=24000), "audio/wav")}
+    form = {"name": "demo", "speaker_name": "Jane Doe", "consent_statement": "I, Jane Doe, authorise this use.", "consent_confirmed": "true"}
+    voice = client.post("/v1/voices", files=ref, data=form, headers=H).json()["voice"]
+    seen = []
+    rt = client.app.state.rt
+    original = rt.clone.synthesize
+
+    async def spy(vid, text, style=None):
+        seen.append(dict(style or {}))
+        return await original(vid, text, style)
+
+    rt.clone.synthesize = spy
+    ok = client.post("/v1/audio/speech?exaggeration=0.7&temperature=0.9", json={"input": "hello", "voice": voice}, headers=H)
+    assert ok.status_code == 200
+    assert seen[-1] == {"exaggeration": 0.7, "temperature": 0.9}
+    body = client.post("/v1/audio/speech", json={"input": "hello", "voice": voice, "exaggeration": 1.2, "temperature": 0.5}, headers=H)
+    assert body.status_code == 200 and seen[-1] == {"exaggeration": 1.2, "temperature": 0.5}
+    assert client.post("/v1/audio/speech?exaggeration=9", json={"input": "hello", "voice": voice}, headers=H).status_code == 400
+    assert client.post("/v1/audio/speech?temperature=abc", json={"input": "hello", "voice": voice}, headers=H).status_code == 400
+    fast = client.post("/v1/audio/speech?speed=1.2", json={"input": "Hello there.", "voice": "af_heart"}, headers=H)
+    assert fast.status_code == 200
