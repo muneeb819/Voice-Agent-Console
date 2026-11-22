@@ -1090,6 +1090,9 @@
       }
       agent.tts.speed ??= 1;
       agent.tts.expr ??= 0;
+      agent.tts.expressiveness ??= 0.5;
+      agent.tts.variation ??= 0.8;
+      ensureAgentFlow(agent);
     }
 
     // Ensure built-in Nova Live Concierge exists for existing localStorage users (one-time seed)
@@ -2378,12 +2381,18 @@
       speak.endpoint = { url: tp.endpoint.trim(), headers: th.ok ? th.value : {} };
     }
 
-    const finalGreeting = window.VacOpening.composeOpening(
-      agent.greeting,
-      agent.randomGreetingEnabled !== false ? greetingText : '',
-      agent.injectCampaignDisclosure,
-      linkedCampaign?.disclosure || '',
-    );
+    // Preview: the first usable line of the bot's greeting list (calls pick one at random).
+    const sampleLine = agent.randomGreetingEnabled !== false
+      ? window.VacOpening.greetingLineList(agent.flow?.greetingLines || '', agent.flow?.greetingMaxWords)[0] || ''
+      : '';
+    const finalGreeting = sampleLine
+      ? window.VacOpening.composeOpening(window.VacOpening.localizeGreeting(sampleLine, linkedCampaign?.tz), '', agent.injectCampaignDisclosure, linkedCampaign?.disclosure || '')
+      : window.VacOpening.composeOpening(
+        agent.greeting,
+        agent.randomGreetingEnabled !== false ? greetingText : '',
+        agent.injectCampaignDisclosure,
+        linkedCampaign?.disclosure || '',
+      );
 
     return {
       type: 'Settings',
@@ -2785,6 +2794,26 @@
     arr.map((x) => `<div class="ck"><span class="${x[0]}">${x[1]}</span><span>${x[2]}</span></div>`).join('');
 
   let fieldSerial = 0;
+  // Per-bot call-start and speaking-style settings (saved with the bot; the
+  // server fills the same defaults when it loads the state).
+  function ensureAgentFlow(agent) {
+    const D = window.VacPersona.FLOW_DEFAULTS;
+    if (!agent.flow || typeof agent.flow !== 'object') agent.flow = {};
+    for (const key of Object.keys(D)) if (key !== 'speakingStyle' && agent.flow[key] === undefined) agent.flow[key] = D[key];
+    if (agent.behavior && typeof agent.behavior === 'object' && typeof agent.behavior.speakingStyle !== 'string') agent.behavior.speakingStyle = D.speakingStyle;
+    return agent;
+  }
+
+  function greetingListStatus(agent) {
+    const f = agent.flow || {};
+    const max = Number(f.greetingMaxWords) || 20;
+    const lines = String(f.greetingLines || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const long = lines.filter((l) => l.split(/\s+/).length > max);
+    if (!lines.length) return '<div class="note">No greeting lines: each call uses a short line from the shared greeting library instead.</div>';
+    const used = lines.length - long.length;
+    return `<div class="note ${long.length ? 'wn' : ''}">${used} greeting line${used === 1 ? '' : 's'} in use, picked at random with no repeats until all have been used.${long.length ? ` ${long.length} line${long.length === 1 ? ' is' : 's are'} over ${max} words and will be skipped.` : ''} Write <code>{timeOfDay}</code> to say morning, afternoon or evening for the caller's time zone.</div>`;
+  }
+
   const F = (label, path, type = 'text', opts = [], attrs = '') => {
     const val = getPath(path);
     const fieldId = `vac-field-${++fieldSerial}`;
@@ -5764,7 +5793,8 @@
     loaded: false, loading: false, data: null, error: '', busy: '', msg: '', msgLevel: '',
     provider: 'elevenlabs', name: '', speaker: '', statement: '', confirm: false, noise: true,
     sample: null, sampleName: '', sampleType: '', recording: null, recStart: 0, recTimer: null,
-    previewText: 'Hi, this is a quick preview of my cloned voice. How does it sound?',
+    previewText: "Hi there! This is Jessica... oh, I'm so glad I caught you! I've got some really good news about your Medicare benefits — do you have just a quick minute?",
+    preset: 'warm', model: 'eleven_flash_v2_5',
   };
 
   async function loadVoiceClones(force = false) {
@@ -5793,14 +5823,16 @@
         : group.code === 'SELFHOSTED_CLONE_OFF' || group.code === 'SELFHOSTED_NOT_CONFIGURED' ? ' This needs the self-hosted speech service with its clone container on an NVIDIA GPU server.' : '';
       return `<div class="note wn">${esc(group.error)}${hint}</div>`;
     }
-    if (!group.voices.length) return '<div class="note">No cloned voices yet.</div>';
+    if (!group.voices.length) return `<div class="note">${provider === 'library' ? 'No ready-made voices on this ElevenLabs account.' : 'No cloned voices yet.'}</div>`;
+    const isLib = provider === 'library';
+    if (isLib) provider = 'elevenlabs';
     const live = vclone.data?.liveVoiceId;
     return group.voices.map((v) => `<div class="vclone-row">
-      <div class="vclone-name"><b>${esc(v.name)}</b>${provider === 'elevenlabs' && live === v.id ? ' <span class="pill ok">Live on calls</span>' : ''}<small>${esc(v.id)}${v.durationSec ? ` · ${Math.round(v.durationSec)} s sample` : ''}</small></div>
+      <div class="vclone-name"><b>${esc(v.name)}</b>${provider === 'elevenlabs' && live === v.id ? ' <span class="pill ok">Live on calls</span>' : ''}<small>${v.description ? `${esc(v.description)} · ` : ''}${esc(v.id)}${v.durationSec ? ` · ${Math.round(v.durationSec)} s sample` : ''}</small></div>
       <div class="vclone-actions">
         <button class="g" type="button" data-vclone-preview="${esc(provider)}|${esc(v.id)}" ${vclone.busy ? 'disabled' : ''}>▶ Preview</button>
         ${provider === 'elevenlabs' && live !== v.id ? `<button class="b" type="button" data-vclone-use="${esc(v.id)}" data-vclone-name="${esc(v.name)}" ${vclone.busy ? 'disabled' : ''}>Use for live calls</button>` : ''}
-        ${provider === 'elevenlabs' && live === v.id ? '' : `<button class="g danger" type="button" data-vclone-del="${esc(provider)}|${esc(v.id)}" data-vclone-name="${esc(v.name)}" ${vclone.busy ? 'disabled' : ''}>Delete</button>`}
+        ${isLib || (provider === 'elevenlabs' && live === v.id) ? '' : `<button class="g danger" type="button" data-vclone-del="${esc(provider)}|${esc(v.id)}" data-vclone-name="${esc(v.name)}" ${vclone.busy ? 'disabled' : ''}>Delete</button>`}
       </div>
     </div>`).join('');
   }
@@ -5844,8 +5876,12 @@
       </div>
       <div class="vclone-list">
        <div class="fld"><label for="vc-preview-text">Preview text</label><input id="vc-preview-text" maxlength="300" value="${esc(vclone.previewText)}"></div>
-       <h3>ElevenLabs voices <small>(live calls)</small></h3>
+       ${renderLiveVoiceFeel()}
+       <h3>Your cloned ElevenLabs voices <small>(live calls)</small></h3>
        ${vclone.error ? `<div class="note er">${esc(vclone.error)}</div>` : cloneRows(d?.elevenlabs, 'elevenlabs')}
+       <h3>Ready-made ElevenLabs voices <small>(live calls)</small></h3>
+       <div class="note" style="margin-top:0">Preview a few warm, natural voices and press <b>Use for live calls</b> on the one that fits your bot best.</div>
+       <div class="vclone-lib">${vclone.error ? '' : cloneRows(d?.elevenlabsLibrary, 'library')}</div>
        <h3>Self-hosted voices <small>(previews)</small></h3>
        ${vclone.error ? '' : cloneRows(d?.selfhosted, 'selfhosted')}
        <audio id="vc-preview-audio" controls hidden></audio>
@@ -5853,6 +5889,47 @@
       </div>
      </div>
     </div>`;
+  }
+
+  // How the live-call voice sounds: expressiveness preset + ElevenLabs model.
+  function renderLiveVoiceFeel() {
+    const d = vclone.data;
+    const presets = Array.isArray(d?.presets) && d.presets.length ? d.presets : [{ id: 'warm', label: 'Warm & expressive' }, { id: 'balanced', label: 'Balanced' }, { id: 'steady', label: 'Steady & calm' }];
+    const live = d?.liveVoiceId;
+    const model = d?.liveModel || vclone.model;
+    return `<div class="vclone-feel">
+      <h3>Live-call voice feel</h3>
+      <div class="row">
+       <div class="fld"><label for="vc-preset">Expressiveness</label>
+        <select id="vc-preset">${presets.map((p) => `<option value="${esc(p.id)}" ${vclone.preset === p.id ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select></div>
+       <div class="fld"><label for="vc-model">ElevenLabs engine</label>
+        <select id="vc-model">
+         <option value="eleven_flash_v2_5" ${model === 'eleven_flash_v2_5' ? 'selected' : ''}>Flash — fastest replies</option>
+         <option value="eleven_turbo_v2_5" ${model === 'eleven_turbo_v2_5' ? 'selected' : ''}>Turbo — richer emotion</option>
+        </select></div>
+      </div>
+      <div class="note" style="margin-top:4px">${live
+        ? `Applies to the voice live on calls now. <button class="b" type="button" id="vc-apply-feel" ${vclone.busy ? 'disabled' : ''}>${vclone.busy === 'feel' ? 'Applying…' : 'Apply to live voice'}</button>`
+        : 'Live calls use a Deepgram voice right now. Press <b>Use for live calls</b> on an ElevenLabs voice below; these settings are applied with it.'}</div>
+    </div>`;
+  }
+
+  async function applyLiveVoiceFeel() {
+    readCloneForm();
+    const live = vclone.data?.liveVoiceId;
+    if (!live) return;
+    const name = [...(vclone.data?.elevenlabs?.voices || []), ...(vclone.data?.elevenlabsLibrary?.voices || [])].find((v) => v.id === live)?.name || 'ElevenLabs voice';
+    vclone.busy = 'feel'; repaintVoiceClone();
+    try {
+      const res = await fetch('./api/voice-clone/use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: live, name, preset: vclone.preset, model: vclone.model }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
+      const st = await fetch('./api/state', { cache: 'no-store' }).then((r) => r.json());
+      if (st?.state) { S = st.state; snap = comparableSnapshot(S); }
+      vclone.busy = '';
+      await loadVoiceClones(true);
+      setCloneMsg(`✓ Live voice now ${esc(name)} — ${esc(vclone.preset)} feel on ${esc(vclone.model)}. The next call uses it.`, 'ok');
+    } catch (err) { vclone.busy = ''; setCloneMsg(esc(err instanceof Error ? err.message : String(err)), 'er'); }
   }
 
   function setCloneMsg(msg, level = '') { vclone.msg = msg; vclone.msgLevel = level; repaintVoiceClone(); }
@@ -5892,6 +5969,8 @@
     const noise = document.getElementById('vc-noise');
     if (noise) vclone.noise = noise.checked;
     vclone.previewText = document.getElementById('vc-preview-text')?.value || vclone.previewText;
+    vclone.preset = document.getElementById('vc-preset')?.value || vclone.preset;
+    vclone.model = document.getElementById('vc-model')?.value || vclone.model;
   }
 
   async function createClonedVoice() {
@@ -5925,10 +6004,11 @@
   }
 
   async function useClonedVoice(id, name) {
-    if (!window.confirm(`Make “${name}” the voice of live calls for every bot?\n\nCalls will speak through ElevenLabs using your API key.`)) return;
+    if (!window.confirm(`Make “${name}” the voice of live calls for every bot?\n\nCalls will speak through ElevenLabs using your API key, with the expressiveness and engine chosen above.`)) return;
     vclone.busy = 'use'; repaintVoiceClone();
     try {
-      const res = await fetch('./api/voice-clone/use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name }) });
+      readCloneForm();
+      const res = await fetch('./api/voice-clone/use', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, name, preset: vclone.preset, model: vclone.model }) });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) throw new Error(data.error || `Server answered ${res.status}`);
       const st = await fetch('./api/state', { cache: 'no-store' }).then((r) => r.json());
@@ -5988,8 +6068,22 @@
      ${F('Bridge VICIdial call-connect & automatic lead hydration (recommended — replaces hallucinated LLM accept tool)', 'a.acceptViciCalls', 'chk')}
      ${F('Include the linked campaign recording notice (optional)', 'a.injectCampaignDisclosure', 'chk')}
      <div class="note wn">Spoken campaign notice only — does not turn off recording.</div>
-     ${F('Saved opening and identity (keep it brief)', 'a.greeting', 'ta')}
-     ${F('Vary this opening using the imported greeting library', 'a.randomGreetingEnabled', 'chk')}
+     <h2>Call start &amp; greeting</h2>
+     <div class="note">How the call opens. Everything here is saved with this bot and used on the next call, with no restart.</div>
+     <div class="row r3">
+      ${F('Wait for the caller to speak first', 'a.flow.waitForHello', 'chk')}
+      ${F('Seconds to wait before asking if anyone is there', 'a.flow.waitForHelloSec', 'number', [], 'min="1" max="10" step="0.5"')}
+      ${F('How many times to ask (0 = say the greeting instead)', 'a.flow.noAnswerRepeats', 'number', [], 'min="0" max="5" step="1"')}
+     </div>
+     ${F('Said when nobody speaks', 'a.flow.noAnswerLine')}
+     ${F('Pick a random greeting for each call', 'a.randomGreetingEnabled', 'chk')}
+     ${F('Greeting lines: one per line, short, ending in a question', 'a.flow.greetingLines', 'ta', [], 'style="min-height:120px"')}
+     <div id="greeting-list-status">${greetingListStatus(a)}</div>
+     ${F('Longest greeting allowed (words)', 'a.flow.greetingMaxWords', 'number', [], 'min="5" max="40" step="1"')}
+     ${F('Introduction after the caller answers the greeting (for example: My name is Jessica, I&#39;m calling from the Medicare Marketplace. I believe you have Medicare Part A and B?)', 'a.flow.introLine', 'ta')}
+     ${F('Transfer straight away when the caller says yes to the introduction question', 'a.flow.transferOnYes', 'chk')}
+     ${F('Said when the bot did not catch what the caller said', 'a.flow.repeatLine')}
+     ${F('Fallback opening (used when random greetings are off or no line fits)', 'a.greeting', 'ta')}
      ${F('System prompt (persona, qualification rules, DNC & transfer instructions)', 'a.prompt', 'ta', [], 'style="min-height:145px"')}
      <div id="agent-reach">${renderAgentReachMeter(a)}</div>
      <div class="note wn">Verify every factual claim before calling.</div>
@@ -6024,6 +6118,7 @@
       </div>
      </div>
      ${F(' Self-Introduction Bio (spoken naturally when asked "Who are you?" or "Introduce yourself")', 'a.behavior.selfIntro', 'ta')}
+     ${F('Personality &amp; speaking style (the only tone guidance the bot gets; the tone menu above is used only when this is empty)', 'a.behavior.speakingStyle', 'ta', [], 'style="min-height:110px"')}
 
      <h2>Speech-to-Text (Listen)</h2>
      <div class="note">Global STT: <b>${esc(globalServiceProvider('stt')?.name || 'Not selected')}</b> · <code>${esc(S.services?.stt?.model || 'not selected')}</code> (Plug-Ins)</div>
@@ -6167,8 +6262,8 @@
         <span class="pill ok">Model: <code>${esc(S.services?.tts?.model || 'not selected')}</code></span>
        </div>
        <div class="row">
-        ${F('Preview speed (0.5–1.5, Speak Text only)', 'a.tts.speed', 'number', [], 'min="0.5" max="1.5" step="0.05"')}
-        ${F('Preview expressivity, Flux v2 (−2..+2, Speak Text only)', 'a.tts.expr', 'sel', [
+        ${F('Speaking speed, Flux voices (0.5–1.5; used on calls and in preview)', 'a.tts.speed', 'number', [], 'min="0.5" max="1.5" step="0.05"')}
+        ${F('Expressivity, Flux voices (−2 flat to +2 lively; used on calls and in preview)', 'a.tts.expr', 'sel', [
           [-2, '-2 (Calmest)'],
           [-1, '-1 (Calm)'],
           [0, '0 (Default)'],
@@ -6176,6 +6271,11 @@
           [2, '+2 (Expressive)'],
         ])}
        </div>
+       <div class="row">
+        ${F('Emotion intensity, self-hosted voices (0.25–2: 0.5 natural, 0.7+ more expressive)', 'a.tts.expressiveness', 'number', [], 'min="0.25" max="2" step="0.05"')}
+        ${F('Delivery variation, self-hosted voices (0.3–1.5: higher is livelier and less repetitive)', 'a.tts.variation', 'number', [], 'min="0.3" max="1.5" step="0.05"')}
+       </div>
+       <div class="note">Self-hosted voices run on your own speech server (Chatterbox). Speed applies to them too. Deepgram reaches the server through the speech provider's public HTTPS address in Plug-Ins.</div>
        <label for="vt">Greeting / Script to Synthesize</label>
        <textarea id="vt">${esc(voiceCatalog.previewText)}</textarea>
        <div class="bar" style="margin-top:10px;margin-bottom:4px">
@@ -6191,7 +6291,7 @@
        <h2>Active Agent <code>agent.speak</code> Payload</h2>
        <pre id="pv">${esc(JSON.stringify(settingsSpeak, null, 2))}</pre>
        <div class="note">
-        Pick a voice below with <b>✓ Use This Voice</b> — it is saved immediately and becomes the shared TTS voice for every bot. <b>Speed and expressivity apply to the Speak Text preview only</b> (Deepgram speak API). They are not sent on live Voice Agent calls — the live speak channel accepts only {type, version, model}.
+        Pick a voice below with <b>✓ Use This Voice</b> — it is saved immediately and becomes the shared TTS voice for every bot. <b>Speed and expressivity are sent on live calls for Flux voices</b> (Deepgram accepts them for Flux only; Aura voices ignore them). For a more human sound, pick a Flux voice and try expressivity +1.
        </div>
       </div>
      </div>
@@ -8689,6 +8789,7 @@
     }
 
     if (b.id === 'vc-rec') { await toggleCloneRecording(); return; }
+    if (b.id === 'vc-apply-feel') { await applyLiveVoiceFeel(); return; }
     if (b.id === 'vc-create') { await createClonedVoice(); return; }
     if (b.dataset.vclonePreview) { const [pv, id] = b.dataset.vclonePreview.split('|'); await previewClonedVoice(pv, id); return; }
     if (b.dataset.vcloneUse) { await useClonedVoice(b.dataset.vcloneUse, b.dataset.vcloneName || 'Cloned voice'); return; }
@@ -9086,6 +9187,10 @@
     if (!t.dataset?.p || t.type === 'checkbox' || t.tagName === 'SELECT') return;
     const value = t.type === 'number' ? (t.value === '' || !Number.isFinite(Number(t.value)) ? 0 : Number(t.value)) : t.value;
     setPath(t.dataset.p, value);
+    if (/^a\.flow\.(greetingLines|greetingMaxWords)$/.test(t.dataset.p)) {
+      const box = document.getElementById('greeting-list-status');
+      if (box) box.innerHTML = greetingListStatus(A());
+    }
     updateLivePreview();
     updateHeaderStatus();
   });

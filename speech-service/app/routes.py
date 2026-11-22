@@ -310,6 +310,11 @@ class SpeechRequest(BaseModel):
     speed: float = Field(1.0, ge=0.25, le=4.0)
     sample_rate: int | None = None
     stream: bool = False
+    # Delivery controls for Chatterbox voices (ignored by Kokoro). They can also
+    # arrive as query parameters, which is how the console passes each bot's
+    # settings through Deepgram's OpenAI-compatible speak provider.
+    exaggeration: float | None = Field(None, ge=0.25, le=2.0)
+    temperature: float | None = Field(None, ge=0.3, le=1.5)
 
     @field_validator("voice", mode="before")
     @classmethod
@@ -326,6 +331,31 @@ async def stock_voices(request: Request, _: Principal = Depends(require_auth)):
     return {"voices": rt(request).tts.voices(), "aliases": OPENAI_VOICE_ALIASES}
 
 
+def _query_float(request: Request, name: str, fallback, lo: float, hi: float):
+    raw = request.query_params.get(name)
+    if raw is None or raw == "":
+        return fallback
+    try:
+        value = float(raw)
+    except ValueError:
+        raise HTTPException(400, f"{name} must be a number")
+    if not lo <= value <= hi:
+        raise HTTPException(400, f"{name} must be between {lo} and {hi}")
+    return value
+
+
+def _style_from(request: Request, body: "SpeechRequest") -> dict:
+    """Chatterbox delivery settings: body fields win, then query parameters."""
+    style = {}
+    exaggeration = body.exaggeration if body.exaggeration is not None else _query_float(request, "exaggeration", None, 0.25, 2.0)
+    temperature = body.temperature if body.temperature is not None else _query_float(request, "temperature", None, 0.3, 1.5)
+    if exaggeration is not None:
+        style["exaggeration"] = exaggeration
+    if temperature is not None:
+        style["temperature"] = temperature
+    return style
+
+
 @router.post("/v1/audio/speech")
 async def speech(request: Request, body: SpeechRequest, p: Principal = Depends(require_auth)):
     r = rt(request)
@@ -336,10 +366,12 @@ async def speech(request: Request, body: SpeechRequest, p: Principal = Depends(r
         raise HTTPException(413, f"input exceeds {r.settings.max_tts_chars} characters")
     if body.voice.startswith("clone:") and not r.clone.enabled:
         raise HTTPException(501, "Voice cloning is not enabled on this deployment")
+    style = _style_from(request, body)
+    speed = _query_float(request, "speed", body.speed, 0.25, 4.0)
     try:
         if body.stream:
             enc_probe = StreamEncoder(body.response_format, 24000, body.sample_rate)
-            gen = r.tts_chunks(text, body.voice, body.speed, p.key_id)
+            gen = r.tts_chunks(text, body.voice, speed, p.key_id, style)
             try:
                 first = await gen.__anext__()
             except StopAsyncIteration:
@@ -375,7 +407,7 @@ async def speech(request: Request, body: SpeechRequest, p: Principal = Depends(r
                 headers={"X-Sample-Rate": str(enc_probe.out_rate)},
             )
         parts, sr = [], 24000
-        async for chunk, sr in r.tts_chunks(text, body.voice, body.speed, p.key_id):
+        async for chunk, sr in r.tts_chunks(text, body.voice, speed, p.key_id, style):
             parts.append(chunk)
         if not parts:
             raise HTTPException(400, "Input produced no speakable audio")

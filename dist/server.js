@@ -124,6 +124,11 @@ function createApp(viciBridge) {
         }
         next();
     });
+    // API answers hold account, key-status and bot data: never let a browser or proxy cache them.
+    app.use('/api', (_req, res, next) => {
+        res.setHeader('Cache-Control', 'no-store, max-age=0');
+        next();
+    });
     app.use(express_1.default.json({ limit: '4mb' }));
     app.use(express_1.default.urlencoded({ extended: false }));
     if (process.env.VAC_DEBUG === '1') {
@@ -948,15 +953,29 @@ function createApp(viciBridge) {
             res.status(503).send('ERROR: VICIdial Bridge not initialized');
             return;
         }
-        const merged = { ...req.query, ...(req.body || {}) };
-        const reg = viciBridge.registerPreCall({
-            uniqueid: merged.uniqueid,
-            vici_cid: merged.vici_cid || merged.caller_code,
-            phone: merged.phone,
-            exten: merged.exten,
-            channel: merged.channel,
-            agent_user: merged.agent_user,
-        });
+        // Only plain string fields are accepted from the dialer; anything else is ignored.
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        const merged = {};
+        for (const [k, v] of Object.entries({ ...req.query, ...body })) {
+            if (typeof v === 'string' || typeof v === 'number')
+                merged[k] = String(v);
+        }
+        let reg;
+        try {
+            reg = viciBridge.registerPreCall({
+                uniqueid: merged.uniqueid,
+                vici_cid: merged.vici_cid || merged.caller_code,
+                phone: merged.phone,
+                exten: merged.exten,
+                channel: merged.channel,
+                agent_user: merged.agent_user,
+            });
+        }
+        catch (err) {
+            // A wrong or unassigned extension is the dialer's mistake, not a server failure.
+            res.status(400).type('text/plain').send(`ERROR: ${err instanceof Error ? err.message : 'Call registration failed.'}`);
+            return;
+        }
         const wantsJson = merged.format === 'json' ||
             String(req.headers.accept || '').includes('application/json');
         if (wantsJson) {
@@ -1332,11 +1351,13 @@ function createApp(viciBridge) {
                 return { ok: false, code: err?.code || 'ERROR', error: err?.message || String(err) };
             }
         };
-        const [elevenlabs, selfhosted] = await Promise.all([settle(() => (0, voice_clone_1.elevenListClones)()), settle(() => (0, voice_clone_1.selfHostedListClones)())]);
+        const [elevenlabs, elevenlabsLibrary, selfhosted] = await Promise.all([settle(() => (0, voice_clone_1.elevenListClones)()), settle(() => (0, voice_clone_1.elevenListLibrary)()), settle(() => (0, voice_clone_1.selfHostedListClones)())]);
         const state = (0, db_1.getConsoleState)();
         const tts = state.providers.find((p) => p.kind === 'tts' && p.id === state.services?.tts?.providerId);
         const liveVoiceId = tts?.type === 'eleven_labs' ? (String(tts.endpoint || '').match(/text-to-speech\/([A-Za-z0-9]+)\//)?.[1] || null) : null;
-        res.json({ ok: true, elevenlabs, selfhosted, liveVoiceId, consents: (0, db_1.listVoiceCloneConsents)(100) });
+        const liveModel = liveVoiceId ? String(state.services?.tts?.model || voice_clone_1.ELEVEN_LIVE_MODELS[0]) : null;
+        const presets = Object.entries(voice_clone_1.EXPRESSIVE_PRESETS).map(([id, p]) => ({ id, label: p.label }));
+        res.json({ ok: true, elevenlabs, elevenlabsLibrary, selfhosted, liveVoiceId, liveModel, presets, consents: (0, db_1.listVoiceCloneConsents)(100) });
     }));
     app.post('/api/voice-clone', sampleBody, asyncRoute(async (req, res) => {
         if (!isOwnerOrAdmin(req)) {
@@ -1425,16 +1446,33 @@ function createApp(viciBridge) {
         }
         try {
             const id = String(req.body?.id || '');
-            const name = String(req.body?.name || 'Cloned voice').slice(0, 80);
+            const name = String(req.body?.name || 'ElevenLabs voice').slice(0, 80);
             if (!/^[A-Za-z0-9]{8,64}$/.test(id))
                 throw new voice_clone_1.CloneError('Unknown ElevenLabs voice id.');
+            const model = voice_clone_1.ELEVEN_LIVE_MODELS.includes(String(req.body?.model)) ? String(req.body.model) : voice_clone_1.ELEVEN_LIVE_MODELS[0];
+            // Expressiveness is written onto the voice first, so the very next call already sounds right.
+            const preset = req.body?.preset ? await (0, voice_clone_1.elevenSetExpressiveness)(id, String(req.body.preset)) : null;
             const state = (0, db_1.getConsoleState)();
             const provider = (0, voice_clone_1.elevenLabsLiveProvider)(id, name);
             const providers = state.providers.filter((p) => p.id !== provider.id);
             providers.push(provider);
-            const next = { ...state, providers, services: { ...state.services, tts: { providerId: provider.id, model: 'eleven_flash_v2_5' } } };
-            const saved = (0, db_1.saveConsoleState)(next, `Live call voice set to ElevenLabs cloned voice “${name}”`);
-            res.json({ ok: true, revisionId: saved.revisionId, provider: provider.id, model: 'eleven_flash_v2_5' });
+            const next = { ...state, providers, services: { ...state.services, tts: { providerId: provider.id, model } } };
+            const saved = (0, db_1.saveConsoleState)(next, `Live call voice set to ElevenLabs voice “${name}” (${model}${preset ? `, ${preset}` : ''})`);
+            res.json({ ok: true, revisionId: saved.revisionId, provider: provider.id, model, preset });
+        }
+        catch (err) {
+            cloneFail(res, err);
+        }
+    }));
+    // Change how expressive an ElevenLabs voice sounds (applies to live calls and previews).
+    app.post('/api/voice-clone/expressive', asyncRoute(async (req, res) => {
+        if (!isOwnerOrAdmin(req)) {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Only an owner or admin can change the call voice.' });
+            return;
+        }
+        try {
+            const preset = await (0, voice_clone_1.elevenSetExpressiveness)(String(req.body?.id || ''), String(req.body?.preset || ''));
+            res.json({ ok: true, preset });
         }
         catch (err) {
             cloneFail(res, err);
@@ -1613,6 +1651,10 @@ function createApp(viciBridge) {
     app.get('/', serveConsoleEntry);
     app.get('/index.html', serveConsoleEntry);
     app.use(express_1.default.static(publicDir, { index: false }));
+    // An unknown API address is an error, not the console page: answer JSON 404.
+    app.all(/^\/api(?:\/|$)/, (_req, res) => {
+        res.status(404).json({ ok: false, code: 'NOT_FOUND', error: 'No such API endpoint.' });
+    });
     app.get('*', serveConsoleEntry);
     app.use((err, _req, res, next) => {
         if (res.headersSent) {

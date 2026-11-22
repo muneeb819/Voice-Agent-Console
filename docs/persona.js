@@ -42,17 +42,62 @@
 
   // Natural, human-sounding delivery (written for text-to-speech). Honesty is
   // unchanged: the integrity rules still require admitting to being an AI.
-  function humanSpeechLines() {
-    return [
-      '- SOUND LIKE A REAL PERSON ON THE PHONE: Talk the way people actually talk, not the way they write.',
-      '  - Use contractions ("I\'m", "you\'re", "that\'s", "we\'ll") and short, simple sentences. Vary sentence length so the rhythm is not robotic.',
-      '  - Briefly acknowledge what the caller said before your point ("Okay, got it.", "Oh, I see.", "Sure thing."), mirror their energy and pace, and use their first name now and then, not every turn.',
-      '  - A light filler is fine about once every few turns ("so", "well", "you know", "alright") — never stacked, never in every sentence.',
-      '  - Use commas and dashes for natural breathing pauses; end with a gentle question rather than a long statement.',
-      '  - Show real emotion that fits the moment: warmth when they share something personal, a smile in your voice for good news, calm patience when they are confused.',
-      '  - Say numbers, dates and money the way people speak them ("about seventy", "next Tuesday"), never as digits read out one by one unless confirming a phone number.',
-      '  - Never sound scripted: avoid formal phrases like "I would be happy to assist you with that" or "Is there anything else I can help you with today", and never read lists aloud.',
-    ];
+
+  // Defaults for the per-bot "Call start & greeting" and "Personality & speaking
+  // style" settings. The operator edits them on the bot page; they are saved with the bot.
+  const FLOW_DEFAULTS = Object.freeze({
+    speakingStyle: [
+      'Personality: warm, caring and upbeat, with a genuine smile in your voice. Patient and respectful with older callers.',
+      'Tone: talk like a real person on the phone. Use contractions and short, simple sentences, with commas and dashes for natural pauses. Briefly acknowledge what the caller said, then make your point, matching their pace and mood. One or two sentences per turn, then let them talk.',
+      'Avoid: reading lists aloud, formal call-centre phrases, stage directions, brackets, emojis.',
+      'Goal: follow the call flow and connect qualified, willing callers to a licensed agent quickly.',
+    ].join('\n'),
+    greetingLines: [
+      'Hi there! How are you doing today?',
+      'Hello! How is your day going so far?',
+      'Hi! How are you today?',
+      'Good {timeOfDay}! How are you doing?',
+      "Hey there! How's your day treating you?",
+      "Hi, good {timeOfDay}! How's everything going?",
+      'Hello there! How are things with you today?',
+      "Hi! Hope your day's going well. How are you?",
+      'Good {timeOfDay}! How has your day been?',
+      "Hello! How's everything with you today?",
+      'Hi there, good {timeOfDay}! How are you?',
+      "Hey, hi! How's your {timeOfDay} going?",
+      "Hello, good {timeOfDay}! How's it going?",
+      'Hi! How are things going for you today?',
+      "Hi there! How's your {timeOfDay} been so far?",
+      'Hello! How are you holding up today?',
+    ].join('\n'),
+    repeatLine: "Sorry, I didn't quite catch that. Could you say that again for me?",
+    noAnswerLine: 'Hello? Are you there?',
+    waitForHello: true,
+    waitForHelloSec: 3,
+    noAnswerRepeats: 2,
+    greetingMaxWords: 20,
+    introLine: '',
+    transferOnYes: false,
+  });
+
+  const TRANSFER_RULE = '- TRANSFERS: The moment you tell the caller you are connecting them, call set_disposition with XFER and transfer_to_live_agent in that SAME turn. Never announce a transfer without calling the tool.';
+
+  // Call flow from the bot's front-end settings (Call start & flow).
+  function callFlowLines(agent) {
+    const f = (agent && agent.flow) || {};
+    // When calls open with a short greeting line, the saved opening (the bot's
+    // identity) becomes the introduction, unless an introduction is written.
+    const greetsWithLine = agent && agent.randomGreetingEnabled !== false && String(f.greetingLines || '').trim();
+    const intro = String(f.introLine || '').trim() || (greetsWithLine ? String(agent.greeting || '').trim() : '');
+    const repeat = String(f.repeatLine || '').trim();
+    const lines = [];
+    if (intro) {
+      lines.push(`- After the caller answers your greeting, introduce yourself in one or two natural sentences, along these lines: "${intro}"`);
+      if (f.transferOnYes) lines.push('- If the caller says yes to that question, thank them briefly and set XFER and call transfer_to_live_agent right away, with no further questions. Their yes counts as agreeing to speak with the specialist.');
+      lines.push('- If the caller asks who you are or why you are calling, explain briefly using your instructions, then ask your question again once.');
+    }
+    if (repeat) lines.push(`- If you could not make out what the caller said, say "${repeat}" instead of guessing.`);
+    return lines.length ? ['', '=== CALL FLOW ===', ...lines] : [];
   }
 
   // Time-boxed, transfer-first behaviour for campaigns with a call-length limit.
@@ -61,12 +106,8 @@
     if (sec <= 0) return [];
     return [
       '',
-      `=== CALL TIME LIMIT (${sec} SECONDS) & FAST TRANSFER ===`,
-      `- This call ends automatically after ${sec} seconds, whatever is happening. Your goal is a qualified transfer well inside that time.`,
-      '- Move fast: keep every turn to one short sentence plus at most one question. No small talk, no recaps, no repeating what the caller already said.',
-      '- Ask only the qualifying questions the campaign rules actually require, in the fewest turns. The moment the caller qualifies and agrees, set XFER and call transfer_to_live_agent immediately.',
-      '- If the caller hesitates, give one short benefit-focused reason to speak with the specialist (only where the campaign rules allow it), then ask once more. Never rebut a stop, do-not-call or hang-up request.',
-      '- If the caller is joking, testing you, stalling or going off topic, steer back once; if it continues, close politely, set the matching disposition and call end_call.',
+      `=== CALL TIME LIMIT (${sec} SECONDS) ===`,
+      `- The call ends automatically after ${sec} seconds. Aim to transfer a qualified, willing caller well before then, asking only the questions the campaign rules require.`,
       '- If you receive a TIME CHECK message, follow it immediately.',
     ];
   }
@@ -124,31 +165,29 @@
           '- LIVE BARGE-IN AWARENESS: The caller can interrupt you mid-sentence at any time. If interrupted, never repeat cut-off sentences — pivot immediately and naturally to their latest question or remark.'
         );
       }
-      lines.push(`- VOCAL EXPRESSION STYLE: ${TONE_MAP[b.expressionStyle] || TONE_MAP.warm_empathetic}`);
-      if (b.vocalGestures === false) {
-        lines.push(
-          '- VOCAL GESTURES DISABLED: Do not add filler reactions or micro-gestures such as "Oh, great question!", "Gotcha —", "Mm-hmm", or "Haha". Answer plainly and naturally. Never output bracketed or asterisk stage directions.'
-        );
-      } else {
-        lines.push(
-          '- NATURAL VOCAL GESTURES: Use subtle, authentic spoken micro-gestures when natural ("Oh, great question!", "Gotcha —", "Mm-hmm, I hear you.", "Right, so—") and natural conversational pauses ("—"). NEVER output bracketed or asterisk tags like [laughs], [smiles], (sighs), or *waves* because TTS speaks brackets literally.',
-          ...humanSpeechLines()
-        );
-      }
+      // Tone is defined once, in the bot's own words (front end: Personality &
+      // speaking style). The style dropdown is used only when that is empty.
+      const style = String(b.speakingStyle || '').trim();
+      if (style) lines.push('', '=== PERSONALITY & SPEAKING STYLE ===', style);
+      else lines.push(`- VOCAL EXPRESSION STYLE: ${Object.prototype.hasOwnProperty.call(TONE_MAP, b.expressionStyle) ? TONE_MAP[b.expressionStyle] : TONE_MAP.warm_empathetic}`);
+      if (b.vocalGestures === false) lines.push('- No filler reactions such as "Mm-hmm" or "Oh, great question!": answer plainly.');
+      lines.push(TRANSFER_RULE);
       if (b.latencyProfile === 'ultra') {
         lines.push(
-          '- ULTRA-LOW LATENCY STREAMING: Begin every reply immediately with the core answer or reaction in the first 4–6 words. Keep turns crisp (1–2 spoken sentences, ~15–35 words unless asked for detail) in plain spoken words with zero markdown (*, #, bullets).'
+          '- Start every reply with the answer or reaction itself, in one or two short spoken sentences, with no markdown.'
         );
       } else if (b.latencyProfile === 'balanced') {
         lines.push(
-          '- BALANCED CONVERSATIONAL STREAMING: Keep turns natural (2–3 spoken sentences, ~25–50 words unless asked for detail) in plain spoken words with zero markdown (*, #, bullets).'
+          '- Keep replies to two or three natural spoken sentences, with no markdown.'
         );
       } else if (b.latencyProfile === 'quality') {
         lines.push(
-          '- DETAILED RESPONSE STREAMING: Give complete, thorough answers (3–5 spoken sentences unless asked for brevity) in plain spoken words with zero markdown (*, #, bullets).'
+          '- Give complete answers of three to five spoken sentences unless asked for brevity, with no markdown.'
         );
       }
     }
+
+    lines.push(...callFlowLines(agent));
 
     if (campaign) {
       const rules = String(campaign.complianceRules || '').trim().slice(0, MAX_CAMPAIGN_RULES);
@@ -173,6 +212,7 @@
       }
     }
 
+    if (!b) lines.push('', TRANSFER_RULE);
     lines.push(...callEndingLines());
     lines.push(...conversationIntegrityLines());
     const suffix = lines.join('\n').trim();
@@ -301,7 +341,7 @@
 
   function extractStatedAge(sentence) {
     if (isUncertainOrReported(sentence)) return null;
-    const clauses = sentence.split(/[,;]|\bbut\b|\bhowever\b|\balhough\b/);
+    const clauses = sentence.split(/[,;]|\bbut\b|\bhowever\b|\balthough\b/);
     for (const clause of clauses) {
       if (/\b(?:not|never|isn't|is not|am not|i'm not|im not)\b/.test(clause)) continue;
       const patterns = [
@@ -365,6 +405,7 @@
       const bareNegative = /^(?:no|nope|not really|i don't|i do not)[.!]?$/i.test(text);
       if (pendingMedicareQuestion && bareAffirmative) hasGenericMedicare = true;
       if (pendingMedicareQuestion && bareNegative) { hasPartA = false; hasPartB = false; hasGenericMedicare = false; }
+      const answeringMedicareQuestion = pendingMedicareQuestion;
       pendingMedicareQuestion = false;
 
       const sentences = text.toLowerCase().match(/[^.!?\n]+[.!?]?/g) || [];
@@ -373,6 +414,18 @@
         const age = extractStatedAge(sentence);
         if (age !== null) statedAge = age;
         if (isUncertainOrReported(sentence)) continue;
+
+        // Lists such as "part a, b, c, all three active", "parts A and B", or
+        // "yes, A and B" in answer to the Medicare question mean both parts. The
+        // clause split below would otherwise see only "part a".
+        const listsBothParts = /\bparts?\s*a\s*(?:,|&|\+|\/|and)\s*(?:part\s*)?b\b/.test(sentence) ||
+          (answeringMedicareQuestion && /(?:^|[\s,])a\s*(?:,|&|\+|\/|and)\s*b\b/.test(sentence));
+        if (listsBothParts && !partIsNegated(sentence, 'a') && !partIsNegated(sentence, 'b') &&
+            !/\b(?:no|not|never|without|don't|do not|lost|cancelled|canceled|no longer)\b/.test(sentence)) {
+          hasPartA = true;
+          hasPartB = true;
+          hasGenericMedicare = true;
+        }
 
         const mentionsMedicare = /\bmedicare\b/.test(sentence);
         const medicareNegated = /\b(?:no|not|never|without|don't|do not|doesn't|does not|didn't|did not|lost|cancelled|canceled|disenrolled|no longer)\b[^]{0,50}\bmedicare\b/.test(sentence);
@@ -385,7 +438,7 @@
           if (/\bboth\b/.test(sentence)) { hasPartA = true; hasPartB = true; }
         }
 
-        for (const clause of sentence.split(/[,;]|\bbut\b|\bhowever\b|\balhough\b/)) {
+        for (const clause of sentence.split(/[,;]|\bbut\b|\bhowever\b|\balthough\b/)) {
           if (isUncertainOrReported(clause)) continue;
           const affirmative = /\b(?:yes|yeah|yep|i\s+(?:have|do have|am on|am enrolled in|enrolled in|receive|get)|i['’]m on|im on|active)\b/.test(clause) ||
             /^\s*part\s*[ab]\b/.test(clause);
@@ -464,7 +517,8 @@
       return blockers;
     }
 
-    return { addUserText, addAssistantText, facts, sanitizeTransferArgs, qualificationBlockers };
+    function lastUserText() { return userTexts.length ? userTexts[userTexts.length - 1] : ''; }
+    return { addUserText, addAssistantText, facts, sanitizeTransferArgs, qualificationBlockers, lastUserText };
   }
 
   function fingerprint(text) {
@@ -518,7 +572,6 @@
     conversationIntegrityLines,
     callEndingLines,
     callTimeLimitLines,
-    humanSpeechLines,
     migrateLegacyQualificationPrompt,
     migrateLegacyCampaignRules,
     defaultSelfIntro,
@@ -529,5 +582,6 @@
     MAX_PROMPT_LENGTH,
     MAX_CAMPAIGN_RULES,
     callPromptReport,
+    FLOW_DEFAULTS,
   };
 });

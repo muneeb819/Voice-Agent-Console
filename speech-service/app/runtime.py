@@ -126,7 +126,7 @@ class Runtime:
         return result
 
     # ---- TTS ----
-    async def tts_chunks(self, text: str, voice: str, speed: float, owner: str):
+    async def tts_chunks(self, text: str, voice: str, speed: float, owner: str, style: dict | None = None):
         """Async iterator of (float32 chunk, sample_rate). Handles stock Kokoro voices and clone:<id> voices."""
         voice = {
             "alloy": "af_alloy",
@@ -149,7 +149,7 @@ class Runtime:
             t0 = time.perf_counter()
             try:
                 async with self.tts_gate:
-                    audio, sr = await self.clone.synthesize(vid, text)
+                    audio, sr = await self.clone.synthesize(vid, text, style or {})
             except Busy:
                 metrics.BUSY_REJECTIONS.labels("tts").inc()
                 raise

@@ -146,8 +146,10 @@ async function main() {
     assert.strictEqual(response('webhook').ok, allowWebhooks && !fail);
     assert.strictEqual(response('missing').ok, false);
     assert.strictEqual(response('unknown').ok, false);
-    assert.strictEqual(response('xfer').ok, false);
+    // A qualified browser-test transfer reports success but never moves a real call.
+    assert.strictEqual(response('xfer').ok, true);
     assert.strictEqual(response('xfer').simulated, true);
+    assert.strictEqual(response('xfer').real_transfer_made, false);
     assert.strictEqual(response('dispo').ok, false);
     assert.strictEqual(response('dispo').simulated, true);
     assert.strictEqual(upstreamResponses.find((e) => e.id === `webhook-${suffix}`).thought_signature, 'sig-123');

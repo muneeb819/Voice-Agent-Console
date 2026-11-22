@@ -32,6 +32,21 @@ export interface AgentBehavior {
   vocalGestures: boolean;
   allowGeneralQa: boolean;
   selfIntro: string;
+  /** Personality, tone and goal in the operator's own words: the only tone guidance the bot gets. */
+  speakingStyle?: string;
+}
+
+/** How a call starts and flows, set per bot on the front end and saved with the bot. */
+export interface AgentFlow {
+  waitForHello: boolean;      // stay quiet until the caller speaks first
+  waitForHelloSec: number;    // how long to wait before asking if anyone is there (1-10 s)
+  noAnswerLine: string;       // e.g. "Hello? Are you there?"
+  noAnswerRepeats: number;    // how many times to ask (0-5)
+  greetingLines: string;      // one greeting per line, picked at random without repeats
+  greetingMaxWords: number;   // longer lines are skipped (5-40)
+  introLine: string;          // said after the caller answers the greeting
+  transferOnYes: boolean;     // a "yes" to the intro question transfers at once
+  repeatLine: string;         // said when the bot did not catch the caller
 }
 
 export interface Agent {
@@ -45,6 +60,7 @@ export interface Agent {
   acceptViciCalls: boolean; // Bridge lifecycle flag (hydrates lead before Deepgram session)
   injectCampaignDisclosure: boolean; // Prepends campaign disclosure to greeting when linked
   behavior: AgentBehavior;
+  flow?: AgentFlow; // always present after loading (normalizeState fills defaults)
   stt: {
     keyterms: string;
     eot: number;
@@ -59,6 +75,8 @@ export interface Agent {
   tts: {
     speed: number;
     expr: number;
+    expressiveness?: number; // self-hosted Chatterbox: emotion intensity (exaggeration), 0.25-2
+    variation?: number;      // self-hosted Chatterbox: delivery variation (temperature), 0.3-1.5
   };
   audio: {
     inEnc: 'linear16' | 'mulaw' | 'alaw';

@@ -7,6 +7,8 @@ exports.closeDb = closeDb;
 exports.getDb = getDb;
 exports.listGreetingLibrary = listGreetingLibrary;
 exports.selectGreetingForAgent = selectGreetingForAgent;
+exports.selectGreetingLine = selectGreetingLine;
+exports.chooseOpeningLine = chooseOpeningLine;
 exports.trySelectGreeting = trySelectGreeting;
 exports.getConsoleState = getConsoleState;
 exports.saveConsoleState = saveConsoleState;
@@ -155,6 +157,14 @@ function getDb() {
       agent_id TEXT PRIMARY KEY,
       last_greeting_id TEXT NOT NULL
     );
+    -- Lines already spoken from each bot's own greeting list (a shuffle bag:
+    -- every line is used once before any repeats).
+    CREATE TABLE IF NOT EXISTS greeting_line_used (
+      agent_id TEXT NOT NULL,
+      line_key TEXT NOT NULL,
+      used_at INTEGER NOT NULL,
+      PRIMARY KEY (agent_id, line_key)
+    );
     CREATE TABLE IF NOT EXISTS simulator_calls (
       id TEXT PRIMARY KEY,
       agent_id TEXT NOT NULL,
@@ -294,6 +304,58 @@ function selectGreetingForAgent(agentId, savedOpening = '') {
       ON CONFLICT(agent_id) DO UPDATE SET last_greeting_id = excluded.last_greeting_id`).run(agentId, row.greeting_id);
         return row;
     })();
+}
+function lineKey(line) {
+    let h = 2166136261;
+    for (let i = 0; i < line.length; i++) {
+        h ^= line.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+    }
+    return (h >>> 0).toString(36) + ':' + line.length;
+}
+/**
+ * Pick the opening greeting for one call from the bot's own greeting list:
+ * random, every line used once before any repeats, never the same line twice
+ * in a row. Returns null when the bot has no usable lines.
+ */
+function selectGreetingLine(agentId, linesText, maxWords) {
+    const lines = (0, opening_1.greetingLineList)(linesText, maxWords);
+    if (!agentId || !lines.length)
+        return null;
+    const conn = getDb();
+    return conn.transactionImmediate(() => {
+        const used = new Set(conn.prepare('SELECT line_key FROM greeting_line_used WHERE agent_id = ?').all(agentId).map((r) => r.line_key));
+        const last = conn.prepare('SELECT line_key FROM greeting_line_used WHERE agent_id = ? ORDER BY used_at DESC LIMIT 1').get(agentId);
+        let fresh = lines.filter((line) => !used.has(lineKey(line)));
+        if (!fresh.length) {
+            conn.prepare('DELETE FROM greeting_line_used WHERE agent_id = ?').run(agentId);
+            fresh = lines.length > 1 && last ? lines.filter((line) => lineKey(line) !== last.line_key) : lines;
+        }
+        const line = fresh[Math.floor(Math.random() * fresh.length)];
+        conn.prepare(`INSERT INTO greeting_line_used (agent_id, line_key, used_at) VALUES (?, ?, ?)
+      ON CONFLICT(agent_id, line_key) DO UPDATE SET used_at = excluded.used_at`).run(agentId, lineKey(line), Date.now());
+        return line;
+    })();
+}
+/**
+ * The greeting for the next call. With greeting lines on the bot, one short
+ * line from that list (spoken alone). With an empty list, the shared library
+ * row that varies the saved opening, as before. Never throws.
+ */
+function chooseOpeningLine(agent) {
+    if (agent.randomGreetingEnabled === false)
+        return null;
+    try {
+        const own = selectGreetingLine(agent.id, String(agent.flow?.greetingLines || ''), Number(agent.flow?.greetingMaxWords) || 20);
+        if (own)
+            return { line: own, row: null };
+        const row = selectGreetingForAgent(agent.id, String(agent.greeting || ''));
+        return row ? { line: '', row } : null;
+    }
+    catch (err) {
+        console.error('[greetings] Could not pick a greeting; using the saved opening:', err instanceof Error ? err.message : err);
+        return null;
+    }
 }
 /** Continue with the configured opening if the library or rotation is unavailable. */
 function trySelectGreeting(agentId, enabled, savedOpening = '') {

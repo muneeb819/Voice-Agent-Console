@@ -3,9 +3,11 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.sampleSha256 = exports.CloneError = exports.MAX_SAMPLE_BYTES = exports.ELEVEN_LIVE_MODELS = exports.ELEVEN_API = void 0;
+exports.EXPRESSIVE_PRESETS = exports.sampleSha256 = exports.CloneError = exports.MAX_SAMPLE_BYTES = exports.ELEVEN_LIVE_MODELS = exports.ELEVEN_API = void 0;
 exports.validateCloneRequest = validateCloneRequest;
 exports.elevenListClones = elevenListClones;
+exports.elevenListLibrary = elevenListLibrary;
+exports.elevenSetExpressiveness = elevenSetExpressiveness;
 exports.elevenCreateClone = elevenCreateClone;
 exports.elevenPreview = elevenPreview;
 exports.elevenDelete = elevenDelete;
@@ -110,6 +112,55 @@ async function elevenListClones(fetchImpl = fetch) {
         liveCalls: true,
         createdAt: v.created_at_unix ? new Date(Number(v.created_at_unix) * 1000).toISOString() : null,
     }));
+}
+/** Ready-made voices on the ElevenLabs account (premade, library, generated): not clones. */
+async function elevenListLibrary(fetchImpl = fetch) {
+    const res = await fetchImpl(`${exports.ELEVEN_API}/v1/voices`, { headers: { 'xi-api-key': elevenKey() } });
+    if (!res.ok)
+        throw await elevenError(res);
+    const data = await res.json();
+    return (Array.isArray(data?.voices) ? data.voices : [])
+        .filter((v) => v?.voice_id && !['cloned', 'professional'].includes(String(v?.category || '')))
+        .map((v) => {
+        const l = v?.labels && typeof v.labels === 'object' ? v.labels : {};
+        const description = [l.gender, l.age, l.accent, l.description || l.descriptive, l.use_case || l.use_case].filter(Boolean).map(String).join(' · ');
+        return {
+            provider: 'elevenlabs',
+            id: String(v.voice_id),
+            name: String(v.name || v.voice_id),
+            voice: String(v.voice_id),
+            liveCalls: true,
+            createdAt: null,
+            description: description.slice(0, 160),
+        };
+    })
+        .sort((a, b) => a.name.localeCompare(b.name));
+}
+/**
+ * How expressive the live-call voice sounds. ElevenLabs uses a voice's saved
+ * settings whenever a request sends none (Deepgram's speak provider sends none),
+ * so these are written onto the voice itself.
+ * Lower stability = more emotion and pitch movement; style adds delivery flair.
+ */
+exports.EXPRESSIVE_PRESETS = {
+    warm: { label: 'Warm & expressive', stability: 0.32, similarity_boost: 0.8, style: 0.45, use_speaker_boost: true, speed: 1.0 },
+    balanced: { label: 'Balanced', stability: 0.5, similarity_boost: 0.75, style: 0.2, use_speaker_boost: true, speed: 1.0 },
+    steady: { label: 'Steady & calm', stability: 0.7, similarity_boost: 0.75, style: 0.0, use_speaker_boost: true, speed: 0.97 },
+};
+async function elevenSetExpressiveness(voiceId, preset, fetchImpl = fetch) {
+    if (!/^[A-Za-z0-9]{8,64}$/.test(voiceId))
+        throw new CloneError('Unknown ElevenLabs voice id.');
+    if (!Object.prototype.hasOwnProperty.call(exports.EXPRESSIVE_PRESETS, preset))
+        throw new CloneError('Choose Warm, Balanced or Steady.');
+    const { label: _label, ...settings } = exports.EXPRESSIVE_PRESETS[preset];
+    const res = await fetchImpl(`${exports.ELEVEN_API}/v1/voices/${voiceId}/settings/edit`, {
+        method: 'POST',
+        headers: { 'xi-api-key': elevenKey(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(settings),
+    });
+    if (!res.ok)
+        throw await elevenError(res);
+    return preset;
 }
 async function elevenCreateClone(req, fetchImpl = fetch) {
     const form = new FormData();

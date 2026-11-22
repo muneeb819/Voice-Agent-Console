@@ -298,7 +298,8 @@ async function run() {
       assert.ok(latencyEvt.ttfbMs >= 1 && latencyEvt.avgTtfbMs >= 1);
 
       const endedEvt = await waitForEvent(clientEvents, waiters, (m) => m.type === 'call_ended', 4000, 'call_ended');
-      assert.strictEqual(endedEvt.reason, 'bot_end_call');
+      // A qualified transfer in the browser test ends the test as a simulated transfer (no real call is moved).
+      assert.strictEqual(endedEvt.reason, 'transfer_simulated');
       assert.strictEqual(endedEvt.disposition, null);
       assert.strictEqual(endedEvt.transferredTo, null);
       assert.strictEqual(clientAudioBytes, 960, 'Expected 960 bytes of binary TTS PCM16 audio');
@@ -316,9 +317,10 @@ async function run() {
       assert.strictEqual(xferResp.thought_signature, 'gemini_sig_abc123');
       const xferResult = JSON.parse(xferResp.content);
       const dispoResult = JSON.parse(receivedFnResponses.find((r) => r.id === 'fc_dispo_1').content);
-      assert.strictEqual(xferResult.ok, false);
+      assert.strictEqual(xferResult.ok, true);
       assert.strictEqual(xferResult.simulated, true);
-      assert.match(xferResult.error, /no VICIdial or PBX transfer/i);
+      assert.strictEqual(xferResult.real_transfer_made, false);
+      assert.match(xferResult.note, /Browser test/i);
       assert.strictEqual(dispoResult.ok, false);
       assert.strictEqual(dispoResult.simulated, true);
       assert.match(dispoResult.error, /no disposition.*changed/i);

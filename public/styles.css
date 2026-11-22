@@ -4283,8 +4283,12 @@ body.has-unsaved-changes .workspace-stage {
 .vclone-list h3 { margin: 12px 0 6px; font-size: 13px; }
 .vclone-list h3 small { font-weight: 400; color: var(--mu); }
 .vclone-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid var(--bd, rgba(0,0,0,.08)); }
+.vclone-lib { max-height: 360px; overflow-y: auto; padding-right: 4px; }
+.vclone-feel { border: 1px solid var(--bd, rgba(0,0,0,.08)); border-radius: 10px; padding: 8px 12px 10px; margin: 8px 0 4px; }
+.vclone-feel h3 { margin-top: 2px !important; }
 .vclone-name { display: flex; flex-direction: column; min-width: 0; }
 .vclone-name small { color: var(--mu); font-size: 11px; overflow-wrap: anywhere; }
 .vclone-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .vclone audio { width: 100%; margin-top: 6px; }
 label.vclone-file, :root[data-theme] label.vclone-file { text-transform: none !important; letter-spacing: normal !important; font-size: 13px !important; font-weight: 600 !important; margin: 0 !important; color: inherit; }
+.vclone-name .pill { display: inline-block; width: auto; align-self: flex-start; margin-left: 6px; vertical-align: middle; }

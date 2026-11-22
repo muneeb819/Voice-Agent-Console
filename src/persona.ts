@@ -7,6 +7,7 @@ interface ConversationMemory {
   facts(): { statedAge: string | null; medicareStatus: string | null; userTurns: number };
   sanitizeTransferArgs(args: Record<string, any>): { args: Record<string, any>; omitted: string[]; corrected: string[] };
   qualificationBlockers(campaign?: { complianceRules?: string } | null): string[];
+  lastUserText(): string;
 }
 
 interface PersonaApi {
@@ -14,7 +15,6 @@ interface PersonaApi {
   conversationIntegrityLines(): string[];
   callEndingLines(): string[];
   callTimeLimitLines(maxCallSec: number): string[];
-  humanSpeechLines(): string[];
   migrateLegacyQualificationPrompt(value: string, currentStock: string): string;
   migrateLegacyCampaignRules(value: string, currentStock: string, campaignId: string): string;
   defaultSelfIntro(id: string, name: string): string;
@@ -22,6 +22,11 @@ interface PersonaApi {
   createConversationMemory(): ConversationMemory;
   fingerprint(text: string): string;
   TONE_MAP: Record<string, string>;
+  FLOW_DEFAULTS: {
+    speakingStyle: string; greetingLines: string; repeatLine: string; noAnswerLine: string;
+    waitForHello: boolean; waitForHelloSec: number; noAnswerRepeats: number; greetingMaxWords: number;
+    introLine: string; transferOnYes: boolean;
+  };
   MAX_PROMPT_LENGTH: number;
   MAX_CAMPAIGN_RULES: number;
   callPromptReport(agent: any, campaign: any, openingChars?: number): {
@@ -37,7 +42,6 @@ export const {
   conversationIntegrityLines,
   callEndingLines,
   callTimeLimitLines,
-  humanSpeechLines,
   migrateLegacyQualificationPrompt,
   migrateLegacyCampaignRules,
   defaultSelfIntro,
@@ -45,6 +49,7 @@ export const {
   createConversationMemory,
   fingerprint,
   TONE_MAP,
+  FLOW_DEFAULTS,
   MAX_PROMPT_LENGTH,
   MAX_CAMPAIGN_RULES,
   callPromptReport,

@@ -246,6 +246,7 @@
   "tests/barge-in-verify.ts",
   "tests/smoke-test-verify.ts",
   "tests/voice-clone-verify.ts",
+  "tests/call-start-verify.ts",
   "tests/bot-functions-verify.ts",
   "tests/bridge-opening-verify.ts",
   "tests/greetings-verify.ts",

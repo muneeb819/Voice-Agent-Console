@@ -52,6 +52,7 @@ async function main() {
   campaign.agentId = agent.id;
   campaign.complianceRules = 'Reviewed bridge fixture rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
   agent.greeting = 'Hi, this is Jessi from Example Services. How are you doing?';
+  (agent as any).flow = { ...((agent as any).flow || {}), waitForHello: false, greetingLines: '' }; // legacy speak-after-one-second opening
   agent.injectCampaignDisclosure = false;
 
   const viciRequests: Array<{ fn: string; params: URLSearchParams }> = [];

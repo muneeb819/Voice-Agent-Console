@@ -107,11 +107,13 @@ export function parseVicidialCallerCode(
  * Strips characters disallowed by VICIdial non_agent_api.php update_lead (' " & | \r \n)
  */
 export function sanitizeViciText(val: string, maxLen = 250): string {
-  return String(val || '')
+  const cleaned = String(val || '')
     .replace(/['"&|\r\n]+/g, ' ')
     .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, maxLen);
+    .trim();
+  // Cut on whole characters (never half an emoji) and drop a space left at the cut.
+  const chars = Array.from(cleaned);
+  return (chars.length > maxLen ? chars.slice(0, maxLen).join('') : cleaned).trim();
 }
 
 function computeAgeFromDob(dob: string): string {

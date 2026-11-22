@@ -1,9 +1,44 @@
 import { Agent,  AgentBehavior, AgentFunction, Campaign, ConsoleState, Provider } from './types';
 import { migrateStockMedicarePrompt, migrateStockOpening } from './opening';
-import { migrateLegacyQualificationPrompt, migrateLegacyCampaignRules, defaultSelfIntro, migrateLegacySelfIntro } from './persona';
+import { migrateLegacyQualificationPrompt, migrateLegacyCampaignRules, defaultSelfIntro, migrateLegacySelfIntro, FLOW_DEFAULTS } from './persona';
+
+export const DEFAULT_SPEAKING_STYLE = FLOW_DEFAULTS.speakingStyle;
+export const DEFAULT_GREETING_LINES = FLOW_DEFAULTS.greetingLines;
+const DEFAULT_REPEAT_LINE = FLOW_DEFAULTS.repeatLine;
+const DEFAULT_NO_ANSWER_LINE = FLOW_DEFAULTS.noAnswerLine;
 import { assignCampaignSlots, normalizeCampaignAgents } from './campaign-assignment';
 import { normalizeBargeInPct, presetForPct } from './barge-in';
 import { SENTINEL_QA_AGENT, SENTINEL_QA_TESTS } from './sentinel-qa';
+
+
+function normalizeFlow(raw: any): import('./types').AgentFlow {
+  const f = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const text = (v: unknown, fallback: string, max: number) => (typeof v === 'string' ? v : fallback).slice(0, max);
+  const num = (v: unknown, fallback: number, min: number, max: number) => { const n = Number(v); return v !== null && v !== '' && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; };
+  return {
+    waitForHello: f.waitForHello !== undefined ? Boolean(f.waitForHello) : true,
+    waitForHelloSec: Math.round(num(f.waitForHelloSec, 3, 1, 10) * 10) / 10,
+    noAnswerLine: text(f.noAnswerLine, DEFAULT_NO_ANSWER_LINE, 200),
+    noAnswerRepeats: Math.round(num(f.noAnswerRepeats, 2, 0, 5)),
+    greetingLines: text(f.greetingLines, DEFAULT_GREETING_LINES, 20000),
+    greetingMaxWords: Math.round(num(f.greetingMaxWords, 20, 5, 40)),
+    introLine: text(f.introLine, '', 600),
+    transferOnYes: Boolean(f.transferOnYes),
+    repeatLine: text(f.repeatLine, DEFAULT_REPEAT_LINE, 300),
+  };
+}
+
+/**
+ * A saved text field: keeps real text (and finite numbers), and falls back for
+ * blanks and junk types such as [] or {} that a damaged file can contain.
+ * String([]) would otherwise turn into "" and be replaced on the next save.
+ */
+function textOr(value: unknown, fallback: string): string {
+  if (typeof value === 'string') return value.trim() ? value : fallback;
+  if (typeof value === 'number' && Number.isFinite(value) && value !== 0) return String(value);
+  if (typeof value === 'boolean' && value) return String(value);
+  return fallback;
+}
 
 // SIP configuration is interpolated into raw UDP headers, so never let control
 // characters, quotes or angle brackets reach the registrar client. These are
@@ -53,7 +88,7 @@ export function defaultVoiceAgentSttModel(language?: string): VoiceAgentSttModel
 }
 
 export function normalizeVoiceAgentSttModel(model: unknown, language?: string): VoiceAgentSttModel {
-  const value = String(model || '').trim();
+  const value = textOr(model, '').trim();
   return VOICE_AGENT_STT_MODELS.includes(value as VoiceAgentSttModel)
     ? (value as VoiceAgentSttModel)
     : defaultVoiceAgentSttModel(language);
@@ -838,18 +873,18 @@ export function normalizeState(raw: any): ConsoleState {
     ? src.functions
         .filter((f: any) => f && typeof f === 'object' && !Array.isArray(f) && f?.name !== 'accept_vicidial_call') // Migrate legacy anti-pattern out of LLM tools
         .map((f: any, idx: number) => {
-          let id = String(f.id || `fn_${idx + 1}`);
+          let id = textOr(f.id, `fn_${idx + 1}`);
           if (usedFnIds.has(id) || id === 'f_new_function') {
             id = `fn_${Date.now().toString(36)}_${idx}`;
           }
           usedFnIds.add(id);
           return {
             id,
-            name: String(f.name || `function_${idx + 1}`).trim(),
-            description: String(f.description || ''),
+            name: textOr(textOr(f.name, '').trim(), `function_${idx + 1}`),
+            description: textOr(f.description, ''),
             params: typeof f.params === 'string' ? f.params : JSON.stringify(f.params || objSchema({})),
             defer: Boolean(f.defer),
-            url: String(f.url || ''),
+            url: textOr(f.url, ''),
             method: f.method === 'get' ? 'get' : 'post',
             headers: typeof f.headers === 'string' ? f.headers : JSON.stringify(f.headers || {}),
           };
@@ -866,14 +901,14 @@ export function normalizeState(raw: any): ConsoleState {
           const llmType = DEEPGRAM_LLM_PROVIDERS.includes(p.type) ? String(p.type) : 'open_ai';
           const allowedModels = deepgramModelsForProviderType(llmType);
           const allowedSet = new Set(allowedModels);
-          const existingValid = String(p.models || '')
+          const existingValid = textOr(p.models, '')
             .split(',')
             .map((s) => s.trim())
             .filter((m) => allowedSet.has(m));
           const mergedModels = Array.from(new Set([...existingValid, ...allowedModels])).join(',');
           const canonical = base.providers.find((bp) => bp.kind === 'llm' && bp.type === llmType);
           const cleanName =
-            String(p.name || '').includes('BYO') || !String(p.name || '').trim()
+            textOr(p.name, '').includes('BYO') || !textOr(p.name, '').trim()
               ? canonical?.name || `${llmType} (Deepgram Managed)`
               : String(p.name);
           return {
@@ -888,19 +923,19 @@ export function normalizeState(raw: any): ConsoleState {
             mk: 'model',
           };
         }
-        const isSpeechService = String(p.type || '') === 'speech_service';
+        const isSpeechService = textOr(p.type, '') === 'speech_service';
         return {
-          id: String(p.id || `p_${kind}_${idx + 1}`),
+          id: textOr(p.id, `p_${kind}_${idx + 1}`),
           kind,
-          name: String(p.name || `Provider ${idx + 1}`),
-          type: kind === 'stt' ? (isSpeechService ? 'speech_service' : 'deepgram') : String(p.type || 'deepgram'),
+          name: textOr(p.name, `Provider ${idx + 1}`),
+          type: kind === 'stt' ? (isSpeechService ? 'speech_service' : 'deepgram') : textOr(p.type, 'deepgram'),
           models:
             kind === 'stt'
               ? isSpeechService
                 ? String(p.models || SPEECH_SERVICE_STT_MODELS.join(','))
                 : VOICE_AGENT_STT_MODELS.join(',')
-              : String(p.models || ''),
-          endpoint: String(p.endpoint || ''),
+              : textOr(p.models, ''),
+          endpoint: textOr(p.endpoint, ''),
           headers: typeof p.headers === 'string' ? p.headers : JSON.stringify(p.headers || {}),
           extra: typeof p.extra === 'string' ? p.extra : JSON.stringify(p.extra || {}),
           mk: p.mk === 'model_id' ? 'model_id' : 'model',
@@ -923,8 +958,8 @@ export function normalizeState(raw: any): ConsoleState {
     // ElevenLabs is kept only in the exact form Voice Lab cloning creates: the
     // ElevenLabs streaming endpoint with the key from the stored secret.
     const isCloneVoice = p.kind === 'tts' && p.type === 'eleven_labs' &&
-      /^wss:\/\/api\.elevenlabs\.io\/v1\/text-to-speech\/[A-Za-z0-9]{8,64}\/multi-stream-input$/.test(String(p.endpoint || '')) &&
-      /\{\{ELEVENLABS_API_KEY\}\}/.test(String(p.headers || ''));
+      /^wss:\/\/api\.elevenlabs\.io\/v1\/text-to-speech\/[A-Za-z0-9]{8,64}\/multi-stream-input$/.test(textOr(p.endpoint, '')) &&
+      /\{\{ELEVENLABS_API_KEY\}\}/.test(textOr(p.headers, ''));
     if (p.kind === 'tts' && p.type !== 'deepgram' && p.type !== 'speech_service' && !isCloneVoice) providers.splice(i, 1);
   }
 
@@ -947,8 +982,8 @@ export function normalizeState(raw: any): ConsoleState {
 
   const normalizeSelection = (kind: Provider['kind']) => {
     const rawSelection = src.services?.[kind] || {};
-    const provider = providers.find((p) => p.kind === kind && p.id === String(rawSelection.providerId || ''));
-    const model = String(rawSelection.model || '').trim();
+    const provider = providers.find((p) => p.kind === kind && p.id === textOr(rawSelection.providerId, ''));
+    const model = textOr(rawSelection.model, '').trim();
     if (!provider || !model) return { providerId: '', model: '' };
     if (kind === 'stt') {
       if (provider.type === 'speech_service') {
@@ -998,8 +1033,14 @@ export function normalizeState(raw: any): ConsoleState {
   const dispoFnId = fnNameMap.get('set_disposition');
   const endFnId = fnNameMap.get('end_call');
 
-  const agents: Agent[] = Array.isArray(src.agents) && src.agents.length
-    ? src.agents.filter((a: any) => a && typeof a === 'object' && !Array.isArray(a)).map((a: any, idx: number) => {
+  // No saved bots → start from the stock bots, but run them through the same
+  // rules (tool ids, Nova's required tools) so the first save already matches
+  // what a re-save would produce.
+  const rawAgents: any[] = Array.isArray(src.agents) && src.agents.some((a: any) => a && typeof a === 'object' && !Array.isArray(a))
+    ? src.agents
+    : JSON.parse(JSON.stringify(base.agents)).map((a: any) => ({ ...a, fnIds: undefined, fns: (a.fnIds || []).map((id: string) => base.functions.find((f) => f.id === id)?.name).filter(Boolean) }));
+  const agents: Agent[] = rawAgents.length
+    ? rawAgents.filter((a: any) => a && typeof a === 'object' && !Array.isArray(a)).map((a: any, idx: number) => {
         let fnIds: string[] = [];
         if (Array.isArray(a.fnIds)) {
           fnIds = a.fnIds.filter((id: string) => fnIdSet.has(id));
@@ -1011,8 +1052,8 @@ export function normalizeState(raw: any): ConsoleState {
 
         const hadLegacyAccept = Array.isArray(a.fns) ? a.fns.includes('accept_vicidial_call') : true;
 
-        const agentId = String(a.id || `a_${idx + 1}`);
-        const agentName = String(a.name || `Agent ${idx + 1}`);
+        const agentId = textOr(a.id, `a_${idx + 1}`);
+        const agentName = textOr(a.name, `Agent ${idx + 1}`);
         const isNovaAgent = agentId === 'a_nova' || /nova.*concierge/i.test(agentName);
 
         if (isNovaAgent) {
@@ -1058,6 +1099,7 @@ export function normalizeState(raw: any): ConsoleState {
           vocalGestures: rawBeh.vocalGestures !== undefined ? Boolean(rawBeh.vocalGestures) : true,
           allowGeneralQa: rawBeh.allowGeneralQa !== undefined ? Boolean(rawBeh.allowGeneralQa) : true,
           selfIntro: migrateLegacySelfIntro(rawBeh.selfIntro, agentId, agentName),
+          speakingStyle: typeof rawBeh.speakingStyle === 'string' ? rawBeh.speakingStyle.slice(0, 6000) : DEFAULT_SPEAKING_STYLE,
         };
 
         const rawInRate = Math.round(num(a.audio?.inRate, 8000));
@@ -1067,7 +1109,7 @@ export function normalizeState(raw: any): ConsoleState {
           id: agentId,
           name: agentName,
           mode: ['outbound', 'inbound', 'both'].includes(a.mode) ? a.mode : 'outbound',
-          language: String(a.language || 'en'),
+          language: textOr(a.language, 'en'),
           greeting: migrateStockOpening(String(a.greeting ?? '')),
           randomGreetingEnabled: a.randomGreetingEnabled !== false,
           prompt: cleanPrompt,
@@ -1075,6 +1117,7 @@ export function normalizeState(raw: any): ConsoleState {
           injectCampaignDisclosure:
             a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : false,
           behavior,
+          flow: normalizeFlow(a.flow),
           stt: {
             keyterms: String(a.stt?.keyterms ?? ''),
             eot: num(a.stt?.eot, 0.55, 0.1, 0.9),
@@ -1092,6 +1135,8 @@ export function normalizeState(raw: any): ConsoleState {
           tts: {
             speed: num(a.tts?.speed, 1.0, 0.5, 1.5),
             expr: Math.round(num(a.tts?.expr, 0, -2, 2)),
+            expressiveness: Math.round(num(a.tts?.expressiveness, 0.5, 0.25, 2) * 100) / 100,
+            variation: Math.round(num(a.tts?.variation, 0.8, 0.3, 1.5) * 100) / 100,
           },
           audio: {
             inEnc: ['linear16', 'mulaw', 'alaw'].includes(a.audio?.inEnc) ? a.audio.inEnc : 'linear16',
@@ -1106,21 +1151,21 @@ export function normalizeState(raw: any): ConsoleState {
 
   const campaigns: Campaign[] = Array.isArray(src.campaigns)
     ? src.campaigns.filter((c: any) => c && typeof c === 'object' && !Array.isArray(c)).map((c: any, idx: number) => {
-        const cName = String(c.name || `Campaign ${idx + 1}`);
+        const cName = textOr(c.name, `Campaign ${idx + 1}`);
         const defaultDisclosure = /medicare/i.test(cName)
           ? 'This call may be recorded for quality and benefit verification.'
           : 'This call may be recorded for quality purposes.';
         return {
-          id: String(c.id || `c_${idx + 1}`),
+          id: textOr(c.id, `c_${idx + 1}`),
           name: cName,
           slot: Number(c.slot),
           // Missing assignments stay missing. Never silently attach a campaign to the first bot.
-          ...normalizeCampaignAgents(c, new Set((src.agents || []).map((a: any) => String(a?.id || '')))),
+          ...normalizeCampaignAgents(c, new Set((Array.isArray(src.agents) ? src.agents : []).map((a: any) => textOr(a?.id, '')))),
           viciCampaign: String(c.viciCampaign ?? '').trim(),
           lists: String(c.lists ?? ''),
-          start: String(c.start || '09:00'),
-          end: String(c.end || '20:00'),
-          tz: String(c.tz || 'America/New_York'),
+          start: textOr(c.start, '09:00'),
+          end: textOr(c.end, '20:00'),
+          tz: textOr(c.tz, 'America/New_York'),
           attempts: Math.round(num(c.attempts, 3, 1, 20)),
           retry: Math.round(num(c.retry, 120, 0, 86400)),
           maxCalls: Math.round(num(c.maxCalls, 10, 1, 1000)),
@@ -1137,7 +1182,7 @@ export function normalizeState(raw: any): ConsoleState {
           dispos: String(c.dispos ?? 'XFER,NI,DNC,NA,CALLBK,DEC'),
           // Legacy campaigns must be reviewed instead of inheriting a fabricated compliance policy.
           complianceRules: typeof c.complianceRules === 'string'
-            ? migrateLegacyCampaignRules(c.complianceRules, base.campaigns.find((entry) => entry.id === String(c.id || ''))?.complianceRules || '', String(c.id || ''))
+            ? migrateLegacyCampaignRules(c.complianceRules, base.campaigns.find((entry) => entry.id === textOr(c.id, ''))?.complianceRules || '', textOr(c.id, ''))
             : MISSING_CAMPAIGN_RULES,
         };
       })
@@ -1162,11 +1207,11 @@ export function normalizeState(raw: any): ConsoleState {
   const rawSipPort = num(src.vici?.sipPort, 5062);
 
   const vici = {
-    viciBaseUrl: String(viciBaseUrl || base.vici.viciBaseUrl).replace(/\/+$/, ''),
-    nonAgentApiPath: String(src.vici?.nonAgentApiPath || base.vici.nonAgentApiPath),
-    agentApiPath: String(src.vici?.agentApiPath || base.vici.agentApiPath),
-    apiUser: String(src.vici?.apiUser === 'apiuser' ? '6666' : src.vici?.apiUser || base.vici.apiUser),
-    source: String(src.vici?.source || base.vici.source),
+    viciBaseUrl: textOr(viciBaseUrl, base.vici.viciBaseUrl).replace(/\/+$/, ''),
+    nonAgentApiPath: textOr(src.vici?.nonAgentApiPath, base.vici.nonAgentApiPath),
+    agentApiPath: textOr(src.vici?.agentApiPath, base.vici.agentApiPath),
+    apiUser: textOr(src.vici?.apiUser === 'apiuser' ? '6666' : src.vici?.apiUser, base.vici.apiUser),
+    source: textOr(src.vici?.source, base.vici.source),
     transport: src.vici?.transport === 'audiosocket' ? ('audiosocket' as const) : ('sip_trunk' as const),
     sipConnectionMode: ['static_peer', 'registration', 'hybrid'].includes(src.vici?.sipConnectionMode) ? src.vici.sipConnectionMode : 'static_peer',
     sipRegistrarHost: cleanSipHost(src.vici?.sipRegistrarHost),
@@ -1175,15 +1220,15 @@ export function normalizeState(raw: any): ConsoleState {
     sipUsername: cleanSipUser(src.vici?.sipUsername),
     sipAuthUsername: cleanSipUser(src.vici?.sipAuthUsername),
     sipTransportProtocol: 'udp' as const,
-    bridgeHost: cleanSipHost(rawBridgeHost || base.vici.bridgeHost),
+    bridgeHost: cleanSipHost(textOr(rawBridgeHost, base.vici.bridgeHost)) || base.vici.bridgeHost,
     bridgePort: Math.round(num(src.vici?.bridgePort, 9092, 1, 65535)),
     sipPort: Math.round(Math.min(65535, Math.max(1, rawSipPort))),
-    aiExten: String(src.vici?.aiExten || base.vici.aiExten),
-    remoteAgentUser: String(src.vici?.remoteAgentUser || base.vici.remoteAgentUser),
-    inIngroup: String(src.vici?.inIngroup || base.vici.inIngroup),
-    amiHost: String(rawAmiHost || base.vici.amiHost),
+    aiExten: textOr(src.vici?.aiExten, base.vici.aiExten),
+    remoteAgentUser: textOr(src.vici?.remoteAgentUser, base.vici.remoteAgentUser),
+    inIngroup: textOr(src.vici?.inIngroup, base.vici.inIngroup),
+    amiHost: textOr(rawAmiHost, base.vici.amiHost),
     amiPort: Math.round(num(src.vici?.amiPort, 5038, 1, 65535)),
-    amiUser: String(src.vici?.amiUser === 'bridge' ? 'cron' : src.vici?.amiUser || base.vici.amiUser),
+    amiUser: textOr(src.vici?.amiUser === 'bridge' ? 'cron' : src.vici?.amiUser, base.vici.amiUser),
   };
 
   const tests: ConsoleState['tests'] = {};
@@ -1191,7 +1236,7 @@ export function normalizeState(raw: any): ConsoleState {
     for (const [aid, list] of Object.entries(src.tests)) {
       if (Array.isArray(list)) {
         tests[aid] = list.filter((item: any) => item && typeof item === 'object' && !Array.isArray(item)).map((item: any, idx: number) => ({
-          id: String(item.id || `t_${aid}_${idx + 1}`),
+          id: textOr(item.id, `t_${aid}_${idx + 1}`),
           s: String(item.s ?? ''),
           e: String(item.e ?? ''),
           r: ['p', 'ok', 'f'].includes(item.r) ? item.r : 'p',
@@ -1214,7 +1259,8 @@ export function normalizeState(raw: any): ConsoleState {
   }
   const uniqueAgents = dedupe(agents);
   const agentIds = new Set(uniqueAgents.map((a) => a.id));
-  const storedSlotSeq = Number.isInteger(Number(src.campaignSlotSeq)) && Number(src.campaignSlotSeq) > 0 ? Number(src.campaignSlotSeq) : 0;
+  // Extensions are at most 4 digits; a damaged counter beyond that is ignored.
+  const storedSlotSeq = Number.isInteger(Number(src.campaignSlotSeq)) && Number(src.campaignSlotSeq) > 0 && Number(src.campaignSlotSeq) < 9999 ? Number(src.campaignSlotSeq) : 0;
   const uniqueCampaigns = assignCampaignSlots(dedupe(campaigns).map((c) => ({ ...c, ...normalizeCampaignAgents(c, agentIds) })), storedSlotSeq);
   const campaignSlotSeq = uniqueCampaigns.reduce((m, c) => Math.max(m, c.slot), storedSlotSeq);
   const uniqueFunctions = dedupe(functions);
@@ -1227,7 +1273,7 @@ export function normalizeState(raw: any): ConsoleState {
     version: 5,
     updatedAt: new Date().toISOString(),
     services,
-    providers,
+    providers: dedupe(providers),
     functions: uniqueFunctions,
     agents: uniqueAgents,
     campaigns: uniqueCampaigns,

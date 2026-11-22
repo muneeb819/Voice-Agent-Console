@@ -1056,6 +1056,13 @@ class VicidialBridgeService {
         let keepAliveTimer = null;
         let comfortSilenceTimer = null;
         let deferredActionTimer = null;
+        // The bot announced "I'm connecting you" (see announcesTransfer). Protects the
+        // call from the length limit; the bridge completes the transfer if the bot
+        // does not call transfer_to_live_agent itself.
+        let transferIntentAt = 0;
+        let transferIntentTimer = null;
+        let autoTransfer = null;
+        const transferIntentActive = () => transferIntentAt > 0 && Date.now() - transferIntentAt < call_limit_1.TRANSFER_INTENT_GRACE_MS;
         let speechDrainTimer = null;
         let openingGate = null;
         let lastCallerAudioAt = Date.now();
@@ -1206,6 +1213,10 @@ class VicidialBridgeService {
             }
             for (const t of callLimitTimers)
                 clearTimeout(t);
+            if (transferIntentTimer) {
+                clearTimeout(transferIntentTimer);
+                transferIntentTimer = null;
+            }
             callLimitTimers.length = 0;
             openingGate?.cancel();
             openingGate = null;
@@ -1295,7 +1306,7 @@ class VicidialBridgeService {
         // A transfer that is already underway is never cut off.
         const callLimitMs = (0, call_limit_1.callLimitMsForCampaign)(campaign);
         if (callLimitMs > 0) {
-            const transferUnderway = () => Boolean(transferRequested || pendingTransferArgs || transferCompletion || transferExecuted || transferredTo);
+            const transferUnderway = () => Boolean(transferRequested || pendingTransferArgs || transferCompletion || transferExecuted || transferredTo || transferIntentActive());
             const plan = (0, call_limit_1.callLimitSchedule)(callLimitMs);
             const elapsed = () => Date.now() - startedAtMs;
             const at = (ms, fn) => callLimitTimers.push(setTimeout(fn, Math.max(0, ms - elapsed())));
@@ -1368,6 +1379,79 @@ class VicidialBridgeService {
                     sourceApi: 'fallback',
                 };
             }
+            // One transfer path for both the bot's transfer_to_live_agent call and the
+            // bridge completing a transfer the bot announced but did not call.
+            const scheduleTransfer = async (rawArgs, onSanitized) => {
+                let args = rawArgs;
+                const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(campaign);
+                const transferDisposition = disposition || 'XFER';
+                const sanitized = conversationMemory.sanitizeTransferArgs(args);
+                const qualificationBlockers = conversationMemory.qualificationBlockers(campaign);
+                if (qualificationBlockers.length) {
+                    return { ok: false, error: `Transfer blocked: ${qualificationBlockers.join(' ')} No transfer was scheduled.`, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}) };
+                }
+                else if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
+                    return { ok: false, error: `Transfer requires the allowed XFER disposition for selected campaign ${campaign.viciCampaign}; current disposition is ${transferDisposition}. No transfer was scheduled.` };
+                }
+                else {
+                    transferRequested = true;
+                    if (!disposition)
+                        disposition = 'XFER';
+                    args = sanitized.args;
+                    onSanitized?.(args);
+                    const reason = String(args.reason || 'Qualified & interested lead');
+                    const metaParts = [
+                        args.prospect_name ? `Name:${args.prospect_name}` : hydratedLead.first_name ? `Name:${hydratedLead.first_name}` : '',
+                        args.confirmed_age ? `Age:${args.confirmed_age}` : '',
+                        args.medicare_status ? `Medicare:${args.medicare_status}` : '',
+                        args.hook_type ? `Hook:${args.hook_type}` : '',
+                    ].filter(Boolean);
+                    const noteSummary = `[AI Qualified${metaParts.length ? ' | ' + metaParts.join(' | ') : ''}] ${reason}`;
+                    // Push structured metadata into vicidial_list BEFORE transfer so closer screen-pop shows Name, Age, Medicare Status & Hook Type!
+                    const notesUpdate = await viciClient.updateLeadDisposition({
+                        leadId: summary.leadId,
+                        phone: summary.phone,
+                        status: disposition,
+                        notes: noteSummary,
+                    });
+                    pendingTransferArgs = {
+                        reason,
+                        prospect_name: args.prospect_name || hydratedLead.first_name || undefined,
+                        confirmed_age: args.confirmed_age,
+                        medicare_status: args.medicare_status,
+                        hook_type: args.hook_type,
+                    };
+                    if (deferredActionTimer)
+                        clearTimeout(deferredActionTimer);
+                    deferredActionTimer = setTimeout(() => {
+                        if (pendingTransferArgs) {
+                            const p = pendingTransferArgs;
+                            pendingTransferArgs = null;
+                            executeTransferAction(p).catch(() => { });
+                        }
+                    }, 9000);
+                    return {
+                        ok: true,
+                        ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
+                        ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
+                        transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
+                        closer_screen_pop_notes_saved: notesUpdate.ok,
+                        metadata_passed: {
+                            prospect_name: args.prospect_name || hydratedLead.first_name || null,
+                            confirmed_age: args.confirmed_age || null,
+                            medicare_status: args.medicare_status || null,
+                            hook_type: args.hook_type || null,
+                        },
+                    };
+                }
+            };
+            autoTransfer = async (reason) => {
+                if ((0, call_limit_1.callerDeclined)(conversationMemory.lastUserText())) {
+                    return { ok: false, error: 'caller declined', blockers: ['The caller did not agree to be connected. Do not transfer; respect their answer and close politely or ask once if they would like to speak with the specialist.'] };
+                }
+                const payload = await scheduleTransfer({ reason });
+                return { ok: Boolean(payload.ok), error: String(payload.error || ''), blockers: conversationMemory.qualificationBlockers(campaign) };
+            };
             if (closed)
                 return;
             if (hydratedLead.lead_id)
@@ -1384,8 +1468,12 @@ class VicidialBridgeService {
                 await finalizeSession('missing_deepgram_key');
                 return;
             }
-            selectedGreeting = (0, db_1.trySelectGreeting)(agent.id, agent.randomGreetingEnabled !== false, agent.greeting);
-            if (selectedGreeting) {
+            const picked = (0, db_1.chooseOpeningLine)(agent);
+            selectedGreeting = picked ? (picked.row || { greeting_id: 'bot-list', persona: 'Bot greeting list', context: '', greeting_text: picked.line, tone: '' }) : null;
+            if (picked?.line) {
+                addTranscript('system', `Greeting picked from the bot's list: "${picked.line}"`);
+            }
+            else if (selectedGreeting) {
                 addTranscript('system', `Selected greeting #${selectedGreeting.greeting_id} (${selectedGreeting.persona}; ${selectedGreeting.context}; ${selectedGreeting.tone}).`);
             }
             else if (agent.randomGreetingEnabled !== false) {
@@ -1393,7 +1481,8 @@ class VicidialBridgeService {
             }
             const rawSettings = (0, settings_builder_1.buildDeepgramSettings)(state, agent, campaign, {
                 forceClientSideWebhooks: true,
-                greetingText: selectedGreeting?.greeting_text,
+                openingLine: picked?.line || '',
+                greetingText: picked?.row?.greeting_text,
             });
             // Telephony is strictly 8000 Hz linear16 mono in & out
             rawSettings.audio = {
@@ -1404,7 +1493,7 @@ class VicidialBridgeService {
             let wireSettings;
             let openingText = '';
             try {
-                const prepared = (0, opening_1.prepareDelayedOpening)((0, env_store_1.interpolateProviderPlaceholders)(rawSettings));
+                const prepared = (0, opening_1.prepareDelayedOpening)((0, env_store_1.interpolateProviderPlaceholders)(rawSettings), (0, opening_1.openingOptionsFor)(agent));
                 openingText = prepared.greeting;
                 wireSettings = prepared.settings;
             }
@@ -1416,6 +1505,7 @@ class VicidialBridgeService {
             }
             openingGate = (0, opening_1.createOpeningGate)({
                 greeting: openingText,
+                ...(0, opening_1.openingGateOptionsFor)(agent),
                 sendOpening: (message) => {
                     if (!closed && dgWs?.readyState === ws_1.default.OPEN) {
                         dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
@@ -1541,6 +1631,10 @@ class VicidialBridgeService {
                         else
                             conversationMemory.addAssistantText(content);
                         addTranscript(role, content);
+                        if (role === 'assistant' && !transferRequested && !transferIntentAt && (0, call_limit_1.announcesTransfer)(content)) {
+                            transferIntentAt = Date.now();
+                            addTranscript('system', 'Bot announced a transfer: call protected from the time limit until it completes');
+                        }
                         break;
                     }
                     case 'AgentThinking': {
@@ -1558,6 +1652,25 @@ class VicidialBridgeService {
                             if (closed)
                                 return;
                             updateState('listening');
+                            // Announced a transfer but did not call the function: complete it.
+                            if (transferIntentAt && !transferRequested && !transferIntentTimer && autoTransfer) {
+                                transferIntentTimer = setTimeout(async () => {
+                                    transferIntentTimer = null;
+                                    if (closed || transferRequested || !autoTransfer)
+                                        return;
+                                    const outcome = await autoTransfer('Bot told the caller it was connecting them');
+                                    if (outcome.ok) {
+                                        addTranscript('system', 'Transfer started by the bridge after the bot announced it');
+                                    }
+                                    else {
+                                        transferIntentAt = 0; // not protected any more; the bot must fix the gap first
+                                        addTranscript('system', `Announced transfer not started: ${outcome.error}`);
+                                        if (dgWs && dgWs.readyState === ws_1.default.OPEN && outcome.blockers.length) {
+                                            dgWs.send(JSON.stringify({ type: 'UpdatePrompt', prompt: (0, call_limit_1.transferBlockedPrompt)(outcome.blockers) }));
+                                        }
+                                    }
+                                }, Math.min(opts.hooks.pendingPlaybackMs() + call_limit_1.TRANSFER_INTENT_AUTOCOMPLETE_MS, 12000));
+                            }
                             if (!pendingTransferArgs && !awaitingHangupAfterSpeech)
                                 return;
                             // AgentAudioDone means the provider finished generating audio,
@@ -1643,66 +1756,7 @@ class VicidialBridgeService {
                                 }
                             }
                             else if (fnItem.name === 'transfer_to_live_agent') {
-                                const allowedCodes = (0, settings_builder_1.allowedCampaignDispositionCodes)(campaign);
-                                const transferDisposition = disposition || 'XFER';
-                                const sanitized = conversationMemory.sanitizeTransferArgs(args);
-                                const qualificationBlockers = conversationMemory.qualificationBlockers(campaign);
-                                if (qualificationBlockers.length) {
-                                    resultPayload = { ok: false, error: `Transfer blocked: ${qualificationBlockers.join(' ')} No transfer was scheduled.`, ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}), ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}) };
-                                }
-                                else if (transferDisposition !== 'XFER' || !allowedCodes.includes('XFER')) {
-                                    resultPayload = { ok: false, error: `Transfer requires the allowed XFER disposition for selected campaign ${campaign.viciCampaign}; current disposition is ${transferDisposition}. No transfer was scheduled.` };
-                                }
-                                else {
-                                    transferRequested = true;
-                                    if (!disposition)
-                                        disposition = 'XFER';
-                                    args = sanitized.args;
-                                    const reason = String(args.reason || 'Qualified & interested lead');
-                                    const metaParts = [
-                                        args.prospect_name ? `Name:${args.prospect_name}` : hydratedLead.first_name ? `Name:${hydratedLead.first_name}` : '',
-                                        args.confirmed_age ? `Age:${args.confirmed_age}` : '',
-                                        args.medicare_status ? `Medicare:${args.medicare_status}` : '',
-                                        args.hook_type ? `Hook:${args.hook_type}` : '',
-                                    ].filter(Boolean);
-                                    const noteSummary = `[AI Qualified${metaParts.length ? ' | ' + metaParts.join(' | ') : ''}] ${reason}`;
-                                    // Push structured metadata into vicidial_list BEFORE transfer so closer screen-pop shows Name, Age, Medicare Status & Hook Type!
-                                    const notesUpdate = await viciClient.updateLeadDisposition({
-                                        leadId: summary.leadId,
-                                        phone: summary.phone,
-                                        status: disposition,
-                                        notes: noteSummary,
-                                    });
-                                    pendingTransferArgs = {
-                                        reason,
-                                        prospect_name: args.prospect_name || hydratedLead.first_name || undefined,
-                                        confirmed_age: args.confirmed_age,
-                                        medicare_status: args.medicare_status,
-                                        hook_type: args.hook_type,
-                                    };
-                                    if (deferredActionTimer)
-                                        clearTimeout(deferredActionTimer);
-                                    deferredActionTimer = setTimeout(() => {
-                                        if (pendingTransferArgs) {
-                                            const p = pendingTransferArgs;
-                                            pendingTransferArgs = null;
-                                            executeTransferAction(p).catch(() => { });
-                                        }
-                                    }, 9000);
-                                    resultPayload = {
-                                        ok: true,
-                                        ...(sanitized.omitted.length ? { omitted_unverified_fields: sanitized.omitted } : {}),
-                                        ...(sanitized.corrected.length ? { corrected_fields: sanitized.corrected } : {}),
-                                        transfer_scheduled: `${campaign?.xferType || 'ingroup'}:${campaign?.xferTarget || 'DEFAULTINGROUP'}`,
-                                        closer_screen_pop_notes_saved: notesUpdate.ok,
-                                        metadata_passed: {
-                                            prospect_name: args.prospect_name || hydratedLead.first_name || null,
-                                            confirmed_age: args.confirmed_age || null,
-                                            medicare_status: args.medicare_status || null,
-                                            hook_type: args.hook_type || null,
-                                        },
-                                    };
-                                }
+                                resultPayload = await scheduleTransfer(args, (a) => { args = a; });
                             }
                             else if (fnItem.name === 'end_call') {
                                 awaitingHangupAfterSpeech = true;

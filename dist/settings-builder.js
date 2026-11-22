@@ -269,6 +269,16 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
         if (ttsModel) {
             speakProvider.version = ttsModel.startsWith('flux') ? 'v2' : 'v1';
             speakProvider.model = ttsModel;
+            // Flux voices take the bot's own speed and expressivity on live calls
+            // (Deepgram: speed 0.5-1.5 in 0.05 steps; expressivity -2..2, 0 = the voice's tuned delivery).
+            if (ttsModel.startsWith('flux')) {
+                const speed = normalizeFluxSpeed(Number(agent.tts.speed));
+                if (speed !== 1)
+                    speakProvider.speed = speed;
+                const expr = Math.round(Number(agent.tts.expr));
+                if (Number.isInteger(expr) && expr >= -2 && expr <= 2 && expr !== 0)
+                    speakProvider.expressivity = expr;
+            }
         }
         else {
             speakProvider.model = '';
@@ -278,7 +288,27 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
         speakProvider[modelKey] = ttsModel;
     }
     const speak = { provider: speakProvider };
-    if (tp.endpoint && tp.endpoint.trim()) {
+    // Self-hosted voice (the operator's own speech service on their GPU server):
+    // Deepgram calls it as an OpenAI-compatible endpoint. The provider's endpoint
+    // must be the server's public HTTPS address; the bot's expressiveness and
+    // variation ride along as query parameters (Chatterbox exaggeration/temperature).
+    const selfHostedBase = String(tp.endpoint || '').trim().replace(/\/+$/, '').replace(/\/v1\/audio\/speech$/, '');
+    if (tp.type === 'speech_service' && ttsModel) {
+        for (const k of Object.keys(speakProvider))
+            delete speakProvider[k];
+        speakProvider.type = 'open_ai';
+        speakProvider.model = ttsModel.startsWith('clone:') ? 'chatterbox' : 'kokoro';
+        speakProvider.voice = ttsModel;
+        const q = new URLSearchParams({
+            speed: String(Math.min(4, Math.max(0.25, Number(agent.tts.speed) || 1))),
+            exaggeration: String(Math.min(2, Math.max(0.25, Number(agent.tts.expressiveness ?? 0.5)))),
+            temperature: String(Math.min(1.5, Math.max(0.3, Number(agent.tts.variation ?? 0.8)))),
+        });
+        speak.endpoint = /^https:\/\//i.test(selfHostedBase)
+            ? { url: `${selfHostedBase}/v1/audio/speech?${q.toString()}`, headers: { Authorization: 'Bearer {{SPEECH_SERVICE_API_KEY}}' } }
+            : { url: '', headers: {} };
+    }
+    else if (tp.endpoint && tp.endpoint.trim()) {
         const hdrs = parseJsonObject(tp.headers || '{}');
         speak.endpoint = {
             url: tp.endpoint.trim(),
@@ -288,8 +318,14 @@ function buildDeepgramSettings(state, agent, explicitCampaign, options) {
     // The saved opening supplies the identity. A library draw varies its short
     // salutation/question instead of appending a second, unrelated greeting.
     // Previews have no draw and therefore never consume the rotation.
+    // A call's greeting is one short line picked from the bot's greeting list
+    // (or the library), spoken alone; the introduction comes after the caller
+    // answers. Without a picked line the saved opening is used as before.
     const variation = agent.randomGreetingEnabled !== false ? (options?.greetingText || '') : '';
-    const finalGreeting = (0, opening_1.composeOpening)(agent.greeting, variation, agent.injectCampaignDisclosure, linkedCampaign?.disclosure || '');
+    const pickedLine = String(options?.openingLine || '').trim();
+    const finalGreeting = pickedLine
+        ? (0, opening_1.composeOpening)((0, opening_1.localizeGreeting)(pickedLine, linkedCampaign?.tz), '', agent.injectCampaignDisclosure, linkedCampaign?.disclosure || '')
+        : (0, opening_1.composeOpening)(agent.greeting, variation, agent.injectCampaignDisclosure, linkedCampaign?.disclosure || '');
     return {
         type: 'Settings',
         tags: ['voice-console', agent.mode, ...(linkedCampaign?.viciCampaign ? [linkedCampaign.viciCampaign] : [])],
@@ -348,8 +384,11 @@ function validateAgent(state, agent) {
             : defaults_1.VOICE_AGENT_STT_MODELS.includes(sttModel))), isLocalStt
         ? `Global STT model "${sttModel || 'not selected'}" is supported by Local Speech Service`
         : `Global STT model "${sttModel || 'not selected'}" is supported by Voice Agent (Nova-3 or Flux v2)`);
-    push(agent.greeting.trim().length > 10, 'Greeting is set (> 10 chars)');
-    const maxPromptOk = agent.prompt.trim().length > 0 && agent.prompt.length <= 25000;
+    // Drafts from the editor can carry a missing or non-text field; validate it as text.
+    const greetingText = typeof agent.greeting === 'string' ? agent.greeting : '';
+    const promptText = typeof agent.prompt === 'string' ? agent.prompt : '';
+    push(greetingText.trim().length > 10, 'Greeting is set (> 10 chars)');
+    const maxPromptOk = promptText.trim().length > 0 && promptText.length <= 25000;
     push(maxPromptOk, 'System prompt is non-empty and within Deepgram 25,000-char managed limit');
     // Over budget, the composer shortens the instructions from the END, so newly
     // added lines were dropped without any warning. Report it per campaign.
@@ -387,6 +426,9 @@ function validateAgent(state, agent) {
             (tp.type === 'deepgram' && /^(flux|aura)-/i.test(ttsModel)) ||
             (tp.type === 'speech_service' && /^(clone:[0-9a-f]{32}|[a-z]{2}_[a-z0-9]+)$/.test(ttsModel))));
     push(ttsModelBelongs, `Selected global TTS model "${ttsModel || 'not selected'}" belongs to the chosen provider`);
+    if (tp?.type === 'speech_service') {
+        push(/^https:\/\/[^\s/]+/i.test(String(tp.endpoint || '').trim()), 'Self-hosted voice on calls: set the speech provider endpoint to your speech server\'s public HTTPS address (for example https://54-79-152-235.sslip.io), so Deepgram can reach it', true);
+    }
     if (tp?.type === 'deepgram') {
         const isFluxOrAura = Boolean(ttsModel.startsWith('flux-') || ttsModel.startsWith('aura-'));
         const speakVersion = ttsModel.startsWith('flux-') ? 'v2' : 'v1';

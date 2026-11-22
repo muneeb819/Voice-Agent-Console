@@ -246,7 +246,7 @@ async function main() {
     assert.ok(fnNames.includes('end_call') && fnNames.includes('transfer_to_live_agent') && fnNames.includes('set_disposition'), `${agent.name}: functions declared to the provider`);
     assert.ok(prompt.includes(promptMark('v1', agent.id)), `${agent.name}: saved prompt reached the call`);
     assert.ok(/CALL ENDING \(MANDATORY/.test(prompt) && /says goodbye, bye/.test(prompt), `${agent.name}: universal call-ending policy is in the live prompt`);
-    assert.ok(/SOUND LIKE A REAL PERSON/.test(prompt) && /CALL TIME LIMIT \(70 SECONDS\)/.test(prompt), `${agent.name}: human-speech and 70 s fast-transfer policy in the live prompt`);
+    assert.ok(/PERSONALITY & SPEAKING STYLE/.test(prompt) && /CALL TIME LIMIT \(70 SECONDS\)/.test(prompt), `${agent.name}: the bot's speaking style and the 70 s time limit in the live prompt`);
     assert.ok(prompt.includes(ruleMark('v1', campaign.id)), `${agent.name}: saved campaign rules reached the call`);
     for (const other of inv.campaigns.filter((c) => c.id !== campaign.id)) {
       assert.ok(!prompt.includes(ruleMark('v1', other.id)), `${agent.name}: no rules leaked from ${other.name}`);
@@ -319,7 +319,7 @@ async function main() {
     await putState((st) => { st.campaigns.find((c: any) => c.id === campaign.id).maxCallSec = 30; });
     const call = await placeCall(`${inv.vici.aiExten}${campaign.slot}`, { steps: [{ user: 'Haha, tell me a joke and keep talking.' }], speakInjected: true });
     const prompt = String(call.session.settings?.agent?.think?.prompt || '');
-    assert.match(prompt, /CALL TIME LIMIT \(30 SECONDS\) & FAST TRANSFER/, 'time-limit and fast-transfer policy is in the prompt');
+    assert.match(prompt, /CALL TIME LIMIT \(30 SECONDS\)/, 'time-limit policy is in the prompt');
     await until(() => call.result.byeAt > 0, `${agent.name}: call ended by the time limit`, 40000);
     const secs = (call.result.byeAt - call.result.startedAt) / 1000;
     const wrap = call.session.messages.find((m) => m.type === 'UpdatePrompt');
@@ -345,6 +345,38 @@ async function main() {
       assert.ok(!viciRequests.some((p) => p.function === 'ra_call_control' && p.stage === 'HANGUP' && p.value === late.callerCode), 'time limit did not hang up the transfer');
       console.log(`✓ TIME LIMIT ${agent.name}: transfer requested 1.5 s before the limit (slow VICIdial) still went through, not cut off`);
       late.close();
+      viciRequests.length = 0;
+    }
+    // Bot SAYS it is connecting the caller but never calls transfer_to_live_agent,
+    // close to the limit (the screenshot case: hung up at the limit mid-handoff).
+    // The bridge must protect the call and complete the transfer itself.
+    {
+      const announced = await placeCall(`${inv.vici.aiExten}${campaign.slot}`, { steps: [
+        { user: "Yes, I'm 70 and I have Medicare Part A and Part B. My name is Mary Jones, ZIP 94601, please connect me." },
+        { sleep: 21000 },
+        { raw: { type: 'ConversationText', role: 'assistant', content: 'You meet all the requirements! Please hold the line for just a brief moment while I connect you with our licensed specialist.' } },
+        { audioDone: true },
+      ] });
+      await until(() => viciRequests.some((p) => p.function === 'ra_call_control' && p.value === announced.callerCode && /TRANSFER/.test(p.stage || '')), 'announced transfer completed by the bridge', 45000);
+      assert.ok(!viciRequests.some((p) => p.function === 'ra_call_control' && p.stage === 'HANGUP' && p.value === announced.callerCode), 'time limit did not hang up the announced transfer');
+      assert.ok(!announced.session.messages.some((m) => m.type === 'InjectAgentMessage' && /have to let you go/.test(m.message || '')), 'no closing line spoken over the handoff');
+      console.log(`✓ TIME LIMIT ${agent.name}: bot announced "I'm connecting you" without calling the transfer → bridge completed the transfer, no hang-up at the limit`);
+      announced.close();
+      viciRequests.length = 0;
+    }
+    // Consent: the caller refused, the bot (wrongly) announces a transfer anyway → no transfer.
+    {
+      const refused = await placeCall(`${inv.vici.aiExten}${campaign.slot}`, { steps: [
+        { user: "I'm 70 with Medicare Part A and Part B, ZIP 94601." },
+        { user: "No, I'm not interested. Don't transfer me." },
+        { raw: { type: 'ConversationText', role: 'assistant', content: 'Please hold the line while I connect you with our licensed specialist.' } },
+        { audioDone: true },
+        { sleep: 4000 },
+      ] });
+      await until(() => refused.session.messages.some((m) => m.type === 'UpdatePrompt' && /TRANSFER NOT STARTED/.test(m.prompt || '') && /did not agree/.test(m.prompt || '')), 'bot told the caller refused', 20000);
+      assert.ok(!viciRequests.some((p) => p.function === 'ra_call_control' && p.value === refused.callerCode && /TRANSFER/.test(p.stage || '')), 'no transfer over a refusal');
+      console.log(`✓ CONSENT ${agent.name}: caller said "not interested", bot announced a transfer anyway → bridge refused to transfer and corrected the bot`);
+      refused.close();
       viciRequests.length = 0;
     }
     await putState((st) => { st.campaigns.find((c: any) => c.id === campaign.id).maxCallSec = 70; });

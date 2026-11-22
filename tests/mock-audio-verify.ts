@@ -39,6 +39,7 @@ async function serverMockSession() {
   campaign.agentIds = [...new Set([agent.id, ...(campaign.agentIds || [])])];
   campaign.complianceRules = 'Reviewed mock audio rules: be truthful, avoid unsupported claims, and honor do-not-call requests immediately.';
   agent.randomGreetingEnabled = false;
+  agent.flow = { ...(agent.flow || {}), waitForHello: false } as any; // this fixture tests the speak-after-one-second opening
   agent.injectCampaignDisclosure = false;
   agent.greeting = 'Hi, this is the mock audio agent. How are you today?';
   saveConsoleState(state, 'Isolated mock audio streaming fixture');
@@ -157,7 +158,7 @@ async function browserMockPlayback() {
   const llm = state.providers.find((p: any) => p.kind === 'llm' && p.type === 'open_ai');
   const tts = state.providers.find((p: any) => p.kind === 'tts' && p.type === 'deepgram');
   state.services = { stt: { providerId: stt.id, model: 'nova-3' }, llm: { providerId: llm.id, model: 'gpt-4o-mini' }, tts: { providerId: tts.id, model: 'aura-2-thalia-en' } };
-  for (const agent of state.agents) { agent.randomGreetingEnabled = false; agent.injectCampaignDisclosure = false; }
+  for (const agent of state.agents) { agent.randomGreetingEnabled = false; agent.flow = { ...(agent.flow || {}), waitForHello: false } as any; agent.injectCampaignDisclosure = false; }
   const agent = state.agents.find((a: any) => a.id === 'a1') || state.agents[0];
   agent.greeting = 'Hi, this is the browser mock agent. How are you today?';
   const campaign = state.campaigns.find((c: any) => c.agentId === agent.id) || state.campaigns[0];
