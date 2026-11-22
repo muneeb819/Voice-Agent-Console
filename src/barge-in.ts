@@ -16,7 +16,8 @@ export const PRESET_TO_PCT: Record<BargeInPreset, number> = { high: 80, balanced
 export function normalizeBargeInPct(pct: unknown, preset?: unknown): number {
   const n = Number(pct);
   if (pct !== undefined && pct !== null && pct !== '' && Number.isFinite(n)) return Math.min(100, Math.max(0, Math.round(n)));
-  return PRESET_TO_PCT[(preset as BargeInPreset)] ?? 50;
+  // Own keys only: a saved value such as "__proto__" must not reach Object.prototype.
+  return typeof preset === 'string' && Object.prototype.hasOwnProperty.call(PRESET_TO_PCT, preset) ? PRESET_TO_PCT[preset as BargeInPreset] : 50;
 }
 
 export function presetForPct(pct: number): BargeInPreset {

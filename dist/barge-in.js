@@ -9,7 +9,8 @@ function normalizeBargeInPct(pct, preset) {
     const n = Number(pct);
     if (pct !== undefined && pct !== null && pct !== '' && Number.isFinite(n))
         return Math.min(100, Math.max(0, Math.round(n)));
-    return exports.PRESET_TO_PCT[preset] ?? 50;
+    // Own keys only: a saved value such as "__proto__" must not reach Object.prototype.
+    return typeof preset === 'string' && Object.prototype.hasOwnProperty.call(exports.PRESET_TO_PCT, preset) ? exports.PRESET_TO_PCT[preset] : 50;
 }
 function presetForPct(pct) {
     return pct >= 67 ? 'high' : pct <= 33 ? 'low' : 'balanced';

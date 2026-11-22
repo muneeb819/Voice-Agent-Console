@@ -348,8 +348,11 @@ function validateAgent(state, agent) {
             : defaults_1.VOICE_AGENT_STT_MODELS.includes(sttModel))), isLocalStt
         ? `Global STT model "${sttModel || 'not selected'}" is supported by Local Speech Service`
         : `Global STT model "${sttModel || 'not selected'}" is supported by Voice Agent (Nova-3 or Flux v2)`);
-    push(agent.greeting.trim().length > 10, 'Greeting is set (> 10 chars)');
-    const maxPromptOk = agent.prompt.trim().length > 0 && agent.prompt.length <= 25000;
+    // Drafts from the editor can carry a missing or non-text field; validate it as text.
+    const greetingText = typeof agent.greeting === 'string' ? agent.greeting : '';
+    const promptText = typeof agent.prompt === 'string' ? agent.prompt : '';
+    push(greetingText.trim().length > 10, 'Greeting is set (> 10 chars)');
+    const maxPromptOk = promptText.trim().length > 0 && promptText.length <= 25000;
     push(maxPromptOk, 'System prompt is non-empty and within Deepgram 25,000-char managed limit');
     // Over budget, the composer shortens the instructions from the END, so newly
     // added lines were dropped without any warning. Report it per campaign.

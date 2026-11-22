@@ -14,7 +14,8 @@
     "test:step2": "node tools/run-tests.js step2",
     "test:step3": "node tools/run-tests.js step3",
     "test:step4": "node tools/run-tests.js step4",
-    "test": "node tools/run-tests.js"
+    "test": "node tools/run-tests.js",
+    "test:quality": "node -e \"require('fs').mkdirSync(process.env.VAC_DATA_DIR||'/tmp/vac-quality',{recursive:true})\" && npm run build && tsx tests/quality/run.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

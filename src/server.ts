@@ -222,6 +222,12 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     next();
   });
 
+  // API answers hold account, key-status and bot data: never let a browser or proxy cache them.
+  app.use('/api', (_req: Request, res: Response, next: express.NextFunction) => {
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
+    next();
+  });
+
   app.use(express.json({ limit: '4mb' }));
   app.use(express.urlencoded({ extended: false }));
 
@@ -1096,15 +1102,27 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       res.status(503).send('ERROR: VICIdial Bridge not initialized');
       return;
     }
-    const merged = { ...(req.query as Record<string, any>), ...(req.body || {}) };
-    const reg = viciBridge.registerPreCall({
-      uniqueid: merged.uniqueid,
-      vici_cid: merged.vici_cid || merged.caller_code,
-      phone: merged.phone,
-      exten: merged.exten,
-      channel: merged.channel,
-      agent_user: merged.agent_user,
-    });
+    // Only plain string fields are accepted from the dialer; anything else is ignored.
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const merged: Record<string, string> = {};
+    for (const [k, v] of Object.entries({ ...(req.query as Record<string, unknown>), ...body })) {
+      if (typeof v === 'string' || typeof v === 'number') merged[k] = String(v);
+    }
+    let reg: ReturnType<NonNullable<typeof viciBridge>['registerPreCall']>;
+    try {
+      reg = viciBridge.registerPreCall({
+        uniqueid: merged.uniqueid,
+        vici_cid: merged.vici_cid || merged.caller_code,
+        phone: merged.phone,
+        exten: merged.exten,
+        channel: merged.channel,
+        agent_user: merged.agent_user,
+      });
+    } catch (err) {
+      // A wrong or unassigned extension is the dialer's mistake, not a server failure.
+      res.status(400).type('text/plain').send(`ERROR: ${err instanceof Error ? err.message : 'Call registration failed.'}`);
+      return;
+    }
 
     const wantsJson =
       merged.format === 'json' ||
@@ -1784,6 +1802,10 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   app.use(express.static(publicDir, { index: false }));
 
+  // An unknown API address is an error, not the console page: answer JSON 404.
+  app.all(/^\/api(?:\/|$)/, (_req: Request, res: Response) => {
+    res.status(404).json({ ok: false, code: 'NOT_FOUND', error: 'No such API endpoint.' });
+  });
   app.get('*', serveConsoleEntry);
 
   app.use((err: any, _req: Request, res: Response, next: express.NextFunction) => {

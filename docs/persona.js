@@ -42,8 +42,13 @@
 
   // Natural, human-sounding delivery (written for text-to-speech). Honesty is
   // unchanged: the integrity rules still require admitting to being an AI.
-  function humanSpeechLines() {
-    return [
+  const TRANSFER_RULE = '- TRANSFERS: The moment you tell the caller you are connecting them, call set_disposition with XFER and transfer_to_live_agent in that SAME turn. Never announce a transfer without calling the tool.';
+  const GESTURE_ONLY = /light filler|React like a human/;
+
+  // Delivery and transfer rules apply to every bot. Bots with vocal gestures
+  // switched off keep them, minus the lines that ask for filler reactions.
+  function humanSpeechLines(withGestures) {
+    const lines = [
       '- SOUND LIKE A REAL PERSON ON THE PHONE: Talk the way people actually talk, not the way they write.',
       '  - Use contractions ("I\'m", "you\'re", "that\'s", "we\'ll") and short, simple sentences. Vary sentence length so the rhythm is not robotic.',
       '  - Briefly acknowledge what the caller said before your point ("Okay, got it.", "Oh, I see.", "Sure thing."), mirror their energy and pace, and use their first name now and then, not every turn.',
@@ -59,8 +64,9 @@
       '  - Match the caller\'s mood: slow down and soften when they are confused, worried or older; sound upbeat and encouraging when they are interested; stay calm and kind when they are annoyed.',
       '  - Keep each turn short and conversational (one or two sentences), so the caller can talk back. Short does not mean cold: one warm phrase plus your question is the ideal turn.',
       '  - Never write stage directions, emojis, brackets, asterisks or labels such as "(smiling)" — express the feeling through the words themselves.',
-      '- TRANSFERS: The moment you tell the caller you are connecting them, call set_disposition with XFER and transfer_to_live_agent in that SAME turn. Never announce a transfer without calling the tool.',
+      TRANSFER_RULE,
     ];
+    return withGestures === false ? lines.filter((line) => !GESTURE_ONLY.test(line)) : lines;
   }
 
   // Time-boxed, transfer-first behaviour for campaigns with a call-length limit.
@@ -132,10 +138,11 @@
           '- LIVE BARGE-IN AWARENESS: The caller can interrupt you mid-sentence at any time. If interrupted, never repeat cut-off sentences — pivot immediately and naturally to their latest question or remark.'
         );
       }
-      lines.push(`- VOCAL EXPRESSION STYLE: ${TONE_MAP[b.expressionStyle] || TONE_MAP.warm_empathetic}`);
+      lines.push(`- VOCAL EXPRESSION STYLE: ${Object.prototype.hasOwnProperty.call(TONE_MAP, b.expressionStyle) ? TONE_MAP[b.expressionStyle] : TONE_MAP.warm_empathetic}`);
       if (b.vocalGestures === false) {
         lines.push(
-          '- VOCAL GESTURES DISABLED: Do not add filler reactions or micro-gestures such as "Oh, great question!", "Gotcha —", "Mm-hmm", or "Haha". Answer plainly and naturally. Never output bracketed or asterisk stage directions.'
+          '- VOCAL GESTURES DISABLED: Do not add filler reactions or micro-gestures such as "Oh, great question!", "Gotcha —", "Mm-hmm", or "Haha". Answer plainly and naturally. Never output bracketed or asterisk stage directions.',
+          ...humanSpeechLines(false)
         );
       } else {
         lines.push(
@@ -181,6 +188,7 @@
       }
     }
 
+    if (!b) lines.push('', TRANSFER_RULE);
     lines.push(...callEndingLines());
     lines.push(...conversationIntegrityLines());
     const suffix = lines.join('\n').trim();
@@ -309,7 +317,7 @@
 
   function extractStatedAge(sentence) {
     if (isUncertainOrReported(sentence)) return null;
-    const clauses = sentence.split(/[,;]|\bbut\b|\bhowever\b|\balhough\b/);
+    const clauses = sentence.split(/[,;]|\bbut\b|\bhowever\b|\balthough\b/);
     for (const clause of clauses) {
       if (/\b(?:not|never|isn't|is not|am not|i'm not|im not)\b/.test(clause)) continue;
       const patterns = [
@@ -373,6 +381,7 @@
       const bareNegative = /^(?:no|nope|not really|i don't|i do not)[.!]?$/i.test(text);
       if (pendingMedicareQuestion && bareAffirmative) hasGenericMedicare = true;
       if (pendingMedicareQuestion && bareNegative) { hasPartA = false; hasPartB = false; hasGenericMedicare = false; }
+      const answeringMedicareQuestion = pendingMedicareQuestion;
       pendingMedicareQuestion = false;
 
       const sentences = text.toLowerCase().match(/[^.!?\n]+[.!?]?/g) || [];
@@ -381,6 +390,18 @@
         const age = extractStatedAge(sentence);
         if (age !== null) statedAge = age;
         if (isUncertainOrReported(sentence)) continue;
+
+        // Lists such as "part a, b, c, all three active", "parts A and B", or
+        // "yes, A and B" in answer to the Medicare question mean both parts. The
+        // clause split below would otherwise see only "part a".
+        const listsBothParts = /\bparts?\s*a\s*(?:,|&|\+|\/|and)\s*(?:part\s*)?b\b/.test(sentence) ||
+          (answeringMedicareQuestion && /(?:^|[\s,])a\s*(?:,|&|\+|\/|and)\s*b\b/.test(sentence));
+        if (listsBothParts && !partIsNegated(sentence, 'a') && !partIsNegated(sentence, 'b') &&
+            !/\b(?:no|not|never|without|don't|do not|lost|cancelled|canceled|no longer)\b/.test(sentence)) {
+          hasPartA = true;
+          hasPartB = true;
+          hasGenericMedicare = true;
+        }
 
         const mentionsMedicare = /\bmedicare\b/.test(sentence);
         const medicareNegated = /\b(?:no|not|never|without|don't|do not|doesn't|does not|didn't|did not|lost|cancelled|canceled|disenrolled|no longer)\b[^]{0,50}\bmedicare\b/.test(sentence);
@@ -393,7 +414,7 @@
           if (/\bboth\b/.test(sentence)) { hasPartA = true; hasPartB = true; }
         }
 
-        for (const clause of sentence.split(/[,;]|\bbut\b|\bhowever\b|\balhough\b/)) {
+        for (const clause of sentence.split(/[,;]|\bbut\b|\bhowever\b|\balthough\b/)) {
           if (isUncertainOrReported(clause)) continue;
           const affirmative = /\b(?:yes|yeah|yep|i\s+(?:have|do have|am on|am enrolled in|enrolled in|receive|get)|i['’]m on|im on|active)\b/.test(clause) ||
             /^\s*part\s*[ab]\b/.test(clause);

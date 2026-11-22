@@ -65,11 +65,13 @@ function parseVicidialCallerCode(callerIdName, callerIdNum) {
  * Strips characters disallowed by VICIdial non_agent_api.php update_lead (' " & | \r \n)
  */
 function sanitizeViciText(val, maxLen = 250) {
-    return String(val || '')
+    const cleaned = String(val || '')
         .replace(/['"&|\r\n]+/g, ' ')
         .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, maxLen);
+        .trim();
+    // Cut on whole characters (never half an emoji) and drop a space left at the cut.
+    const chars = Array.from(cleaned);
+    return (chars.length > maxLen ? chars.slice(0, maxLen).join('') : cleaned).trim();
 }
 function computeAgeFromDob(dob) {
     const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dob || '').trim());

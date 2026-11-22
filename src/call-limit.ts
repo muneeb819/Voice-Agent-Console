@@ -55,7 +55,7 @@ export function announcesTransfer(text: string): boolean {
 export function callerDeclined(text: string): boolean {
   const t = String(text || '').toLowerCase().replace(/[’']/g, "'").trim();
   if (!t) return false;
-  return /^(?:no|nope|nah|no thanks?|no thank you)\b|\b(?:not interested|no thank|don't (?:transfer|connect|want)|do not (?:transfer|connect|call)|i don't want|stop calling|take me off|remove me|hang up|not now|maybe later|call (?:me )?(?:back )?later|i'm (?:busy|good|fine)|not today)\b/.test(t);
+  return /^(?:no|nope|nah|no thanks?|no thank you)\b|\b(?:not interested|no thank|don't (?:transfer|connect|want)|do not (?:transfer|connect|call)|i don't want|i do not want|stop calling|take me off|remove me|hang up|not now|maybe later|call (?:me )?(?:back )?later|i'm (?:busy|good|fine)|not today)\b/.test(t);
 }
 
 /** How long an announced transfer protects the call from the call-length limit. */
