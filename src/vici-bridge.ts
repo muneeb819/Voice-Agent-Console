@@ -227,7 +227,15 @@ interface TransportHooks {
   pendingPlaybackMs: () => number;
   bargeInFlush: () => void;
   hangupTransport: () => void;
+  /** Called with each 20 ms bot frame at the moment it is actually sent to the caller (live listening). */
+  onFramePlayed?: ((frame: Buffer) => void) | null;
 }
+
+/** Live listening limits: listen-only supervisors per call and in total. */
+const MAX_LISTENERS_PER_CALL = 3;
+const MAX_LISTENERS_TOTAL = 20;
+/** Frames are dropped for a listener whose connection falls this far behind. */
+const LISTENER_MAX_BUFFERED_BYTES = 256 * 1024;
 
 export interface ViciBridgeOptions {
   audioSocketPort?: number;
@@ -279,6 +287,76 @@ export class VicidialBridgeService {
     // New installations default to 5062; an explicitly saved port must not be
     // silently rewritten, or generated carrier configuration will disagree.
     this.viciApiBaseOverride = opts.viciApiBaseOverride;
+  }
+
+  private readonly listeners = new Map<string, Set<WebSocket>>();
+  private readonly listenNotes = new Map<string, (line: string) => void>();
+  private readonly listenerLabels = new WeakMap<WebSocket, string>();
+  private listenWss: WebSocketServer | null = null;
+
+  /** Listen-only audio for supervisors: frames are [kind][PCM16LE 8 kHz], kind 1 = caller, 2 = bot. */
+  public createListenWebSocketServer(): WebSocketServer {
+    this.listenWss = new WebSocketServer({ noServer: true, maxPayload: 1024, perMessageDeflate: false });
+    return this.listenWss;
+  }
+
+  /** Attaches a listener to a live call. Returns an error message, or '' when listening started. */
+  public attachListener(callId: string, ws: WebSocket, who: string): string {
+    if (!this.activeCalls.has(callId)) return 'This call is not live any more.';
+    let total = 0;
+    for (const set of this.listeners.values()) total += set.size;
+    const set = this.listeners.get(callId) || new Set<WebSocket>();
+    if (set.size >= MAX_LISTENERS_PER_CALL) return `Already ${MAX_LISTENERS_PER_CALL} people are listening to this call.`;
+    if (total >= MAX_LISTENERS_TOTAL) return 'Too many live listeners on the server right now.';
+    set.add(ws);
+    this.listeners.set(callId, set);
+    const label = (who || 'Supervisor').slice(0, 120);
+    this.listenerLabels.set(ws, label);
+    this.listenNotes.get(callId)?.(`${label} started listening (listen only)`);
+    ws.send(JSON.stringify({ type: 'listening', callId, sampleRate: 8000 }));
+    const detach = () => {
+      const cur = this.listeners.get(callId);
+      if (!cur || !cur.delete(ws)) return;
+      if (!cur.size) this.listeners.delete(callId);
+      this.listenNotes.get(callId)?.(`${label} stopped listening`);
+    };
+    ws.on('close', detach);
+    ws.on('error', detach);
+    // Listeners never send audio; any message is ignored.
+    ws.on('message', () => {});
+    return '';
+  }
+
+  public listenerCount(callId?: string): number {
+    if (callId) return this.listeners.get(callId)?.size || 0;
+    let n = 0;
+    for (const set of this.listeners.values()) n += set.size;
+    return n;
+  }
+
+  private emitListen(callId: string, kind: 1 | 2, pcm: Buffer): void {
+    const set = this.listeners.get(callId);
+    if (!set || !set.size || !pcm.length) return;
+    const frame = Buffer.allocUnsafe(pcm.length + 1);
+    frame[0] = kind;
+    pcm.copy(frame, 1);
+    for (const ws of set) {
+      if (ws.readyState === WebSocket.OPEN && ws.bufferedAmount < LISTENER_MAX_BUFFERED_BYTES) ws.send(frame, { binary: true });
+    }
+  }
+
+  /** Ends listening for a call; called before the call record is saved so each stop is in the transcript. */
+  private closeListeners(callId: string, reason: string): void {
+    const set = this.listeners.get(callId);
+    const note = this.listenNotes.get(callId);
+    this.listeners.delete(callId);
+    this.listenNotes.delete(callId);
+    if (!set) return;
+    for (const ws of set) {
+      note?.(`${this.listenerLabels.get(ws) || 'Supervisor'} stopped listening (call ended)`);
+      try { ws.send(JSON.stringify({ type: 'ended', callId, reason })); } catch {}
+      try { ws.close(1000, 'call ended'); } catch {}
+    }
   }
 
   public createMonitorWebSocketServer(): WebSocketServer {
@@ -525,6 +603,7 @@ export class VicidialBridgeService {
           txPcmQueue = Buffer.alloc(0);
         }
         writeAudioSocketFrame(0x10, frame);
+        hooks.onFramePlayed?.(frame);
       }, 20);
 
       const hooks: TransportHooks = {
@@ -984,6 +1063,7 @@ export class VicidialBridgeService {
           rtpTimestamp = (rtpTimestamp + 160) >>> 0;
           nextTalkspurtMarker = false;
           rtpSocket.send(rtpPkt, remoteRtpPort, remoteRtpIp);
+          hooks.onFramePlayed?.(pcmFrame);
         }, 20);
 
         const cleanupRtpAndBye = (sendByeToAsterisk: boolean) => {
@@ -1268,6 +1348,10 @@ export class VicidialBridgeService {
       this.broadcastMonitor({ type: 'call_transcript', callId, ...entry });
     };
 
+    // Live listening: bot frames as they are sent, caller audio as it arrives.
+    opts.hooks.onFramePlayed = (frame) => this.emitListen(callId, 2, frame);
+    this.listenNotes.set(callId, (line) => addTranscript('system', line));
+
     const updateState = (nextState: string) => {
       summary.state = nextState;
       summary.turns = turns;
@@ -1411,6 +1495,10 @@ export class VicidialBridgeService {
           })
           .catch(() => {});
       }
+
+      // Listening ends with the call, and each stop is recorded before the call record is saved.
+      this.closeListeners(callId, reason);
+      opts.hooks.onFramePlayed = null;
 
       let savedRec: ReturnType<StereoCallRecorder8k['finalizeAndSave']> = null;
       try { savedRec = recorder.finalizeAndSave(callId); } catch (err: any) {
@@ -2095,6 +2183,7 @@ export class VicidialBridgeService {
         if (closed || pcm8k.length === 0) return;
         lastCallerAudioAt = Date.now();
         recorder.recordCallerPcm8k(pcm8k);
+        this.emitListen(callId, 1, pcm8k);
         // During screening caller audio goes only to the screening engine,
         // never to the bot (nothing may start the conversation early).
         if (screening && !screeningDecided) {

@@ -1730,6 +1730,7 @@ function createServerWithSimulator(bridgeOpts) {
     server.maxRequestsPerSocket = 1000;
     const simWss = (0, live_simulator_1.attachLiveSimulator)(undefined, true);
     const monitorWss = viciBridge ? viciBridge.createMonitorWebSocketServer() : null;
+    const listenWss = viciBridge ? viciBridge.createListenWebSocketServer() : null;
     server.on('upgrade', (req, socket, head) => {
         socket.on('error', () => { });
         try {
@@ -1747,6 +1748,28 @@ function createServerWithSimulator(bridgeOpts) {
             if (pathname === '/ws/simulator') {
                 simWss.handleUpgrade(req, socket, head, (ws) => {
                     simWss.emit('connection', ws, req);
+                });
+            }
+            else if (pathname === '/ws/vici-listen' && listenWss && viciBridge) {
+                // Listen-only live audio: owners and admins (a legacy admin-password session has no account and counts as admin).
+                const account = (0, auth_guard_1.getAuthenticatedUser)(req);
+                if (account && account.role !== 'owner' && account.role !== 'admin') {
+                    socket.write('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nForbidden');
+                    socket.destroy();
+                    return;
+                }
+                const callId = new URL(req.url || '/', 'http://local').searchParams.get('callId') || '';
+                if (!/^vici_[a-z0-9]{4,16}_[0-9a-f-]{1,8}$/i.test(callId)) {
+                    socket.write('HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 11\r\n\r\nBad Request');
+                    socket.destroy();
+                    return;
+                }
+                listenWss.handleUpgrade(req, socket, head, (ws) => {
+                    const err = viciBridge.attachListener(callId, ws, account?.email || 'Administrator');
+                    if (err) {
+                        ws.send(JSON.stringify({ type: 'error', error: err }));
+                        ws.close(4004, 'not available');
+                    }
                 });
             }
             else if (pathname === '/ws/vici-monitor' && monitorWss) {

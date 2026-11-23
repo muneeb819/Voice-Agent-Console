@@ -4293,6 +4293,21 @@ body.has-unsaved-changes .workspace-stage {
 label.vclone-file, :root[data-theme] label.vclone-file { text-transform: none !important; letter-spacing: normal !important; font-size: 13px !important; font-weight: 600 !important; margin: 0 !important; color: inherit; }
 .vclone-name .pill { display: inline-block; width: auto; align-self: flex-start; margin-left: 6px; vertical-align: middle; }
 
+/* Live call listening (Wallboard) */
+.listen-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: rgba(46, 160, 67, .08); border: 1px solid rgba(46, 160, 67, .28); font-size: 12.5px; }
+.listen-live { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.listen-live i { width: 8px; height: 8px; border-radius: 50%; background: #2ea043; box-shadow: 0 0 0 0 rgba(46,160,67,.6); animation: listen-pulse 1.4s infinite; }
+.listen-live.off i { background: #9a9a9a; animation: none; }
+.listen-meter { display: inline-flex; align-items: center; gap: 6px; min-width: 130px; }
+.listen-meter small { opacity: .75; width: 56px; }
+.listen-track { position: relative; width: 70px; height: 6px; border-radius: 3px; background: rgba(127,127,127,.25); overflow: hidden; }
+.listen-track span { position: absolute; inset: 0 auto 0 0; background: #2ea043; transition: width .08s linear; }
+.listen-meter.bot .listen-track span { background: #3b82f6; }
+.listen-time { font-variant-numeric: tabular-nums; opacity: .8; }
+.listen-vol { display: inline-flex; align-items: center; gap: 6px; }
+.listen-vol input { width: 90px; }
+@keyframes listen-pulse { 0% { box-shadow: 0 0 0 0 rgba(46,160,67,.6); } 70% { box-shadow: 0 0 0 6px rgba(46,160,67,0); } 100% { box-shadow: 0 0 0 0 rgba(46,160,67,0); } }
+@media (prefers-reduced-motion: reduce) { .listen-live i { animation: none; } }
 /* Call screening test report */
 .screen-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .screen-tbl th { text-align: left; font-weight: 600; opacity: .75; padding: 6px 8px; border-bottom: 1px solid var(--line, rgba(127,127,127,.25)); }
