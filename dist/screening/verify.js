@@ -70,15 +70,22 @@ async function runScreeningVerification(opts = {}) {
         if ((0, env_store_1.getSecret)('AMI_SECRET') && state.vici) {
             const ami = new ami_client_1.AsteriskAmiClient(state.vici);
             const ver = await amiCommand(ami, 'core show version');
-            add('Asterisk AMD', 'Asterisk version', ver.ok ? 'pass' : 'fail', ver.ok ? (/(Asterisk [^\s]+)/.exec(ver.text)?.[1] || 'read') : ver.text.slice(0, 160));
-            const app = await amiCommand(ami, 'core show application AMD');
-            add('Asterisk AMD', 'AMD application loaded', app.ok && /AMD/i.test(app.text) && !/not registered|no such/i.test(app.text) ? 'pass' : 'fail', app.ok ? 'app_amd available' : app.text.slice(0, 160));
-            const ctx = String(process.env.SCREENING_AMD_CONTEXT || 'default').replace(/[^A-Za-z0-9_-]/g, '');
-            const stock = await amiCommand(ami, `dialplan show 8369@${ctx}`);
-            add('Asterisk AMD', 'Stock VICIdial AMD extension 8369', stock.ok && /AMD\(/i.test(stock.text) ? 'pass' : 'warn', stock.ok && /AMD\(/i.test(stock.text) ? `Present in [${ctx}] (left unchanged)` : 'Not found; run deploy/vicidial-amd/inspect-amd.sh on the dialer');
-            const mma = await amiCommand(ami, `dialplan show 8370@${ctx}`);
-            const mmaOk = mma.ok && /X-MMA-AMD/i.test(mma.text);
-            add('Asterisk AMD', 'MMA AMD extension 8370', mmaOk ? 'pass' : 'warn', mmaOk ? 'Installed; passes the AMD result to the bridge' : 'Not installed; AI screening still runs on every call, without the native AMD result');
+            // AMI is optional (backup transfer path + native AMD checks). Hosted
+            // VICIdial usually keeps port 5038 closed; that is not a fault.
+            if (!ver.ok && /AMI TCP error|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENOTFOUND|timed? ?out/i.test(ver.text)) {
+                add('Asterisk AMD', 'Native AMD checks', 'skip', `AMI not reachable at ${state.vici.amiHost || '(no host)'}:${state.vici.amiPort || 5038} (optional). Calls, transfers and AI screening use the VICIdial API instead.`);
+            }
+            else {
+                add('Asterisk AMD', 'Asterisk version', ver.ok ? 'pass' : 'fail', ver.ok ? (/(Asterisk [^\s]+)/.exec(ver.text)?.[1] || 'read') : ver.text.slice(0, 160));
+                const app = await amiCommand(ami, 'core show application AMD');
+                add('Asterisk AMD', 'AMD application loaded', app.ok && /AMD/i.test(app.text) && !/not registered|no such/i.test(app.text) ? 'pass' : 'fail', app.ok ? 'app_amd available' : app.text.slice(0, 160));
+                const ctx = String(process.env.SCREENING_AMD_CONTEXT || 'default').replace(/[^A-Za-z0-9_-]/g, '');
+                const stock = await amiCommand(ami, `dialplan show 8369@${ctx}`);
+                add('Asterisk AMD', 'Stock VICIdial AMD extension 8369', stock.ok && /AMD\(/i.test(stock.text) ? 'pass' : 'warn', stock.ok && /AMD\(/i.test(stock.text) ? `Present in [${ctx}] (left unchanged)` : 'Not found; run deploy/vicidial-amd/inspect-amd.sh on the dialer');
+                const mma = await amiCommand(ami, `dialplan show 8370@${ctx}`);
+                const mmaOk = mma.ok && /X-MMA-AMD/i.test(mma.text);
+                add('Asterisk AMD', 'MMA AMD extension 8370', mmaOk ? 'pass' : 'warn', mmaOk ? 'Installed; passes the AMD result to the bridge' : 'Not installed; AI screening still runs on every call, without the native AMD result');
+            }
         }
         else {
             add('Asterisk AMD', 'Native AMD checks', 'skip', 'AMI is not configured (AMI_SECRET); run deploy/vicidial-amd/inspect-amd.sh on the dialer instead');
