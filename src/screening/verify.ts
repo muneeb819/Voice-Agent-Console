@@ -75,6 +75,11 @@ export async function runScreeningVerification(opts: VerifyOptions = {}): Promis
     if (getSecret('AMI_SECRET') && state.vici) {
       const ami = new AsteriskAmiClient(state.vici);
       const ver = await amiCommand(ami, 'core show version');
+      // AMI is optional (backup transfer path + native AMD checks). Hosted
+      // VICIdial usually keeps port 5038 closed; that is not a fault.
+      if (!ver.ok && /AMI TCP error|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENOTFOUND|timed? ?out/i.test(ver.text)) {
+        add('Asterisk AMD', 'Native AMD checks', 'skip', `AMI not reachable at ${state.vici.amiHost || '(no host)'}:${state.vici.amiPort || 5038} (optional). Remote Agent bot calls transfer and hang up through the VICIdial Agent API, and AI screening still runs; only the AMI Redirect fallback for non-Remote-Agent calls is unavailable.`);
+      } else {
       add('Asterisk AMD', 'Asterisk version', ver.ok ? 'pass' : 'fail', ver.ok ? (/(Asterisk [^\s]+)/.exec(ver.text)?.[1] || 'read') : ver.text.slice(0, 160));
       const app = await amiCommand(ami, 'core show application AMD');
       add('Asterisk AMD', 'AMD application loaded', app.ok && /AMD/i.test(app.text) && !/not registered|no such/i.test(app.text) ? 'pass' : 'fail', app.ok ? 'app_amd available' : app.text.slice(0, 160));
@@ -84,6 +89,7 @@ export async function runScreeningVerification(opts: VerifyOptions = {}): Promis
       const mma = await amiCommand(ami, `dialplan show 8370@${ctx}`);
       const mmaOk = mma.ok && /X-MMA-AMD/i.test(mma.text);
       add('Asterisk AMD', 'MMA AMD extension 8370', mmaOk ? 'pass' : 'warn', mmaOk ? 'Installed; passes the AMD result to the bridge' : 'Not installed; AI screening still runs on every call, without the native AMD result');
+      }
     } else {
       add('Asterisk AMD', 'Native AMD checks', 'skip', 'AMI is not configured (AMI_SECRET); run deploy/vicidial-amd/inspect-amd.sh on the dialer instead');
     }
