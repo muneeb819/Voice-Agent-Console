@@ -78,6 +78,17 @@
     greetingMaxWords: 20,
     introLine: '',
     transferOnYes: false,
+    // Prosody: how the words are spoken. The voice engine renders pitch and
+    // timing from the words and punctuation the bot writes, so these are
+    // written as things the bot controls in its text.
+    voiceDeliveryEnabled: true,
+    voiceDelivery: [
+      'Intonation (rise and fall of pitch): end real questions with a question mark so your voice rises; end statements with a full stop so it settles. Put the most important word near the end of the sentence, where the voice naturally lands.',
+      'Pace (speech rate): slow down for what matters (names, numbers, eligibility, the transfer) by breaking it into short phrases; keep small talk light and quicker. Match the caller: slower and clearer for older or confused callers.',
+      'Tone (emotion): sound like you mean it. Warm and bright when greeting, softer and gentle when the caller shares a problem ("Oh, I\'m sorry to hear that."), calm and steady if they are upset, genuinely pleased for good news.',
+      'Phrasing (thought groups): speak in chunks of three to seven words joined by commas or a dash, one idea per sentence. Use a single "..." before a key point at most once in a turn.',
+      'Duration (lengthening and clipping): you may stretch an opening word now and then to sound relaxed ("Well...", "Oh, that\'s wonderful."), and clip quick acknowledgements short ("Sure.", "Got it."). Never stretch words in names, numbers or facts.',
+    ].join('\n'),
   });
 
   const TRANSFER_RULE = '- TRANSFERS: The moment you tell the caller you are connecting them, call set_disposition with XFER and transfer_to_live_agent in that SAME turn. Never announce a transfer without calling the tool.';
@@ -186,6 +197,11 @@
         );
       }
     }
+
+    // Voice delivery (prosody), set per bot on the front end; on by default.
+    const fl = (agent && agent.flow) || {};
+    const delivery = String(fl.voiceDelivery || '').trim();
+    if (fl.voiceDeliveryEnabled !== false && delivery) lines.push('', '=== VOICE DELIVERY (INTONATION, PACE, TONE, PHRASING, DURATION) ===', delivery);
 
     lines.push(...callFlowLines(agent));
 

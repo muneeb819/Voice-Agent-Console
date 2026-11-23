@@ -26,6 +26,7 @@ interface PersonaApi {
     speakingStyle: string; greetingLines: string; repeatLine: string; noAnswerLine: string;
     waitForHello: boolean; waitForHelloSec: number; noAnswerRepeats: number; greetingMaxWords: number;
     introLine: string; transferOnYes: boolean;
+    voiceDeliveryEnabled: boolean; voiceDelivery: string;
   };
   MAX_PROMPT_LENGTH: number;
   MAX_CAMPAIGN_RULES: number;

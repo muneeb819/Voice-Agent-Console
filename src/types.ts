@@ -47,6 +47,8 @@ export interface AgentFlow {
   introLine: string;          // said after the caller answers the greeting
   transferOnYes: boolean;     // a "yes" to the intro question transfers at once
   repeatLine: string;         // said when the bot did not catch the caller
+  voiceDeliveryEnabled: boolean; // add the voice-delivery (prosody) guidance to the prompt
+  voiceDelivery: string;      // intonation, pace, tone, phrasing, duration, in plain words
 }
 
 export interface Agent {

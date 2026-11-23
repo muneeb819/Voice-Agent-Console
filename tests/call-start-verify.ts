@@ -124,7 +124,10 @@ function promptChecks() {
   assert.equal(a.flow!.waitForHello, true);
   assert.equal(a.behavior.speakingStyle, FLOW_DEFAULTS.speakingStyle);
   const p = composeBehavioralPrompt(a, c);
-  assert.ok(!/VOICE DELIVERY|SOUND LIKE A REAL PERSON|NATURAL VOCAL GESTURES/.test(p), 'no stacked hard-coded tone rules');
+  assert.ok(!/SOUND LIKE A REAL PERSON|NATURAL VOCAL GESTURES/.test(p), 'no stacked hard-coded tone rules');
+  // Voice delivery comes only from the bot's saved setting (on by default), never from code.
+  assert.ok(p.includes(a.flow!.voiceDelivery), 'voice delivery is the saved per-bot text');
+  assert.ok(!/VOICE DELIVERY/.test(composeBehavioralPrompt({ ...a, flow: { ...a.flow!, voiceDeliveryEnabled: false } }, c)), 'voice delivery off: no section');
   assert.equal(p.split('Personality: warm').length - 1, 1, 'tone is defined once');
   assert.ok(p.includes('TRANSFERS:'));
   assert.ok(p.includes(`After the caller answers your greeting, introduce yourself`) && p.includes(a.greeting.slice(0, 30)), 'saved opening becomes the introduction');
