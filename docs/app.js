@@ -4465,6 +4465,62 @@
     renderSimFeedDom();
   }
 
+  // ==================== CALL SCREENING (AMD) — two controls ====================
+  const screeningUi = { loaded: false, loading: false, status: null, busy: '', error: '', report: null };
+  const SCREEN_LABEL = { HUMAN_CONFIRMED: 'Person', VOICEMAIL: 'Voicemail', IVR: 'Phone menu', PRERECORDED_AUDIO: 'Recording', KNOWN_TEST_ENDPOINT: 'Test number', UNCERTAIN: 'Uncertain' };
+
+  async function loadScreeningStatus() {
+    if (serverlessCloudMode || screeningUi.loading) return;
+    screeningUi.loading = true;
+    try {
+      const r = await fetch('/api/screening/status');
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      screeningUi.status = j;
+      if (!screeningUi.report && j.lastTest) screeningUi.report = j.lastTest;
+      screeningUi.error = '';
+    } catch (err) {
+      screeningUi.error = err.message || 'Could not load call screening status';
+    } finally {
+      screeningUi.loading = false;
+      screeningUi.loaded = true;
+      if (tab === 'vici') paintScreeningCard();
+    }
+  }
+
+  function paintScreeningCard() {
+    const host = document.getElementById('screening-card');
+    if (host) host.outerHTML = renderScreeningCard();
+  }
+
+  function renderScreeningCard() {
+    if (serverlessCloudMode) return '';
+    const st = screeningUi.status;
+    const on = Boolean(st?.enabled);
+    const c = st?.last24h || {};
+    const rep = screeningUi.report;
+    const badge = (x) => x === 'pass' ? '<span class="pill ok">Pass</span>' : x === 'fail' ? '<span class="pill er">Fail</span>' : x === 'warn' ? '<span class="pill wn">Check</span>' : '<span class="pill">Skipped</span>';
+    const rows = (rep?.items || []).map((i) => `<tr><td>${esc(i.group)}</td><td>${esc(i.label)}</td><td>${badge(i.status)}</td><td>${esc(i.detail)}</td></tr>`).join('');
+    const verdict = rep ? (rep.failed ? `<span class="pill er">${rep.failed} failed</span>` : '<span class="pill ok">Working</span>') : '';
+    return `
+    <div class="card" id="screening-card">
+     <div class="sim-header">
+      <h2 style="margin:0">Call screening (answering machine detection)</h2>
+      <span class="pill ${on ? 'ok' : 'wn'}">${st ? (on ? 'On' : 'Off') : 'Loading'}</span>
+     </div>
+     <p class="note" style="margin:6px 0 14px">When on, every bridge call is checked before the bot says a word. Only a confirmed person reaches the bot; voicemail, phone menus, recordings and test numbers are hung up with their VICIdial status, and the line is freed for the next call.</p>
+     ${screeningUi.error ? `<div class="pill er" style="display:block;margin-bottom:10px">${esc(screeningUi.error)}</div>` : ''}
+     <div class="bar" style="gap:12px;flex-wrap:wrap;margin:0 0 12px">
+      <button class="${on ? 'g' : 'b'}" id="btn-screening-toggle" ${screeningUi.busy || !st ? 'disabled' : ''}>${screeningUi.busy === 'toggle' ? 'Saving…' : on ? '1. Turn screening off' : '1. Turn screening on'}</button>
+      <button class="g" id="btn-screening-verify" ${screeningUi.busy ? 'disabled' : ''}>${screeningUi.busy === 'verify' ? 'Testing… (about 20 s)' : '2. Run testing &amp; verification'}</button>
+      ${verdict}
+     </div>
+     ${st ? `<div class="note" style="margin-bottom:10px">Last 24 hours: ${c.total || 0} screened · ${c.HUMAN_CONFIRMED || 0} person · ${c.VOICEMAIL || 0} voicemail · ${c.IVR || 0} phone menu · ${c.PRERECORDED_AUDIO || 0} recording · ${c.KNOWN_TEST_ENDPOINT || 0} test · ${c.UNCERTAIN || 0} uncertain</div>` : ''}
+     ${rep ? `<div class="note" style="margin-bottom:6px">Last test: ${esc(new Date(rep.ranAt).toLocaleString())} · ${rep.passed} passed · ${rep.failed} failed · ${rep.warnings} to check</div>
+     <div style="overflow-x:auto"><table class="screen-tbl"><thead><tr><th>Area</th><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody>${rows}</tbody></table></div>` : ''}
+    </div>`;
+  }
+
   async function loadViciBridgeStatus() {
     if (serverlessCloudMode) {
       // The old static demo invented bridge CDRs and latency. Keep any old
@@ -6697,7 +6753,9 @@
               : ['Assign this campaign to an existing bot agent.']),
           ];
 
+      if (!screeningUi.loaded) loadScreeningStatus();
       m.innerHTML = `
+    ${renderScreeningCard()}
     <div class="card">
      <div class="sim-header">
       <h2 style="margin:0"> Live VICIdial Bridge Service (Step 3)</h2>
@@ -8653,6 +8711,30 @@
         window.localStorage?.removeItem(VAC_CLOUD_SESSION_KEY);
       } catch {}
       window.location.replace(serverlessCloudMode ? './login.html' : '/login');
+      return;
+    }
+    if (b.id === 'btn-screening-toggle' || b.id === 'btn-screening-verify') {
+      const toggling = b.id === 'btn-screening-toggle';
+      screeningUi.busy = toggling ? 'toggle' : 'verify';
+      screeningUi.error = '';
+      paintScreeningCard();
+      try {
+        const r = await fetch(toggling ? '/api/screening/toggle' : '/api/screening/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(toggling ? { enabled: !screeningUi.status?.enabled } : { live: true }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 403) throw new Error('Only an owner or admin can change call screening.');
+        if (!r.ok && !(j && j.items)) throw new Error(j.error || `HTTP ${r.status}`);
+        if (toggling) screeningUi.status = j;
+        else screeningUi.report = j;
+      } catch (err) {
+        screeningUi.error = err.message || 'Request failed';
+      } finally {
+        screeningUi.busy = '';
+        await loadScreeningStatus();
+      }
       return;
     }
     if (b.id === 'btn-wb-refresh') {
