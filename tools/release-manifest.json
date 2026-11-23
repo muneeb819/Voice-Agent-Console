@@ -21,6 +21,7 @@
   "datasets/Greetings-Dataset.csv",
   "deploy/aws-deploy.sh",
   "deploy/linux-deploy.sh",
+  "deploy/update-vac.sh",
   "deploy/nginx-free-port80.py",
   "deploy/vicibox-install.sh",
   "deploy/voice-agent-bridge.service",
