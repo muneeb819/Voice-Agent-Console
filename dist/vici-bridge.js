@@ -66,6 +66,7 @@ Object.defineProperty(exports, "callLimitMsForCampaign", { enumerable: true, get
 Object.defineProperty(exports, "callLimitSchedule", { enumerable: true, get: function () { return call_limit_2.callLimitSchedule; } });
 Object.defineProperty(exports, "callLimitWrapUpPrompt", { enumerable: true, get: function () { return call_limit_2.callLimitWrapUpPrompt; } });
 const vici_sip_registration_1 = require("./vici-sip-registration");
+const screening_1 = require("./screening");
 const vici_client_1 = require("./vici-client");
 function resolveSdpAdvertisedHost(peerAddress, configuredHost, bindHost) {
     if ((0, auth_guard_1.isLoopbackIp)(peerAddress))
@@ -328,6 +329,8 @@ class VicidialBridgeService {
             remoteAgentUser: raUser,
             viciClient,
             leadPromise,
+            amd: String(input.amd || '').slice(0, 80),
+            amdSig: String(input.amd_sig || '').slice(0, 80),
         });
         return {
             uuid,
@@ -926,6 +929,8 @@ class VicidialBridgeService {
                         sessionUuid: preReg.uuid,
                         preCall: preRecord,
                         hooks,
+                        amdHeader: firstHeader(headers, 'x-mma-amd'),
+                        amdSignature: firstHeader(headers, 'x-mma-amd-sig'),
                     });
                     rtpSocket.on('message', (pktBuf, peer) => {
                         if (rtpClosed)
@@ -1065,6 +1070,11 @@ class VicidialBridgeService {
         const transferIntentActive = () => transferIntentAt > 0 && Date.now() - transferIntentAt < call_limit_1.TRANSFER_INTENT_GRACE_MS;
         let speechDrainTimer = null;
         let openingGate = null;
+        // Call screening: no campaign conversation starts until a person is confirmed.
+        let screening = null;
+        let screeningDecided = false;
+        let screenedHuman = false;
+        let screeningNonHuman = null;
         let lastCallerAudioAt = Date.now();
         // Assigned once the provider session exists (it owns the stale-audio gate).
         let performBargeInFlush = () => { };
@@ -1220,6 +1230,8 @@ class VicidialBridgeService {
             callLimitTimers.length = 0;
             openingGate?.cancel();
             openingGate = null;
+            if (screening && !screeningDecided)
+                screening.session.cancel(`Call ended during screening (${reason})`);
             if (dgWs && (dgWs.readyState === ws_1.default.OPEN || dgWs.readyState === ws_1.default.CONNECTING)) {
                 try {
                     dgWs.close(1000, reason);
@@ -1232,8 +1244,27 @@ class VicidialBridgeService {
                 await Promise.race([transferCompletion, new Promise((resolve) => setTimeout(resolve, 12000))]);
             }
             opts.hooks.hangupTransport();
-            // Release Remote Agent call slot via ra_call_control HANGUP if call was NOT transferred
-            if (!transferredTo && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
+            // Screened as not a person: the screening module sends the status once,
+            // retries, frees the remote-agent slot and reads the status back.
+            if (screeningNonHuman && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
+                await (0, screening_1.sendScreeningDisposition)({
+                    callId,
+                    campaignId: campaign.id,
+                    campaignViciId: campaign.viciCampaign || '',
+                    leadId: summary.leadId || '',
+                    callerCode: parsedCaller.callerCode,
+                    remoteAgentUser,
+                    phone: summary.phone || '',
+                    nativeAmd: screening?.nativeAmd || { status: 'NONE', cause: '', authenticated: false },
+                    decision: screeningNonHuman.decision,
+                    status: screeningNonHuman.status,
+                    client: viciClient,
+                }, (line) => transcript.push({ ts: new Date().toISOString(), role: 'system', content: line })).catch((err) => {
+                    transcript.push({ ts: new Date().toISOString(), role: 'system', content: `Screening disposition error: ${err?.message || 'unknown'}` });
+                });
+            }
+            else if (!transferredTo && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
+                // Release Remote Agent call slot via ra_call_control HANGUP if call was NOT transferred
                 await viciClient
                     .hangupRemoteAgentCall({
                     callerCode: parsedCaller.callerCode,
@@ -1346,8 +1377,37 @@ class VicidialBridgeService {
                 disposition = 'XFER';
             await executeTransferAction({ reason });
         });
+        if ((0, screening_1.isScreeningEnabled)()) {
+            try {
+                screening = (0, screening_1.startCallScreening)({
+                    callerCode: parsedCaller.callerCode || '',
+                    phone: parsedCaller.phone || '',
+                    amdHeader: opts.amdHeader || opts.preCall?.amd || '',
+                    amdSignature: opts.amdSignature || opts.preCall?.amdSig || '',
+                    playAudio: (pcm8k) => {
+                        if (closed)
+                            return;
+                        recorder.recordBotPcm8k(pcm8k);
+                        opts.hooks.enqueueBotPcm8k(pcm8k);
+                    },
+                    log: (line) => addTranscript('system', line),
+                });
+                updateState('screening');
+            }
+            catch (err) {
+                // Fail closed: if screening cannot start, the call is not handed to the bot.
+                screening = null;
+                screeningNonHuman = { status: 'NA', decision: { outcome: 'UNCERTAIN', reason: `Screening could not start: ${err?.message || 'error'}`, decidedAtMs: 0, evidence: {} } };
+            }
+        }
         // Boot async lead hydration -> Deepgram Voice Agent 8kHz session
         (async () => {
+            if (screeningNonHuman) {
+                addTranscript('system', `✗ ${screeningNonHuman.decision.reason}; call ended without starting the bot`);
+                disposition = screeningNonHuman.status;
+                await finalizeSession('screening_error');
+                return;
+            }
             let hydratedLead;
             try {
                 hydratedLead = opts.preCall
@@ -1459,6 +1519,38 @@ class VicidialBridgeService {
             if (hydratedLead.phone_number)
                 summary.phone = hydratedLead.phone_number;
             addTranscript('system', `Connected ${opts.transport.toUpperCase()} call (CID: ${parsedCaller.callerCode || 'direct'}, Lead #${summary.leadId || 'n/a'} ${hydratedLead.first_name || ''} ${hydratedLead.state || ''} via ${hydratedLead.sourceApi})`);
+            if (screening) {
+                const decision = await screening.session.result;
+                screeningDecided = true;
+                const finishInput = {
+                    callId,
+                    campaignId: campaign.id,
+                    campaignViciId: campaign.viciCampaign || '',
+                    leadId: summary.leadId || '',
+                    callerCode: parsedCaller.callerCode || '',
+                    remoteAgentUser,
+                    phone: summary.phone || '',
+                    nativeAmd: screening.nativeAmd,
+                    decision,
+                };
+                if (closed) {
+                    // Caller hung up (or the transport dropped) during screening: record it, no extra disposition.
+                    (0, screening_1.recordScreeningDecision)({ ...finishInput, decision: { ...decision, outcome: 'UNCERTAIN' } }, (l) => addTranscript('system', l), '');
+                    return;
+                }
+                const status = (0, screening_1.recordScreeningDecision)(finishInput, (l) => addTranscript('system', l));
+                if (decision.outcome === 'HUMAN_CONFIRMED') {
+                    screenedHuman = true;
+                    addTranscript('system', `✓ Screening: person confirmed in ${(decision.decidedAtMs / 1000).toFixed(1)}s (${decision.reason}); starting the bot`);
+                }
+                else {
+                    screeningNonHuman = { status, decision };
+                    disposition = status;
+                    addTranscript('system', `Screening: ${decision.outcome} (${decision.reason}); ending the call with status ${status}`);
+                    await finalizeSession(`screening_${decision.outcome.toLowerCase()}`);
+                    return;
+                }
+            }
             const dgKey = (0, env_store_1.getSecret)('DEEPGRAM_API_KEY');
             const customAgentUrl = (process.env.DEEPGRAM_AGENT_URL || '').trim();
             const targetUrl = customAgentUrl || 'wss://agent.deepgram.com/v1/agent/converse';
@@ -1506,6 +1598,8 @@ class VicidialBridgeService {
             openingGate = (0, opening_1.createOpeningGate)({
                 greeting: openingText,
                 ...(0, opening_1.openingGateOptionsFor)(agent),
+                // Screening already heard the person say hello: greet right away.
+                ...(screenedHuman ? { waitForCaller: false } : {}),
                 sendOpening: (message) => {
                     if (!closed && dgWs?.readyState === ws_1.default.OPEN) {
                         dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
@@ -1859,6 +1953,14 @@ class VicidialBridgeService {
                     return;
                 lastCallerAudioAt = Date.now();
                 recorder.recordCallerPcm8k(pcm8k);
+                // During screening caller audio goes only to the screening engine,
+                // never to the bot (nothing may start the conversation early).
+                if (screening && !screeningDecided) {
+                    screening.session.pushAudio(pcm8k);
+                    return;
+                }
+                if (screening && !screenedHuman)
+                    return;
                 bargeInGate.onCallerAudio(pcm8k);
                 if (!settingsApplied) {
                     if (preSettingsAudioQueue.length < 40) {

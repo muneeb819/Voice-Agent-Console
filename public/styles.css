@@ -4292,3 +4292,8 @@ body.has-unsaved-changes .workspace-stage {
 .vclone audio { width: 100%; margin-top: 6px; }
 label.vclone-file, :root[data-theme] label.vclone-file { text-transform: none !important; letter-spacing: normal !important; font-size: 13px !important; font-weight: 600 !important; margin: 0 !important; color: inherit; }
 .vclone-name .pill { display: inline-block; width: auto; align-self: flex-start; margin-left: 6px; vertical-align: middle; }
+
+/* Call screening test report */
+.screen-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.screen-tbl th { text-align: left; font-weight: 600; opacity: .75; padding: 6px 8px; border-bottom: 1px solid var(--line, rgba(127,127,127,.25)); }
+.screen-tbl td { padding: 6px 8px; border-bottom: 1px solid var(--line, rgba(127,127,127,.15)); vertical-align: top; }
