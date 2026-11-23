@@ -37,6 +37,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.VicidialBridgeService = exports.callLimitWrapUpPrompt = exports.callLimitSchedule = exports.callLimitMsForCampaign = exports.CALL_LIMIT_CLOSING_LINE = void 0;
+exports.usableAgentUser = usableAgentUser;
+exports.lookupCallAgentUser = lookupCallAgentUser;
 exports.resolveSdpAdvertisedHost = resolveSdpAdvertisedHost;
 exports.uuidBytesToCanonical = uuidBytesToCanonical;
 exports.canonicalUuidToBytes = canonicalUuidToBytes;
@@ -68,6 +70,26 @@ Object.defineProperty(exports, "callLimitWrapUpPrompt", { enumerable: true, get:
 const vici_sip_registration_1 = require("./vici-sip-registration");
 const screening_1 = require("./screening");
 const vici_client_1 = require("./vici-client");
+/**
+ * A remote agent with several lines uses one VICIdial user per line (User ID
+ * Start, +1, +2, ...). The call's own user comes from callid_info; anything that
+ * is not a plain user id (or is VICIdial's dialer placeholder) is ignored.
+ */
+function usableAgentUser(user) {
+    const u = String(user || '').trim();
+    if (!/^[A-Za-z0-9_.@-]{1,20}$/.test(u))
+        return '';
+    if (/^(VDAD|VDCL|VDAC)$/i.test(u))
+        return '';
+    return u;
+}
+function lookupCallAgentUser(client, callerCode) {
+    if (!callerCode)
+        return Promise.resolve('');
+    return client.lookupCallIdInfo(callerCode)
+        .then((r) => (r.ok ? usableAgentUser(r.agentUser) : ''))
+        .catch(() => '');
+}
 function resolveSdpAdvertisedHost(peerAddress, configuredHost, bindHost) {
     if ((0, auth_guard_1.isLoopbackIp)(peerAddress))
         return peerAddress;
@@ -395,6 +417,7 @@ class VicidialBridgeService {
         const parsedCaller = (0, vici_client_1.parseVicidialCallerCode)(input.vici_cid || input.caller_code, input.phone);
         const raUser = String(input.agent_user || remoteAgentUser);
         const viciClient = new vici_client_1.VicidialApiClient(effectiveVici);
+        const agentUserPromise = input.agent_user ? Promise.resolve(String(input.agent_user)) : lookupCallAgentUser(viciClient, parsedCaller.callerCode);
         const leadPromise = viciClient.fetchLeadInfo({
             leadId: parsedCaller.leadId,
             phone: parsedCaller.phone,
@@ -413,6 +436,7 @@ class VicidialBridgeService {
             campaign,
             agent,
             remoteAgentUser: raUser,
+            agentUserPromise,
             viciClient,
             leadPromise,
             amd: String(input.amd || '').slice(0, 80),
@@ -1108,7 +1132,7 @@ class VicidialBridgeService {
         }
         const campaign = resolved.campaign;
         const agent = resolved.agent;
-        const remoteAgentUser = opts.preCall?.remoteAgentUser || resolved.remoteAgentUser;
+        let remoteAgentUser = opts.preCall?.remoteAgentUser || resolved.remoteAgentUser;
         const parsedCaller = opts.preCall?.parsedCaller || (0, vici_client_1.parseVicidialCallerCode)('', '');
         const channel = opts.preCall?.channel || '';
         const viciClient = opts.preCall?.viciClient || new vici_client_1.VicidialApiClient(effectiveVici);
@@ -1209,6 +1233,20 @@ class VicidialBridgeService {
             transferredTo: null,
         };
         this.activeCalls.set(callId, summary);
+        // Multi-line remote agents: use the VICIdial user that actually holds this
+        // call, so transfers and hang-ups reach the right line.
+        let agentUserLookup = Promise.resolve();
+        if (opts.preCall?.agentUserPromise) {
+            agentUserLookup = opts.preCall.agentUserPromise.then((u) => {
+                if (u && u !== remoteAgentUser) {
+                    remoteAgentUser = u;
+                    summary.remoteAgentUser = u;
+                }
+            });
+        }
+        // VICIdial control actions wait for that lookup (it ends on its own HTTP
+        // timeout); the campaign user is used only if the lookup really fails.
+        const awaitAgentUser = () => Promise.race([agentUserLookup, new Promise((r) => setTimeout(r, 15000))]);
         this.broadcastMonitor({ type: 'call_started', call: summary, status: this.getStatus() });
         const addTranscript = (role, content) => {
             const entry = { ts: new Date().toISOString(), role, content };
@@ -1235,6 +1273,7 @@ class VicidialBridgeService {
             let xferOk = false;
             let detail = '';
             if (parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
+                await awaitAgentUser();
                 const raRes = await viciClient.transferRemoteAgentCall({
                     callerCode: parsedCaller.callerCode,
                     remoteAgentUser,
@@ -1335,6 +1374,7 @@ class VicidialBridgeService {
                 await Promise.race([transferCompletion, new Promise((resolve) => setTimeout(resolve, 12000))]);
             }
             opts.hooks.hangupTransport();
+            await awaitAgentUser();
             // Screened as not a person: the screening module sends the status once,
             // retries, frees the remote-agent slot and reads the status back.
             if (screeningNonHuman && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
