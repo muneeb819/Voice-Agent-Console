@@ -13,6 +13,7 @@ const fs_1 = __importDefault(require("fs"));
 const http_1 = __importDefault(require("http"));
 const net_1 = __importDefault(require("net"));
 const path_1 = __importDefault(require("path"));
+const compression_1 = __importDefault(require("compression"));
 const express_1 = __importDefault(require("express"));
 dns_1.default.setDefaultResultOrder('ipv4first');
 if (typeof net_1.default.setDefaultAutoSelectFamily === 'function') {
@@ -126,6 +127,18 @@ function createApp(viciBridge) {
         }
         next();
     });
+    // Gzip text responses (app.js, styles, /api/state). The console is often used
+    // far from the server, and these are large: about 1.2 MB shrinks to about 250 KB.
+    // Live streams are left alone so events and audio are never held back.
+    app.use((0, compression_1.default)({
+        threshold: 1024,
+        filter: (req, res) => {
+            const type = String(res.getHeader('Content-Type') || '');
+            if (type.includes('text/event-stream') || req.headers['x-no-compression'])
+                return false;
+            return compression_1.default.filter(req, res);
+        },
+    }));
     // API answers hold account, key-status and bot data: never let a browser or proxy cache them.
     app.use('/api', (_req, res, next) => {
         res.setHeader('Cache-Control', 'no-store, max-age=0');
