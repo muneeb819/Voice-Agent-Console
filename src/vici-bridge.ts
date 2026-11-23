@@ -35,6 +35,25 @@ import {
   VicidialApiClient,
 } from './vici-client';
 
+/**
+ * A remote agent with several lines uses one VICIdial user per line (User ID
+ * Start, +1, +2, ...). The call's own user comes from callid_info; anything that
+ * is not a plain user id (or is VICIdial's dialer placeholder) is ignored.
+ */
+export function usableAgentUser(user: string | undefined): string {
+  const u = String(user || '').trim();
+  if (!/^[A-Za-z0-9_.@-]{1,20}$/.test(u)) return '';
+  if (/^(VDAD|VDCL|VDAC)$/i.test(u)) return '';
+  return u;
+}
+
+export function lookupCallAgentUser(client: Pick<VicidialApiClient, 'lookupCallIdInfo'>, callerCode: string): Promise<string> {
+  if (!callerCode) return Promise.resolve('');
+  return client.lookupCallIdInfo(callerCode)
+    .then((r) => (r.ok ? usableAgentUser(r.agentUser) : ''))
+    .catch(() => '');
+}
+
 export function resolveSdpAdvertisedHost(peerAddress: string, configuredHost: string, bindHost: string): string {
   if (isLoopbackIp(peerAddress)) return peerAddress;
   const configured = configuredHost.trim();
@@ -66,6 +85,8 @@ interface PreCallRecord {
   campaign: Campaign;
   agent: Agent;
   remoteAgentUser: string;
+  /** The VICIdial remote agent user actually on this call (callid_info); '' if unknown. */
+  agentUserPromise?: Promise<string>;
   viciClient: VicidialApiClient;
   leadPromise: Promise<HydratedViciLead>;
   amd: string;
@@ -458,6 +479,7 @@ export class VicidialBridgeService {
     const raUser = String(input.agent_user || remoteAgentUser);
 
     const viciClient = new VicidialApiClient(effectiveVici);
+    const agentUserPromise = input.agent_user ? Promise.resolve(String(input.agent_user)) : lookupCallAgentUser(viciClient, parsedCaller.callerCode);
     const leadPromise = viciClient.fetchLeadInfo({
       leadId: parsedCaller.leadId,
       phone: parsedCaller.phone,
@@ -476,6 +498,7 @@ export class VicidialBridgeService {
       campaign,
       agent,
       remoteAgentUser: raUser,
+      agentUserPromise,
       viciClient,
       leadPromise,
       amd: String(input.amd || '').slice(0, 80),
@@ -1214,7 +1237,7 @@ export class VicidialBridgeService {
     }
     const campaign = resolved.campaign;
     const agent = resolved.agent;
-    const remoteAgentUser = opts.preCall?.remoteAgentUser || resolved.remoteAgentUser;
+    let remoteAgentUser = opts.preCall?.remoteAgentUser || resolved.remoteAgentUser;
     const parsedCaller = opts.preCall?.parsedCaller || parseVicidialCallerCode('', '');
     const channel = opts.preCall?.channel || '';
     const viciClient = opts.preCall?.viciClient || new VicidialApiClient(effectiveVici);
@@ -1340,6 +1363,17 @@ export class VicidialBridgeService {
     };
 
     this.activeCalls.set(callId, summary);
+    // Multi-line remote agents: use the VICIdial user that actually holds this
+    // call, so transfers and hang-ups reach the right line.
+    let agentUserLookup: Promise<void> = Promise.resolve();
+    if (opts.preCall?.agentUserPromise) {
+      agentUserLookup = opts.preCall.agentUserPromise.then((u) => {
+        if (u && u !== remoteAgentUser) {
+          remoteAgentUser = u;
+          summary.remoteAgentUser = u;
+        }
+      });
+    }
     this.broadcastMonitor({ type: 'call_started', call: summary, status: this.getStatus() });
 
     const addTranscript = (role: 'user' | 'assistant' | 'system', content: string) => {
@@ -1372,6 +1406,7 @@ export class VicidialBridgeService {
       let detail = '';
 
       if (parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
+        await Promise.race([agentUserLookup, new Promise((r) => setTimeout(r, 1500))]);
         const raRes = await viciClient.transferRemoteAgentCall({
           callerCode: parsedCaller.callerCode,
           remoteAgentUser,
