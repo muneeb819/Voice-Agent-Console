@@ -1244,6 +1244,9 @@ class VicidialBridgeService {
                 }
             });
         }
+        // VICIdial control actions wait for that lookup (it ends on its own HTTP
+        // timeout); the campaign user is used only if the lookup really fails.
+        const awaitAgentUser = () => Promise.race([agentUserLookup, new Promise((r) => setTimeout(r, 15000))]);
         this.broadcastMonitor({ type: 'call_started', call: summary, status: this.getStatus() });
         const addTranscript = (role, content) => {
             const entry = { ts: new Date().toISOString(), role, content };
@@ -1270,7 +1273,7 @@ class VicidialBridgeService {
             let xferOk = false;
             let detail = '';
             if (parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
-                await Promise.race([agentUserLookup, new Promise((r) => setTimeout(r, 1500))]);
+                await awaitAgentUser();
                 const raRes = await viciClient.transferRemoteAgentCall({
                     callerCode: parsedCaller.callerCode,
                     remoteAgentUser,
@@ -1371,6 +1374,7 @@ class VicidialBridgeService {
                 await Promise.race([transferCompletion, new Promise((resolve) => setTimeout(resolve, 12000))]);
             }
             opts.hooks.hangupTransport();
+            await awaitAgentUser();
             // Screened as not a person: the screening module sends the status once,
             // retries, frees the remote-agent slot and reads the status back.
             if (screeningNonHuman && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
