@@ -5729,7 +5729,8 @@
       }
       if (r.callWillFail) return `<div class="reach-er">✗ <b>${esc(c.name)}:</b> ${fmtN(r.phoneChars)} of ${fmtN(r.phoneLimit)} characters with the opening — calls cannot start. Shorten the instructions.</div>`;
       const cls = r.phoneRoom < 1000 ? 'reach-wn' : 'reach-ok';
-      return `<div class="${cls}">${cls === 'reach-ok' ? '✓' : '!'} <b>${esc(c.name)}:</b> all ${fmtN(r.instructionsLines)} lines reach calls · call prompt ${fmtN(r.phoneChars)} / ${fmtN(r.phoneLimit)} (${fmtN(r.phoneRoom)} to spare)</div>`;
+      const omitted = r.voiceDeliveryOmitted ? `<div class="reach-wn">! <b>${esc(c.name)}:</b> voice delivery guidance is left out of calls: the prompt has no room for it. Shorten the instructions or campaign rules to include it.</div>` : '';
+      return `<div class="${cls}">${cls === 'reach-ok' ? '✓' : '!'} <b>${esc(c.name)}:</b> all ${fmtN(r.instructionsLines)} lines reach calls · call prompt ${fmtN(r.phoneChars)} / ${fmtN(r.phoneLimit)} (${fmtN(r.phoneRoom)} to spare)</div>${omitted}`;
     }).join('')}</div>`;
   }
 
@@ -6175,6 +6176,9 @@
      </div>
      ${F(' Self-Introduction Bio (spoken naturally when asked "Who are you?" or "Introduce yourself")', 'a.behavior.selfIntro', 'ta')}
      ${F('Personality &amp; speaking style (the only tone guidance the bot gets; the tone menu above is used only when this is empty)', 'a.behavior.speakingStyle', 'ta', [], 'style="min-height:110px"')}
+     ${F('Natural voice delivery: intonation, pace, tone, phrasing and word length (on for every bot by default)', 'a.flow.voiceDeliveryEnabled', 'chk')}
+     ${F('Voice delivery guidance (leave blank to restore the default)', 'a.flow.voiceDelivery', 'ta', [], 'style="min-height:150px"')}
+     <div class="note">The voice engine turns these words and punctuation into pitch and timing. For stronger rise and fall, use a Flux voice with expressivity +1 (Voice Lab), or raise Emotion intensity for a self-hosted voice. Speed sets the overall pace.</div>
 
      <h2>Speech-to-Text (Listen)</h2>
      <div class="note">Global STT: <b>${esc(globalServiceProvider('stt')?.name || 'Not selected')}</b> · <code>${esc(S.services?.stt?.model || 'not selected')}</code> (Plug-Ins)</div>

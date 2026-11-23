@@ -25,6 +25,9 @@ function normalizeFlow(raw: any): import('./types').AgentFlow {
     introLine: text(f.introLine, '', 600),
     transferOnYes: Boolean(f.transferOnYes),
     repeatLine: text(f.repeatLine, DEFAULT_REPEAT_LINE, 300),
+    voiceDeliveryEnabled: f.voiceDeliveryEnabled !== undefined ? Boolean(f.voiceDeliveryEnabled) : true,
+    // Every bot gets the default delivery guidance until it is edited; a blank box restores it.
+    voiceDelivery: (typeof f.voiceDelivery === 'string' && f.voiceDelivery.trim() ? f.voiceDelivery : FLOW_DEFAULTS.voiceDelivery).slice(0, 3000),
   };
 }
 
@@ -1134,7 +1137,8 @@ export function normalizeState(raw: any): ConsoleState {
           },
           tts: {
             speed: num(a.tts?.speed, 1.0, 0.5, 1.5),
-            expr: Math.round(num(a.tts?.expr, 0, -2, 2)),
+            // +1 by default: livelier pitch movement (intonation) on Flux voices.
+            expr: Math.round(num(a.tts?.expr, 1, -2, 2)),
             expressiveness: Math.round(num(a.tts?.expressiveness, 0.5, 0.25, 2) * 100) / 100,
             variation: Math.round(num(a.tts?.variation, 0.8, 0.3, 1.5) * 100) / 100,
           },

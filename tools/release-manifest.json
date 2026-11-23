@@ -275,6 +275,7 @@
   "tools/sync-static-site.js",
   "tsconfig.json",
   "vercel.json",
+  "tests/voice-delivery-verify.ts",
   "src/screening/types.ts",
   "src/screening/audio-analysis.ts",
   "src/screening/transcript-rules.ts",
