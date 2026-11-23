@@ -26,7 +26,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22.5.0'
+          node-version: '22.5.1' # 22.5.0 has a known npm-breaking bug (npm ci: "Exit handler never called")
           cache: npm
 
       - name: Install locked dependencies
