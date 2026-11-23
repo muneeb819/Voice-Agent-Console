@@ -13,6 +13,9 @@
   'use strict';
 
   const MAX_PROMPT_LENGTH = 24950;
+  // Room kept free for what a live call adds (lead details, opening turn)
+  // before the optional voice-delivery section is included.
+  const VOICE_DELIVERY_RESERVE = 2500;
   const MAX_CAMPAIGN_RULES = 8000;
 
   const TONE_MAP = {
@@ -78,6 +81,17 @@
     greetingMaxWords: 20,
     introLine: '',
     transferOnYes: false,
+    // Prosody: how the words are spoken. The voice engine renders pitch and
+    // timing from the words and punctuation the bot writes, so these are
+    // written as things the bot controls in its text.
+    voiceDeliveryEnabled: true,
+    voiceDelivery: [
+      'Intonation (rise and fall of pitch): end real questions with a question mark so your voice rises; end statements with a full stop so it settles. Put the most important word near the end of the sentence, where the voice naturally lands.',
+      'Pace (speech rate): slow down for what matters (names, numbers, eligibility, the transfer) by breaking it into short phrases; keep small talk light and quicker. Match the caller: slower and clearer for older or confused callers.',
+      'Tone (emotion): sound like you mean it. Warm and bright when greeting, softer and gentle when the caller shares a problem ("Oh, I\'m sorry to hear that."), calm and steady if they are upset, genuinely pleased for good news.',
+      'Phrasing (thought groups): speak in chunks of three to seven words joined by commas or a dash, one idea per sentence. Use a single "..." before a key point at most once in a turn.',
+      'Duration (lengthening and clipping): you may stretch an opening word now and then to sound relaxed ("Well...", "Oh, that\'s wonderful."), and clip quick acknowledgements short ("Sure.", "Got it."). Never stretch words in names, numbers or facts.',
+    ].join('\n'),
   });
 
   const TRANSFER_RULE = '- TRANSFERS: The moment you tell the caller you are connecting them, call set_disposition with XFER and transfer_to_live_agent in that SAME turn. Never announce a transfer without calling the tool.';
@@ -187,6 +201,15 @@
       }
     }
 
+    // Voice delivery (prosody), set per bot on the front end; on by default.
+    // Lower priority than the bot's own instructions: added only where it fits.
+    const fl = (agent && agent.flow) || {};
+    const delivery = String(fl.voiceDelivery || '').trim();
+    const deliveryAt = lines.length;
+    const deliveryLines = fl.voiceDeliveryEnabled !== false && delivery
+      ? ['', '=== VOICE DELIVERY (INTONATION, PACE, TONE, PHRASING, DURATION) ===', delivery]
+      : [];
+
     lines.push(...callFlowLines(agent));
 
     if (campaign) {
@@ -215,13 +238,23 @@
     if (!b) lines.push('', TRANSFER_RULE);
     lines.push(...callEndingLines());
     lines.push(...conversationIntegrityLines());
-    const suffix = lines.join('\n').trim();
-    if (!suffix) return { basePrompt, safeBase: basePrompt, suffix: '', prompt: basePrompt };
+    // The voice-delivery section must never cost the bot its own instructions,
+    // nor the room a live call needs for lead details and the opening: without
+    // enough room it is left out (and reported), so a bot that fitted before
+    // still fits exactly as before.
+    const withoutDelivery = lines.join('\n').trim();
+    const withDelivery = deliveryLines.length
+      ? [...lines.slice(0, deliveryAt), ...deliveryLines, ...lines.slice(deliveryAt)].join('\n').trim()
+      : withoutDelivery;
+    const deliveryFits = basePrompt.length + 1 + withDelivery.length <= MAX_PROMPT_LENGTH - VOICE_DELIVERY_RESERVE;
+    const suffix = deliveryFits ? withDelivery : withoutDelivery;
+    const voiceDeliveryOmitted = deliveryLines.length > 0 && !deliveryFits;
+    if (!suffix) return { basePrompt, safeBase: basePrompt, suffix: '', prompt: basePrompt, voiceDeliveryOmitted };
     const truncationNote = '\n[Agent prompt shortened to preserve the mandatory campaign rules below.]';
     const availableBaseLength = Math.max(0, MAX_PROMPT_LENGTH - suffix.length - 1 - truncationNote.length);
     const safeBase = basePrompt.slice(0, availableBaseLength);
     const note = basePrompt.length > safeBase.length ? truncationNote : '';
-    return { basePrompt, safeBase, suffix, prompt: `${safeBase}${note}\n${suffix}`.trim() };
+    return { basePrompt, safeBase, suffix, prompt: `${safeBase}${note}\n${suffix}`.trim(), voiceDeliveryOmitted };
   }
 
   /**
@@ -258,6 +291,7 @@
       phoneRoom: 25000 - phoneChars,
       callWillFail: phoneChars > 25000,
       builtInChars: Math.max(0, parts.suffix.length - Math.min(rules.length, MAX_CAMPAIGN_RULES)),
+      voiceDeliveryOmitted: Boolean(parts.voiceDeliveryOmitted),
     };
   }
 

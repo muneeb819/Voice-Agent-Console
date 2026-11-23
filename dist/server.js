@@ -37,6 +37,7 @@ const vici_bridge_1 = require("./vici-bridge");
 const vici_client_1 = require("./vici-client");
 const vici_loopback_tester_1 = require("./vici-loopback-tester");
 const webhook_executor_1 = require("./webhook-executor");
+const screening_1 = require("./screening");
 const user_store_1 = require("./user-store");
 const demo_tunnel_1 = require("./demo-tunnel");
 const speech_service_client_1 = require("./speech-service-client");
@@ -969,6 +970,8 @@ function createApp(viciBridge) {
                 exten: merged.exten,
                 channel: merged.channel,
                 agent_user: merged.agent_user,
+                amd: merged.amd,
+                amd_sig: merged.amd_sig,
             });
         }
         catch (err) {
@@ -1493,6 +1496,53 @@ function createApp(viciBridge) {
                 code: err?.code || 'TTS_PREVIEW_FAILED',
                 error: err?.message || 'Failed to synthesize TTS preview',
             });
+        }
+    }));
+    // ==================== CALL SCREENING (ANSWERING MACHINE DETECTION) ====================
+    // Two controls only: turn screening on/off, and run Testing & Verification.
+    const screeningStatusPayload = () => {
+        const cfg = (0, screening_1.loadScreeningConfig)();
+        const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+        const settings = (0, screening_1.screeningSettingsRow)();
+        const last = (0, screening_1.lastTestRun)();
+        return {
+            ok: true,
+            enabled: settings.enabled,
+            updatedAt: settings.updatedAt,
+            updatedBy: settings.updatedBy,
+            last24h: (0, screening_1.screeningCounts)(since),
+            recent: (0, screening_1.recentScreeningResults)(20),
+            dispositions: cfg.dispositions,
+            maxScreeningSec: cfg.thresholds.maxScreeningMs / 1000,
+            lastTest: last ? { ranAt: last.ranAt, ranBy: last.ranBy, passed: last.passed, failed: last.failed, warnings: last.warnings, items: last.report?.items || [] } : null,
+        };
+    };
+    app.get('/api/screening/status', asyncRoute(async (_req, res) => {
+        res.json(screeningStatusPayload());
+    }));
+    app.post('/api/screening/toggle', asyncRoute(async (req, res) => {
+        if (typeof req.body?.enabled !== 'boolean') {
+            res.status(400).json({ ok: false, code: 'INVALID_BODY', error: 'Send {"enabled": true} or {"enabled": false}.' });
+            return;
+        }
+        const who = (0, auth_guard_1.getAuthenticatedUser)(req)?.email || 'admin';
+        (0, screening_1.setScreeningEnabled)(req.body.enabled, who);
+        res.json({ ...screeningStatusPayload(), enabled: (0, screening_1.isScreeningEnabled)() });
+    }));
+    let screeningVerifyRunning = false;
+    app.post('/api/screening/verify', asyncRoute(async (req, res) => {
+        if (screeningVerifyRunning) {
+            res.status(409).json({ ok: false, code: 'VERIFY_RUNNING', error: 'A verification run is already in progress.' });
+            return;
+        }
+        screeningVerifyRunning = true;
+        try {
+            const who = (0, auth_guard_1.getAuthenticatedUser)(req)?.email || 'admin';
+            const report = await (0, screening_1.runScreeningVerification)({ live: req.body?.live !== false, by: who });
+            res.json({ ok: report.failed === 0, ...report });
+        }
+        finally {
+            screeningVerifyRunning = false;
         }
     }));
     // ==================== LOCAL SPEECH SERVICE (1-CLICK STT + TTS) ====================

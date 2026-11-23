@@ -332,8 +332,12 @@ function selectGreetingLine(agentId, linesText, maxWords) {
             fresh = lines.length > 1 && last ? lines.filter((line) => lineKey(line) !== last.line_key) : lines;
         }
         const line = fresh[Math.floor(Math.random() * fresh.length)];
+        // Strictly increasing timestamp: two picks in the same millisecond must not tie,
+        // or "the last line used" becomes ambiguous and a line could repeat.
+        const prev = conn.prepare('SELECT MAX(used_at) AS m FROM greeting_line_used WHERE agent_id = ?').get(agentId);
+        const usedAt = Math.max(Date.now(), Number(prev?.m || 0) + 1);
         conn.prepare(`INSERT INTO greeting_line_used (agent_id, line_key, used_at) VALUES (?, ?, ?)
-      ON CONFLICT(agent_id, line_key) DO UPDATE SET used_at = excluded.used_at`).run(agentId, lineKey(line), Date.now());
+      ON CONFLICT(agent_id, line_key) DO UPDATE SET used_at = excluded.used_at`).run(agentId, lineKey(line), usedAt);
         return line;
     })();
 }

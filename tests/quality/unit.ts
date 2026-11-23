@@ -415,9 +415,14 @@ export async function runUnit() {
     const st = defaults.normalizeState(clone$(base)); const c = st.campaigns[R.int(0, st.campaigns.length - 1)]; const a = st.agents[R.int(0, st.agents.length - 1)];
     a.behavior.expressionStyle = R.pick(styles.slice(0, 4)) as any; a.prompt = R.pick(['', fuzzString(R, 500), 'Ask about Medicare.\n'.repeat(R.int(1, 2000))]);
     c.complianceRules = R.pick(['', 'Never promise savings.', fuzzString(R, 300)]); c.maxCallSec = R.pick([0, 70, 120, 300]);
-    check(`call prompt #${i + 1} (${a.behavior.expressionStyle}, limit ${c.maxCallSec}s) carries the bot's own speaking style and the transfer rule`, () => {
+    if (i % 3 === 0) a.flow!.voiceDeliveryEnabled = false;
+    check(`call prompt #${i + 1} (${a.behavior.expressionStyle}, limit ${c.maxCallSec}s) carries the bot's own speaking style, the transfer rule and its saved voice delivery`, () => {
       const p = persona.composeBehavioralPrompt(a, c);
-      assert.ok(typeof p === 'string' && p.includes('PERSONALITY & SPEAKING STYLE') && p.includes('TRANSFERS:') && !p.includes('VOICE DELIVERY'));
+      // On, unless the prompt has no room left for it (it never displaces the bot's own instructions).
+      const delivery = a.flow!.voiceDeliveryEnabled !== false && !persona.callPromptReport(a, c, 0).voiceDeliveryOmitted;
+      assert.ok(typeof p === 'string' && p.includes('PERSONALITY & SPEAKING STYLE') && p.includes('TRANSFERS:'));
+      assert.equal(p.includes('VOICE DELIVERY'), delivery, 'voice delivery section follows the bot switch');
+      if (delivery) assert.ok(p.includes(a.flow!.voiceDelivery.trim()), 'section is the saved per-bot text');
       if (c.complianceRules && c.complianceRules.length < 200 && c.complianceRules.trim()) assert.ok(p.includes(c.complianceRules.trim().slice(0, 30)));
     });
     check(`call prompt report #${i + 1} is self-consistent`, () => {

@@ -105,6 +105,7 @@ import { VicidialBridgeService, ViciBridgeOptions } from './vici-bridge';
 import { parseVicidialCallerCode, VicidialApiClient } from './vici-client';
 import { runSimulatedViciBridgeCall } from './vici-loopback-tester';
 import { executeCustomFunctionWebhook } from './webhook-executor';
+import { isScreeningEnabled, lastTestRun, loadScreeningConfig, recentScreeningResults, runScreeningVerification, screeningCounts, screeningSettingsRow, setScreeningEnabled } from './screening';
 import {
   authenticateUser,
   changeUserPassword,
@@ -1117,6 +1118,8 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         exten: merged.exten,
         channel: merged.channel,
         agent_user: merged.agent_user,
+        amd: merged.amd,
+        amd_sig: merged.amd_sig,
       });
     } catch (err) {
       // A wrong or unassigned extension is the dialer's mistake, not a server failure.
@@ -1632,6 +1635,57 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         code: err?.code || 'TTS_PREVIEW_FAILED',
         error: err?.message || 'Failed to synthesize TTS preview',
       });
+    }
+  }));
+
+  // ==================== CALL SCREENING (ANSWERING MACHINE DETECTION) ====================
+  // Two controls only: turn screening on/off, and run Testing & Verification.
+
+  const screeningStatusPayload = () => {
+    const cfg = loadScreeningConfig();
+    const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const settings = screeningSettingsRow();
+    const last = lastTestRun();
+    return {
+      ok: true,
+      enabled: settings.enabled,
+      updatedAt: settings.updatedAt,
+      updatedBy: settings.updatedBy,
+      last24h: screeningCounts(since),
+      recent: recentScreeningResults(20),
+      dispositions: cfg.dispositions,
+      maxScreeningSec: cfg.thresholds.maxScreeningMs / 1000,
+      lastTest: last ? { ranAt: last.ranAt, ranBy: last.ranBy, passed: last.passed, failed: last.failed, warnings: last.warnings, items: last.report?.items || [] } : null,
+    };
+  };
+
+  app.get('/api/screening/status', asyncRoute(async (_req: Request, res: Response) => {
+    res.json(screeningStatusPayload());
+  }));
+
+  app.post('/api/screening/toggle', asyncRoute(async (req: Request, res: Response) => {
+    if (typeof req.body?.enabled !== 'boolean') {
+      res.status(400).json({ ok: false, code: 'INVALID_BODY', error: 'Send {"enabled": true} or {"enabled": false}.' });
+      return;
+    }
+    const who = getAuthenticatedUser(req)?.email || 'admin';
+    setScreeningEnabled(req.body.enabled, who);
+    res.json({ ...screeningStatusPayload(), enabled: isScreeningEnabled() });
+  }));
+
+  let screeningVerifyRunning = false;
+  app.post('/api/screening/verify', asyncRoute(async (req: Request, res: Response) => {
+    if (screeningVerifyRunning) {
+      res.status(409).json({ ok: false, code: 'VERIFY_RUNNING', error: 'A verification run is already in progress.' });
+      return;
+    }
+    screeningVerifyRunning = true;
+    try {
+      const who = getAuthenticatedUser(req)?.email || 'admin';
+      const report = await runScreeningVerification({ live: req.body?.live !== false, by: who });
+      res.json({ ok: report.failed === 0, ...report });
+    } finally {
+      screeningVerifyRunning = false;
     }
   }));
 

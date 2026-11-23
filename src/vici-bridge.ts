@@ -26,6 +26,8 @@ import { CALL_LIMIT_CLOSING_LINE, TRANSFER_INTENT_AUTOCOMPLETE_MS, TRANSFER_INTE
 export { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
 import { Agent, Campaign, ConsoleState } from './types';
 import { SipRegistrationClient } from './vici-sip-registration';
+import { isScreeningEnabled, NativeAmdResult, recordScreeningDecision, ScreeningDecision, sendScreeningDisposition, startCallScreening } from './screening';
+import type { ScreeningSession } from './screening/session';
 import {
   HydratedViciLead,
   ParsedViciCallerCode,
@@ -49,6 +51,9 @@ export interface PreCallRegistrationInput {
   exten?: string;
   channel?: string;
   agent_user?: string;
+  /** Native AMD result relayed by the MMA AMD dialplan (STATUS/CAUSE) and its signature. */
+  amd?: string;
+  amd_sig?: string;
 }
 
 interface PreCallRecord {
@@ -63,6 +68,8 @@ interface PreCallRecord {
   remoteAgentUser: string;
   viciClient: VicidialApiClient;
   leadPromise: Promise<HydratedViciLead>;
+  amd: string;
+  amdSig: string;
 }
 
 export interface ActiveBridgeCallSummary {
@@ -471,6 +478,8 @@ export class VicidialBridgeService {
       remoteAgentUser: raUser,
       viciClient,
       leadPromise,
+      amd: String(input.amd || '').slice(0, 80),
+      amdSig: String(input.amd_sig || '').slice(0, 80),
     });
 
     return {
@@ -1105,6 +1114,8 @@ export class VicidialBridgeService {
           sessionUuid: preReg.uuid,
           preCall: preRecord,
           hooks,
+          amdHeader: firstHeader(headers, 'x-mma-amd'),
+          amdSignature: firstHeader(headers, 'x-mma-amd-sig'),
         });
 
         rtpSocket.on('message', (pktBuf, peer) => {
@@ -1180,6 +1191,9 @@ export class VicidialBridgeService {
     sessionUuid: string;
     preCall?: PreCallRecord;
     hooks: TransportHooks;
+    /** X-MMA-AMD / X-MMA-AMD-Sig from the INVITE (native Asterisk AMD result). */
+    amdHeader?: string;
+    amdSignature?: string;
   }) {
     const state = getConsoleState();
     const effectiveVici = this.viciApiBaseOverride
@@ -1255,6 +1269,11 @@ export class VicidialBridgeService {
     const transferIntentActive = () => transferIntentAt > 0 && Date.now() - transferIntentAt < TRANSFER_INTENT_GRACE_MS;
     let speechDrainTimer: NodeJS.Timeout | null = null;
     let openingGate: OpeningGate | null = null;
+    // Call screening: no campaign conversation starts until a person is confirmed.
+    let screening: { session: ScreeningSession; nativeAmd: NativeAmdResult } | null = null;
+    let screeningDecided = false;
+    let screenedHuman = false;
+    let screeningNonHuman: { status: string; decision: ScreeningDecision } | null = null;
 
     let lastCallerAudioAt = Date.now();
     // Assigned once the provider session exists (it owns the stale-audio gate).
@@ -1433,6 +1452,7 @@ export class VicidialBridgeService {
       callLimitTimers.length = 0;
       openingGate?.cancel();
       openingGate = null;
+      if (screening && !screeningDecided) screening.session.cancel(`Call ended during screening (${reason})`);
 
       if (dgWs && (dgWs.readyState === WebSocket.OPEN || dgWs.readyState === WebSocket.CONNECTING)) {
         try {
@@ -1447,8 +1467,26 @@ export class VicidialBridgeService {
       }
       opts.hooks.hangupTransport();
 
-      // Release Remote Agent call slot via ra_call_control HANGUP if call was NOT transferred
-      if (!transferredTo && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
+      // Screened as not a person: the screening module sends the status once,
+      // retries, frees the remote-agent slot and reads the status back.
+      if (screeningNonHuman && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
+        await sendScreeningDisposition({
+          callId,
+          campaignId: campaign.id,
+          campaignViciId: campaign.viciCampaign || '',
+          leadId: summary.leadId || '',
+          callerCode: parsedCaller.callerCode,
+          remoteAgentUser,
+          phone: summary.phone || '',
+          nativeAmd: screening?.nativeAmd || { status: 'NONE', cause: '', authenticated: false },
+          decision: screeningNonHuman.decision,
+          status: screeningNonHuman.status,
+          client: viciClient,
+        }, (line) => transcript.push({ ts: new Date().toISOString(), role: 'system', content: line })).catch((err: any) => {
+          transcript.push({ ts: new Date().toISOString(), role: 'system', content: `Screening disposition error: ${err?.message || 'unknown'}` });
+        });
+      } else if (!transferredTo && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
+        // Release Remote Agent call slot via ra_call_control HANGUP if call was NOT transferred
         await viciClient
           .hangupRemoteAgentCall({
             callerCode: parsedCaller.callerCode,
@@ -1564,8 +1602,36 @@ export class VicidialBridgeService {
       await executeTransferAction({ reason });
     });
 
+    if (isScreeningEnabled()) {
+      try {
+        screening = startCallScreening({
+          callerCode: parsedCaller.callerCode || '',
+          phone: parsedCaller.phone || '',
+          amdHeader: opts.amdHeader || opts.preCall?.amd || '',
+          amdSignature: opts.amdSignature || opts.preCall?.amdSig || '',
+          playAudio: (pcm8k) => {
+            if (closed) return;
+            recorder.recordBotPcm8k(pcm8k);
+            opts.hooks.enqueueBotPcm8k(pcm8k);
+          },
+          log: (line) => addTranscript('system', line),
+        });
+        updateState('screening');
+      } catch (err: any) {
+        // Fail closed: if screening cannot start, the call is not handed to the bot.
+        screening = null;
+        screeningNonHuman = { status: 'NA', decision: { outcome: 'UNCERTAIN', reason: `Screening could not start: ${err?.message || 'error'}`, decidedAtMs: 0, evidence: {} } };
+      }
+    }
+
     // Boot async lead hydration -> Deepgram Voice Agent 8kHz session
     (async () => {
+      if (screeningNonHuman) {
+        addTranscript('system', `✗ ${screeningNonHuman.decision.reason}; call ended without starting the bot`);
+        disposition = screeningNonHuman.status;
+        await finalizeSession('screening_error');
+        return;
+      }
       let hydratedLead: HydratedViciLead;
       try {
         hydratedLead = opts.preCall
@@ -1679,6 +1745,38 @@ export class VicidialBridgeService {
         `Connected ${opts.transport.toUpperCase()} call (CID: ${parsedCaller.callerCode || 'direct'}, Lead #${summary.leadId || 'n/a'} ${hydratedLead.first_name || ''} ${hydratedLead.state || ''} via ${hydratedLead.sourceApi})`
       );
 
+      if (screening) {
+        const decision = await screening.session.result;
+        screeningDecided = true;
+        const finishInput = {
+          callId,
+          campaignId: campaign.id,
+          campaignViciId: campaign.viciCampaign || '',
+          leadId: summary.leadId || '',
+          callerCode: parsedCaller.callerCode || '',
+          remoteAgentUser,
+          phone: summary.phone || '',
+          nativeAmd: screening.nativeAmd,
+          decision,
+        };
+        if (closed) {
+          // Caller hung up (or the transport dropped) during screening: record it, no extra disposition.
+          recordScreeningDecision({ ...finishInput, decision: { ...decision, outcome: 'UNCERTAIN' } }, (l) => addTranscript('system', l), '');
+          return;
+        }
+        const status = recordScreeningDecision(finishInput, (l) => addTranscript('system', l));
+        if (decision.outcome === 'HUMAN_CONFIRMED') {
+          screenedHuman = true;
+          addTranscript('system', `✓ Screening: person confirmed in ${(decision.decidedAtMs / 1000).toFixed(1)}s (${decision.reason}); starting the bot`);
+        } else {
+          screeningNonHuman = { status, decision };
+          disposition = status;
+          addTranscript('system', `Screening: ${decision.outcome} (${decision.reason}); ending the call with status ${status}`);
+          await finalizeSession(`screening_${decision.outcome.toLowerCase()}`);
+          return;
+        }
+      }
+
       const dgKey = getSecret('DEEPGRAM_API_KEY');
       const customAgentUrl = (process.env.DEEPGRAM_AGENT_URL || '').trim();
       const targetUrl = customAgentUrl || 'wss://agent.deepgram.com/v1/agent/converse';
@@ -1726,6 +1824,8 @@ export class VicidialBridgeService {
       openingGate = createOpeningGate({
         greeting: openingText,
         ...openingGateOptionsFor(agent),
+        // Screening already heard the person say hello: greet right away.
+        ...(screenedHuman ? { waitForCaller: false } : {}),
         sendOpening: (message) => {
           if (!closed && dgWs?.readyState === WebSocket.OPEN) {
             dgWs.send(JSON.stringify({ type: 'InjectAgentMessage', message }));
@@ -2084,6 +2184,13 @@ export class VicidialBridgeService {
         lastCallerAudioAt = Date.now();
         recorder.recordCallerPcm8k(pcm8k);
         this.emitListen(callId, 1, pcm8k);
+        // During screening caller audio goes only to the screening engine,
+        // never to the bot (nothing may start the conversation early).
+        if (screening && !screeningDecided) {
+          screening.session.pushAudio(pcm8k);
+          return;
+        }
+        if (screening && !screenedHuman) return;
         bargeInGate.onCallerAudio(pcm8k);
         if (!settingsApplied) {
           if (preSettingsAudioQueue.length < 40) {

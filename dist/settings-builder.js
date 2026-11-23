@@ -658,6 +658,10 @@ function generateViciConfig(state) {
         ` same => n,SIPAddHeader(X-Vici-UniqueID: \${CHANNEL(uniqueid)})`,
         ` same => n,SIPAddHeader(X-Vici-Channel: \${CHANNEL})`,
         ` same => n,SIPAddHeader(X-Vici-Exten: \${EXTEN})`,
+        `; Call screening: relay the native AMD result stored by MMA AMD extension 8370 (empty when AMD did not run)`,
+        ` same => n,Set(MMA_AMD=\${DB_DELETE(MMA_AMD/\${CALLERID(name)})})`,
+        ` same => n,ExecIf($["\${MMA_AMD}" != ""]?SIPAddHeader(X-MMA-AMD: \${CUT(MMA_AMD,/,1-2)}))`,
+        ` same => n,ExecIf($["\${CUT(MMA_AMD,/,3)}" != ""]?SIPAddHeader(X-MMA-AMD-Sig: \${CUT(MMA_AMD,/,3)}))`,
         ` same => n,Dial(SIP/\${EXTEN}@ai-bridge,60,tTo)`,
         ` same => n,Hangup()`,
     ].join('\n');
@@ -669,7 +673,8 @@ function generateViciConfig(state) {
         ` same => n,Answer()`,
         ` same => n,Set(CHANNEL(audioreadformat)=slin)`,
         ` same => n,Set(CHANNEL(audiowriteformat)=slin)`,
-        ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:${consolePort}/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})})})`,
+        ` same => n,Set(MMA_AMD=\${DB_DELETE(MMA_AMD/\${CALLERID(name)})})`,
+        ` same => n,Set(_BRIDGE_UUID=\${CURL(http://${v.bridgeHost}:${consolePort}/api/vici/register-call,uniqueid=\${CHANNEL(uniqueid)}&vici_cid=\${URIENCODE(\${CALLERID(name)})}&phone=\${URIENCODE(\${CALLERID(num)})}&exten=\${EXTEN}&channel=\${URIENCODE(\${CHANNEL})}&amd=\${URIENCODE(\${CUT(MMA_AMD,/,1-2)})}&amd_sig=\${CUT(MMA_AMD,/,3)})})`,
         ` same => n,AudioSocket(\${_BRIDGE_UUID},${v.bridgeHost}:${v.bridgePort})`,
         ` same => n,Hangup()`,
     ].join('\n');

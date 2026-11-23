@@ -4308,3 +4308,7 @@ label.vclone-file, :root[data-theme] label.vclone-file { text-transform: none !i
 .listen-vol input { width: 90px; }
 @keyframes listen-pulse { 0% { box-shadow: 0 0 0 0 rgba(46,160,67,.6); } 70% { box-shadow: 0 0 0 6px rgba(46,160,67,0); } 100% { box-shadow: 0 0 0 0 rgba(46,160,67,0); } }
 @media (prefers-reduced-motion: reduce) { .listen-live i { animation: none; } }
+/* Call screening test report */
+.screen-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.screen-tbl th { text-align: left; font-weight: 600; opacity: .75; padding: 6px 8px; border-bottom: 1px solid var(--line, rgba(127,127,127,.25)); }
+.screen-tbl td { padding: 6px 8px; border-bottom: 1px solid var(--line, rgba(127,127,127,.15)); vertical-align: top; }
