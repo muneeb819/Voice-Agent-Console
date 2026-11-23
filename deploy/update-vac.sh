@@ -45,7 +45,9 @@ Host github-vac
 EOF
   chmod 600 "$HOME/.ssh/config"
 fi
-if ! ssh -o BatchMode=yes -T github-vac 2>&1 | grep -q "successfully authenticated"; then
+# GitHub answers a successful key test with exit status 1, so check the text, not the status.
+SSH_TEST=$(ssh -o BatchMode=yes -T github-vac 2>&1 || true)
+if ! printf '%s' "$SSH_TEST" | grep -q "successfully authenticated"; then
   echo "GitHub did not accept the deploy key. Add this key in"
   echo "github.com/$REPO -> Settings -> Deploy keys, then run again:"
   echo
@@ -77,9 +79,13 @@ git log --oneline -5
 say "3/6 Backing up data and settings"
 BACKUP="$HOME/vac-backup-$(date +%Y%m%d-%H%M).tgz"
 if sudo test -d "$INSTALL_DIR"; then
-  sudo tar czf "$BACKUP" -C "$INSTALL_DIR" --ignore-failed-read data .env 2>/dev/null || true
+  if ! sudo tar czf "$BACKUP" -C "$INSTALL_DIR" --ignore-failed-read data .env || ! sudo tar tzf "$BACKUP" >/dev/null; then
+    echo "ERROR: the backup failed (disk full?). Nothing was deployed." >&2
+    df -h "$HOME" >&2
+    exit 1
+  fi
   sudo chown "$(id -u):$(id -g)" "$BACKUP" 2>/dev/null || true
-  echo "Backup: $BACKUP"
+  echo "Backup: $BACKUP ($(du -h "$BACKUP" | cut -f1))"
   ls -1t "$HOME"/vac-backup-*.tgz 2>/dev/null | tail -n +6 | xargs -r rm -f   # keep the last 5
 else
   echo "No existing install to back up."
