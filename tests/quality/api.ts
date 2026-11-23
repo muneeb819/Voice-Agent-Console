@@ -25,7 +25,7 @@ const concrete = (p: string) => p.replace(/:([A-Za-z]+)/g, (_m, name) => (name =
 // the remaining checks rely on are left out of the malformed-input family only.
 const SIDE_EFFECT = new Set(['POST /api/demo-tunnel/start', 'POST /api/state/reset', 'POST /api/auth/logout-all', 'POST /api/auth/revoke-sessions', 'POST /api/auth/logout']);
 const PUBLIC = (r: Route) => r.path === '/api/health' || r.path.startsWith('/api/auth/') || r.path === '/api/vici/register-call' || r.path === '/api/vici/precall';
-const ADMIN_ONLY = (r: Route) => /^\/api\/(secrets|users|state\/reset|demo-tunnel\/(start|stop)|vici\/deploy-script|vici\/release-bundle|functions\/test-webhook|speech-service\/(activate|test)|vici\/verify|deepgram\/verify)$/.test(r.path) || /^\/api\/users\/:id\//.test(r.path) || /^\/api\/vici\/calls\/:callId\/(hangup|transfer)$/.test(r.path);
+const ADMIN_ONLY = (r: Route) => /^\/api\/(secrets|users|state\/reset|demo-tunnel\/(start|stop)|vici\/deploy-script|vici\/release-bundle|functions\/test-webhook|speech-service\/(activate|test)|vici\/verify|deepgram\/verify)$/.test(r.path) || /^\/api\/mirror\//.test(r.path) || /^\/api\/users\/:id\//.test(r.path) || /^\/api\/vici\/calls\/:callId\/(hangup|transfer)$/.test(r.path);
 
 export async function runApi(base: string, adminPassword: string, routes: Route[]) {
   const admin = { Authorization: `Bearer ${adminPassword}` };

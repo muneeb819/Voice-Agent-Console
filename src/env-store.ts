@@ -29,6 +29,7 @@ export const MANAGED_SECRET_KEYS = [
   'CUSTOM_WEBHOOK_SECRET',
   'ADMIN_PASSWORD',
   'BRIDGE_ALLOWED_IPS',
+  'MSSQL_PASSWORD',
 ] as const;
 
 export type SecretKeyName = (typeof MANAGED_SECRET_KEYS)[number];

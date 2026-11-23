@@ -176,8 +176,9 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 echo "=== [1/7] Checking prerequisites ==="
 node_ok() {
   command -v node >/dev/null 2>&1 && \
-    node -e 'const [M,m]=process.versions.node.split(".").map(Number); process.exit(M>22||(M===22&&m>=5)?0:1)' 2>/dev/null
+    node -e 'const [M,m,p]=process.versions.node.split(".").map(Number); process.exit(M>22||(M===22&&(m>5||(m===5&&p>=1)))?0:1)' 2>/dev/null
 }
+# 22.5.0 itself is excluded: its npm fails with "Exit handler never called".
 # A fresh EC2/VM has no Node.js; install Node 22 LTS from NodeSource so the
 # documented "clone + run this script" path works end to end.
 if ! node_ok && [ "$INSTALL_NODE" = "yes" ]; then
