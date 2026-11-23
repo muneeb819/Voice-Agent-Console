@@ -70,6 +70,8 @@ export interface ScreeningThresholds {
   probeResponseWindowMs: number;
   /** Minimum tone length that counts as a voicemail beep. */
   minBeepMs: number;
+  /** With a long first utterance, this many recognised words mark a recorded greeting. */
+  minMachineWords: number;
 }
 
 export const DEFAULT_THRESHOLDS: ScreeningThresholds = {
@@ -81,6 +83,7 @@ export const DEFAULT_THRESHOLDS: ScreeningThresholds = {
   silenceProbeAtMs: 2500,
   probeResponseWindowMs: 3000,
   minBeepMs: 200,
+  minMachineWords: 12,
 };
 
 export interface ScreeningDispositions {

@@ -54,6 +54,7 @@ function loadScreeningConfig(env = process.env) {
             silenceProbeAtMs: num(env, 'SCREENING_SILENCE_PROBE_AT_MS', t.silenceProbeAtMs, 1000, 6000),
             probeResponseWindowMs: num(env, 'SCREENING_PROBE_RESPONSE_MS', t.probeResponseWindowMs, 1000, 6000),
             minBeepMs: num(env, 'SCREENING_MIN_BEEP_MS', t.minBeepMs, 100, 1000),
+            minMachineWords: num(env, 'SCREENING_MIN_MACHINE_WORDS', t.minMachineWords, 6, 40),
         },
         dispositions: {
             VOICEMAIL: code(env, 'SCREENING_DISPO_VOICEMAIL', 'AA'),

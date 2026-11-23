@@ -61,7 +61,7 @@ The checks run in this order; the first match decides.
 | 5 | Words: "number you have dialed / not in service / recorded message …" | PRERECORDED_AUDIO |
 | 5 | Words: "press 1 / para español / main menu / screening service / say your name …" | IVR |
 | 5 | Words: "leave a message / after the tone / not available … / you've reached …" | VOICEMAIL |
-| 6 | First utterance ≥ 3.5 s with no pause | VOICEMAIL |
+| 6 | First utterance ≥ 3.5 s with no pause **and** ≥ 12 recognised words (a long sound alone is only evidence; without more, the call ends UNCERTAIN, never VOICEMAIL) | VOICEMAIL |
 | 7 | Short answer (≤ 3 s, 1–8 recognised words, final transcript), then ≥ 0.8 s of quiet | HUMAN_CONFIRMED |
 | 8 | No speech by 2.5 s, or sound without words: play "Hello?" once; a short recognised reply | HUMAN_CONFIRMED |
 | 9 | No reply within 3 s of the probe, or 7 s reached | UNCERTAIN |
@@ -85,7 +85,7 @@ The on/off switch is stored in the database and set from the console. Every othe
 | `SCREENING_ALWAYS_PROBE` | 0 | 1 = ask the probe on every call before confirming |
 | `SCREENING_ASR_MODEL` | nova-3 | Deepgram model for screening |
 | `SCREENING_AMD_CONTEXT` | default | Context of 8369/8370 for the verification checks |
-| Fine thresholds | see `src/screening/config.ts` | `SCREENING_AFTER_GREETING_SILENCE_MS`, `SCREENING_LONG_GREETING_MS`, … |
+| Fine thresholds | see `src/screening/config.ts` | `SCREENING_AFTER_GREETING_SILENCE_MS`, `SCREENING_LONG_GREETING_MS`, `SCREENING_MIN_MACHINE_WORDS`, … |
 
 ## 4. Data (SQLite, created automatically; no manual migration)
 
@@ -147,7 +147,7 @@ Each stage can be undone separately, in seconds:
 |---|---|
 | Full regression (`npm test`, 27 suites incl. call screening) | All passed |
 | Call screening suite | 85 / 85 checks |
-| Detection scenarios (also run by the console button) | 18 / 18 |
+| Detection scenarios (also run by the console button) | 20 / 20 |
 | Shell scripts (`bash -n`, `shellcheck -S warning`) | Clean |
 | Installer dry run against a captured 8369 dialplan | 8370 generated correctly: stock steps kept, `${EXTEN}` pinned to 8369, AMD result stored after `AMD()`, secret masked in the printout |
 | Console UI (Chrome, 1366 px and 400 px) | Card renders, both buttons work, no script errors, no sideways scroll |
@@ -159,7 +159,9 @@ Detection scenarios, decision and decision time (audio clock):
 | Human "Hello?" then waits | HUMAN_CONFIRMED | 2.1 s |
 | Human "Yeah, hello" on a noisy line | HUMAN_CONFIRMED | 2.5 s |
 | Voicemail greeting | VOICEMAIL | 3.2 s |
-| Long recorded greeting, no words recognised | VOICEMAIL | 3.8 s |
+| Long recorded greeting without voicemail words | VOICEMAIL | 3.8 s |
+| Person who talks for 4 s | UNCERTAIN (never voicemail) | 7.0 s |
+| Long sound, no words recognised | UNCERTAIN | 7.0 s |
 | Voicemail beep | VOICEMAIL | 1.0 s |
 | IVR menu | IVR | 2.0 s |
 | Phone call-screening assistant | IVR | 2.3 s |

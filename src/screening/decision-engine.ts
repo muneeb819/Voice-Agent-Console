@@ -85,16 +85,22 @@ export function evaluateScreening(e: EngineEvidence, th: ScreeningThresholds): E
   const cue = matchTranscriptCue(text);
   if (cue) return decide(e, cue.cue, `Transcript matched "${cue.label}"`);
 
-  // 5. Timing: a long first utterance is a recorded greeting.
   const utts = utterances(e.audio, 400);
   const first = utts[0];
   const probeActive = e.probe.startedAtMs !== null;
-  if (first && first.endMs - first.startMs >= th.longGreetingMs && (!probeActive || first.startMs < (e.probe.startedAtMs as number))) {
-    return decide(e, 'VOICEMAIL', `First utterance lasted ${Math.round((first.endMs - first.startMs) / 100) / 10}s without a pause`, { greetingMs: first.endMs - first.startMs });
-  }
-
   const words = wordCount(text);
   const hasFinal = e.transcripts.some((t) => t.isFinal && t.text.trim());
+
+  // 5. Timing: a long first utterance is only evidence. People sometimes talk
+  // for several seconds, so it decides VOICEMAIL only together with a long
+  // recognised monologue; otherwise screening keeps listening and, without
+  // stronger evidence, ends UNCERTAIN (lead recycled) rather than hanging up
+  // on a person with a machine status.
+  const longFirst = Boolean(first) && first.endMs - first.startMs >= th.longGreetingMs && (!probeActive || first.startMs < (e.probe.startedAtMs as number));
+  const finalWords = wordCount(e.transcripts.filter((t) => t.isFinal).map((t) => t.text).join(' '));
+  if (longFirst && hasFinal && finalWords >= th.minMachineWords) {
+    return decide(e, 'VOICEMAIL', `First utterance lasted ${Math.round((first.endMs - first.startMs) / 100) / 10}s with ${finalWords} words and no pause`, { greetingMs: first.endMs - first.startMs, words: finalWords });
+  }
 
   // 6. Human: a short answer, then quiet, recognised as words.
   const asrOk = e.asrState === 'ok';

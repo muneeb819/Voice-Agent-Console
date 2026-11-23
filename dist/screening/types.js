@@ -19,4 +19,5 @@ exports.DEFAULT_THRESHOLDS = {
     silenceProbeAtMs: 2500,
     probeResponseWindowMs: 3000,
     minBeepMs: 200,
+    minMachineWords: 12,
 };
