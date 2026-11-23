@@ -38,7 +38,6 @@ const vici_bridge_1 = require("./vici-bridge");
 const vici_client_1 = require("./vici-client");
 const vici_loopback_tester_1 = require("./vici-loopback-tester");
 const webhook_executor_1 = require("./webhook-executor");
-const mirror_1 = require("./mirror");
 const screening_1 = require("./screening");
 const user_store_1 = require("./user-store");
 const demo_tunnel_1 = require("./demo-tunnel");
@@ -1559,58 +1558,6 @@ function createApp(viciBridge) {
             screeningVerifyRunning = false;
         }
     }));
-    // ==================== SQL SERVER MIRROR (AWS RDS, SSMS) ====================
-    // SQLite stays the live database; every change is copied to SQL Server.
-    app.get('/api/mirror/status', asyncRoute(async (_req, res) => {
-        res.json((0, mirror_1.mirrorStatus)());
-    }));
-    // Save connection settings (and the password, which goes to .env, never the database).
-    app.post('/api/mirror/settings', asyncRoute(async (req, res) => {
-        const who = (0, auth_guard_1.getAuthenticatedUser)(req)?.email || 'admin';
-        const parsed = (0, mirror_1.parseMirrorSettings)(req.body, who);
-        if (!parsed.settings) {
-            res.status(400).json({ ok: false, code: 'INVALID_SETTINGS', error: parsed.error });
-            return;
-        }
-        if (typeof req.body?.password === 'string' && req.body.password.length) {
-            try {
-                (0, env_store_1.updateSecrets)({ MSSQL_PASSWORD: req.body.password });
-            }
-            catch (err) {
-                res.status(400).json({ ok: false, code: 'INVALID_PASSWORD', error: err instanceof Error ? err.message : 'Password could not be saved.' });
-                return;
-            }
-        }
-        (0, mirror_1.updateMirrorSettings)(parsed.settings);
-        res.json((0, mirror_1.mirrorStatus)());
-    }));
-    app.post('/api/mirror/test', asyncRoute(async (_req, res) => {
-        const result = await (0, mirror_1.testMirrorConnection)((0, mirror_1.loadSettings)());
-        res.status(result.ok ? 200 : 502).json(result);
-    }));
-    app.post('/api/mirror/toggle', asyncRoute(async (req, res) => {
-        if (typeof req.body?.enabled !== 'boolean') {
-            res.status(400).json({ ok: false, code: 'INVALID_BODY', error: 'Send {"enabled": true} or {"enabled": false}.' });
-            return;
-        }
-        if (req.body.enabled) {
-            const missing = (0, mirror_1.missingSettings)((0, mirror_1.loadSettings)());
-            if (missing.length) {
-                res.status(400).json({ ok: false, code: 'SETTINGS_MISSING', error: `Fill in and save: ${missing.join(', ')}.` });
-                return;
-            }
-        }
-        (0, mirror_1.setMirrorEnabled)(req.body.enabled, (0, auth_guard_1.getAuthenticatedUser)(req)?.email || 'admin');
-        res.json((0, mirror_1.mirrorStatus)());
-    }));
-    app.post('/api/mirror/resync', asyncRoute(async (_req, res) => {
-        if (!(0, mirror_1.loadSettings)().enabled) {
-            res.status(400).json({ ok: false, code: 'MIRROR_OFF', error: 'Turn the mirror on first.' });
-            return;
-        }
-        (0, mirror_1.requestFullResync)();
-        res.json((0, mirror_1.mirrorStatus)());
-    }));
     // ==================== LOCAL SPEECH SERVICE (1-CLICK STT + TTS) ====================
     app.get('/api/speech-service/status', asyncRoute(async (req, res) => {
         try {
@@ -1902,7 +1849,6 @@ if (require.main === module) {
                         console.log(`[VAC:DEBUG] Active state loaded: ${currentState.agents.length} agents (${currentState.agents.map((a) => `"${a.name}"`).join(', ')}), ${currentState.campaigns.length} campaigns (${currentState.campaigns.map((c) => `"${c.name}"`).join(', ')}) | TTS=${currentState.services.tts.model || 'none'} | Pre-flight checks: ${okCount} passed, ${wnCount} warnings, ${erCount} errors`);
                     }
                     (0, deepgram_catalog_1.fetchDeepgramVoiceCatalog)().catch(() => { });
-                    (0, mirror_1.startMirror)();
                     resolveListen();
                 };
                 server.once('error', onError);
@@ -1941,7 +1887,6 @@ if (require.main === module) {
             await new Promise((resolve) => liveSimulator.close(() => resolve()));
             if (viciBridge)
                 await viciBridge.stop().catch(() => { });
-            await (0, mirror_1.stopMirror)().catch(() => { });
             // Initiate the close first, then drop idle/keep-alive sockets so the
             // close callback cannot be held open until the force-exit timer fires.
             const closed = new Promise((resolve) => server.close(() => resolve()));
