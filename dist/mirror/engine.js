@@ -28,6 +28,12 @@ function setTargetFactoryForTests(f) {
 }
 const OWNER = `${process.pid}-${crypto_1.default.randomBytes(4).toString('hex')}`;
 const BATCH = 500;
+let leaseMs = 60_000;
+/** Renews the lease before each write so a long copy never runs past it. */
+function holdLease() {
+    if (!(0, source_1.acquireLease)(OWNER, leaseMs))
+        throw new Error('Another console process took over the SQL Server mirror; this one stopped.');
+}
 const MAX_BATCHES_PER_TICK = 40;
 const rt = { phase: 'off', serverVersion: '', rowsSent: 0, rowsDeleted: 0, lastTickAt: '', copying: '', tableRows: {}, views: [], failures: 0 };
 let target = null;
@@ -83,6 +89,7 @@ async function copyTable(t, spec, keepDeleted) {
     let sent = 0;
     let first = true;
     for (const page of (0, source_1.readAllRows)(spec, BATCH)) {
+        holdLease();
         await t.apply(spec, { truncate: first && !keepDeleted, upserts: page, deletes: [] });
         first = false;
         sent += page.length;
@@ -100,6 +107,7 @@ async function drain(t, tables, s, book) {
         const entries = (0, source_1.readOutbox)(BATCH);
         if (!entries.length)
             return;
+        holdLease();
         const byTable = new Map();
         for (const e of entries) {
             if (!tables.has(e.tbl))
@@ -148,7 +156,8 @@ async function tick() {
         (0, source_1.saveBook)(book);
         return;
     }
-    if (!(0, source_1.acquireLease)(OWNER, Math.max(60_000, s.intervalSec * 4000)))
+    leaseMs = Math.max(60_000, s.intervalSec * 4000);
+    if (!(0, source_1.acquireLease)(OWNER, leaseMs))
         return; // another process is syncing
     const tables = (0, source_1.discoverTables)();
     // Capture changes first, so nothing written during a copy is missed.

@@ -20,6 +20,12 @@ export function setTargetFactoryForTests(f: TargetFactory | null): void {
 
 const OWNER = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
 const BATCH = 500;
+let leaseMs = 60_000;
+
+/** Renews the lease before each write so a long copy never runs past it. */
+function holdLease(): void {
+  if (!acquireLease(OWNER, leaseMs)) throw new Error('Another console process took over the SQL Server mirror; this one stopped.');
+}
 const MAX_BATCHES_PER_TICK = 40;
 
 interface Runtime {
@@ -88,6 +94,7 @@ async function copyTable(t: MirrorTarget, spec: TableSpec, keepDeleted: boolean)
   let sent = 0;
   let first = true;
   for (const page of readAllRows(spec, BATCH)) {
+    holdLease();
     await t.apply(spec, { truncate: first && !keepDeleted, upserts: page, deletes: [] });
     first = false;
     sent += page.length;
@@ -104,6 +111,7 @@ async function drain(t: MirrorTarget, tables: Map<string, TableSpec>, s: MirrorS
   for (let n = 0; n < MAX_BATCHES_PER_TICK; n++) {
     const entries = readOutbox(BATCH);
     if (!entries.length) return;
+    holdLease();
     const byTable = new Map<string, Map<string, unknown[]>>();
     for (const e of entries) {
       if (!tables.has(e.tbl)) continue; // table no longer mirrored
@@ -148,7 +156,8 @@ async function tick(): Promise<void> {
     saveBook(book);
     return;
   }
-  if (!acquireLease(OWNER, Math.max(60_000, s.intervalSec * 4000))) return; // another process is syncing
+  leaseMs = Math.max(60_000, s.intervalSec * 4000);
+  if (!acquireLease(OWNER, leaseMs)) return; // another process is syncing
 
   const tables = discoverTables();
   // Capture changes first, so nothing written during a copy is missed.

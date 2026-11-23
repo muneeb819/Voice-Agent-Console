@@ -161,6 +161,27 @@ async function engine() {
   await runOnce();
   eq(outboxStats().pending, 0, 'overflowing queue is replaced by a full copy');
 
+  // Full copy pages by key, so deleting rows mid-copy cannot skip a row.
+  getDb().exec(`CREATE TABLE IF NOT EXISTS paging_table (id INTEGER PRIMARY KEY, v TEXT)`);
+  const ins = getDb().prepare(`INSERT INTO paging_table (id, v) VALUES (?, 'x')`);
+  getDb().transaction(() => { for (let i = 1; i <= 1200; i++) ins.run(i); })();
+  const { readAllRows } = await import('../src/mirror/source');
+  const pspec = discoverTables().get('paging_table')!;
+  const seen: number[] = [];
+  let pageNo = 0;
+  for (const page of readAllRows(pspec, 500)) {
+    seen.push(...page.map((r) => Number(r.id)));
+    if (pageNo++ === 0) getDb().prepare('DELETE FROM paging_table WHERE id <= 100').run();
+  }
+  eq(seen.length, 1200, 'rows deleted during a copy do not make later rows be skipped');
+  getDb().prepare(`UPDATE mirror_settings SET lease_owner = 'other-process', lease_until = ? WHERE id = 1`).run(Date.now() + 600000);
+  const before = outboxStats().pending;
+  await runOnce();
+  ok(outboxStats().pending === before, 'a worker does nothing while another process holds the lease');
+  getDb().prepare(`UPDATE mirror_settings SET lease_until = 0 WHERE id = 1`).run();
+  await runOnce();
+  eq(outboxStats().pending, 0, 'the lease is taken back once it expires');
+
   // Off: triggers and queue removed; changes are not tracked.
   setMirrorEnabled(false, by);
   const triggers = getDb().prepare(`SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'mirror_%'`).get() as { n: number };

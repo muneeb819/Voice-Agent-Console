@@ -221,19 +221,27 @@ function readRowsByKeys(spec, keys) {
     }
     return { rows, missing };
 }
-/** Pages through a whole table in key order (for full copies). */
+/**
+ * Pages through a whole table in key order (for full copies). Keyset paging
+ * (key > last key seen), so rows deleted during the copy cannot shift a page
+ * and make an unchanged row be skipped.
+ */
 function* readAllRows(spec, pageSize = 500) {
     const d = db();
-    const order = spec.pk.map(dq).join(', ');
-    let offset = 0;
+    const keys = spec.pk.map(dq).join(', ');
+    const after = spec.pk.length === 1 ? `${keys} > ?` : `(${keys}) > (${spec.pk.map(() => '?').join(', ')})`;
+    const first = d.prepare(`SELECT ${colList(spec)} FROM ${dq(spec.name)} ORDER BY ${keys} LIMIT ?`);
+    const next = d.prepare(`SELECT ${colList(spec)} FROM ${dq(spec.name)} WHERE ${after} ORDER BY ${keys} LIMIT ?`);
+    let last = null;
     for (;;) {
-        const page = d.prepare(`SELECT ${colList(spec)} FROM ${dq(spec.name)} ORDER BY ${order} LIMIT ? OFFSET ?`).all(pageSize, offset);
+        const page = (last ? next.all(...last, pageSize) : first.all(pageSize));
         if (!page.length)
             return;
         yield page;
         if (page.length < pageSize)
             return;
-        offset += page.length;
+        const tail = page[page.length - 1];
+        last = spec.pk.map((k) => tail[k]);
     }
 }
 function countRows(table) {
