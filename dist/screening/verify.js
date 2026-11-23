@@ -73,7 +73,7 @@ async function runScreeningVerification(opts = {}) {
             // AMI is optional (backup transfer path + native AMD checks). Hosted
             // VICIdial usually keeps port 5038 closed; that is not a fault.
             if (!ver.ok && /AMI TCP error|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH|ENOTFOUND|timed? ?out/i.test(ver.text)) {
-                add('Asterisk AMD', 'Native AMD checks', 'skip', `AMI not reachable at ${state.vici.amiHost || '(no host)'}:${state.vici.amiPort || 5038} (optional). Calls, transfers and AI screening use the VICIdial API instead.`);
+                add('Asterisk AMD', 'Native AMD checks', 'skip', `AMI not reachable at ${state.vici.amiHost || '(no host)'}:${state.vici.amiPort || 5038} (optional). Remote Agent bot calls transfer and hang up through the VICIdial Agent API, and AI screening still runs; only the AMI Redirect fallback for non-Remote-Agent calls is unavailable.`);
             }
             else {
                 add('Asterisk AMD', 'Asterisk version', ver.ok ? 'pass' : 'fail', ver.ok ? (/(Asterisk [^\s]+)/.exec(ver.text)?.[1] || 'read') : ver.text.slice(0, 160));
