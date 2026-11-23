@@ -274,5 +274,6 @@
   "tools/start-demo.js",
   "tools/sync-static-site.js",
   "tsconfig.json",
-  "vercel.json"
+  "vercel.json",
+  "tests/live-listen-verify.ts"
 ]

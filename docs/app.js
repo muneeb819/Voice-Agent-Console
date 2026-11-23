@@ -4532,6 +4532,8 @@
           if (msg.type === 'call_ended' && msg.cdr) {
             viciMon.logs = [msg.cdr, ...viciMon.logs.filter((x) => x.id !== msg.cdr.id)].slice(0, 25);
           }
+          if (listen && msg.type === 'call_ended' && msg.callId === listen.callId && !listen.closing) stopListening('Call ended');
+          if (listen && msg.type === 'call_transcript') return;
           if ((tab === 'vici' || tab === 'wallboard') && !viciMon.simRunning) {
             if (msg.type === 'call_ended' || msg.type === 'call_started' || tab === 'wallboard') {
               if (msg.type === 'call_ended') loadViciBridgeStatus();
@@ -4548,6 +4550,142 @@
         viciMon.ws = null;
       };
     } catch {}
+  }
+
+  // ==================== LIVE CALL LISTENING (listen only) ====================
+  // One call at a time. Customer in the left ear, bot in the right (as in the
+  // stereo recordings). Nothing is ever sent back to the call.
+  let listen = null;
+
+  function listenElapsed() {
+    if (!listen) return '0:00';
+    const sec = Math.max(0, Math.floor((Date.now() - listen.startedAt) / 1000));
+    return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+  }
+
+  function renderListenBar(callId) {
+    if (!listen || listen.callId !== callId) return '';
+    const vol = Math.round((listen.volume ?? 1) * 100);
+    const status = listen.error ? esc(listen.error) : listen.status;
+    return `<div class="listen-bar" role="group" aria-label="Live listening">
+      <span class="listen-live ${listen.error || listen.status !== 'Listening' ? 'off' : ''}"><i aria-hidden="true"></i><span id="listen-status">${status}</span></span>
+      <span class="listen-meter"><small>Customer</small><span class="listen-track"><span id="listen-meter-1" style="width:0%"></span></span></span>
+      <span class="listen-meter bot"><small>Bot</small><span class="listen-track"><span id="listen-meter-2" style="width:0%"></span></span></span>
+      <span class="listen-time" id="listen-time">${listenElapsed()}</span>
+      <label class="listen-vol">Volume <input type="range" id="listen-volume" min="0" max="200" step="5" value="${vol}" aria-label="Listening volume"></label>
+      <button class="g" data-listen-stop="1" style="padding:4px 9px;font-size:11.5px">Stop listening</button>
+    </div>`;
+  }
+
+  function paintListenBar() {
+    const host = listen && document.querySelector(`[data-listen-host="${CSS.escape(listen.callId)}"]`);
+    if (host) host.innerHTML = renderListenBar(listen.callId);
+    else if (!listen) document.querySelectorAll('[data-listen-host]').forEach((h) => { h.innerHTML = ''; });
+  }
+
+  function stopListening(note) {
+    const cur = listen;
+    if (!cur) return;
+    try { cur.ws && cur.ws.close(); } catch {}
+    if (cur.raf) cancelAnimationFrame(cur.raf);
+    if (note) {
+      cur.status = note;
+      cur.closing = true;
+      paintListenBar();
+      setTimeout(() => { if (listen === cur) { try { cur.ctx && cur.ctx.close(); } catch {} listen = null; paintListenBar(); render(); } }, 1500);
+    } else {
+      try { cur.ctx && cur.ctx.close(); } catch {}
+      listen = null;
+      paintListenBar();
+      render();
+    }
+  }
+
+  function playListenFrame(kind, pcm) {
+    const L = listen;
+    if (!L || L.closing || !pcm.length) return;
+    const ctx = L.ctx;
+    const buf = ctx.createBuffer(2, pcm.length, 8000);
+    const ch = buf.getChannelData(kind === 1 ? 0 : 1);
+    let sum = 0;
+    for (let i = 0; i < pcm.length; i++) { const v = pcm[i] / 32768; ch[i] = v; sum += v * v; }
+    const rms = Math.sqrt(sum / pcm.length);
+    L.levels[kind] = Math.max(L.levels[kind] * 0.6, Math.min(1, rms * 5));
+    // Small jitter buffer per side; resync if the schedule drifts too far ahead.
+    const now = ctx.currentTime;
+    let at = Math.max(now + 0.12, L.next[kind]);
+    if (at - now > 0.8) at = now + 0.12;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(L.gain);
+    src.start(at);
+    L.next[kind] = at + buf.duration;
+  }
+
+  function listenAnimate() {
+    const L = listen;
+    if (!L) return;
+    for (const k of [1, 2]) {
+      L.levels[k] *= 0.9;
+      const el = document.getElementById(`listen-meter-${k}`);
+      if (el) el.style.width = `${Math.round(L.levels[k] * 100)}%`;
+    }
+    const t = document.getElementById('listen-time');
+    if (t) t.textContent = listenElapsed();
+    L.raf = requestAnimationFrame(listenAnimate);
+  }
+
+  async function startListening(callId) {
+    if (listen && listen.callId === callId) return;
+    if (listen) stopListening();
+    let ctx;
+    try {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      await ctx.resume();
+    } catch {
+      listen = { callId, ctx: null, gain: null, ws: null, next: { 1: 0, 2: 0 }, levels: { 1: 0, 2: 0 }, startedAt: Date.now(), status: '', error: 'This browser cannot play live audio.', volume: 1, raf: 0, closing: false };
+      render();
+      return;
+    }
+    const gain = ctx.createGain();
+    gain.gain.value = 1;
+    gain.connect(ctx.destination);
+    listen = { callId, ctx, gain, ws: null, next: { 1: 0, 2: 0 }, levels: { 1: 0, 2: 0 }, startedAt: Date.now(), status: 'Connecting…', error: '', volume: 1, raf: 0, closing: false };
+    render();
+    const L = listen;
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    let ws;
+    try {
+      ws = new WebSocket(vacWithWsAuth(`${wsProto}//${window.location.host}/ws/vici-listen?callId=${encodeURIComponent(callId)}`));
+    } catch {
+      L.error = 'Could not connect to live listening.';
+      paintListenBar();
+      return;
+    }
+    ws.binaryType = 'arraybuffer';
+    L.ws = ws;
+    ws.onmessage = (ev) => {
+      if (listen !== L) return;
+      if (typeof ev.data === 'string') {
+        let msg = {};
+        try { msg = JSON.parse(ev.data); } catch {}
+        if (msg.type === 'listening') { L.status = 'Listening'; L.startedAt = Date.now(); paintListenBar(); }
+        else if (msg.type === 'ended') stopListening('Call ended');
+        else if (msg.type === 'error') { L.error = msg.error || 'Listening is not available for this call.'; paintListenBar(); }
+        return;
+      }
+      const bytes = new Uint8Array(ev.data);
+      if (bytes.length < 3) return;
+      const kind = bytes[0];
+      const pcm = new Int16Array(ev.data.slice(1, 1 + ((bytes.length - 1) & ~1)));
+      if (kind === 1 || kind === 2) playListenFrame(kind, pcm);
+    };
+    ws.onclose = (ev) => {
+      if (listen !== L || L.closing) return;
+      if (!L.error) L.error = ev.code === 1006 && L.status === 'Connecting…' ? 'Only an owner or admin can listen to live calls.' : 'Listening stopped.';
+      paintListenBar();
+    };
+    L.raf = requestAnimationFrame(listenAnimate);
   }
 
   function renderBridgeCdrList() {
@@ -6933,10 +7071,12 @@
              State: <span class="pill ok">${esc(ac.state)}</span>
             </span>
             <span class="bar" style="margin:0">
+             <button class="g" data-listen="${esc(ac.callId)}" aria-pressed="${listen && listen.callId === ac.callId ? 'true' : 'false'}" style="padding:4px 9px;font-size:11.5px">${listen && listen.callId === ac.callId ? 'Listening…' : '🎧 Listen'}</button>
              <button class="b" data-sup-xfer="${esc(ac.callId)}" style="padding:4px 9px;font-size:11.5px"> Force Closer Xfer</button>
              <button class="g danger" data-sup-hangup="${esc(ac.callId)}" style="padding:4px 9px;font-size:11.5px"> Force Hangup</button>
             </span>
            </div>
+           <div data-listen-host="${esc(ac.callId)}">${renderListenBar(ac.callId)}</div>
           </div>`,
              )
              .join('')
@@ -8659,6 +8799,14 @@
       await loadViciBridgeStatus();
       return;
     }
+    if (d.listen) {
+      await startListening(d.listen);
+      return;
+    }
+    if (d.listenStop) {
+      stopListening();
+      return;
+    }
     if (d.supXfer) {
       await fetch(`/api/vici/calls/${encodeURIComponent(d.supXfer)}/transfer`, {
         method: 'POST',
@@ -9183,6 +9331,11 @@
   });
 
   document.addEventListener('input', (e) => {
+    if (e.target && e.target.id === 'listen-volume' && listen && listen.gain) {
+      listen.volume = Math.max(0, Math.min(2, Number(e.target.value) / 100));
+      listen.gain.gain.value = listen.volume;
+      return;
+    }
     const t = e.target;
     if (!t.dataset?.p || t.type === 'checkbox' || t.tagName === 'SELECT') return;
     const value = t.type === 'number' ? (t.value === '' || !Number.isFinite(Number(t.value)) ? 0 : Number(t.value)) : t.value;

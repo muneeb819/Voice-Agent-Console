@@ -184,6 +184,11 @@ function hydrateRealLeadIntoSettings(settings, agent, campaign, lead) {
         .join('\n');
     settings.agent.think.prompt = basePrompt + '\n' + leadBlock;
 }
+/** Live listening limits: listen-only supervisors per call and in total. */
+const MAX_LISTENERS_PER_CALL = 3;
+const MAX_LISTENERS_TOTAL = 20;
+/** Frames are dropped for a listener whose connection falls this far behind. */
+const LISTENER_MAX_BUFFERED_BYTES = 256 * 1024;
 class VicidialBridgeService {
     host;
     audioSocketPort;
@@ -223,6 +228,82 @@ class VicidialBridgeService {
         // New installations default to 5062; an explicitly saved port must not be
         // silently rewritten, or generated carrier configuration will disagree.
         this.viciApiBaseOverride = opts.viciApiBaseOverride;
+    }
+    listeners = new Map();
+    listenNotes = new Map();
+    listenWss = null;
+    /** Listen-only audio for supervisors: frames are [kind][PCM16LE 8 kHz], kind 1 = caller, 2 = bot. */
+    createListenWebSocketServer() {
+        this.listenWss = new ws_1.WebSocketServer({ noServer: true, maxPayload: 1024, perMessageDeflate: false });
+        return this.listenWss;
+    }
+    /** Attaches a listener to a live call. Returns an error message, or '' when listening started. */
+    attachListener(callId, ws, who) {
+        if (!this.activeCalls.has(callId))
+            return 'This call is not live any more.';
+        let total = 0;
+        for (const set of this.listeners.values())
+            total += set.size;
+        const set = this.listeners.get(callId) || new Set();
+        if (set.size >= MAX_LISTENERS_PER_CALL)
+            return `Already ${MAX_LISTENERS_PER_CALL} people are listening to this call.`;
+        if (total >= MAX_LISTENERS_TOTAL)
+            return 'Too many live listeners on the server right now.';
+        set.add(ws);
+        this.listeners.set(callId, set);
+        const label = (who || 'Supervisor').slice(0, 120);
+        this.listenNotes.get(callId)?.(`${label} started listening (listen only)`);
+        ws.send(JSON.stringify({ type: 'listening', callId, sampleRate: 8000 }));
+        const detach = () => {
+            const cur = this.listeners.get(callId);
+            if (!cur || !cur.delete(ws))
+                return;
+            if (!cur.size)
+                this.listeners.delete(callId);
+            this.listenNotes.get(callId)?.(`${label} stopped listening`);
+        };
+        ws.on('close', detach);
+        ws.on('error', detach);
+        // Listeners never send audio; any message is ignored.
+        ws.on('message', () => { });
+        return '';
+    }
+    listenerCount(callId) {
+        if (callId)
+            return this.listeners.get(callId)?.size || 0;
+        let n = 0;
+        for (const set of this.listeners.values())
+            n += set.size;
+        return n;
+    }
+    emitListen(callId, kind, pcm) {
+        const set = this.listeners.get(callId);
+        if (!set || !set.size || !pcm.length)
+            return;
+        const frame = Buffer.allocUnsafe(pcm.length + 1);
+        frame[0] = kind;
+        pcm.copy(frame, 1);
+        for (const ws of set) {
+            if (ws.readyState === ws_1.default.OPEN && ws.bufferedAmount < LISTENER_MAX_BUFFERED_BYTES)
+                ws.send(frame, { binary: true });
+        }
+    }
+    closeListeners(callId, reason) {
+        const set = this.listeners.get(callId);
+        this.listeners.delete(callId);
+        this.listenNotes.delete(callId);
+        if (!set)
+            return;
+        for (const ws of set) {
+            try {
+                ws.send(JSON.stringify({ type: 'ended', callId, reason }));
+            }
+            catch { }
+            try {
+                ws.close(1000, 'call ended');
+            }
+            catch { }
+        }
     }
     createMonitorWebSocketServer() {
         this.monitorWss = new ws_1.WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
@@ -451,6 +532,7 @@ class VicidialBridgeService {
                     txPcmQueue = Buffer.alloc(0);
                 }
                 writeAudioSocketFrame(0x10, frame);
+                hooks.onFramePlayed?.(frame);
             }, 20);
             const hooks = {
                 enqueueBotPcm8k: (pcm8kLe) => {
@@ -876,6 +958,7 @@ class VicidialBridgeService {
                         rtpTimestamp = (rtpTimestamp + 160) >>> 0;
                         nextTalkspurtMarker = false;
                         rtpSocket.send(rtpPkt, remoteRtpPort, remoteRtpIp);
+                        hooks.onFramePlayed?.(pcmFrame);
                     }, 20);
                     const cleanupRtpAndBye = (sendByeToAsterisk) => {
                         if (rtpClosed)
@@ -1117,6 +1200,9 @@ class VicidialBridgeService {
             transcript.push(entry);
             this.broadcastMonitor({ type: 'call_transcript', callId, ...entry });
         };
+        // Live listening: bot frames as they are sent, caller audio as it arrives.
+        opts.hooks.onFramePlayed = (frame) => this.emitListen(callId, 2, frame);
+        this.listenNotes.set(callId, (line) => addTranscript('system', line));
         const updateState = (nextState) => {
             summary.state = nextState;
             summary.turns = turns;
@@ -1287,6 +1373,8 @@ class VicidialBridgeService {
             catch (err) {
                 this.stats.lastError = `Call history could not be saved: ${err?.message || 'database error'}`;
             }
+            this.closeListeners(callId, reason);
+            opts.hooks.onFramePlayed = null;
             this.activeCalls.delete(callId);
             this.activeSessionClosers.delete(callId);
             this.activeSessionTransferrers.delete(callId);
@@ -1859,6 +1947,7 @@ class VicidialBridgeService {
                     return;
                 lastCallerAudioAt = Date.now();
                 recorder.recordCallerPcm8k(pcm8k);
+                this.emitListen(callId, 1, pcm8k);
                 bargeInGate.onCallerAudio(pcm8k);
                 if (!settingsApplied) {
                     if (preSettingsAudioQueue.length < 40) {
