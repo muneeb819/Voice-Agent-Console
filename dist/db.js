@@ -112,28 +112,11 @@ function closeDb() {
         db = null;
     }
 }
-/**
- * The SQL Server mirror was removed. Drop its change-capture triggers and
- * tables from installs that had it, so nothing keeps queueing changes.
- */
-function removeRetiredSqlServerMirror(d) {
-    try {
-        const triggers = d.prepare(`SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'mirror\\_%' ESCAPE '\\'`).all();
-        for (const t of triggers)
-            if (/^mirror_[A-Za-z0-9_]+$/.test(t.name))
-                d.exec(`DROP TRIGGER IF EXISTS "${t.name}"`);
-        d.exec('DROP TABLE IF EXISTS mirror_outbox; DROP TABLE IF EXISTS mirror_settings;');
-    }
-    catch (err) {
-        console.error('[db] could not remove retired SQL Server mirror objects:', err instanceof Error ? err.message : err);
-    }
-}
 function getDb() {
     if (db)
         return db;
     fs_1.default.mkdirSync(data_paths_1.DATA_DIR, { recursive: true });
     db = openSqliteEngine(DB_PATH);
-    removeRetiredSqlServerMirror(db);
     db.exec(`
     CREATE TABLE IF NOT EXISTS console_store (
       key TEXT PRIMARY KEY,

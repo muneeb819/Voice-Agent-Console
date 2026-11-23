@@ -7492,8 +7492,6 @@
       // Password rotation and session revocation need an account row; the
       // legacy ADMIN_PASSWORD session is managed in server.env instead.
       accountSecurityUser = authJson.user || null;
-      const fxBtn = document.getElementById('btn-fx-toggle');
-      if (fxBtn) fxBtn.textContent = `Visual effects: ${document.documentElement.classList.contains('fx-full') ? 'Full' : 'Smooth'}`;
       const securityBtn = document.getElementById('btn-account-security');
       if (securityBtn) securityBtn.style.display = accountSecurityUser ? 'inline-flex' : 'none';
       if (logoutBtn) {
@@ -8828,13 +8826,6 @@
       } catch {
         window.prompt('Copy this public HTTPS link for your client:', demoUrl);
       }
-      return;
-    }
-    if (b.id === 'btn-fx-toggle') {
-      const full = !document.documentElement.classList.contains('fx-full');
-      document.documentElement.classList.toggle('fx-full', full);
-      try { localStorage.setItem('vac_fx', full ? 'full' : 'smooth'); } catch (e) { /* storage unavailable */ }
-      b.textContent = `Visual effects: ${full ? 'Full' : 'Smooth'}`;
       return;
     }
     if (b.id === 'btn-account-security') {

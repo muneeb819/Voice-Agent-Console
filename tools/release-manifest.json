@@ -21,7 +21,6 @@
   "datasets/Greetings-Dataset.csv",
   "deploy/aws-deploy.sh",
   "deploy/linux-deploy.sh",
-  "deploy/update-vac.sh",
   "deploy/nginx-free-port80.py",
   "deploy/vicibox-install.sh",
   "deploy/voice-agent-bridge.service",
@@ -307,6 +306,5 @@
   "deploy/vicidial-amd/rollback-mma-amd.sh",
   "deploy/vicidial-amd/README.md",
   "tests/screening-verify.ts",
-  "tests/performance-verify.ts",
   "docs/CALL-SCREENING.md"
 ]

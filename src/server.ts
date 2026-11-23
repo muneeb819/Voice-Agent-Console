@@ -22,7 +22,6 @@ import fs from 'fs';
 import http from 'http';
 import net from 'net';
 import path from 'path';
-import compression from 'compression';
 import express, { Request, Response } from 'express';
 
 dns.setDefaultResultOrder('ipv4first');
@@ -223,18 +222,6 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     }
     next();
   });
-
-  // Gzip text responses (app.js, styles, /api/state). The console is often used
-  // far from the server, and these are large: about 1.2 MB shrinks to about 250 KB.
-  // Live streams are left alone so events and audio are never held back.
-  app.use(compression({
-    threshold: 1024,
-    filter: (req, res) => {
-      const type = String(res.getHeader('Content-Type') || '');
-      if (type.includes('text/event-stream') || req.headers['x-no-compression']) return false;
-      return compression.filter(req, res);
-    },
-  }));
 
   // API answers hold account, key-status and bot data: never let a browser or proxy cache them.
   app.use('/api', (_req: Request, res: Response, next: express.NextFunction) => {

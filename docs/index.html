@@ -13,17 +13,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="./styles.css?v=nova-3.14" />
-    <link rel="stylesheet" href="./brand-logos.css?v=nova-3.14" />
-    <link rel="stylesheet" href="./future.css?v=nova-3.14" />
-    <link rel="stylesheet" href="./atelier.css?v=nova-3.14" />
+    <link rel="stylesheet" href="./styles.css?v=nova-3.13" />
+    <link rel="stylesheet" href="./brand-logos.css?v=nova-3.13" />
+    <link rel="stylesheet" href="./future.css?v=nova-3.13" />
+    <link rel="stylesheet" href="./atelier.css?v=nova-3.13" />
     <script>
       (function () {
-        var CURRENT_BUILD = 'nova-3.14';
-        // Visual effects: "smooth" (default) freezes decorative animations and blur.
-        try {
-          if (localStorage.getItem('vac_fx') === 'full') document.documentElement.classList.add('fx-full');
-        } catch (e) {}
+        var CURRENT_BUILD = 'nova-3.13';
         // Discard legacy token handoffs; browser authentication uses HttpOnly cookies.
         try {
           sessionStorage.removeItem('vac_auth_token');
@@ -178,7 +174,6 @@
             <div class="account-popover" id="account-popover" hidden>
               <a class="g" id="btn-create-account" href="/signup" style="display: none; text-decoration: none">Create Account</a>
               <button class="g" id="btn-account-security" type="button" style="display: none">Password &amp; Sessions</button>
-              <button class="g" id="btn-fx-toggle" type="button" title="Smooth mode freezes decorative animations and blur so every screen stays fast">Visual effects: Smooth</button>
               <button class="g" id="btn-logout" type="button" style="display: none">Sign Out</button>
               <button class="g" id="btn-share-demo" type="button" style="display: none">Copy Client Link</button>
               <a class="g" id="btn-newtab" href="./" target="_blank" rel="noopener" style="display: none; text-decoration: none"
@@ -305,10 +300,10 @@
     </div>
 
     <input type="file" id="import-file" accept="application/json,.json" hidden />
-    <script src="./opening.js?v=nova-3.14"></script>
-    <script src="./persona.js?v=nova-3.14"></script>
-    <script src="./brand-logos.js?v=nova-3.14"></script>
-    <script src="./app.js?v=nova-3.14"></script>
-    <script src="./future-board.js?v=nova-3.14"></script>
+    <script src="./opening.js?v=nova-3.13"></script>
+    <script src="./persona.js?v=nova-3.13"></script>
+    <script src="./brand-logos.js?v=nova-3.13"></script>
+    <script src="./app.js?v=nova-3.13"></script>
+    <script src="./future-board.js?v=nova-3.13"></script>
   </body>
 </html>
