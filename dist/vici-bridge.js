@@ -231,6 +231,7 @@ class VicidialBridgeService {
     }
     listeners = new Map();
     listenNotes = new Map();
+    listenerLabels = new WeakMap();
     listenWss = null;
     /** Listen-only audio for supervisors: frames are [kind][PCM16LE 8 kHz], kind 1 = caller, 2 = bot. */
     createListenWebSocketServer() {
@@ -252,6 +253,7 @@ class VicidialBridgeService {
         set.add(ws);
         this.listeners.set(callId, set);
         const label = (who || 'Supervisor').slice(0, 120);
+        this.listenerLabels.set(ws, label);
         this.listenNotes.get(callId)?.(`${label} started listening (listen only)`);
         ws.send(JSON.stringify({ type: 'listening', callId, sampleRate: 8000 }));
         const detach = () => {
@@ -288,13 +290,16 @@ class VicidialBridgeService {
                 ws.send(frame, { binary: true });
         }
     }
+    /** Ends listening for a call; called before the call record is saved so each stop is in the transcript. */
     closeListeners(callId, reason) {
         const set = this.listeners.get(callId);
+        const note = this.listenNotes.get(callId);
         this.listeners.delete(callId);
         this.listenNotes.delete(callId);
         if (!set)
             return;
         for (const ws of set) {
+            note?.(`${this.listenerLabels.get(ws) || 'Supervisor'} stopped listening (call ended)`);
             try {
                 ws.send(JSON.stringify({ type: 'ended', callId, reason }));
             }
@@ -1328,6 +1333,9 @@ class VicidialBridgeService {
                 })
                     .catch(() => { });
             }
+            // Listening ends with the call, and each stop is recorded before the call record is saved.
+            this.closeListeners(callId, reason);
+            opts.hooks.onFramePlayed = null;
             let savedRec = null;
             try {
                 savedRec = recorder.finalizeAndSave(callId);
@@ -1373,8 +1381,6 @@ class VicidialBridgeService {
             catch (err) {
                 this.stats.lastError = `Call history could not be saved: ${err?.message || 'database error'}`;
             }
-            this.closeListeners(callId, reason);
-            opts.hooks.onFramePlayed = null;
             this.activeCalls.delete(callId);
             this.activeSessionClosers.delete(callId);
             this.activeSessionTransferrers.delete(callId);

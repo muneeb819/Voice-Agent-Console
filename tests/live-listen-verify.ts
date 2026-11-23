@@ -138,7 +138,11 @@ const ok = (c: unknown, m: string) => { assert.ok(c, m); checks++; console.log(`
     await until(() => listBridgeCallLogs(5).some((c) => c.id === callId), 'call log');
     const log = listBridgeCallLogs(5).find((c) => c.id === callId)!;
     ok(log.transcript.some((t) => /owner@listen\.test started listening \(listen only\)/.test(t.content)), 'call transcript records who started listening');
-    ok(log.transcript.some((t) => /stopped listening/.test(t.content)), 'call transcript records when they stopped');
+    ok(log.transcript.some((t) => /stopped listening$/.test(t.content)), 'call transcript records a listener who stopped during the call');
+    ok(log.transcript.filter((t) => /stopped listening \(call ended\)/.test(t.content)).length === 1, 'call transcript records the listener still connected when the call ended (once)');
+    const starts = log.transcript.filter((t) => /started listening/.test(t.content)).length;
+    const stops = log.transcript.filter((t) => /stopped listening/.test(t.content)).length;
+    ok(starts === stops, `every start has a stop in the saved transcript (${starts}/${stops})`);
   } finally {
     clearInterval(pump);
     tcp.destroy();

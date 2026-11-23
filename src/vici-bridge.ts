@@ -284,6 +284,7 @@ export class VicidialBridgeService {
 
   private readonly listeners = new Map<string, Set<WebSocket>>();
   private readonly listenNotes = new Map<string, (line: string) => void>();
+  private readonly listenerLabels = new WeakMap<WebSocket, string>();
   private listenWss: WebSocketServer | null = null;
 
   /** Listen-only audio for supervisors: frames are [kind][PCM16LE 8 kHz], kind 1 = caller, 2 = bot. */
@@ -303,6 +304,7 @@ export class VicidialBridgeService {
     set.add(ws);
     this.listeners.set(callId, set);
     const label = (who || 'Supervisor').slice(0, 120);
+    this.listenerLabels.set(ws, label);
     this.listenNotes.get(callId)?.(`${label} started listening (listen only)`);
     ws.send(JSON.stringify({ type: 'listening', callId, sampleRate: 8000 }));
     const detach = () => {
@@ -336,12 +338,15 @@ export class VicidialBridgeService {
     }
   }
 
+  /** Ends listening for a call; called before the call record is saved so each stop is in the transcript. */
   private closeListeners(callId: string, reason: string): void {
     const set = this.listeners.get(callId);
+    const note = this.listenNotes.get(callId);
     this.listeners.delete(callId);
     this.listenNotes.delete(callId);
     if (!set) return;
     for (const ws of set) {
+      note?.(`${this.listenerLabels.get(ws) || 'Supervisor'} stopped listening (call ended)`);
       try { ws.send(JSON.stringify({ type: 'ended', callId, reason })); } catch {}
       try { ws.close(1000, 'call ended'); } catch {}
     }
@@ -1453,6 +1458,10 @@ export class VicidialBridgeService {
           .catch(() => {});
       }
 
+      // Listening ends with the call, and each stop is recorded before the call record is saved.
+      this.closeListeners(callId, reason);
+      opts.hooks.onFramePlayed = null;
+
       let savedRec: ReturnType<StereoCallRecorder8k['finalizeAndSave']> = null;
       try { savedRec = recorder.finalizeAndSave(callId); } catch (err: any) {
         this.stats.lastError = `Call recording could not be saved: ${err?.message || 'storage error'}`;
@@ -1498,8 +1507,6 @@ export class VicidialBridgeService {
         this.stats.lastError = `Call history could not be saved: ${err?.message || 'database error'}`;
       }
 
-      this.closeListeners(callId, reason);
-      opts.hooks.onFramePlayed = null;
       this.activeCalls.delete(callId);
       this.activeSessionClosers.delete(callId);
       this.activeSessionTransferrers.delete(callId);
