@@ -105,6 +105,7 @@ import { VicidialBridgeService, ViciBridgeOptions } from './vici-bridge';
 import { parseVicidialCallerCode, VicidialApiClient } from './vici-client';
 import { runSimulatedViciBridgeCall } from './vici-loopback-tester';
 import { executeCustomFunctionWebhook } from './webhook-executor';
+import { mirrorStatus, parseMirrorSettings, requestFullResync, setMirrorEnabled, startMirror, stopMirror, testMirrorConnection, updateMirrorSettings, missingSettings, loadSettings as loadMirrorSettings } from './mirror';
 import { isScreeningEnabled, lastTestRun, loadScreeningConfig, recentScreeningResults, runScreeningVerification, screeningCounts, screeningSettingsRow, setScreeningEnabled } from './screening';
 import {
   authenticateUser,
@@ -1689,6 +1690,63 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     }
   }));
 
+  // ==================== SQL SERVER MIRROR (AWS RDS, SSMS) ====================
+  // SQLite stays the live database; every change is copied to SQL Server.
+
+  app.get('/api/mirror/status', asyncRoute(async (_req: Request, res: Response) => {
+    res.json(mirrorStatus());
+  }));
+
+  // Save connection settings (and the password, which goes to .env, never the database).
+  app.post('/api/mirror/settings', asyncRoute(async (req: Request, res: Response) => {
+    const who = getAuthenticatedUser(req)?.email || 'admin';
+    const parsed = parseMirrorSettings(req.body, who);
+    if (!parsed.settings) {
+      res.status(400).json({ ok: false, code: 'INVALID_SETTINGS', error: parsed.error });
+      return;
+    }
+    if (typeof req.body?.password === 'string' && req.body.password.length) {
+      try {
+        updateSecrets({ MSSQL_PASSWORD: req.body.password });
+      } catch (err) {
+        res.status(400).json({ ok: false, code: 'INVALID_PASSWORD', error: err instanceof Error ? err.message : 'Password could not be saved.' });
+        return;
+      }
+    }
+    updateMirrorSettings(parsed.settings);
+    res.json(mirrorStatus());
+  }));
+
+  app.post('/api/mirror/test', asyncRoute(async (_req: Request, res: Response) => {
+    const result = await testMirrorConnection(loadMirrorSettings());
+    res.status(result.ok ? 200 : 502).json(result);
+  }));
+
+  app.post('/api/mirror/toggle', asyncRoute(async (req: Request, res: Response) => {
+    if (typeof req.body?.enabled !== 'boolean') {
+      res.status(400).json({ ok: false, code: 'INVALID_BODY', error: 'Send {"enabled": true} or {"enabled": false}.' });
+      return;
+    }
+    if (req.body.enabled) {
+      const missing = missingSettings(loadMirrorSettings());
+      if (missing.length) {
+        res.status(400).json({ ok: false, code: 'SETTINGS_MISSING', error: `Fill in and save: ${missing.join(', ')}.` });
+        return;
+      }
+    }
+    setMirrorEnabled(req.body.enabled, getAuthenticatedUser(req)?.email || 'admin');
+    res.json(mirrorStatus());
+  }));
+
+  app.post('/api/mirror/resync', asyncRoute(async (_req: Request, res: Response) => {
+    if (!loadMirrorSettings().enabled) {
+      res.status(400).json({ ok: false, code: 'MIRROR_OFF', error: 'Turn the mirror on first.' });
+      return;
+    }
+    requestFullResync();
+    res.json(mirrorStatus());
+  }));
+
   // ==================== LOCAL SPEECH SERVICE (1-CLICK STT + TTS) ====================
 
   app.get('/api/speech-service/status', asyncRoute(async (req: Request, res: Response) => {
@@ -2001,6 +2059,7 @@ if (require.main === module) {
             );
           }
           fetchDeepgramVoiceCatalog().catch(() => {});
+          startMirror();
           resolveListen();
         };
         server.once('error', onError);
@@ -2038,6 +2097,7 @@ if (require.main === module) {
       for (const client of liveSimulator.clients) client.terminate();
       await new Promise<void>((resolve) => liveSimulator.close(() => resolve()));
       if (viciBridge) await viciBridge.stop().catch(() => {});
+      await stopMirror().catch(() => {});
       // Initiate the close first, then drop idle/keep-alive sockets so the
       // close callback cannot be held open until the force-exit timer fires.
       const closed = new Promise<void>((resolve) => server.close(() => resolve()));

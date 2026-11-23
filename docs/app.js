@@ -943,6 +943,7 @@
       'CUSTOM_WEBHOOK_SECRET',
       'ADMIN_PASSWORD',
       'BRIDGE_ALLOWED_IPS',
+      'MSSQL_PASSWORD',
     ];
     const out = {};
     for (const k of keys) {
@@ -4521,6 +4522,96 @@
     </div>`;
   }
 
+  // ==================== SQL SERVER MIRROR (AWS RDS / SSMS) ====================
+  const mirrorUi = { loaded: false, loading: false, status: null, busy: '', error: '', notice: '' };
+  const MIRROR_PHASE = { off: ['Off', 'wn'], starting: ['Connecting', 'wn'], copying: ['Copying', 'wn'], syncing: ['Syncing', 'ok'], idle: ['Up to date', 'ok'], error: ['Problem', 'er'] };
+
+  async function loadMirrorStatus() {
+    if (serverlessCloudMode || mirrorUi.loading) return;
+    mirrorUi.loading = true;
+    try {
+      const r = await fetch('/api/mirror/status');
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 403) throw new Error('Only an owner or admin can see the SQL Server mirror.');
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      mirrorUi.status = j;
+      mirrorUi.error = '';
+    } catch (err) {
+      mirrorUi.error = err.message || 'Could not load the SQL Server mirror status';
+    } finally {
+      mirrorUi.loading = false;
+      mirrorUi.loaded = true;
+      if (tab === 'export') paintMirrorCard();
+    }
+  }
+
+  function paintMirrorCard() {
+    const host = document.getElementById('mirror-card');
+    if (host) host.outerHTML = renderMirrorCard();
+  }
+
+  function mirrorAgo(iso) {
+    if (!iso) return 'never';
+    const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)} min ago`;
+    return new Date(iso).toLocaleString();
+  }
+
+  function renderMirrorCard() {
+    if (serverlessCloudMode) return '';
+    const st = mirrorUi.status;
+    const cfg = st?.settings || {};
+    const on = Boolean(cfg.enabled);
+    const [phaseLabel, phaseClass] = MIRROR_PHASE[st?.phase] || ['Loading', 'wn'];
+    const busy = Boolean(mirrorUi.busy);
+    const v = (x) => esc(x == null ? '' : String(x));
+    const tableRows = (st?.tables || [])
+      .map((t) => `<tr><td><code>${v(cfg.schema || 'vac')}.${v(t.name)}</code></td><td>${Number(t.rows).toLocaleString()}</td><td>${t.copied ? '<span class="pill ok">Copied</span>' : on ? '<span class="pill wn">Waiting</span>' : '<span class="pill">—</span>'}</td></tr>`)
+      .join('');
+    const ssmsServer = cfg.host ? `${cfg.host},${cfg.port || 1433}` : 'your-endpoint.rds.amazonaws.com,1433';
+    return `
+    <div class="card" id="mirror-card">
+     <div class="sim-header">
+      <h2 style="margin:0">SQL Server database (AWS RDS · SSMS)</h2>
+      <span class="pill ${on ? phaseClass : 'wn'}">${st ? (on ? phaseLabel : 'Off') : 'Loading'}</span>
+     </div>
+     <p class="note" style="margin:6px 0 14px">Copies every bot, campaign, call log, screening result and setting to your SQL Server on AWS RDS, a few seconds after it changes. Calls keep running on the console's own database, so an RDS outage never affects a live call. Passwords and login sessions are never copied.</p>
+     ${mirrorUi.error ? `<div class="pill er" style="display:block;margin-bottom:10px">${esc(mirrorUi.error)}</div>` : ''}
+     ${mirrorUi.notice ? `<div class="pill ok" style="display:block;margin-bottom:10px">${esc(mirrorUi.notice)}</div>` : ''}
+     ${on && st?.lastError ? `<div class="pill er" style="display:block;margin-bottom:10px;white-space:normal">Last problem (${esc(mirrorAgo(st.lastErrorAt))}): ${esc(st.lastError)}</div>` : ''}
+     <div class="row" style="align-items:start">
+      <div>
+       <label for="mir-host">RDS endpoint</label>
+       <input id="mir-host" type="text" autocomplete="off" spellcheck="false" placeholder="mydb.abc123.ap-southeast-2.rds.amazonaws.com" value="${v(cfg.host)}" />
+       <div class="row" style="gap:10px">
+        <div><label for="mir-port">Port</label><input id="mir-port" type="number" min="1" max="65535" value="${v(cfg.port || 1433)}" /></div>
+        <div><label for="mir-db">Database</label><input id="mir-db" type="text" autocomplete="off" value="${v(cfg.database || 'VoiceAgentConsole')}" /></div>
+        <div><label for="mir-schema">Schema</label><input id="mir-schema" type="text" autocomplete="off" value="${v(cfg.schema || 'vac')}" /></div>
+       </div>
+       <div class="row" style="gap:10px">
+        <div><label for="mir-user">Username</label><input id="mir-user" type="text" autocomplete="off" value="${v(cfg.username)}" /></div>
+        <div><label for="mir-pass">Password ${cfg.passwordSet ? '<span class="ok">(saved)</span>' : ''}</label><input id="mir-pass" type="password" autocomplete="new-password" placeholder="${cfg.passwordSet ? 'Leave blank to keep' : 'Enter password'}" /></div>
+       </div>
+       <label class="ck" style="cursor:pointer"><input id="mir-verify" type="checkbox" ${cfg.verifyCert !== false ? 'checked' : ''} /> <span>Verify the RDS certificate (recommended)</span></label>
+       <label class="ck" style="cursor:pointer"><input id="mir-keep" type="checkbox" ${cfg.keepDeleted ? 'checked' : ''} /> <span>Keep rows in SQL Server when they are deleted in the console (archive)</span></label>
+       <div class="bar" style="gap:10px;flex-wrap:wrap;margin-top:12px">
+        <button class="b" id="btn-mirror-save" ${busy ? 'disabled' : ''}>${mirrorUi.busy === 'save' ? 'Saving & testing…' : '1. Save & test connection'}</button>
+        <button class="${on ? 'g' : 'b'}" id="btn-mirror-toggle" ${busy || !st ? 'disabled' : ''}>${mirrorUi.busy === 'toggle' ? 'Saving…' : on ? '2. Turn mirror off' : '2. Turn mirror on'}</button>
+        <button class="g" id="btn-mirror-resync" ${busy || !on ? 'disabled' : ''}>${mirrorUi.busy === 'resync' ? 'Starting…' : 'Copy everything again'}</button>
+        <button class="g" id="btn-mirror-refresh" ${busy ? 'disabled' : ''}>Refresh</button>
+       </div>
+      </div>
+      <div>
+       ${st ? `<div class="note" style="margin-bottom:8px">${on ? `${st.copying ? `Copying <code>${v(st.copying)}</code>… · ` : ''}${Number(st.pending || 0).toLocaleString()} change(s) waiting${st.pending ? ` (oldest ${st.lagSec}s)` : ''} · last sync ${esc(mirrorAgo(st.lastOkAt))} · full copy ${esc(mirrorAgo(st.lastFullSyncAt))}` : 'Mirror is off. Nothing is sent to SQL Server.'}${st.serverVersion ? `<br>${v(st.serverVersion)}` : ''}</div>` : ''}
+       ${tableRows ? `<div style="overflow-x:auto"><table class="screen-tbl"><thead><tr><th>Table in SQL Server</th><th>Rows</th><th>Status</th></tr></thead><tbody>${tableRows}</tbody></table></div>` : ''}
+       ${st?.views?.length ? `<div class="note" style="margin-top:6px">Reporting views with real dates: ${st.views.map((x) => `<code>${v(cfg.schema)}.${v(x)}</code>`).join(', ')}</div>` : ''}
+       <div class="note" style="margin-top:10px">In SSMS: <b>Server name</b> <code>${v(ssmsServer)}</code> · <b>Authentication</b> SQL Server Authentication · <b>Login</b> ${v(cfg.username || 'your RDS user')} · <b>Encryption</b> Mandatory · then open <code>${v(cfg.database || 'VoiceAgentConsole')}</code> → Tables → <code>${v(cfg.schema || 'vac')}.*</code></div>
+      </div>
+     </div>
+    </div>`;
+  }
+
   async function loadViciBridgeStatus() {
     if (serverlessCloudMode) {
       // The old static demo invented bridge CDRs and latency. Keep any old
@@ -7205,7 +7296,9 @@
     </div>
    `;
     } else if (tab === 'export') {
+      if (!mirrorUi.loaded) loadMirrorStatus();
       m.innerHTML = `
+    ${renderMirrorCard()}
     <div class="card">
      <div class="bar">
       <button class="b" id="cp"> Copy Export JSON</button>
@@ -7946,6 +8039,7 @@
       ['CUSTOM_WEBHOOK_SECRET', 'Custom CRM / Webhook Secret (usable as {{CUSTOM_WEBHOOK_SECRET}} in Function headers)'],
       ['ADMIN_PASSWORD', 'Console Admin Password (Step 4 — locks:533 Web UI & WebSockets while keeping local Asterisk whitelisted)'],
       ['BRIDGE_ALLOWED_IPS', 'Allowed Asterisk IPs/CIDRs for SIP:5062 & AudioSocket:9092 (e.g. 10.0.0.0/8,192.168.1.50)'],
+      ['MSSQL_PASSWORD', 'SQL Server (AWS RDS) password for the database mirror — Export tab'],
     ];
 
     form.innerHTML = keySpecs
@@ -8855,6 +8949,61 @@
         window.localStorage?.removeItem(VAC_CLOUD_SESSION_KEY);
       } catch {}
       window.location.replace(serverlessCloudMode ? './login.html' : '/login');
+      return;
+    }
+    if (b.id === 'btn-mirror-save' || b.id === 'btn-mirror-toggle' || b.id === 'btn-mirror-resync' || b.id === 'btn-mirror-refresh') {
+      if (b.id === 'btn-mirror-refresh') {
+        await loadMirrorStatus();
+        return;
+      }
+      const val = (id) => document.getElementById(id);
+      mirrorUi.error = '';
+      mirrorUi.notice = '';
+      const post = async (url, body) => {
+        const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 403) throw new Error('Only an owner or admin can change the SQL Server mirror.');
+        if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+        return j;
+      };
+      try {
+        if (b.id === 'btn-mirror-save') {
+          mirrorUi.busy = 'save';
+          const body = {
+            host: val('mir-host')?.value || '',
+            port: val('mir-port')?.value || '',
+            database: val('mir-db')?.value || '',
+            schema: val('mir-schema')?.value || '',
+            username: val('mir-user')?.value || '',
+            verifyCert: Boolean(val('mir-verify')?.checked),
+            keepDeleted: Boolean(val('mir-keep')?.checked),
+          };
+          const pass = val('mir-pass')?.value || '';
+          if (pass) body.password = pass;
+          paintMirrorCard();
+          mirrorUi.status = await post('/api/mirror/settings', body);
+          const t = await fetch('/api/mirror/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then((r) => r.json()).catch(() => ({ ok: false, error: 'Connection test failed' }));
+          if (!t.ok) throw new Error(`Saved, but the connection test failed: ${t.error}`);
+          mirrorUi.notice = `Connected: ${t.version}${t.createdDatabase ? ' — database created' : ''}.${mirrorUi.status?.settings?.enabled ? '' : ' Now turn the mirror on.'}`;
+        } else if (b.id === 'btn-mirror-toggle') {
+          mirrorUi.busy = 'toggle';
+          paintMirrorCard();
+          mirrorUi.status = await post('/api/mirror/toggle', { enabled: !mirrorUi.status?.settings?.enabled });
+          if (mirrorUi.status?.settings?.enabled) mirrorUi.notice = 'Mirror on. The first full copy starts within a few seconds.';
+        } else {
+          if (!confirm('Copy every table to SQL Server again? Existing rows there are replaced.')) return;
+          mirrorUi.busy = 'resync';
+          paintMirrorCard();
+          mirrorUi.status = await post('/api/mirror/resync', {});
+          mirrorUi.notice = 'Full copy started.';
+        }
+      } catch (err) {
+        mirrorUi.error = err.message || 'Request failed';
+      } finally {
+        mirrorUi.busy = '';
+        await loadMirrorStatus();
+        if (mirrorUi.status?.settings?.enabled) setTimeout(() => { if (tab === 'export') loadMirrorStatus(); }, 4000);
+      }
       return;
     }
     if (b.id === 'btn-screening-toggle' || b.id === 'btn-screening-verify') {
