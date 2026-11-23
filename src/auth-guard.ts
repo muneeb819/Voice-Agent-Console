@@ -368,7 +368,6 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
       p === '/functions/test-webhook' ||
       p === '/speech-service/activate' ||
       (p.startsWith('/screening/') && req.method !== 'GET' && req.method !== 'HEAD') ||
-      p.startsWith('/mirror/') ||
       p === '/speech-service/test' ||
       p === '/vici/verify' ||
       p === '/deepgram/verify' ||
