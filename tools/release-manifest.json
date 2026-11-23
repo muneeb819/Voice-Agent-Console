@@ -318,6 +318,7 @@
   "deploy/vicidial-amd/README.md",
   "tests/screening-verify.ts",
   "tests/sql-mirror-verify.ts",
+  "tests/performance-verify.ts",
   "docs/SQL-SERVER-MIRROR.md",
   "docs/CALL-SCREENING.md"
 ]

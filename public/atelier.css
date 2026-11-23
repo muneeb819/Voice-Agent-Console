@@ -2864,3 +2864,30 @@ nav.side-nav .nav-item:focus-visible { outline: 2px solid var(--nav-active-tx); 
 .hdr-live-pill[data-state="down"] { color: var(--er); border-color: color-mix(in srgb, var(--er) 45%, transparent); }
 .hdr-live-pill[data-state="down"] i { background: var(--er); animation: livePip 1.1s ease-in-out infinite; }
 .hdr-live-pill[data-state="checking"] i, .hdr-live-pill[data-state="demo"] i { background: var(--mu); animation: none; }
+
+
+/* ==================== SMOOTH MODE (default) ====================
+   Decorative endless animations, the full-page blended watermark and
+   background blur make the browser repaint the whole screen many times a
+   second. Smooth mode keeps the same look, frozen. "Visual effects: Full"
+   in the account menu turns them back on (html.fx-full). */
+html:not(.fx-full) body::after {
+  animation: none !important;
+  mix-blend-mode: normal;
+  will-change: auto;
+}
+html:not(.fx-full) header::after,
+html:not(.fx-full) .ready-scan,
+html:not(.fx-full) .ready-signal i,
+html:not(.fx-full) .hdr-waves i,
+html:not(.fx-full) .cmd-radar-dot::after,
+html:not(.fx-full) .section-signal i,
+html:not(.fx-full) .hdr-save-btn:not(:disabled) {
+  animation: none !important;
+}
+html:not(.fx-full) *,
+html:not(.fx-full) *::before,
+html:not(.fx-full) *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

@@ -18,6 +18,7 @@
     "test:quality": "node -e \"require('fs').mkdirSync(process.env.VAC_DATA_DIR||'/tmp/vac-quality',{recursive:true})\" && npm run build && tsx tests/quality/run.ts"
   },
   "dependencies": {
+    "compression": "^1.8.2",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "mssql": "^11.0.3",
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
+    "@types/compression": "^1.8.1",
     "@types/express": "^5.0.0",
     "@types/node": "^20.17.16",
     "@types/ws": "^8.5.14",
