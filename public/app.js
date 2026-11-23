@@ -5673,7 +5673,8 @@
       }
       if (r.callWillFail) return `<div class="reach-er">✗ <b>${esc(c.name)}:</b> ${fmtN(r.phoneChars)} of ${fmtN(r.phoneLimit)} characters with the opening — calls cannot start. Shorten the instructions.</div>`;
       const cls = r.phoneRoom < 1000 ? 'reach-wn' : 'reach-ok';
-      return `<div class="${cls}">${cls === 'reach-ok' ? '✓' : '!'} <b>${esc(c.name)}:</b> all ${fmtN(r.instructionsLines)} lines reach calls · call prompt ${fmtN(r.phoneChars)} / ${fmtN(r.phoneLimit)} (${fmtN(r.phoneRoom)} to spare)</div>`;
+      const omitted = r.voiceDeliveryOmitted ? `<div class="reach-wn">! <b>${esc(c.name)}:</b> voice delivery guidance is left out of calls: the prompt has no room for it. Shorten the instructions or campaign rules to include it.</div>` : '';
+      return `<div class="${cls}">${cls === 'reach-ok' ? '✓' : '!'} <b>${esc(c.name)}:</b> all ${fmtN(r.instructionsLines)} lines reach calls · call prompt ${fmtN(r.phoneChars)} / ${fmtN(r.phoneLimit)} (${fmtN(r.phoneRoom)} to spare)</div>${omitted}`;
     }).join('')}</div>`;
   }
 

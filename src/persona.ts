@@ -33,7 +33,7 @@ interface PersonaApi {
   callPromptReport(agent: any, campaign: any, openingChars?: number): {
     instructionsChars: number; instructionsCutChars: number; instructionsLines: number; cutLines: string[];
     rulesChars: number; rulesCutChars: number; rulesLimit: number; callChars: number; phoneChars: number;
-    phoneLimit: number; phoneRoom: number; callWillFail: boolean; builtInChars: number;
+    phoneLimit: number; phoneRoom: number; callWillFail: boolean; builtInChars: number; voiceDeliveryOmitted: boolean;
   };
 }
 

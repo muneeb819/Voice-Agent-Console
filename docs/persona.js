@@ -13,6 +13,9 @@
   'use strict';
 
   const MAX_PROMPT_LENGTH = 24950;
+  // Room kept free for what a live call adds (lead details, opening turn)
+  // before the optional voice-delivery section is included.
+  const VOICE_DELIVERY_RESERVE = 2500;
   const MAX_CAMPAIGN_RULES = 8000;
 
   const TONE_MAP = {
@@ -199,9 +202,13 @@
     }
 
     // Voice delivery (prosody), set per bot on the front end; on by default.
+    // Lower priority than the bot's own instructions: added only where it fits.
     const fl = (agent && agent.flow) || {};
     const delivery = String(fl.voiceDelivery || '').trim();
-    if (fl.voiceDeliveryEnabled !== false && delivery) lines.push('', '=== VOICE DELIVERY (INTONATION, PACE, TONE, PHRASING, DURATION) ===', delivery);
+    const deliveryAt = lines.length;
+    const deliveryLines = fl.voiceDeliveryEnabled !== false && delivery
+      ? ['', '=== VOICE DELIVERY (INTONATION, PACE, TONE, PHRASING, DURATION) ===', delivery]
+      : [];
 
     lines.push(...callFlowLines(agent));
 
@@ -231,13 +238,23 @@
     if (!b) lines.push('', TRANSFER_RULE);
     lines.push(...callEndingLines());
     lines.push(...conversationIntegrityLines());
-    const suffix = lines.join('\n').trim();
-    if (!suffix) return { basePrompt, safeBase: basePrompt, suffix: '', prompt: basePrompt };
+    // The voice-delivery section must never cost the bot its own instructions,
+    // nor the room a live call needs for lead details and the opening: without
+    // enough room it is left out (and reported), so a bot that fitted before
+    // still fits exactly as before.
+    const withoutDelivery = lines.join('\n').trim();
+    const withDelivery = deliveryLines.length
+      ? [...lines.slice(0, deliveryAt), ...deliveryLines, ...lines.slice(deliveryAt)].join('\n').trim()
+      : withoutDelivery;
+    const deliveryFits = basePrompt.length + 1 + withDelivery.length <= MAX_PROMPT_LENGTH - VOICE_DELIVERY_RESERVE;
+    const suffix = deliveryFits ? withDelivery : withoutDelivery;
+    const voiceDeliveryOmitted = deliveryLines.length > 0 && !deliveryFits;
+    if (!suffix) return { basePrompt, safeBase: basePrompt, suffix: '', prompt: basePrompt, voiceDeliveryOmitted };
     const truncationNote = '\n[Agent prompt shortened to preserve the mandatory campaign rules below.]';
     const availableBaseLength = Math.max(0, MAX_PROMPT_LENGTH - suffix.length - 1 - truncationNote.length);
     const safeBase = basePrompt.slice(0, availableBaseLength);
     const note = basePrompt.length > safeBase.length ? truncationNote : '';
-    return { basePrompt, safeBase, suffix, prompt: `${safeBase}${note}\n${suffix}`.trim() };
+    return { basePrompt, safeBase, suffix, prompt: `${safeBase}${note}\n${suffix}`.trim(), voiceDeliveryOmitted };
   }
 
   /**
@@ -274,6 +291,7 @@
       phoneRoom: 25000 - phoneChars,
       callWillFail: phoneChars > 25000,
       builtInChars: Math.max(0, parts.suffix.length - Math.min(rules.length, MAX_CAMPAIGN_RULES)),
+      voiceDeliveryOmitted: Boolean(parts.voiceDeliveryOmitted),
     };
   }
 

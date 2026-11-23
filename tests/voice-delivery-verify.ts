@@ -3,7 +3,7 @@
 // switched off, and reaches the call prompt.
 import assert from 'node:assert/strict';
 import { createDefaultState, normalizeState } from '../src/defaults';
-import { composeBehavioralPrompt, FLOW_DEFAULTS } from '../src/persona';
+import { callPromptReport, composeBehavioralPrompt, FLOW_DEFAULTS } from '../src/persona';
 import { buildDeepgramSettings } from '../src/settings-builder';
 
 let checks = 0;
@@ -44,5 +44,29 @@ ok(normalizeState(s2).agents[2].flow.voiceDeliveryEnabled === false, 'off surviv
 const settings = buildDeepgramSettings(state, state.agents[0], state.campaigns[0], { forceClientSideWebhooks: true });
 const prompt = String(settings?.agent?.think?.prompt || '');
 ok(prompt.includes(HEADER), 'live call Settings carry the voice delivery section');
+
+// Near the prompt limit the section is left out, so a bot that fitted before
+// keeps every instruction line and the same room for lead details and the opening.
+const near: any = normalizeState(createDefaultState());
+const nb = near.agents[0];
+const nc = near.campaigns.find((c: any) => (c.agentIds || []).includes(nb.id)) || near.campaigns[0];
+const off = { ...nb, flow: { ...nb.flow, voiceDeliveryEnabled: false } };
+const builtIn = composeBehavioralPrompt({ ...off, prompt: '' }, nc).length;
+for (const room of [200, 1500, 2400, 4000]) {
+  const line = 'Ask about Medicare Part A and B, then confirm the zip code.\n';
+  const target = 24950 - builtIn - room;
+  const big = { ...nb, prompt: line.repeat(Math.ceil(target / line.length)).slice(0, target) };
+  const bigOff = { ...big, flow: { ...big.flow, voiceDeliveryEnabled: false } };
+  const rOn = callPromptReport(big, nc, 300);
+  const rOff = callPromptReport(bigOff, nc, 300);
+  ok(rOn.instructionsCutChars === rOff.instructionsCutChars, `room ${room}: delivery never cuts the bot's own instructions`);
+  ok(rOn.phoneChars <= Math.max(rOff.phoneChars, 24950 - 2500 + 300), `room ${room}: delivery never eats the room a live call needs`);
+  if (room < 2500 + FLOW_DEFAULTS.voiceDelivery.length) {
+    ok(rOn.voiceDeliveryOmitted && composeBehavioralPrompt(big, nc) === composeBehavioralPrompt(bigOff, nc), `room ${room}: left out, prompt identical to before`);
+  } else {
+    ok(!rOn.voiceDeliveryOmitted && composeBehavioralPrompt(big, nc).includes(HEADER), `room ${room}: enough room, included`);
+  }
+}
+ok(!callPromptReport(state.agents[0], state.campaigns[0], 300).voiceDeliveryOmitted, 'normal bots: nothing left out');
 
 console.log(`✓ Voice delivery: ${checks} checks passed`);

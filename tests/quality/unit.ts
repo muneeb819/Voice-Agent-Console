@@ -418,7 +418,8 @@ export async function runUnit() {
     if (i % 3 === 0) a.flow!.voiceDeliveryEnabled = false;
     check(`call prompt #${i + 1} (${a.behavior.expressionStyle}, limit ${c.maxCallSec}s) carries the bot's own speaking style, the transfer rule and its saved voice delivery`, () => {
       const p = persona.composeBehavioralPrompt(a, c);
-      const delivery = a.flow!.voiceDeliveryEnabled !== false;
+      // On, unless the prompt has no room left for it (it never displaces the bot's own instructions).
+      const delivery = a.flow!.voiceDeliveryEnabled !== false && !persona.callPromptReport(a, c, 0).voiceDeliveryOmitted;
       assert.ok(typeof p === 'string' && p.includes('PERSONALITY & SPEAKING STYLE') && p.includes('TRANSFERS:'));
       assert.equal(p.includes('VOICE DELIVERY'), delivery, 'voice delivery section follows the bot switch');
       if (delivery) assert.ok(p.includes(a.flow!.voiceDelivery.trim()), 'section is the saved per-bot text');
