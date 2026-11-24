@@ -3549,9 +3549,9 @@
   }
 
   function effectiveSimulatorMode() {
-    return globalServiceProvider('stt')?.type === 'speech_service' || globalServiceProvider('tts')?.type === 'speech_service'
-      ? 'speech_service'
-      : 'deepgram';
+    // Only a local listener (STT) blocks Deepgram Voice Agent; a local voice
+    // (TTS) is spoken through Deepgram, so that configuration runs as 'deepgram'.
+    return globalServiceProvider('stt')?.type === 'speech_service' ? 'speech_service' : 'deepgram';
   }
 
   async function startLiveCall(withMic = true) {
@@ -3611,8 +3611,8 @@
     const mode = effectiveSimulatorMode();
     if (mode !== 'deepgram') {
       sim.lastError =
-        'Local speech is not connected to an LLM in Live Bot. Select and save supported Deepgram Voice Agent providers on Plug-Ins.';
-      sim.statusText = 'Local speech conversation unavailable';
+        'Listening (STT) is set to the local speech service, but Deepgram Voice Agent only listens with Deepgram models. Set STT to Deepgram Nova-3 or Flux on Plug-Ins; your local voice and Deepgram LLM keep working.';
+      sim.statusText = 'Set STT to Deepgram';
       render();
       return;
     }
@@ -6700,7 +6700,7 @@
 
      <div class="t" style="border-left:3px solid var(--ac)">
       <b>Deepgram browser test, not a telephone call.</b> After the provider confirms the session, microphone audio and typed messages are sent to Deepgram. This may incur provider charges. Transfers, dispositions and DNC updates are <b>not executed</b> here; test them on a properly configured VICIdial call instead. An enabled custom webhook can perform real external actions.
-      ${curMode === 'speech_service' ? '<div class="wn" style="margin-top:6px">Local speech is selected, but a local LLM conversation is not implemented. Select supported Deepgram Voice Agent providers in Plug-Ins.</div>' : ''}
+      ${curMode === 'speech_service' ? '<div class="wn" style="margin-top:6px">Listening (STT) is set to the local speech service. Deepgram Voice Agent only listens with Deepgram models: set STT to Deepgram Nova-3 or Flux in Plug-Ins. Your local voice and Deepgram LLM keep working.</div>' : ''}
      </div>
      <div class="row">
       <div>
