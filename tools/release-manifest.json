@@ -309,5 +309,6 @@
   "tests/screening-verify.ts",
   "tests/performance-verify.ts",
   "tests/remote-agent-user-verify.ts",
+  "tests/phone-bot-rotation-verify.ts",
   "docs/CALL-SCREENING.md"
 ]

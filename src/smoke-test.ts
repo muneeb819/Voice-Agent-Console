@@ -7,6 +7,7 @@
  * builder a phone call uses (buildDeepgramSettings + the opening sequence), and
  * reports anything that would silently stop a change from reaching the call.
  */
+import { phoneBotPool } from './campaign-assignment';
 import type { Agent, Campaign, ConsoleState } from './types';
 import { buildDeepgramSettings, promptReachReport, validateAgent, validateCampaign } from './settings-builder';
 import { composeOpening } from './opening';
@@ -135,12 +136,14 @@ function nextCallChecks(state: ConsoleState, agent: Agent, campaign: Campaign, c
   else if (greeting && greeting === composeOpening(agent.greeting, '', agent.injectCampaignDisclosure, campaign.disclosure || '')) push('ok', 'Opening line', `Calls open with: “${greeting.length > 160 ? `${greeting.slice(0, 160)}…` : greeting}”`);
   else push('er', 'Opening line', 'The saved opening line is not what the next call will say.');
 
-  if (campaign.agentId !== agent.id) {
-    const primary = state.agents.find((a) => a.id === campaign.agentId);
-    push('wn', 'Who answers phone calls', `Phone calls on this campaign are answered by its primary bot${primary ? ` “${primary.name}”` : ''}, not this one. Make this bot primary on the campaign if it should take the calls.`);
+  const pool = phoneBotPool(state, campaign);
+  const takesCalls = pool.some((a) => a.id === agent.id);
+  if (takesCalls) {
+    const others = pool.filter((a) => a.id !== agent.id).map((a) => `“${a.name}”`);
+    push('ok', 'Who answers phone calls', others.length ? `Phone calls on this campaign are shared in turn between this bot and ${others.join(', ')}.` : 'This bot answers every phone call on this campaign.');
   }
   const limit = Number(campaign.maxCallSec) || 0;
-  if (campaign.agentId === agent.id && limit > 0) push(prompt.includes('CALL TIME LIMIT') ? 'ok' : 'er', 'Max call length', prompt.includes('CALL TIME LIMIT') ? `${limit} s limit applies to the next call.` : `${limit} s limit is saved but not in the call prompt.`);
+  if (takesCalls && limit > 0) push(prompt.includes('CALL TIME LIMIT') ? 'ok' : 'er', 'Max call length', prompt.includes('CALL TIME LIMIT') ? `${limit} s limit applies to the next call.` : `${limit} s limit is saved but not in the call prompt.`);
 }
 
 function commonHeader(kind: 'agent' | 'campaign', saved: any, draft: any, state: ConsoleState, revisions: RevisionSnapshot[], push: (l: SmokeLevel, label: string, detail: string) => void) {

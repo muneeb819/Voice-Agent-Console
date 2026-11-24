@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.QA_REVIEW_AGENT_ID = void 0;
 exports.normalizeCampaignAgents = normalizeCampaignAgents;
 exports.campaignAgentIds = campaignAgentIds;
 exports.campaignHasAgent = campaignHasAgent;
@@ -8,6 +9,9 @@ exports.assignCampaignSlots = assignCampaignSlots;
 exports.campaignExtension = campaignExtension;
 exports.campaignSlot = campaignSlot;
 exports.reconcileCampaignSlots = reconcileCampaignSlots;
+exports.phoneBotPool = phoneBotPool;
+exports.nextPhoneBotOrder = nextPhoneBotOrder;
+exports.resetPhoneRotationForTests = resetPhoneRotationForTests;
 /** Legacy state has one agentId; newer state also has an explicit pool.
  * Never invent an assignment when both fields are empty. The primary remains
  * deterministic for a telephone extension, which cannot carry a browser-style
@@ -102,3 +106,28 @@ function reconcileCampaignSlots(prev, next) {
     }
     next.campaignSlotSeq = seq;
 }
+/** The shared QA reviewer bot never answers phone calls. */
+exports.QA_REVIEW_AGENT_ID = 'a_qa';
+/** Bots that answer this campaign's phone calls, primary first (the QA reviewer excluded). */
+function phoneBotPool(state, campaign) {
+    return campaignAgentIds(campaign)
+        .filter((id) => id !== exports.QA_REVIEW_AGENT_ID)
+        .map((id) => state.agents.find((agent) => agent.id === id))
+        .filter((agent) => Boolean(agent));
+}
+const phoneRotation = new Map();
+/**
+ * Round-robin order for the next phone call: every assigned bot takes calls in
+ * turn. Returns the pool rotated so the caller can skip a bot that is not ready.
+ */
+function nextPhoneBotOrder(state, campaign) {
+    const pool = phoneBotPool(state, campaign);
+    if (pool.length <= 1)
+        return pool;
+    const key = String(campaign.id || '');
+    const start = (phoneRotation.get(key) || 0) % pool.length;
+    phoneRotation.set(key, start + 1);
+    return [...pool.slice(start), ...pool.slice(0, start)];
+}
+/** Tests reset the rotation between cases. */
+function resetPhoneRotationForTests() { phoneRotation.clear(); }

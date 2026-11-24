@@ -55,8 +55,9 @@ const pool = clone(base);
 const camp = pool.campaigns.find((c) => c.id === 'c1')!;
 camp.agentIds = Array.from(new Set([...(camp.agentIds || []), 'a_nova']));
 r = smokeTestAgent(pool as any, 'a_nova');
-assert.ok(r.checks.some((c) => c.level === 'wn' && /Who answers phone calls/.test(c.label) && /primary bot/.test(c.detail)));
-console.log('✓ A bot that is not the campaign\'s primary is told who actually answers phone calls');
+assert.ok(r.checks.some((c) => c.level === 'ok' && /Who answers phone calls/.test(c.label) && /shared in turn|answers every phone call/.test(c.detail)));
+assert.ok(!r.checks.some((c) => /Make this bot primary/.test(c.detail)));
+console.log('✓ Every bot assigned to the campaign takes phone calls in turn (no "make this bot primary" warning)');
 
 // 5) Never saved.
 r = smokeTestAgent(base as any, 'a_missing', { name: 'New' });

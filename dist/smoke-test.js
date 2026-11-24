@@ -2,6 +2,16 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.smokeTestAgent = smokeTestAgent;
 exports.smokeTestCampaign = smokeTestCampaign;
+/**
+ * Smoke test for a bot or campaign. Answers the operator's question after a
+ * Save: "is the running server using my change, and will the next call get it?"
+ *
+ * Calls read the saved state from the database at call start, so a saved change
+ * applies to the next call with no restart. This check proves it using the same
+ * builder a phone call uses (buildDeepgramSettings + the opening sequence), and
+ * reports anything that would silently stop a change from reaching the call.
+ */
+const campaign_assignment_1 = require("./campaign-assignment");
 const settings_builder_1 = require("./settings-builder");
 const opening_1 = require("./opening");
 const persona_1 = require("./persona");
@@ -127,12 +137,14 @@ function nextCallChecks(state, agent, campaign, checks, group) {
         push('ok', 'Opening line', `Calls open with: “${greeting.length > 160 ? `${greeting.slice(0, 160)}…` : greeting}”`);
     else
         push('er', 'Opening line', 'The saved opening line is not what the next call will say.');
-    if (campaign.agentId !== agent.id) {
-        const primary = state.agents.find((a) => a.id === campaign.agentId);
-        push('wn', 'Who answers phone calls', `Phone calls on this campaign are answered by its primary bot${primary ? ` “${primary.name}”` : ''}, not this one. Make this bot primary on the campaign if it should take the calls.`);
+    const pool = (0, campaign_assignment_1.phoneBotPool)(state, campaign);
+    const takesCalls = pool.some((a) => a.id === agent.id);
+    if (takesCalls) {
+        const others = pool.filter((a) => a.id !== agent.id).map((a) => `“${a.name}”`);
+        push('ok', 'Who answers phone calls', others.length ? `Phone calls on this campaign are shared in turn between this bot and ${others.join(', ')}.` : 'This bot answers every phone call on this campaign.');
     }
     const limit = Number(campaign.maxCallSec) || 0;
-    if (campaign.agentId === agent.id && limit > 0)
+    if (takesCalls && limit > 0)
         push(prompt.includes('CALL TIME LIMIT') ? 'ok' : 'er', 'Max call length', prompt.includes('CALL TIME LIMIT') ? `${limit} s limit applies to the next call.` : `${limit} s limit is saved but not in the call prompt.`);
 }
 function commonHeader(kind, saved, draft, state, revisions, push) {
