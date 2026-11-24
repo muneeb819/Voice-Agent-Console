@@ -35,11 +35,50 @@ export const KOKORO_STOCK_VOICES = [
 
 export const SPEECH_SERVICE_STT_MODELS = ['large-v3-turbo', 'whisper-1'] as const;
 
+/** This server's own public names, from the deploy (.env) and the bridge settings. */
+let selfHostsProvider: () => string[] = () => [
+  process.env.PUBLIC_HOST || '', process.env.PUBLIC_IP || '', process.env.BRIDGE_PUBLIC_HOST || '',
+];
+export function setSpeechSelfHostsProvider(fn: () => string[]): void { selfHostsProvider = fn; }
+function selfSpeechHosts(): string[] { try { return selfHostsProvider(); } catch { return []; } }
+
+export const LOCAL_SPEECH_SERVICE_URL = 'http://127.0.0.1:8000';
+
+/**
+ * Turns what an operator typed into the base URL the console should call.
+ * - Endpoint paths (/v1/audio/speech, /v1/models, /healthz ...) are removed:
+ *   the console adds them itself.
+ * - An address that points back at this same server (its public IP or name,
+ *   given in selfHosts) becomes the loopback address: the speech service runs
+ *   beside the console, and a cloud server usually cannot reach its own
+ *   public IP.
+ */
+export function normalizeSpeechServiceUrl(input: string, selfHosts: string[] = []): string {
+  let raw = String(input || '').trim();
+  if (!raw) return '';
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) raw = `http://${raw}`;
+  let parsed: URL;
+  try { parsed = new URL(raw); } catch { return raw.replace(/\/+$/, ''); }
+  // Leave anything unsafe untouched so validation rejects it as typed.
+  if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) return raw;
+  const path = parsed.pathname.replace(/\/(v1|healthz|readyz|metrics|docs)(\/.*)?$/i, '').replace(/\/+$/, '');
+  const host = parsed.hostname.toLowerCase();
+  const self = new Set(selfHosts.map((h) => String(h || '').trim().toLowerCase()).filter(Boolean));
+  if (host === '0.0.0.0' || self.has(host)) {
+    // Same server: call the service directly. The nginx TLS front (8443) and
+    // the console ports map to the service's own port, 8000.
+    const port = Number(parsed.port || 0);
+    const direct = !port || [80, 443, 533, 534, 8443].includes(port) ? 8000 : port;
+    return `http://127.0.0.1:${direct}`;
+  }
+  return `${parsed.protocol}//${parsed.host}${path}`;
+}
+
 export function getSpeechServiceBaseUrl(explicitUrl?: string): string {
   const raw = String(
     explicitUrl || getSecret('SPEECH_SERVICE_URL') || process.env.SPEECH_SERVICE_URL || ''
   ).trim();
-  const value = (raw || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+  const value = normalizeSpeechServiceUrl(raw, selfSpeechHosts()) || LOCAL_SPEECH_SERVICE_URL;
   let parsed: URL;
   try { parsed = new URL(value); } catch { throw new Error('Speech Service URL is invalid.'); }
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) {

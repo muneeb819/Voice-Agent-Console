@@ -1602,7 +1602,10 @@ function createApp(viciBridge) {
         try {
             const secretUpdates = {};
             if (typeof req.body?.url === 'string' && req.body.url.trim()) {
-                secretUpdates.SPEECH_SERVICE_URL = req.body.url.trim();
+                // Save the address the console can actually use (see normalizeSpeechServiceUrl).
+                secretUpdates.SPEECH_SERVICE_URL = (0, speech_service_client_1.normalizeSpeechServiceUrl)(req.body.url, [
+                    String(req.hostname || ''), (0, db_1.getConsoleState)().vici?.bridgeHost || '', process.env.PUBLIC_HOST || '', process.env.PUBLIC_IP || '',
+                ]);
             }
             if (typeof req.body?.apiKey === 'string') {
                 secretUpdates.SPEECH_SERVICE_API_KEY = req.body.apiKey;
@@ -1849,6 +1852,8 @@ if (require.main === module) {
                         console.log(`[VAC:DEBUG] Active state loaded: ${currentState.agents.length} agents (${currentState.agents.map((a) => `"${a.name}"`).join(', ')}), ${currentState.campaigns.length} campaigns (${currentState.campaigns.map((c) => `"${c.name}"`).join(', ')}) | TTS=${currentState.services.tts.model || 'none'} | Pre-flight checks: ${okCount} passed, ${wnCount} warnings, ${erCount} errors`);
                     }
                     (0, deepgram_catalog_1.fetchDeepgramVoiceCatalog)().catch(() => { });
+                    // A speech-service URL saved with this server's own public IP is used as loopback.
+                    (0, speech_service_client_1.setSpeechSelfHostsProvider)(() => [(0, db_1.getConsoleState)().vici?.bridgeHost || '', process.env.PUBLIC_HOST || '', process.env.PUBLIC_IP || '']);
                     resolveListen();
                 };
                 server.once('error', onError);

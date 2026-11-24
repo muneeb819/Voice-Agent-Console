@@ -132,6 +132,8 @@ import {
 } from './demo-tunnel';
 import {
   getSpeechServiceBaseUrl,
+  normalizeSpeechServiceUrl,
+  setSpeechSelfHostsProvider,
   runSpeechServiceRoundTripSmoke,
   verifySpeechServiceConnection,
   synthesizeWithSpeechService,
@@ -1747,7 +1749,10 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     try {
       const secretUpdates: Partial<Record<SecretKeyName, string>> = {};
       if (typeof req.body?.url === 'string' && req.body.url.trim()) {
-        secretUpdates.SPEECH_SERVICE_URL = req.body.url.trim();
+        // Save the address the console can actually use (see normalizeSpeechServiceUrl).
+        secretUpdates.SPEECH_SERVICE_URL = normalizeSpeechServiceUrl(req.body.url, [
+          String(req.hostname || ''), getConsoleState().vici?.bridgeHost || '', process.env.PUBLIC_HOST || '', process.env.PUBLIC_IP || '',
+        ]);
       }
       if (typeof req.body?.apiKey === 'string') {
         secretUpdates.SPEECH_SERVICE_API_KEY = req.body.apiKey;
@@ -2014,6 +2019,8 @@ if (require.main === module) {
             );
           }
           fetchDeepgramVoiceCatalog().catch(() => {});
+          // A speech-service URL saved with this server's own public IP is used as loopback.
+          setSpeechSelfHostsProvider(() => [getConsoleState().vici?.bridgeHost || '', process.env.PUBLIC_HOST || '', process.env.PUBLIC_IP || '']);
           resolveListen();
         };
         server.once('error', onError);

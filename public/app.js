@@ -2930,7 +2930,8 @@
    <div class="row r3">
     <div>
      <label for="ss-url-input">Speech Service URL (optional override)</label>
-     <input id="ss-url-input" type="text" placeholder="e.g. http://127.0.0.1:8000" value="${esc(localSpeechUi.urlDraft)}" autocomplete="off" />
+     <input id="ss-url-input" type="text" placeholder="http://127.0.0.1:8000 (same server — recommended)" value="${esc(localSpeechUi.urlDraft)}" autocomplete="off" />
+     <div class="note" style="margin-top:4px">Base address only. This server's own public IP is saved as <code>http://127.0.0.1:8000</code>, and paths like <code>/v1/audio/…</code> are removed automatically.</div>
     </div>
     <div>
      <label for="ss-key-input">Speech Service API Key (Bearer / X-API-Key)</label>

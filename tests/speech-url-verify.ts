@@ -1,0 +1,20 @@
+// The speech-service URL box accepts what operators type and stores a usable base URL.
+import assert from 'node:assert/strict';
+import { normalizeSpeechServiceUrl as n, LOCAL_SPEECH_SERVICE_URL as L } from '../src/speech-service-client';
+let checks = 0;
+const eq = (a: unknown, b: unknown, m: string) => { assert.equal(a, b, m); checks++; };
+const self = ['54.79.152.235', 'console.example.com'];
+eq(n('http://54.79.152.235:8443/v1/audio/', self), L, 'own public IP + endpoint path -> loopback');
+eq(n('https://54.79.152.235:8443', self), L, 'own public IP over https -> loopback');
+eq(n('console.example.com:8000/healthz', self), L, 'own hostname without scheme -> loopback');
+eq(n('http://localhost:8000/', self), 'http://localhost:8000', 'localhost keeps its port');
+eq(n('http://localhost:39123', self), 'http://localhost:39123', 'test service on another local port is kept');
+eq(n('http://54.79.152.235:9000', self), 'http://127.0.0.1:9000', 'own IP on a custom service port keeps that port');
+eq(n('http://127.0.0.1:8000/', self), L, 'loopback stays loopback');
+eq(n('https://speech.other-host.net/v1/audio/speech', self), 'https://speech.other-host.net', 'remote host keeps scheme+host, path stripped');
+eq(n('https://gw.example.org/speech/v1/models', self), 'https://gw.example.org/speech', 'path prefix before /v1 is kept');
+eq(n('', self), '', 'empty stays empty (default applies later)');
+import { getSpeechServiceBaseUrl } from '../src/speech-service-client';
+assert.throws(() => getSpeechServiceBaseUrl('file:///etc/passwd')); checks++;
+assert.throws(() => getSpeechServiceBaseUrl('https://user:pass@example.test')); checks++;
+console.log(`✓ Speech service URL: ${checks} checks passed`);
