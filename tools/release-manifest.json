@@ -310,5 +310,6 @@
   "tests/performance-verify.ts",
   "tests/remote-agent-user-verify.ts",
   "tests/speech-url-verify.ts",
+  "tests/phone-bot-rotation-verify.ts",
   "docs/CALL-SCREENING.md"
 ]

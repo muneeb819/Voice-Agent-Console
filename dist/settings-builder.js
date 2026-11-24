@@ -612,7 +612,6 @@ function generateViciConfig(state) {
     const agentApiUrl = `${v.viciBaseUrl}${v.agentApiPath}`;
     const campaignLines = state.campaigns
         .map((c, idx) => {
-        const ag = (0, campaign_assignment_1.primaryCampaignAgent)(state, c);
         const pool = (0, campaign_assignment_1.campaignAgentIds)(c).map((id) => state.agents.find((a) => a.id === id)?.name || id).join(', ');
         const slot = (0, campaign_assignment_1.campaignSlot)(c, idx);
         const ext = (0, campaign_assignment_1.campaignExtension)(v.aiExten, c, idx);
@@ -623,7 +622,7 @@ function generateViciConfig(state) {
             `; [Campaign slot ${slot}: ${c.name}]`,
             `;   VICIdial Campaign ID : ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCalls}`,
             `;   Assigned Bot Pool    : ${pool || '(missing)'}`,
-            `;   Telephone Persona    : ${ag ? ag.name : '(missing)'} (${ag?.mode || 'outbound'}); browser tests may select any assigned bot`,
+            `;   Phone Bots (in turn) : ${(0, campaign_assignment_1.phoneBotPool)(state, c).map((a) => a.name).join(', ') || '(missing)'}`,
             `;   Remote Agent Exten   : ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + slot - 1})`,
             `;   Live Closer Transfer : ${xferNote}`,
             `;   Allowed Dispositions : ${c.dispos}`,
