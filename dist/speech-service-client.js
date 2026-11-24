@@ -3,7 +3,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.SPEECH_SERVICE_STT_MODELS = exports.KOKORO_STOCK_VOICES = void 0;
+exports.LOCAL_SPEECH_SERVICE_URL = exports.SPEECH_SERVICE_STT_MODELS = exports.KOKORO_STOCK_VOICES = void 0;
+exports.setSpeechSelfHostsProvider = setSpeechSelfHostsProvider;
+exports.normalizeSpeechServiceUrl = normalizeSpeechServiceUrl;
 exports.getSpeechServiceBaseUrl = getSpeechServiceBaseUrl;
 exports.getSpeechServiceWsBaseUrl = getSpeechServiceWsBaseUrl;
 exports.getSpeechServiceHeaders = getSpeechServiceHeaders;
@@ -46,9 +48,60 @@ exports.KOKORO_STOCK_VOICES = [
     'bm_lewis',
 ];
 exports.SPEECH_SERVICE_STT_MODELS = ['large-v3-turbo', 'whisper-1'];
+/** This server's own public names, from the deploy (.env) and the bridge settings. */
+let selfHostsProvider = () => [
+    process.env.PUBLIC_HOST || '', process.env.PUBLIC_IP || '', process.env.BRIDGE_PUBLIC_HOST || '',
+];
+function setSpeechSelfHostsProvider(fn) { selfHostsProvider = fn; }
+function selfSpeechHosts() { try {
+    return selfHostsProvider();
+}
+catch {
+    return [];
+} }
+exports.LOCAL_SPEECH_SERVICE_URL = 'http://127.0.0.1:8000';
+/**
+ * Turns what an operator typed into the base URL the console should call.
+ * - Endpoint paths (/v1/audio/speech, /v1/models, /healthz ...) are removed:
+ *   the console adds them itself.
+ * - An address that points back at this same server (its public IP or name,
+ *   given in selfHosts) becomes the loopback address: the speech service runs
+ *   beside the console, and a cloud server usually cannot reach its own
+ *   public IP.
+ */
+function normalizeSpeechServiceUrl(input, selfHosts = []) {
+    let raw = String(input || '').trim();
+    if (!raw)
+        return '';
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw))
+        raw = `http://${raw}`;
+    let parsed;
+    try {
+        parsed = new URL(raw);
+    }
+    catch {
+        return raw.replace(/\/+$/, '');
+    }
+    // Leave anything unsafe untouched so validation rejects it as typed.
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash)
+        return raw;
+    const path = parsed.pathname.replace(/\/(v1|healthz|readyz|metrics|docs)(\/.*)?$/i, '').replace(/\/+$/, '');
+    const host = parsed.hostname.toLowerCase();
+    // Loopback names are never "self": a local service on its own port is used as typed.
+    const isLoopback = (h) => h === 'localhost' || h === '::1' || h === '[::1]' || /^127\./.test(h);
+    const self = new Set(selfHosts.map((h) => String(h || '').trim().toLowerCase()).filter((h) => h && !isLoopback(h)));
+    if (host === '0.0.0.0' || self.has(host)) {
+        // Same server: call the service directly. The nginx TLS front (8443) and
+        // the console ports map to the service's own port, 8000.
+        // Any port on this server's own public address (console TLS port, the
+        // nginx speech front, a custom --tls-port) means the local service.
+        return exports.LOCAL_SPEECH_SERVICE_URL;
+    }
+    return `${parsed.protocol}//${parsed.host}${path}`;
+}
 function getSpeechServiceBaseUrl(explicitUrl) {
     const raw = String(explicitUrl || (0, env_store_1.getSecret)('SPEECH_SERVICE_URL') || process.env.SPEECH_SERVICE_URL || '').trim();
-    const value = (raw || 'http://127.0.0.1:8000').replace(/\/+$/, '');
+    const value = normalizeSpeechServiceUrl(raw, selfSpeechHosts()) || exports.LOCAL_SPEECH_SERVICE_URL;
     let parsed;
     try {
         parsed = new URL(value);
