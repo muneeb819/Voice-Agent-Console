@@ -1708,7 +1708,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   app.get('/api/speech-service/status', asyncRoute(async (req: Request, res: Response) => {
     try {
-      const explicitUrl = typeof req.query.url === 'string' ? req.query.url : undefined;
+      const explicitUrl = typeof req.query.url === 'string' ? normalizeSpeechServiceUrl(req.query.url, speechSelfHosts(req)) || undefined : undefined;
       const diagnostic = await verifySpeechServiceConnection(explicitUrl);
       const state = getConsoleState();
       const activeStt = state.providers.find((p) => p.kind === 'stt' && p.id === state.services?.stt?.providerId);
@@ -1731,7 +1731,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   app.post('/api/speech-service/test', asyncRoute(async (req: Request, res: Response) => {
     try {
       const result = await runSpeechServiceRoundTripSmoke({
-        url: typeof req.body?.url === 'string' ? req.body.url : undefined,
+        url: typeof req.body?.url === 'string' ? normalizeSpeechServiceUrl(req.body.url, speechSelfHosts(req)) || undefined : undefined,
         apiKey: typeof req.body?.apiKey === 'string' ? req.body.apiKey : undefined,
         voice: typeof req.body?.voice === 'string' ? req.body.voice : undefined,
         text: typeof req.body?.text === 'string' ? req.body.text : undefined,
@@ -1745,14 +1745,17 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     }
   }));
 
+  /** This server's own public names: the address the browser used, the bridge host and deploy settings. */
+  const speechSelfHosts = (req: Request) => [
+    String(req.hostname || ''), getConsoleState().vici?.bridgeHost || '', process.env.PUBLIC_HOST || '', process.env.PUBLIC_IP || '',
+  ];
+
   app.post('/api/speech-service/activate', asyncRoute(async (req: Request, res: Response) => {
     try {
       const secretUpdates: Partial<Record<SecretKeyName, string>> = {};
       if (typeof req.body?.url === 'string' && req.body.url.trim()) {
         // Save the address the console can actually use (see normalizeSpeechServiceUrl).
-        secretUpdates.SPEECH_SERVICE_URL = normalizeSpeechServiceUrl(req.body.url, [
-          String(req.hostname || ''), getConsoleState().vici?.bridgeHost || '', process.env.PUBLIC_HOST || '', process.env.PUBLIC_IP || '',
-        ]);
+        secretUpdates.SPEECH_SERVICE_URL = normalizeSpeechServiceUrl(req.body.url, speechSelfHosts(req));
       }
       if (typeof req.body?.apiKey === 'string') {
         secretUpdates.SPEECH_SERVICE_API_KEY = req.body.apiKey;

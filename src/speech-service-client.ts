@@ -63,13 +63,15 @@ export function normalizeSpeechServiceUrl(input: string, selfHosts: string[] = [
   if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) return raw;
   const path = parsed.pathname.replace(/\/(v1|healthz|readyz|metrics|docs)(\/.*)?$/i, '').replace(/\/+$/, '');
   const host = parsed.hostname.toLowerCase();
-  const self = new Set(selfHosts.map((h) => String(h || '').trim().toLowerCase()).filter(Boolean));
+  // Loopback names are never "self": a local service on its own port is used as typed.
+  const isLoopback = (h: string) => h === 'localhost' || h === '::1' || h === '[::1]' || /^127\./.test(h);
+  const self = new Set(selfHosts.map((h) => String(h || '').trim().toLowerCase()).filter((h) => h && !isLoopback(h)));
   if (host === '0.0.0.0' || self.has(host)) {
     // Same server: call the service directly. The nginx TLS front (8443) and
     // the console ports map to the service's own port, 8000.
-    const port = Number(parsed.port || 0);
-    const direct = !port || [80, 443, 533, 534, 8443].includes(port) ? 8000 : port;
-    return `http://127.0.0.1:${direct}`;
+    // Any port on this server's own public address (console TLS port, the
+    // nginx speech front, a custom --tls-port) means the local service.
+    return LOCAL_SPEECH_SERVICE_URL;
   }
   return `${parsed.protocol}//${parsed.host}${path}`;
 }

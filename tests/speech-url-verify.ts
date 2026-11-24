@@ -9,7 +9,7 @@ eq(n('https://54.79.152.235:8443', self), L, 'own public IP over https -> loopba
 eq(n('console.example.com:8000/healthz', self), L, 'own hostname without scheme -> loopback');
 eq(n('http://localhost:8000/', self), 'http://localhost:8000', 'localhost keeps its port');
 eq(n('http://localhost:39123', self), 'http://localhost:39123', 'test service on another local port is kept');
-eq(n('http://54.79.152.235:9000', self), 'http://127.0.0.1:9000', 'own IP on a custom service port keeps that port');
+eq(n('https://54.79.152.235:9443', self), L, 'own IP on a custom TLS port -> local service');
 eq(n('http://127.0.0.1:8000/', self), L, 'loopback stays loopback');
 eq(n('https://speech.other-host.net/v1/audio/speech', self), 'https://speech.other-host.net', 'remote host keeps scheme+host, path stripped');
 eq(n('https://gw.example.org/speech/v1/models', self), 'https://gw.example.org/speech', 'path prefix before /v1 is kept');
@@ -17,4 +17,5 @@ eq(n('', self), '', 'empty stays empty (default applies later)');
 import { getSpeechServiceBaseUrl } from '../src/speech-service-client';
 assert.throws(() => getSpeechServiceBaseUrl('file:///etc/passwd')); checks++;
 assert.throws(() => getSpeechServiceBaseUrl('https://user:pass@example.test')); checks++;
+eq(n('http://localhost:39123', ['localhost', '127.0.0.1']), 'http://localhost:39123', 'loopback request host never rewrites a local test service');
 console.log(`✓ Speech service URL: ${checks} checks passed`);

@@ -1561,7 +1561,7 @@ function createApp(viciBridge) {
     // ==================== LOCAL SPEECH SERVICE (1-CLICK STT + TTS) ====================
     app.get('/api/speech-service/status', asyncRoute(async (req, res) => {
         try {
-            const explicitUrl = typeof req.query.url === 'string' ? req.query.url : undefined;
+            const explicitUrl = typeof req.query.url === 'string' ? (0, speech_service_client_1.normalizeSpeechServiceUrl)(req.query.url, speechSelfHosts(req)) || undefined : undefined;
             const diagnostic = await (0, speech_service_client_1.verifySpeechServiceConnection)(explicitUrl);
             const state = (0, db_1.getConsoleState)();
             const activeStt = state.providers.find((p) => p.kind === 'stt' && p.id === state.services?.stt?.providerId);
@@ -1584,7 +1584,7 @@ function createApp(viciBridge) {
     app.post('/api/speech-service/test', asyncRoute(async (req, res) => {
         try {
             const result = await (0, speech_service_client_1.runSpeechServiceRoundTripSmoke)({
-                url: typeof req.body?.url === 'string' ? req.body.url : undefined,
+                url: typeof req.body?.url === 'string' ? (0, speech_service_client_1.normalizeSpeechServiceUrl)(req.body.url, speechSelfHosts(req)) || undefined : undefined,
                 apiKey: typeof req.body?.apiKey === 'string' ? req.body.apiKey : undefined,
                 voice: typeof req.body?.voice === 'string' ? req.body.voice : undefined,
                 text: typeof req.body?.text === 'string' ? req.body.text : undefined,
@@ -1598,14 +1598,16 @@ function createApp(viciBridge) {
             });
         }
     }));
+    /** This server's own public names: the address the browser used, the bridge host and deploy settings. */
+    const speechSelfHosts = (req) => [
+        String(req.hostname || ''), (0, db_1.getConsoleState)().vici?.bridgeHost || '', process.env.PUBLIC_HOST || '', process.env.PUBLIC_IP || '',
+    ];
     app.post('/api/speech-service/activate', asyncRoute(async (req, res) => {
         try {
             const secretUpdates = {};
             if (typeof req.body?.url === 'string' && req.body.url.trim()) {
                 // Save the address the console can actually use (see normalizeSpeechServiceUrl).
-                secretUpdates.SPEECH_SERVICE_URL = (0, speech_service_client_1.normalizeSpeechServiceUrl)(req.body.url, [
-                    String(req.hostname || ''), (0, db_1.getConsoleState)().vici?.bridgeHost || '', process.env.PUBLIC_HOST || '', process.env.PUBLIC_IP || '',
-                ]);
+                secretUpdates.SPEECH_SERVICE_URL = (0, speech_service_client_1.normalizeSpeechServiceUrl)(req.body.url, speechSelfHosts(req));
             }
             if (typeof req.body?.apiKey === 'string') {
                 secretUpdates.SPEECH_SERVICE_API_KEY = req.body.apiKey;
