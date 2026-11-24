@@ -104,3 +104,37 @@ export function reconcileCampaignSlots(
   }
   next.campaignSlotSeq = seq;
 }
+
+/** The shared QA reviewer bot never answers phone calls. */
+export const QA_REVIEW_AGENT_ID = 'a_qa';
+
+/** Bots that answer this campaign's phone calls, primary first (the QA reviewer excluded). */
+export function phoneBotPool(state: Pick<ConsoleState, 'agents'>, campaign: Partial<CampaignAssignment>): Agent[] {
+  return campaignAgentIds(campaign)
+    .filter((id) => id !== QA_REVIEW_AGENT_ID)
+    .map((id) => state.agents.find((agent) => agent.id === id))
+    .filter((agent): agent is Agent => Boolean(agent));
+}
+
+const phoneRotation = new Map<string, number>();
+
+/**
+ * Next bot for a phone call: every ready bot assigned to the campaign takes
+ * calls in turn. Bots that are not ready are left out of the turn order, so the
+ * ready ones share calls evenly.
+ */
+export function pickPhoneBot(
+  state: Pick<ConsoleState, 'agents'>,
+  campaign: Partial<CampaignAssignment> & { id?: string },
+  isReady: (agent: Agent) => boolean = () => true
+): Agent | undefined {
+  const eligible = phoneBotPool(state, campaign).filter(isReady);
+  if (eligible.length <= 1) return eligible[0];
+  const key = String(campaign.id || '');
+  const n = phoneRotation.get(key) || 0;
+  phoneRotation.set(key, n + 1);
+  return eligible[n % eligible.length];
+}
+
+/** Tests reset the rotation between cases. */
+export function resetPhoneRotationForTests(): void { phoneRotation.clear(); }

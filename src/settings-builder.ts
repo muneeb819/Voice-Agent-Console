@@ -3,7 +3,7 @@ import { getSecret } from './env-store';
 import { deepgramModelsForProviderType, VOICE_AGENT_STT_MODELS } from './defaults';
 import { composeOpening, localizeGreeting, openingInstruction } from './opening';
 import { composeBehavioralPrompt, callPromptReport } from './persona';
-import { campaignAgentIds, campaignExtension, campaignHasAgent, campaignSlot, primaryCampaignAgent } from './campaign-assignment';
+import { campaignAgentIds, campaignExtension, campaignHasAgent, campaignSlot, phoneBotPool, primaryCampaignAgent } from './campaign-assignment';
 
 export function isPlainObject(val: unknown): val is Record<string, any> {
   return typeof val === 'object' && val !== null && !Array.isArray(val);
@@ -691,7 +691,6 @@ export function generateViciConfig(state: ConsoleState): string {
 
   const campaignLines = state.campaigns
     .map((c, idx) => {
-      const ag = primaryCampaignAgent(state, c);
       const pool = campaignAgentIds(c).map((id) => state.agents.find((a) => a.id === id)?.name || id).join(', ');
       const slot = campaignSlot(c, idx);
       const ext = campaignExtension(v.aiExten, c, idx);
@@ -703,7 +702,7 @@ export function generateViciConfig(state: ConsoleState): string {
         `; [Campaign slot ${slot}: ${c.name}]`,
         `;   VICIdial Campaign ID : ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCalls}`,
         `;   Assigned Bot Pool    : ${pool || '(missing)'}`,
-        `;   Telephone Persona    : ${ag ? ag.name : '(missing)'} (${ag?.mode || 'outbound'}); browser tests may select any assigned bot`,
+        `;   Phone Bots (in turn) : ${phoneBotPool(state, c).map((a) => a.name).join(', ') || '(missing)'}`,
         `;   Remote Agent Exten   : ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + slot - 1})`,
         `;   Live Closer Transfer : ${xferNote}`,
         `;   Allowed Dispositions : ${c.dispos}`,
