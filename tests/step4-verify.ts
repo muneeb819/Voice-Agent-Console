@@ -829,12 +829,25 @@ async function run() {
       const actJson = (await actRes.json()) as any;
       assert(
         actJson.ok === true &&
-          actJson.state?.services?.stt?.providerId === 's_local' &&
+          actJson.state?.services?.stt?.providerId === 's1' &&
+          actJson.state?.services?.stt?.model === preStateSnap.state?.services?.stt?.model &&
           actJson.state?.services?.tts?.providerId === 't_local' &&
           actJson.state?.services?.tts?.model === 'af_bella' &&
           actJson.counts?.er === 0,
-        `Expected s_local + t_local (af_bella) with 0 validation errors, got er=${actJson.counts?.er}`
+        `Expected Deepgram listening kept unchanged + t_local (af_bella) voice with 0 validation errors, got stt=${actJson.state?.services?.stt?.providerId}/${actJson.state?.services?.stt?.model} er=${actJson.counts?.er}`
       );
+      // A local listener cannot run on Deepgram Voice Agent: force it here to
+      // verify the honest Live Bot rejection below and the readiness error.
+      const forcedState = JSON.parse(JSON.stringify(actJson.state));
+      forcedState.services.stt = { providerId: 's_local', model: 'large-v3-turbo' };
+      const forceRes = await fetch(`${httpBase}/api/state`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Cookie: signedInCookie },
+        body: JSON.stringify({ state: forcedState, summary: 'Test: force local STT' }),
+      });
+      const forceJson = (await forceRes.json()) as any;
+      assert(forceRes.status === 200 && forceJson.state?.services?.stt?.providerId === 's_local', `Expected forced local STT to save, got ${forceRes.status}`);
+      assert(Number(forceJson.counts?.er) > 0, 'Local STT must be a readiness error (Deepgram Voice Agent cannot listen through it)');
 
       const prevRes = await fetch(`${httpBase}/api/tts/preview`, {
         method: 'POST',
@@ -908,7 +921,7 @@ async function run() {
           ws.on('error', (err) => { clearTimeout(timer); reject(err); });
         }
       );
-      assert(simStreamCheck.errorCode === 'LOCAL_SPEECH_AGENT_UNAVAILABLE', 'Expected local speech rejection');
+      assert(['LOCAL_SPEECH_AGENT_UNAVAILABLE', 'CAMPAIGN_NOT_READY'].includes(simStreamCheck.errorCode), `Expected local speech rejection, got ${simStreamCheck.errorCode}`);
       assert(!simStreamCheck.started && simStreamCheck.audioBytes === 0 && !simStreamCheck.transcript,
         'Unsupported local speech must not produce a started session, audio or transcript');
       console.log('✓ [13/13] First-party HTTPS cookies & honest local speech simulator rejection verified');

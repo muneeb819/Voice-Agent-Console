@@ -2910,22 +2910,23 @@
       : ['af_heart', 'af_bella', 'af_nova', 'af_alloy', 'am_adam', 'bf_emma'];
     const activeStt = globalServiceProvider('stt');
     const activeTts = globalServiceProvider('tts');
-    const isLocalActive = activeStt?.type === 'speech_service' && activeTts?.type === 'speech_service';
+    const isLocalActive = activeTts?.type === 'speech_service';
+    const localSttSelected = activeStt?.type === 'speech_service';
     const currentVoice = isLocalActive && S.services?.tts?.model ? S.services.tts.model : localSpeechUi.voiceDraft || 'af_heart';
     const urlConfigured = secretsStatus?.SPEECH_SERVICE_URL?.configured;
     const keyConfigured = secretsStatus?.SPEECH_SERVICE_API_KEY?.configured;
 
     return `<div class="card" id="local-speech-card" style="border:1px solid var(--accent-soft,rgba(56,189,248,.35))">
    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:8px">
-    <h2 style="margin:0"> Self-Hosted Speech Service — 1-Click Local STT + TTS</h2>
+    <h2 style="margin:0"> Self-Hosted Speech Service — Local Voice (TTS)</h2>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
-     <span class="pill ${isLocalActive ? 'wn' : ''}">${isLocalActive ? 'Selected · Live Bot unsupported' : 'Not selected'}</span>
+     <span class="pill ${localSttSelected ? 'er' : isLocalActive ? 'ok' : ''}">${localSttSelected ? 'STT is local — set it to Deepgram' : isLocalActive ? 'Local voice active' : 'Not selected'}</span>
      <span class="pill">${urlConfigured ? 'URL Configured' : 'Auto Port:8000'}</span>
      <span class="pill ${keyConfigured ? 'ok' : 'wn'}">${keyConfigured ? `Key ${esc(secretsStatus.SPEECH_SERVICE_API_KEY.masked)}` : 'Auth Key Optional/Dev'}</span>
     </div>
    </div>
    <div class="note" style="margin-bottom:10px">
-    Configure your self-hosted speech service for standalone STT/TTS and voice previews. <b>Live Bot does not yet connect local speech to an LLM</b>; selecting it here does not enable a full conversation. Use Deepgram Voice Agent for Live Bot.
+    Use your self-hosted Kokoro voice for the bots. Calls and Live Bot run on Deepgram Voice Agent: <b>it speaks with your local voice, listens with Deepgram (Nova-3/Flux) and thinks with your selected Deepgram LLM</b>. For calls, Deepgram reaches the voice through the speech provider's public HTTPS address.
    </div>
    <div class="row r3">
     <div>
@@ -2945,7 +2946,7 @@
     </div>
    </div>
    <div class="bar" style="margin-top:10px;margin-bottom:4px">
-    <button class="b" id="btn-ss-activate" ${localSpeechUi.busy ? 'disabled' : ''}> Save Local STT + TTS Selection</button>
+    <button class="b" id="btn-ss-activate" ${localSpeechUi.busy ? 'disabled' : ''}> Use Local Voice (keep Deepgram STT + LLM)</button>
     <button class="g" id="btn-ss-test" ${localSpeechUi.busy ? 'disabled' : ''}>${serverlessCloudMode ? ' Test Remote TTS' : ' Test Round-Trip (TTS → STT)'}</button>
     <button class="g" id="btn-ss-probe" ${localSpeechUi.busy ? 'disabled' : ''}> Check /readyz Status</button>
    </div>
@@ -3548,9 +3549,9 @@
   }
 
   function effectiveSimulatorMode() {
-    return globalServiceProvider('stt')?.type === 'speech_service' || globalServiceProvider('tts')?.type === 'speech_service'
-      ? 'speech_service'
-      : 'deepgram';
+    // Only a local listener (STT) blocks Deepgram Voice Agent; a local voice
+    // (TTS) is spoken through Deepgram, so that configuration runs as 'deepgram'.
+    return globalServiceProvider('stt')?.type === 'speech_service' ? 'speech_service' : 'deepgram';
   }
 
   async function startLiveCall(withMic = true) {
@@ -3610,8 +3611,8 @@
     const mode = effectiveSimulatorMode();
     if (mode !== 'deepgram') {
       sim.lastError =
-        'Local speech is not connected to an LLM in Live Bot. Select and save supported Deepgram Voice Agent providers on Plug-Ins.';
-      sim.statusText = 'Local speech conversation unavailable';
+        'Listening (STT) is set to the local speech service, but Deepgram Voice Agent only listens with Deepgram models. Set STT to Deepgram Nova-3 or Flux on Plug-Ins; your local voice and Deepgram LLM keep working.';
+      sim.statusText = 'Set STT to Deepgram';
       render();
       return;
     }
@@ -5045,34 +5046,56 @@
     const list = filteredVoices();
     const countLabel = `Showing ${list.length} of ${voiceCatalog.voices.length} real Deepgram voices`;
     const localTtsProv = S.providers.find((p) => p.kind === 'tts' && p.type === 'speech_service');
-    const localVoices = localTtsProv
+    const allLocalVoices = localTtsProv
       ? (localTtsProv.models || '')
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean)
       : [];
     const isLocalTtsActive = globalServiceProvider('tts')?.type === 'speech_service';
+    const localVoiceInfo = (vid) => {
+      const isClone = vid.startsWith('clone:');
+      return {
+        isClone,
+        accent: vid.startsWith('bf_') || vid.startsWith('bm_') ? 'British' : isClone ? 'Custom Clone' : 'American',
+        gender: vid.startsWith('am_') || vid.startsWith('bm_') ? 'masculine' : isClone ? 'cloned' : 'feminine',
+        pretty: isClone ? `Cloned Voice (${vid.slice(6, 12)})` : vid.replace(/^[ab][fm]_/, '').replace(/^\w/, (c) => c.toUpperCase()),
+      };
+    };
+    // The same filters apply to the self-hosted voices: a Deepgram model family
+    // hides them, and search / language / accent / gender narrow them down.
+    const lf = voiceCatalog.filters;
+    const lq = (lf.q || '').trim().toLowerCase();
+    const showLocal = !lf.family || lf.family === 'local';
+    const localVoices = showLocal
+      ? allLocalVoices
+          .filter((vid) => {
+            const info = localVoiceInfo(vid);
+            if (lf.language && !info.isClone && !'en'.startsWith(String(lf.language).toLowerCase().slice(0, 2))) return false;
+            if (lf.accent && info.accent !== lf.accent) return false;
+            if (lf.gender && info.gender !== lf.gender) return false;
+            if (lq && !`${vid} ${info.pretty} ${info.accent} ${info.gender} kokoro local self-hosted`.toLowerCase().includes(lq)) return false;
+            return true;
+          })
+          .sort((x, y) => Number(isLocalTtsActive && S.services?.tts?.model === y) - Number(isLocalTtsActive && S.services?.tts?.model === x))
+      : [];
 
-    const localVoicesSectionHtml = localVoices.length
+    const localVoicesSectionHtml = showLocal && allLocalVoices.length
       ? `
    <div class="t" style="margin-bottom:14px;border-left:3px solid var(--ac)">
     <div class="bar" style="justify-content:space-between;margin-bottom:8px">
      <div>
-      <b> Self-Hosted Local Speech Service Voices (${localVoices.length} Kokoro-82M &amp; Cloned Voices)</b>
-      <div class="note" style="margin-top:2px">Zero per-minute cloud cost — click <b> Speak Text</b> to synthesize live WAV audio or <b>✓ Use This Voice</b> to assign globally.</div>
+      <b>Self-Hosted Local Speech Service Voices (showing ${localVoices.length} of ${allLocalVoices.length} Kokoro-82M &amp; Cloned Voices)</b>
+      <div class="note" style="margin-top:2px">Zero per-minute cloud cost — click <b>Speak Text</b> to hear it or <b>✓ Use This Voice</b> to make it every bot's voice. Listening stays on Deepgram and your LLM is unchanged.</div>
      </div>
      <span class="pill ${isLocalTtsActive ? 'ok' : ''}">${isLocalTtsActive ? `● Active (${esc(S.services?.tts?.model)})` : '○ Available'}</span>
     </div>
     <div class="voice-grid">
+     ${localVoices.length ? '' : '<div class="note">No self-hosted voice matches these filters.</div>'}
      ${localVoices
        .map((vid) => {
-         const isClone = vid.startsWith('clone:');
+         const { isClone, accent, gender, pretty } = localVoiceInfo(vid);
          const isSelected = isLocalTtsActive && S.services?.tts?.model === vid;
-         const accent = vid.startsWith('bf_') || vid.startsWith('bm_') ? 'British' : isClone ? 'Custom Clone' : 'American';
-         const gender = vid.startsWith('am_') || vid.startsWith('bm_') ? 'masculine' : isClone ? 'cloned' : 'feminine';
-         const pretty = isClone
-           ? `Cloned Voice (${vid.slice(6, 12)})`
-           : vid.replace(/^[ab][fm]_/, '').replace(/^\w/, (c) => c.toUpperCase());
          const initials = esc(pretty.slice(0, 2).toUpperCase());
          return `<div class="vcard ${isSelected ? 'active' : ''}">
         <div class="vcard-top">
@@ -6506,10 +6529,11 @@
       <div>
        <label for="vf-family">Model Family</label>
        <select id="vf-family">
-        <option value="">All Families (Flux + Aura)</option>
+        <option value="">All Families (Flux + Aura + Self-Hosted)</option>
         <option value="flux-v2" ${voiceCatalog.filters.family === 'flux-v2' ? 'selected' : ''}>Flux TTS (v2 — Turn-Based)</option>
         <option value="aura-2" ${voiceCatalog.filters.family === 'aura-2' ? 'selected' : ''}>Aura-2 (v1)</option>
         <option value="aura-1" ${voiceCatalog.filters.family === 'aura-1' ? 'selected' : ''}>Aura-1 (v1)</option>
+        <option value="local" ${voiceCatalog.filters.family === 'local' ? 'selected' : ''}>Self-Hosted (Kokoro &amp; Clones)</option>
        </select>
       </div>
       <div>
@@ -6676,7 +6700,7 @@
 
      <div class="t" style="border-left:3px solid var(--ac)">
       <b>Deepgram browser test, not a telephone call.</b> After the provider confirms the session, microphone audio and typed messages are sent to Deepgram. This may incur provider charges. Transfers, dispositions and DNC updates are <b>not executed</b> here; test them on a properly configured VICIdial call instead. An enabled custom webhook can perform real external actions.
-      ${curMode === 'speech_service' ? '<div class="wn" style="margin-top:6px">Local speech is selected, but a local LLM conversation is not implemented. Select supported Deepgram Voice Agent providers in Plug-Ins.</div>' : ''}
+      ${curMode === 'speech_service' ? '<div class="wn" style="margin-top:6px">Listening (STT) is set to the local speech service. Deepgram Voice Agent only listens with Deepgram models: set STT to Deepgram Nova-3 or Flux in Plug-Ins. Your local voice and Deepgram LLM keep working.</div>' : ''}
      </div>
      <div class="row">
       <div>
@@ -8523,18 +8547,23 @@
             upgradeRealtimeAgentFeatures(S);
             const sLoc = S.providers.find((p) => p.kind === 'stt' && p.type === 'speech_service');
             const tLoc = S.providers.find((p) => p.kind === 'tts' && p.type === 'speech_service');
-            if (sLoc && tLoc) {
-              S.services.stt = { providerId: sLoc.id, model: 'large-v3-turbo' };
+            if (tLoc) {
+              // Deepgram Voice Agent speaks through the local voice but only
+              // listens with Deepgram models, so STT stays on (or returns to) Deepgram.
               S.services.tts = { providerId: tLoc.id, model: voiceVal || 'af_heart' };
+              const curStt = S.providers.find((p) => p.kind === 'stt' && p.id === S.services.stt?.providerId);
+              const dgStt = S.providers.find((p) => p.kind === 'stt' && p.type === 'deepgram');
+              if ((!curStt || curStt.type !== 'deepgram') && dgStt) S.services.stt = { providerId: dgStt.id, model: 'nova-3' };
               if (!S.services.llm?.providerId) S.services.llm = { providerId: 'l1', model: 'gpt-4o-mini' };
             }
+            void sLoc;
             S.updatedAt = new Date().toISOString();
             try {
               window.localStorage?.setItem(CLOUD_STATE_KEY, JSON.stringify(S));
             } catch {}
             snap = comparableSnapshot(S);
             localSpeechUi.statusTone = 'ok';
-            localSpeechUi.statusText = `Saved local STT=${S.services.stt.model} and TTS=${S.services.tts.model}. Connectivity was not verified; Live Bot does not support local LLM conversations.`;
+            localSpeechUi.statusText = `Saved local voice ${S.services.tts.model}. Listening stays on Deepgram ${S.services.stt.model} and your LLM is unchanged. Connectivity was not verified.`;
             updateHeaderStatus();
           }
         } else if (b.id === 'btn-ss-probe') {
@@ -8591,7 +8620,7 @@
             if (j.telemetry) cmdDeckState.serverTelemetry = j.telemetry;
             if (Array.isArray(j.revisions) && j.revisions[0]) latestRevisionId = j.revisions[0].id;
             localSpeechUi.statusTone = 'ok';
-            localSpeechUi.statusText = `✓ Saved local STT=${S.services.stt.model} and TTS=${S.services.tts.model} (${j.diagnostic?.baseUrl}). Live Bot does not support local LLM conversations.`;
+            localSpeechUi.statusText = `✓ Saved local voice ${S.services.tts.model} (${j.diagnostic?.baseUrl}). Listening stays on Deepgram ${S.services.stt.model} and your LLM (${S.services.llm?.model || 'not set'}) is unchanged.`;
             updateHeaderStatus();
           } else {
             localSpeechUi.statusTone = 'er';
@@ -9013,11 +9042,12 @@
       }
       S.services = S.services || {};
       S.services.tts = { providerId: ttsProv.id, model: voiceId };
-      if (targetProvType === 'speech_service') {
-        const sttLocal = S.providers.find((p) => p.kind === 'stt' && p.type === 'speech_service');
-        if (sttLocal) {
-          S.services.stt = { providerId: sttLocal.id, model: 'large-v3-turbo' };
-        }
+      // Picking a voice changes only the voice. Listening stays on Deepgram, which
+      // is the only STT Deepgram Voice Agent accepts (moved back there if it was local).
+      const curSttProv = S.providers.find((p) => p.kind === 'stt' && p.id === S.services.stt?.providerId);
+      if (!curSttProv || curSttProv.type !== 'deepgram') {
+        const dgStt = S.providers.find((p) => p.kind === 'stt' && p.type === 'deepgram');
+        if (dgStt) S.services.stt = { providerId: dgStt.id, model: 'nova-3' };
       }
       const vs = document.getElementById('vs');
       if (vs) vs.textContent = `Saving ${label} as the active voice…`;
