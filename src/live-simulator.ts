@@ -632,7 +632,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           return;
         }
         if (requestedMode === 'speech_service' || usesLocalSpeechService) {
-          sendFatalError('LOCAL_SPEECH_AGENT_UNAVAILABLE', 'Local STT/TTS is not connected to an LLM in Live Bot. Select supported Deepgram Voice Agent providers for a real conversation.');
+          sendFatalError('LOCAL_SPEECH_AGENT_UNAVAILABLE', 'Listening (STT) is set to the local speech service, but Deepgram Voice Agent can only listen with Deepgram models. In Plug-Ins set STT to Deepgram Nova-3 or Flux; your local voice (TTS) and Deepgram LLM keep working.');
           finalizeCall('unsupported_mode');
           return;
         }

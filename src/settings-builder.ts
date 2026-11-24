@@ -377,9 +377,9 @@ export function validateAgent(state: ConsoleState, agent: Agent): ValidationItem
   const isLocalStt = Boolean(sp && sp.type === 'speech_service');
   const spAllowedStt = sp ? sp.models.split(',').map((s) => s.trim()).filter(Boolean) : [];
   push(
-    Boolean(sp && (sp.type === 'deepgram' || sp.type === 'speech_service')),
+    Boolean(sp && sp.type === 'deepgram'),
     isLocalStt
-      ? 'Global STT provider is Local Speech Service (Faster-Whisper)'
+      ? 'Global STT is set to Local Speech Service, but Deepgram Voice Agent can only listen with Deepgram models. Set STT to Deepgram Nova-3 or Flux (your local voice and Deepgram LLM keep working)'
       : 'Global STT provider is Deepgram (required by Voice Agent API)'
   );
   push(

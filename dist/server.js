@@ -1637,19 +1637,27 @@ function createApp(viciBridge) {
             if (mergedVoices.length > 0) {
                 localTts.models = mergedVoices.join(',');
             }
-            const chosenSttModel = typeof req.body?.sttModel === 'string' && req.body.sttModel.trim()
-                ? req.body.sttModel.trim()
-                : 'large-v3-turbo';
             const chosenVoice = typeof req.body?.voice === 'string' && req.body.voice.trim() ? req.body.voice.trim() : 'af_heart';
-            state.services.stt = { providerId: localStt.id, model: chosenSttModel };
+            // Calls run on Deepgram's Voice Agent: it can speak through this server's
+            // voice, but it only listens with Deepgram models and thinks with the
+            // selected Deepgram-managed LLM. So activation switches the voice only;
+            // listening stays on Deepgram (moved back there if it was set to local).
             state.services.tts = { providerId: localTts.id, model: chosenVoice };
+            const currentStt = state.providers.find((p) => p.kind === 'stt' && p.id === state.services.stt?.providerId);
+            if (!currentStt || currentStt.type !== 'deepgram') {
+                const deepgramStt = state.providers.find((p) => p.kind === 'stt' && p.type === 'deepgram');
+                if (deepgramStt) {
+                    const allowed = String(deepgramStt.models || '').split(',').map((m) => m.trim()).filter(Boolean);
+                    state.services.stt = { providerId: deepgramStt.id, model: allowed.includes('nova-3') ? 'nova-3' : allowed[0] || 'nova-3' };
+                }
+            }
             if (!state.services.llm?.providerId || !state.services.llm?.model) {
                 const defaultLlm = state.providers.find((p) => p.kind === 'llm' && p.type === 'open_ai') || state.providers.find((p) => p.kind === 'llm');
                 if (defaultLlm) {
                     state.services.llm = { providerId: defaultLlm.id, model: 'gpt-4o-mini' };
                 }
             }
-            const saved = (0, db_1.saveConsoleState)(state, `1-Click Activated Local Speech Service (${chosenSttModel} + ${chosenVoice})`);
+            const saved = (0, db_1.saveConsoleState)(state, `Local voice activated (${chosenVoice}); listening and LLM stay on Deepgram`);
             res.json({
                 ok: true,
                 diagnostic,
