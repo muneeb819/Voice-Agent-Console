@@ -119,16 +119,21 @@ export function phoneBotPool(state: Pick<ConsoleState, 'agents'>, campaign: Part
 const phoneRotation = new Map<string, number>();
 
 /**
- * Round-robin order for the next phone call: every assigned bot takes calls in
- * turn. Returns the pool rotated so the caller can skip a bot that is not ready.
+ * Next bot for a phone call: every ready bot assigned to the campaign takes
+ * calls in turn. Bots that are not ready are left out of the turn order, so the
+ * ready ones share calls evenly.
  */
-export function nextPhoneBotOrder(state: Pick<ConsoleState, 'agents'>, campaign: Partial<CampaignAssignment> & { id?: string }): Agent[] {
-  const pool = phoneBotPool(state, campaign);
-  if (pool.length <= 1) return pool;
+export function pickPhoneBot(
+  state: Pick<ConsoleState, 'agents'>,
+  campaign: Partial<CampaignAssignment> & { id?: string },
+  isReady: (agent: Agent) => boolean = () => true
+): Agent | undefined {
+  const eligible = phoneBotPool(state, campaign).filter(isReady);
+  if (eligible.length <= 1) return eligible[0];
   const key = String(campaign.id || '');
-  const start = (phoneRotation.get(key) || 0) % pool.length;
-  phoneRotation.set(key, start + 1);
-  return [...pool.slice(start), ...pool.slice(0, start)];
+  const n = phoneRotation.get(key) || 0;
+  phoneRotation.set(key, n + 1);
+  return eligible[n % eligible.length];
 }
 
 /** Tests reset the rotation between cases. */

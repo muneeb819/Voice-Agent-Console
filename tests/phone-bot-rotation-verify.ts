@@ -40,6 +40,16 @@ const b = broken.agents.find((a: any) => a.id === 'clone_1'); b.prompt = '';
 resetPhoneRotationForTests();
 const seen = new Set(Array.from({ length: 8 }, () => resolveCampaignAndAgent(broken, exten, { rotate: true }).agent!.id));
 ok(!seen.has('clone_1') && seen.size >= 2, 'a bot that is not ready is skipped');
+resetPhoneRotationForTests();
+const even: Record<string, number> = {};
+for (let i = 0; i < 9; i++) { const id = resolveCampaignAndAgent(broken, exten, { rotate: true }).agent!.id; even[id] = (even[id] || 0) + 1; }
+ok(Object.values(even).every((n) => n === 3), `ready bots share calls evenly: ${JSON.stringify(even)}`);
+
+// The bot chosen at registration is validated and kept, even if the primary is not ready.
+const primaryBroken = JSON.parse(JSON.stringify(state));
+primaryBroken.agents.find((a: any) => a.id === primary.id).prompt = '';
+const kept = resolveCampaignAndAgent(primaryBroken, exten, { agentId: 'clone_2' });
+ok(!kept.error && kept.agent!.id === 'clone_2', `registered bot keeps the call when the primary is not ready: ${kept.error || ''}`);
 
 // Smoke test no longer warns that only the primary takes calls.
 const report = smokeTestAgent(state, 'clone_2');

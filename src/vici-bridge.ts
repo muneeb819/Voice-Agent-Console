@@ -20,7 +20,7 @@ import {
 } from './g711';
 import { allowedCampaignDispositionCodes, buildDeepgramSettings, getCampaignCallReadinessBlockers } from './settings-builder';
 import { createConversationMemory } from './persona';
-import { campaignExtension, campaignSlot, nextPhoneBotOrder, phoneBotPool, primaryCampaignAgent } from './campaign-assignment';
+import { campaignExtension, campaignSlot, phoneBotPool, pickPhoneBot, primaryCampaignAgent } from './campaign-assignment';
 import { BargeInGate, normalizeBargeInPct } from './barge-in';
 import { CALL_LIMIT_CLOSING_LINE, TRANSFER_INTENT_AUTOCOMPLETE_MS, TRANSFER_INTENT_GRACE_MS, announcesTransfer, callerDeclined, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt, transferBlockedPrompt } from './call-limit';
 export { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
@@ -149,7 +149,7 @@ export function rtpInactivityTimeoutMs(env: NodeJS.ProcessEnv = process.env): nu
 export function resolveCampaignAndAgent(
   state: ConsoleState,
   dialedExten: string,
-  opts: { rotate?: boolean } = {}
+  opts: { rotate?: boolean; agentId?: string } = {}
 ): { campaign?: Campaign; agent?: Agent; remoteAgentUser: string; campaignIndex: number; error?: string } {
   const cleanExten = String(dialedExten || '').trim();
   const prefix = String(state.vici.aiExten || '8800').trim();
@@ -172,10 +172,14 @@ export function resolveCampaignAndAgent(
 
   const campaign = state.campaigns[idx];
   let agent = primaryCampaignAgent(state, campaign);
-  if (opts.rotate) {
-    // Every bot assigned to the campaign takes phone calls in turn; a bot that
-    // is not ready is skipped so it never blocks the others.
-    const ready = nextPhoneBotOrder(state, campaign).find((candidate) => getCampaignCallReadinessBlockers(state, campaign, candidate).length === 0);
+  if (opts.agentId) {
+    // The bot chosen when the call was registered keeps the call.
+    const chosen = phoneBotPool(state, campaign).find((a) => a.id === opts.agentId);
+    if (chosen) agent = chosen;
+  } else if (opts.rotate) {
+    // Every ready bot assigned to the campaign takes phone calls in turn; a bot
+    // that is not ready is left out so it never blocks the others.
+    const ready = pickPhoneBot(state, campaign, (candidate) => getCampaignCallReadinessBlockers(state, campaign, candidate).length === 0);
     if (ready) agent = ready;
   }
   if (!agent) {
@@ -1231,20 +1235,20 @@ export class VicidialBridgeService {
       : state.vici;
 
     const exten = String(opts.preCall?.exten || '').trim();
-    const resolved = resolveCampaignAndAgent(state, exten, { rotate: !opts.preCall });
+    const resolved = resolveCampaignAndAgent(state, exten, opts.preCall ? { agentId: opts.preCall.agent.id } : { rotate: true });
     if (resolved.error || !resolved.campaign || !resolved.agent) {
       this.stats.lastError = resolved.error || 'Campaign assignment is required before the bridge can start a call.';
       opts.hooks.hangupTransport();
       return { onCallerPcm8k: () => {}, onCallerDtmf: () => {}, onTransportClosed: () => {} };
     }
-    if (opts.preCall && (opts.preCall.campaign.id !== resolved.campaign.id || !phoneBotPool(state, resolved.campaign).some((a) => a.id === opts.preCall!.agent.id))) {
+    if (opts.preCall && (opts.preCall.campaign.id !== resolved.campaign.id || resolved.agent.id !== opts.preCall.agent.id)) {
       this.stats.lastError = 'Campaign assignment changed between pre-call registration and media connection; refusing to use stale campaign rules.';
       opts.hooks.hangupTransport();
       return { onCallerPcm8k: () => {}, onCallerDtmf: () => {}, onTransportClosed: () => {} };
     }
     const campaign = resolved.campaign;
     // The bot chosen at registration keeps the call (it may differ from the primary).
-    const agent = (opts.preCall && state.agents.find((a) => a.id === opts.preCall!.agent.id)) || resolved.agent;
+    const agent = resolved.agent;
     let remoteAgentUser = opts.preCall?.remoteAgentUser || resolved.remoteAgentUser;
     const parsedCaller = opts.preCall?.parsedCaller || parseVicidialCallerCode('', '');
     const channel = opts.preCall?.channel || '';

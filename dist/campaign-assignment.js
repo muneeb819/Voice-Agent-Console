@@ -10,7 +10,7 @@ exports.campaignExtension = campaignExtension;
 exports.campaignSlot = campaignSlot;
 exports.reconcileCampaignSlots = reconcileCampaignSlots;
 exports.phoneBotPool = phoneBotPool;
-exports.nextPhoneBotOrder = nextPhoneBotOrder;
+exports.pickPhoneBot = pickPhoneBot;
 exports.resetPhoneRotationForTests = resetPhoneRotationForTests;
 /** Legacy state has one agentId; newer state also has an explicit pool.
  * Never invent an assignment when both fields are empty. The primary remains
@@ -117,17 +117,18 @@ function phoneBotPool(state, campaign) {
 }
 const phoneRotation = new Map();
 /**
- * Round-robin order for the next phone call: every assigned bot takes calls in
- * turn. Returns the pool rotated so the caller can skip a bot that is not ready.
+ * Next bot for a phone call: every ready bot assigned to the campaign takes
+ * calls in turn. Bots that are not ready are left out of the turn order, so the
+ * ready ones share calls evenly.
  */
-function nextPhoneBotOrder(state, campaign) {
-    const pool = phoneBotPool(state, campaign);
-    if (pool.length <= 1)
-        return pool;
+function pickPhoneBot(state, campaign, isReady = () => true) {
+    const eligible = phoneBotPool(state, campaign).filter(isReady);
+    if (eligible.length <= 1)
+        return eligible[0];
     const key = String(campaign.id || '');
-    const start = (phoneRotation.get(key) || 0) % pool.length;
-    phoneRotation.set(key, start + 1);
-    return [...pool.slice(start), ...pool.slice(0, start)];
+    const n = phoneRotation.get(key) || 0;
+    phoneRotation.set(key, n + 1);
+    return eligible[n % eligible.length];
 }
 /** Tests reset the rotation between cases. */
 function resetPhoneRotationForTests() { phoneRotation.clear(); }
