@@ -15,13 +15,19 @@ function createErrorBudget(maxErrors = 8, windowMs = 60_000) {
 }
 function installProcessGuards(log = (m, e) => console.error(m, e)) {
     const budget = createErrorBudget();
-    const handle = (kind) => (err) => {
-        log(`[VoiceAgentConsole] ${kind} (call handler fault; process kept alive)`, err);
+    // A rejected promise belongs to one call's async work and cannot corrupt shared
+    // state mid-update, so it is logged and survived (bursts still restart cleanly).
+    process.on('unhandledRejection', (err) => {
+        log('[VoiceAgentConsole] unhandledRejection (call handler fault; process kept alive)', err);
         if (!budget.record()) {
-            log(`[VoiceAgentConsole] Too many ${kind} events in one minute; exiting so the service manager restarts cleanly.`);
+            log('[VoiceAgentConsole] Too many unhandled rejections in one minute; exiting so the service manager restarts cleanly.');
             process.exit(1);
         }
-    };
-    process.on('unhandledRejection', handle('unhandledRejection'));
-    process.on('uncaughtException', handle('uncaughtException'));
+    });
+    // A synchronous uncaught exception can interrupt arbitrary shared-state updates
+    // with no rollback, so it is fatal: log, then exit and let systemd restart (3s).
+    process.on('uncaughtException', (err) => {
+        log('[VoiceAgentConsole] uncaughtException (fatal; exiting for a clean restart)', err);
+        setTimeout(() => process.exit(1), 100).unref();
+    });
 }
