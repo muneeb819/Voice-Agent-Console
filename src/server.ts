@@ -1,3 +1,4 @@
+import { installProcessGuards } from './process-guards';
 import {
   CloneError,
   MAX_SAMPLE_BYTES,
@@ -2057,6 +2058,7 @@ if (require.main === module) {
       listenWithFallback(initialPort, allowFallback && initialPort > 0 && initialPort < 1024 ? 1 : 0);
     });
 
+    installProcessGuards();
     let shuttingDown = false;
     const shutdown = async (signal: string) => {
       if (shuttingDown) return;

@@ -59,6 +59,7 @@
   "dist/vici-client.js",
   "dist/vici-loopback-tester.js",
   "dist/vici-sip-registration.js",
+  "dist/process-guards.js",
   "dist/webhook-executor.js",
   "docs/.nojekyll",
   "docs/AUDIT-REPORT.md",
@@ -238,6 +239,7 @@
   "src/vici-client.ts",
   "src/vici-loopback-tester.ts",
   "src/vici-sip-registration.ts",
+  "src/process-guards.ts",
   "src/webhook-executor.ts",
   "start-demo.bat",
   "start.bat",
@@ -310,6 +312,8 @@
   "tests/performance-verify.ts",
   "tests/remote-agent-user-verify.ts",
   "tests/speech-url-verify.ts",
+  "tests/webhook-ssrf-verify.ts",
+  "tests/process-guards-verify.ts",
   "tests/phone-bot-rotation-verify.ts",
   "docs/CALL-SCREENING.md"
 ]

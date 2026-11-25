@@ -1,6 +1,14 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.isBlockedMetadataAddress = isBlockedMetadataAddress;
 exports.executeCustomFunctionWebhook = executeCustomFunctionWebhook;
+const dns_1 = __importDefault(require("dns"));
+const http_1 = __importDefault(require("http"));
+const https_1 = __importDefault(require("https"));
+const net_1 = __importDefault(require("net"));
 const env_store_1 = require("./env-store");
 const http_limits_1 = require("./http-limits");
 const settings_builder_1 = require("./settings-builder");
@@ -25,12 +33,101 @@ function interpolateTemplate(raw, ctx) {
         return '';
     });
 }
-function isBlockedMetadataHost(hostname) {
-    const lower = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-    return (lower === '169.254.169.254' ||
-        lower === 'fd00:ec2::254' ||
-        lower === 'metadata.google.internal' ||
-        lower === '100.100.100.200');
+/** True for cloud metadata / link-local targets, in any spelling (IPv4, IPv6, IPv4-mapped IPv6). */
+function isBlockedMetadataAddress(raw) {
+    let lower = String(raw || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    if (!lower)
+        return false;
+    if (lower === 'metadata.google.internal' || lower === 'metadata' || lower === 'instance-data')
+        return true;
+    // IPv4-mapped IPv6 (::ffff:a.b.c.d or ::ffff:a9fe:a9fe) -> dotted IPv4.
+    const mapped = /^(?:0{0,4}:){0,5}ffff:(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/.exec(lower);
+    if (mapped) {
+        if (mapped[1])
+            lower = mapped[1];
+        else {
+            const hi = parseInt(mapped[2], 16);
+            const lo = parseInt(mapped[3], 16);
+            lower = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+        }
+    }
+    if (net_1.default.isIPv4(lower)) {
+        const [a, b] = lower.split('.').map(Number);
+        return (a === 169 && b === 254) || lower === '100.100.100.200' || lower === '0.0.0.0';
+    }
+    if (net_1.default.isIPv6(lower)) {
+        return lower === '::' || lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb') || lower.startsWith('fd00:ec2:');
+    }
+    return false;
+}
+/**
+ * Connect-time DNS guard: the address that is actually dialed is the one that is
+ * checked, so a hostname cannot pass a pre-check and then resolve to a metadata
+ * address when the socket connects (DNS rebinding). Runs inside the request, so
+ * the request timeout/abort also bounds the lookup.
+ */
+function guardedLookup(hostname, options, callback) {
+    const opts = typeof options === 'number' ? { family: options } : { ...(options || {}) };
+    dns_1.default.lookup(hostname, { ...opts, all: true }, (err, addresses) => {
+        if (err)
+            return callback(err);
+        const list = addresses;
+        if (!list.length)
+            return callback(Object.assign(new Error(`No address for ${hostname}`), { code: 'ENOTFOUND' }));
+        if (list.some((a) => isBlockedMetadataAddress(a.address))) {
+            return callback(Object.assign(new Error('Blocked cloud metadata endpoint'), { code: 'EBLOCKED' }));
+        }
+        if (opts.all)
+            return callback(null, list);
+        callback(null, list[0].address, list[0].family);
+    });
+}
+const MAX_WEBHOOK_BODY_BYTES = 65536;
+/** HTTP(S) request with the connect-time guard, no redirects, bounded body. Resolves a standard Response. */
+function guardedRequest(target, init) {
+    return new Promise((resolve, reject) => {
+        const mod = target.protocol === 'https:' ? https_1.default : http_1.default;
+        const headers = { ...init.headers };
+        if (init.body !== undefined)
+            headers['Content-Length'] = String(Buffer.byteLength(init.body));
+        const req = mod.request(target, { method: init.method, headers, lookup: guardedLookup }, (res) => {
+            const chunks = [];
+            let total = 0;
+            res.on('data', (chunk) => {
+                total += chunk.length;
+                if (total > MAX_WEBHOOK_BODY_BYTES) {
+                    req.destroy(new Error(`Upstream response exceeds ${MAX_WEBHOOK_BODY_BYTES} bytes`));
+                    return;
+                }
+                chunks.push(chunk);
+            });
+            res.on('error', reject);
+            res.on('end', () => {
+                const status = res.statusCode || 0;
+                const noBody = status === 204 || status === 205 || status === 304;
+                const h = new Headers();
+                for (const [k, v] of Object.entries(res.headers)) {
+                    if (Array.isArray(v))
+                        v.forEach((x) => h.append(k, x));
+                    else if (v !== undefined)
+                        h.set(k, String(v));
+                }
+                try {
+                    resolve(new Response(noBody ? null : Buffer.concat(chunks, total), { status, headers: h }));
+                }
+                catch (e) {
+                    reject(e);
+                }
+            });
+        });
+        const onAbort = () => req.destroy(init.signal.reason instanceof Error ? init.signal.reason : new Error('Webhook request aborted'));
+        if (init.signal.aborted)
+            onAbort();
+        else
+            init.signal.addEventListener('abort', onAbort, { once: true });
+        req.on('error', reject);
+        req.end(init.body);
+    });
 }
 async function executeCustomFunctionWebhook(fnDef, args, ctx = {}, timeoutMs = 6000, signal) {
     const started = Date.now();
@@ -69,7 +166,7 @@ async function executeCustomFunctionWebhook(fnDef, args, ctx = {}, timeoutMs = 6
             error: `Unsupported webhook protocol: ${targetUrl.protocol}`,
         };
     }
-    if (isBlockedMetadataHost(targetUrl.hostname)) {
+    if (isBlockedMetadataAddress(targetUrl.hostname)) {
         return {
             ok: false,
             executedWebhook: true,
@@ -119,13 +216,12 @@ async function executeCustomFunctionWebhook(fnDef, args, ctx = {}, timeoutMs = 6
         });
     }
     try {
-        const res = await fetch(targetUrl.toString(), {
+        // Redirects are never followed: that would bypass the address guard and
+        // forward interpolated credentials to another destination.
+        const res = await guardedRequest(targetUrl, {
             method,
             headers,
             body,
-            // Do not forward interpolated credentials or bypass the metadata-host
-            // restriction through a redirect to another destination.
-            redirect: 'manual',
             signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
         });
         if (res.status >= 300 && res.status < 400) {
