@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.asyncRoute = asyncRoute;
 exports.createApp = createApp;
 exports.createServerWithSimulator = createServerWithSimulator;
+const process_guards_1 = require("./process-guards");
 const voice_clone_1 = require("./voice-clone");
 const smoke_test_1 = require("./smoke-test");
 const dns_1 = __importDefault(require("dns"));
@@ -1888,6 +1889,7 @@ if (require.main === module) {
             }
             listenWithFallback(initialPort, allowFallback && initialPort > 0 && initialPort < 1024 ? 1 : 0);
         });
+        (0, process_guards_1.installProcessGuards)();
         let shuttingDown = false;
         const shutdown = async (signal) => {
             if (shuttingDown)

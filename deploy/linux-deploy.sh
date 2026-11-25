@@ -222,6 +222,10 @@ fi
 echo "=== [2/7] Installing application to ${INSTALL_DIR} ==="
 mkdir -p "$INSTALL_DIR"
 if [ "$SRC_DIR" != "$INSTALL_DIR" ]; then
+  # Code directories are replaced, not merged, so a file deleted from the repo
+  # is deleted from the install too (a stale module once broke a deploy).
+  # data/, .env and node_modules are never touched.
+  rm -rf "$INSTALL_DIR/src" "$INSTALL_DIR/public" "$INSTALL_DIR/deploy"
   cp -r "$SRC_DIR/package.json" "$SRC_DIR/package-lock.json" "$SRC_DIR/tsconfig.json" \
         "$SRC_DIR/.env.example" "$SRC_DIR/src" "$SRC_DIR/public" "$SRC_DIR/deploy" "$INSTALL_DIR/"
   mkdir -p "$INSTALL_DIR/tools"
@@ -263,7 +267,14 @@ chmod 600 "$INSTALL_DIR/.env"
 echo "=== [3/7] Installing dependencies & building ==="
 cd "$INSTALL_DIR"
 npm ci --include=dev
-npm run build
+# Build into a fresh directory, then swap it in, so output of deleted sources
+# never lingers and the running service never sees a half-built dist/.
+rm -rf dist.next dist.old
+npx tsc --outDir dist.next
+[ -f dist.next/server.js ] || { echo "ERROR: build produced no dist.next/server.js" >&2; exit 1; }
+[ -d dist ] && mv dist dist.old
+mv dist.next dist
+rm -rf dist.old
 
 # Run the service as an unprivileged system account. It only needs the install
 # tree (writable for .env updates, data, recordings and the release archive).

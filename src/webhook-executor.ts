@@ -1,3 +1,5 @@
+import dns from 'dns';
+import net from 'net';
 import { getSecret, sanitizeSecretValue } from './env-store';
 import { readResponseText } from './http-limits';
 import { parseJsonObject } from './settings-builder';
@@ -41,14 +43,42 @@ function interpolateTemplate(raw: string, ctx: WebhookCallContext): string {
   });
 }
 
-function isBlockedMetadataHost(hostname: string): boolean {
-  const lower = hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  return (
-    lower === '169.254.169.254' ||
-    lower === 'fd00:ec2::254' ||
-    lower === 'metadata.google.internal' ||
-    lower === '100.100.100.200'
-  );
+/** True for cloud metadata / link-local targets, in any spelling (IPv4, IPv6, IPv4-mapped IPv6). */
+export function isBlockedMetadataAddress(raw: string): boolean {
+  let lower = String(raw || '').toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (!lower) return false;
+  if (lower === 'metadata.google.internal' || lower === 'metadata' || lower === 'instance-data') return true;
+  // IPv4-mapped IPv6 (::ffff:a.b.c.d or ::ffff:a9fe:a9fe) -> dotted IPv4.
+  const mapped = /^(?:0{0,4}:){0,5}ffff:(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/.exec(lower);
+  if (mapped) {
+    if (mapped[1]) lower = mapped[1];
+    else {
+      const hi = parseInt(mapped[2], 16);
+      const lo = parseInt(mapped[3], 16);
+      lower = `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+    }
+  }
+  if (net.isIPv4(lower)) {
+    const [a, b] = lower.split('.').map(Number);
+    return (a === 169 && b === 254) || lower === '100.100.100.200' || lower === '0.0.0.0';
+  }
+  if (net.isIPv6(lower)) {
+    return lower === '::' || lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb') || lower.startsWith('fd00:ec2:');
+  }
+  return false;
+}
+
+/** Blocks a host that is, or resolves to, a metadata/link-local address. */
+async function resolvesToBlockedAddress(hostname: string): Promise<boolean> {
+  const host = hostname.replace(/^\[|\]$/g, '');
+  if (isBlockedMetadataAddress(host)) return true;
+  if (net.isIP(host)) return false;
+  try {
+    const found = await dns.promises.lookup(host, { all: true });
+    return found.some((a) => isBlockedMetadataAddress(a.address));
+  } catch {
+    return false; // unresolvable hosts fail in fetch() with a clear error
+  }
 }
 
 export async function executeCustomFunctionWebhook(
@@ -96,7 +126,7 @@ export async function executeCustomFunctionWebhook(
     };
   }
 
-  if (isBlockedMetadataHost(targetUrl.hostname)) {
+  if (await resolvesToBlockedAddress(targetUrl.hostname)) {
     return {
       ok: false,
       executedWebhook: true,
