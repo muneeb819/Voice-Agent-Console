@@ -1268,6 +1268,8 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       bridge: viciBridge ? viciBridge.getStatus() : null,
       botSleep: getBotSleep(),
       alerts: listAlerts().alerts,
+      ownEngine: String(process.env.VOICE_ENGINE || '').toLowerCase() === 'own',
+      ownLlmUrl: Boolean(String(process.env.OWN_LLM_BASE_URL || '').trim()),
       probes: {
         deepgram: () => probeDeepgramKey(getSecret('DEEPGRAM_API_KEY')),
         viciApi: async () => {

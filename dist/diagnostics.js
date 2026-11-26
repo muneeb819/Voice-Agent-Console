@@ -71,27 +71,56 @@ async function runDiagnostics(input) {
     const { state, secrets, bridge, botSleep, alerts, probes } = input;
     const findings = [];
     const add = (f) => findings.push(f);
+    const own = Boolean(input.ownEngine);
     const hasDeepgramKey = Boolean(secrets.DEEPGRAM_API_KEY?.configured);
     const viciUrl = String(state.vici?.viciBaseUrl || '').trim();
     const amiConfigured = Boolean(String(state.vici?.amiHost || '').trim() && String(state.vici?.amiUser || '').trim());
     // Slow checks run side by side so the whole scan takes as long as the slowest one, not the sum.
     const [dg, api, ami, disk] = await Promise.all([
-        hasDeepgramKey ? bounded(probes.deepgram, { ok: false, detail: 'No answer from Deepgram within 6 seconds' }, limit) : Promise.resolve(null),
+        hasDeepgramKey && !own ? bounded(probes.deepgram, { ok: false, detail: 'No answer from Deepgram within 6 seconds' }, limit) : Promise.resolve(null),
         viciUrl ? bounded(probes.viciApi, { ok: false, detail: 'No answer from the dialer web server within 6 seconds' }, limit) : Promise.resolve(null),
         amiConfigured ? bounded(probes.ami, { ok: false, detail: 'No answer on the AMI port within 6 seconds' }, limit) : Promise.resolve(null),
         bounded(probes.disk, { writable: false, freeBytes: null }, limit),
     ]);
+    if (own) {
+        const svc = state.services;
+        const provOf = (kind, id) => state.providers.find((p) => p.kind === kind && p.id === id);
+        const stt = provOf('stt', svc?.stt?.providerId);
+        const tts = provOf('tts', svc?.tts?.providerId);
+        const llm = provOf('llm', svc?.llm?.providerId);
+        const problems = [];
+        if (!stt || stt.type !== 'speech_service')
+            problems.push('listening is not set to your speech service');
+        if (!tts || tts.type !== 'speech_service')
+            problems.push('the voice is not a self-hosted voice');
+        if (!input.ownLlmUrl) {
+            const key = llm?.type === 'groq' ? 'GROQ_API_KEY' : llm?.type === 'open_ai' ? 'OPENAI_API_KEY' : '';
+            if (!key)
+                problems.push('the thinking model must be OpenAI or Groq (or set OWN_LLM_BASE_URL)');
+            else if (!secrets[key]?.configured)
+                problems.push(`${key} is not saved`);
+        }
+        add(problems.length
+            ? { id: 'engine.own', area: 'Setup', title: 'Own voice engine is ready', status: 'fail', detail: `The console runs its own voice engine, but ${problems.join('; ')}. Calls would end at once.`, suggestion: 'Fix these in Plug-ins and API Keys, or remove VOICE_ENGINE=own to go back to Deepgram.' }
+            : { id: 'engine.own', area: 'Setup', title: 'Own voice engine is ready', status: 'ok', detail: 'Calls use your speech service and your language model. Deepgram is not used.', suggestion: '' });
+    }
     // Keys
-    add(hasDeepgramKey
-        ? { id: 'keys.deepgram', area: 'Keys', title: 'Deepgram key saved', status: 'ok', detail: 'A Deepgram key is configured.', suggestion: '' }
-        : { id: 'keys.deepgram', area: 'Keys', title: 'Deepgram key saved', status: 'fail', detail: 'No Deepgram key is saved, so no bot can speak or listen.', suggestion: 'Open Settings, paste the Deepgram key and save.' });
-    if (dg) {
-        add(dg.ok
-            ? { id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'ok', detail: dg.detail || 'Deepgram answered.', suggestion: '' }
-            : { id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'fail', detail: dg.detail || 'Deepgram did not accept the request.', suggestion: deepgramAdvice(dg.kind) });
+    if (own) {
+        add({ id: 'keys.deepgram', area: 'Keys', title: 'Deepgram key saved', status: 'skipped', detail: 'Not needed: the own voice engine is on.', suggestion: '' });
+        add({ id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'skipped', detail: 'Not needed: the own voice engine is on.', suggestion: '' });
     }
     else {
-        add({ id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'skipped', detail: 'Skipped because no key is saved.', suggestion: '' });
+        add(hasDeepgramKey
+            ? { id: 'keys.deepgram', area: 'Keys', title: 'Deepgram key saved', status: 'ok', detail: 'A Deepgram key is configured.', suggestion: '' }
+            : { id: 'keys.deepgram', area: 'Keys', title: 'Deepgram key saved', status: 'fail', detail: 'No Deepgram key is saved, so no bot can speak or listen.', suggestion: 'Open Settings, paste the Deepgram key and save.' });
+        if (dg) {
+            add(dg.ok
+                ? { id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'ok', detail: dg.detail || 'Deepgram answered.', suggestion: '' }
+                : { id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'fail', detail: dg.detail || 'Deepgram did not accept the request.', suggestion: deepgramAdvice(dg.kind) });
+        }
+        else {
+            add({ id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'skipped', detail: 'Skipped because no key is saved.', suggestion: '' });
+        }
     }
     // Bots
     add(botSleep.sleeping
