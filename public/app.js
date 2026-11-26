@@ -5409,7 +5409,7 @@
        ${rt.agents ? `<span class="pill ok">${rt.agents.loggedIn} agent${rt.agents.loggedIn === 1 ? '' : 's'} logged in</span> ${states}` : '<span class="pill wn">Agents not available</span>'}
        <span class="pill">${rt.bot.activeCalls} bot call${rt.bot.activeCalls === 1 ? '' : 's'} live now</span>
       </div>
-      ${rt.inGroups.map((g) => `<div style="margin-top:6px"><b>${esc(g.id)}</b>${rpRaw(g.rows)}</div>`).join('')}
+      ${rt.omittedInGroups ? `<div class="note wn">${rt.omittedInGroups} more in-group${rt.omittedInGroups === 1 ? ' is' : 's are'} not shown: only the first 10 are checked.</div>` : ''}${rt.inGroups.map((g) => `<div style="margin-top:6px"><b>${esc(g.id)}</b>${rpRaw(g.rows)}</div>`).join('')}
       ${rt.agents ? rpRaw(rt.agents.rows) : ''}` : reportsState.loading ? '<div class="note">Loading…</div>' : ''}
     </div>
 
@@ -5423,7 +5423,7 @@
     </div>
 
     <div class="card"><h3 style="margin:0 0 6px">List performance</h3>${rpErr(dt.lists)}
-     ${ls ? (ls.lists.length ? ls.lists.map((l) => `<div style="padding:4px 0;border-top:1px solid var(--bd)"><b>List ${esc(l.listId)}</b> <span class="note" style="margin:0">· ${esc(l.campaign)}${l.note ? ` · ${esc(l.note)}` : ''}</span>${rpRaw(l.rows)}</div>`).join('') : '<div class="note">No list numbers are set on your campaigns. Add them under Campaigns.</div>') : ''}
+     ${ls && ls.omittedLists ? `<div class="note wn">${ls.omittedLists} more list${ls.omittedLists === 1 ? ' is' : 's are'} not shown: only the first 30 are checked.</div>` : ''}${ls ? (ls.lists.length ? ls.lists.map((l) => `<div style="padding:4px 0;border-top:1px solid var(--bd)"><b>List ${esc(l.listId)}</b> <span class="note" style="margin:0">· ${esc(l.campaign)}${l.note ? ` · ${esc(l.note)}` : ''}</span>${rpRaw(l.rows)}</div>`).join('') : '<div class="note">No list numbers are set on your campaigns. Add them under Campaigns.</div>') : ''}
     </div>
 
     <div class="card"><h3 style="margin:0 0 6px">Bot performance · ${esc(reportsState.hours === 1 ? 'last hour' : reportsState.hours === 24 ? 'last 24 hours' : 'last 7 days')}</h3>${rpErr(dt.bots)}

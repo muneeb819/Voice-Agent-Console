@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.MAX_REPORT_IN_GROUPS = exports.MAX_REPORT_LISTS = void 0;
 exports.mapLimit = mapLimit;
 exports.coverageOf = coverageOf;
 exports.parseRows = parseRows;
@@ -30,6 +31,8 @@ async function mapLimit(items, limit, fn) {
     return out;
 }
 const REPORT_CONCURRENCY = 5;
+exports.MAX_REPORT_LISTS = 30;
+exports.MAX_REPORT_IN_GROUPS = 10;
 const UNREACHABLE_TITLE = 'The dialer cannot be reached';
 /** Says plainly when the kept calls do not reach back as far as the report asks. */
 function coverageOf(logs, windowStartMs, retention = db_1.BRIDGE_LOG_RETENTION) {
@@ -126,15 +129,15 @@ async function buildRealtime(source, state, bot) {
     const groups = Array.from(new Set(state.campaigns.filter((c) => c.xferType === 'ingroup' && c.xferTarget).map((c) => String(c.xferTarget))));
     const inGroups = [];
     // One request per group: with several groups the dialer folds them into a single combined row.
-    const answers = await mapLimit(groups.slice(0, 10), REPORT_CONCURRENCY, (g) => runDialerQuery(source, 'in_group_status', { in_groups: g, stage: 'pipe', header: 'NO' }));
-    groups.slice(0, 10).forEach((g, i) => {
+    const answers = await mapLimit(groups.slice(0, exports.MAX_REPORT_IN_GROUPS), REPORT_CONCURRENCY, (g) => runDialerQuery(source, 'in_group_status', { in_groups: g, stage: 'pipe', header: 'NO' }));
+    groups.slice(0, exports.MAX_REPORT_IN_GROUPS).forEach((g, i) => {
         if (answers[i].ok)
             inGroups.push({ id: g, rows: answers[i].rows });
         else if (answers[i].problem)
             problems.push(answers[i].problem);
     });
     const uniqueProblems = dedupeProblems(problems);
-    return { dialer: { id: source.id, label: source.label }, at: new Date().toISOString(), agents, inGroups, bot, problems: uniqueProblems };
+    return { dialer: { id: source.id, label: source.label }, at: new Date().toISOString(), agents, inGroups, omittedInGroups: Math.max(0, groups.length - exports.MAX_REPORT_IN_GROUPS), bot, problems: uniqueProblems };
 }
 function summarizeLogs(logs) {
     const calls = logs.length;
@@ -191,7 +194,8 @@ function listIdsOf(state) {
 async function buildListReport(source, state) {
     const problems = [];
     const lists = [];
-    const wanted = listIdsOf(state).slice(0, 30);
+    const all = listIdsOf(state);
+    const wanted = all.slice(0, exports.MAX_REPORT_LISTS);
     let unreachable = false;
     await mapLimit(wanted, REPORT_CONCURRENCY, async (l) => {
         if (unreachable) {
@@ -207,7 +211,7 @@ async function buildListReport(source, state) {
         lists.push({ ...l, rows: q.rows, note: q.ok ? (q.rows.length ? '' : BLANK_NOTE) : q.problem.title });
     });
     lists.sort((a, b) => wanted.findIndex((w) => w.listId === a.listId) - wanted.findIndex((w) => w.listId === b.listId));
-    return { lists, problems: dedupeProblems(problems) };
+    return { lists, omittedLists: Math.max(0, all.length - wanted.length), problems: dedupeProblems(problems) };
 }
 function buildBotReport(logs, sinceHours, now = Date.now()) {
     const cutoff = now - sinceHours * 3600_000;

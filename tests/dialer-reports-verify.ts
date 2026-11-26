@@ -135,6 +135,13 @@ const log = (over: Record<string, any>): any => ({
   assert(calls.length <= 5 && deadLists.lists.length === 30, `a dead dialer is asked ${calls.length} times, not 30; every list still appears`);
   assert.strictEqual(deadLists.problems.length, 1);
   assert.deepStrictEqual(deadLists.lists.map((l) => l.listId), Array.from({ length: 30 }, (_, i) => String(2000 + i)), 'lists stay in order');
+  const big = normalizeState(createDefaultState());
+  big.campaigns = [{ ...big.campaigns[0], viciCampaign: 'B1', lists: Array.from({ length: 33 }, (_, i) => String(3000 + i)).join(',') }];
+  assert.strictEqual((await buildListReport(ok, big)).omittedLists, 3, 'lists beyond the cap are counted, not hidden');
+  assert.strictEqual(deadLists.omittedLists, 0);
+  const groups12 = normalizeState(createDefaultState());
+  groups12.campaigns = Array.from({ length: 12 }, (_, i) => ({ ...groups12.campaigns[0], viciCampaign: `G${i}`, xferType: 'ingroup' as const, xferTarget: `GRP${i}` }));
+  assert.strictEqual((await buildRealtime(ok, groups12, { activeCalls: 0, capacity: null })).omittedInGroups, 2, 'in-groups beyond the cap are counted, not hidden');
   assert.deepStrictEqual(await mapLimit([1, 2, 3], 2, async (n) => n * 2), [2, 4, 6]);
 
   // The console keeps only 200 calls: say so when a window reaches further back

@@ -51,6 +51,8 @@ export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) =>
 }
 
 const REPORT_CONCURRENCY = 5;
+export const MAX_REPORT_LISTS = 30;
+export const MAX_REPORT_IN_GROUPS = 10;
 const UNREACHABLE_TITLE = 'The dialer cannot be reached';
 
 export interface Coverage {
@@ -145,6 +147,8 @@ export interface RealtimeReport {
   /** Agents logged in on the dialer, counted by the state word the dialer reports for them. */
   agents: { loggedIn: number; byState: Record<string, number>; rows: string[][] } | null;
   inGroups: Array<{ id: string; rows: string[][] }>;
+  /** In-groups left out because only the first few are queried. */
+  omittedInGroups: number;
   bot: { activeCalls: number; capacity: number | null };
   problems: ReportProblem[];
 }
@@ -180,15 +184,15 @@ export async function buildRealtime(
   );
   const inGroups: RealtimeReport['inGroups'] = [];
   // One request per group: with several groups the dialer folds them into a single combined row.
-  const answers = await mapLimit(groups.slice(0, 10), REPORT_CONCURRENCY, (g) =>
+  const answers = await mapLimit(groups.slice(0, MAX_REPORT_IN_GROUPS), REPORT_CONCURRENCY, (g) =>
     runDialerQuery(source, 'in_group_status', { in_groups: g, stage: 'pipe', header: 'NO' })
   );
-  groups.slice(0, 10).forEach((g, i) => {
+  groups.slice(0, MAX_REPORT_IN_GROUPS).forEach((g, i) => {
     if (answers[i].ok) inGroups.push({ id: g, rows: answers[i].rows });
     else if (answers[i].problem) problems.push(answers[i].problem!);
   });
   const uniqueProblems = dedupeProblems(problems);
-  return { dialer: { id: source.id, label: source.label }, at: new Date().toISOString(), agents, inGroups, bot, problems: uniqueProblems };
+  return { dialer: { id: source.id, label: source.label }, at: new Date().toISOString(), agents, inGroups, omittedInGroups: Math.max(0, groups.length - MAX_REPORT_IN_GROUPS), bot, problems: uniqueProblems };
 }
 
 export interface CampaignReportRow {
@@ -275,7 +279,8 @@ export function listIdsOf(state: ConsoleState): Array<{ listId: string; campaign
 export async function buildListReport(source: DialerSource, state: ConsoleState) {
   const problems: ReportProblem[] = [];
   const lists: Array<{ listId: string; campaign: string; rows: string[][]; note: string }> = [];
-  const wanted = listIdsOf(state).slice(0, 30);
+  const all = listIdsOf(state);
+  const wanted = all.slice(0, MAX_REPORT_LISTS);
   let unreachable = false;
   await mapLimit(wanted, REPORT_CONCURRENCY, async (l) => {
     if (unreachable) {
@@ -290,7 +295,7 @@ export async function buildListReport(source: DialerSource, state: ConsoleState)
     lists.push({ ...l, rows: q.rows, note: q.ok ? (q.rows.length ? '' : BLANK_NOTE) : q.problem!.title });
   });
   lists.sort((a, b) => wanted.findIndex((w) => w.listId === a.listId) - wanted.findIndex((w) => w.listId === b.listId));
-  return { lists, problems: dedupeProblems(problems) };
+  return { lists, omittedLists: Math.max(0, all.length - wanted.length), problems: dedupeProblems(problems) };
 }
 
 export interface BotReport {
