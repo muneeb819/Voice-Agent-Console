@@ -77,6 +77,7 @@ import { createDefaultState, normalizeState } from './defaults';
 import { credentialRoutingChanges } from './state-guard';
 import { DATA_DIR } from './data-paths';
 import { pickDistinctFemaleVoice } from './voice-pick';
+import { runDiagnostics } from './diagnostics';
 import {
   fetchAllowedSampleAudio,
   fetchDeepgramLlmModels,
@@ -1205,6 +1206,50 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       logs: listBridgeCallLogs(20),
     });
   });
+
+  // One-button health scan: every check says what it found and what to do about it.
+  app.get('/api/diagnostics', asyncRoute(async (_req: Request, res: Response) => {
+    const st = getConsoleState();
+    const report = await runDiagnostics({
+      state: st,
+      secrets: getSecretsStatus(),
+      bridge: viciBridge ? viciBridge.getStatus() : null,
+      botSleep: getBotSleep(),
+      alerts: listAlerts().alerts,
+      probes: {
+        deepgram: async () => {
+          const catalog = await fetchDeepgramVoiceCatalog(true);
+          return catalog.authenticated && catalog.source === 'deepgram_live_api'
+            ? { ok: true, detail: `Deepgram answered with ${catalog.voices.length} voices.` }
+            : { ok: false, detail: 'Deepgram did not accept the saved key (the built-in voice list was used instead).' };
+        },
+        viciApi: async () => {
+          const r = await new VicidialApiClient(st.vici).checkVersion();
+          return { ok: r.ok, detail: r.ok ? String(r.versionText || 'The dialer answered.').split('\n')[0].slice(0, 120) : 'The dialer web server answered, but not with its version.' };
+        },
+        ami: async () => {
+          const r = await new AsteriskAmiClient(st.vici).ping();
+          return { ok: r.ok, detail: r.ok ? 'AMI answered the ping.' : String(r.message || 'AMI refused the login or the connection.').slice(0, 160) };
+        },
+        disk: async () => {
+          const probeFile = path.join(DATA_DIR, `.diag-${process.pid}`);
+          let writable = false;
+          try {
+            fs.writeFileSync(probeFile, 'x');
+            fs.unlinkSync(probeFile);
+            writable = true;
+          } catch {}
+          let freeBytes: number | null = null;
+          try {
+            const sf = fs.statfsSync(DATA_DIR);
+            freeBytes = Number(sf.bavail) * Number(sf.bsize);
+          } catch {}
+          return { writable, freeBytes };
+        },
+      },
+    });
+    res.json({ ok: true, report });
+  }));
 
   app.get('/api/vici/logs', (req: Request, res: Response) => {
     const requested = typeof req.query.limit === 'string' ? Number(req.query.limit) : 25;

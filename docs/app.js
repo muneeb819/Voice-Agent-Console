@@ -5216,6 +5216,8 @@
   // ==================== EXECUTIVE COMMAND & CONSOLE QUALITY DECK ====================
 
   const CMD_DECK_COMPACT_KEY = 'vac_cmd_deck_compact_v1';
+  // Last diagnostic scan shown on the Command deck.
+  const diagState = { running: false, report: null, error: '' };
   const cmdDeckState = {
     serverTelemetry: null,
     publicDemoUrl: null,
@@ -5834,6 +5836,29 @@
         <h3 style="margin:0">Alerts ${al.unacknowledged ? `<span class="pill er">${al.unacknowledged} new</span>` : '<span class="pill ok">all read</span>'}</h3>
         ${al.unacknowledged ? '<button type="button" class="g cmd-mini-btn" data-alert-ack-all="1">Mark all read</button>' : ''}
        </div>${rows}</div>`;
+    })()}
+
+    ${(() => {
+      const rep = diagState.report;
+      const cls = { ok: 'ok', warn: 'wn', fail: 'er', skipped: '' };
+      const word = { ok: 'OK', warn: 'Review', fail: 'Problem', skipped: 'Skipped' };
+      const rows = rep
+        ? rep.findings.map((f) => `<div class="row" style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--bd)">
+        <span class="pill ${cls[f.status]}" style="min-width:58px;text-align:center">${word[f.status]}</span>
+        <div style="flex:1;min-width:0"><b>${esc(f.title)}</b> <span class="note" style="margin:0">· ${esc(f.area)}</span>
+         <div class="note" style="margin:2px 0 0">${esc(f.detail)}</div>${f.suggestion ? `<div class="note" style="margin:2px 0 0"><b>Fix:</b> ${esc(f.suggestion)}</div>` : ''}</div>
+       </div>`).join('')
+        : '';
+      const summary = rep
+        ? `<span class="pill ${cls[rep.overall]}">${rep.counts.fail} problem${rep.counts.fail === 1 ? '' : 's'}</span> <span class="pill">${rep.counts.warn} to review</span> <span class="pill">${rep.counts.ok} OK</span>`
+        : '<span class="note" style="margin:0">Checks keys, bridge, dialer, transfers, setup and disk in one go.</span>';
+      return `<div class="card" style="margin:10px 0">
+       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+        <h3 style="margin:0">Diagnostic scan</h3>
+        <button type="button" class="g cmd-mini-btn" id="btn-run-scan" ${diagState.running ? 'disabled' : ''}>${diagState.running ? 'Scanning…' : rep ? 'Scan again' : 'Run scan'}</button>
+       </div>
+       <div style="margin:6px 0">${summary}${rep ? ` <span class="note" style="margin:0">· ${esc(new Date(rep.ranAt).toLocaleTimeString())}</span>` : ''}</div>
+       ${diagState.error ? `<div class="note" style="color:var(--er)">${esc(diagState.error)}</div>` : ''}${rows}</div>`;
     })()}
 
     <div class="cmd-score-card ready-stage ${healthClass}" data-ready-stage aria-label="System readiness, ${T.score} out of 100">
@@ -8430,6 +8455,23 @@
       try {
         window.localStorage?.setItem(CMD_DECK_COMPACT_KEY, cmdDeckState.compact ? '1' : '0');
       } catch {}
+      renderExecutiveCommandDeck();
+      return;
+    }
+    if (b.id === 'btn-run-scan') {
+      if (diagState.running) return;
+      diagState.running = true;
+      diagState.error = '';
+      renderExecutiveCommandDeck();
+      try {
+        const r = await fetch('/api/diagnostics');
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'The scan could not run');
+        diagState.report = j.report;
+      } catch (err) {
+        diagState.error = `The scan could not run: ${err.message || err}`;
+      }
+      diagState.running = false;
       renderExecutiveCommandDeck();
       return;
     }
