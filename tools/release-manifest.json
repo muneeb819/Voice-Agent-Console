@@ -316,6 +316,7 @@
   "tests/remote-agent-user-verify.ts",
   "tests/speech-url-verify.ts",
   "tests/webhook-ssrf-verify.ts",
+  "tests/dialplan-pattern-verify.ts",
   "tests/process-guards-verify.ts",
   "tests/phone-bot-rotation-verify.ts",
   "docs/CALL-SCREENING.md"

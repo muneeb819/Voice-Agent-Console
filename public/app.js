@@ -2726,7 +2726,7 @@
       `insecure=port,invite`,
       ``,
       `;  Dialplan Entry (under same Carrier):`,
-      `exten => _${v.aiExten}X.,1,NoOp(VICIdial AI Bot SIP -> Ext \${EXTEN} | ViciCID: \${CALLERID(name)})`,
+      `exten => _${v.aiExten}.,1,NoOp(VICIdial AI Bot SIP -> Ext \${EXTEN} | ViciCID: \${CALLERID(name)})`,
       ` same => n,SIPAddHeader(X-Vici-CallName: \${CALLERID(name)})`,
       ` same => n,SIPAddHeader(X-Vici-UniqueID: \${CHANNEL(uniqueid)})`,
       ` same => n,SIPAddHeader(X-Vici-Channel: \${CHANNEL})`,
@@ -2738,7 +2738,7 @@
     const audioSocketBlock = [
       `; === OPTION B (Asterisk 18+ on ViciBox 11/12): Native AudioSocket TCP Mode ===`,
       `; /api/vici/register-call returns a canonical 36-char RFC4122 UUID & pre-hydrates the lead!`,
-      `exten => _${v.aiExten}X.,1,NoOp(VICIdial AI Bot AudioSocket -> \${EXTEN} | ViciCID: \${CALLERID(name)})`,
+      `exten => _${v.aiExten}.,1,NoOp(VICIdial AI Bot AudioSocket -> \${EXTEN} | ViciCID: \${CALLERID(name)})`,
       ` same => n,Answer()`,
       ` same => n,Set(CHANNEL(audioreadformat)=slin)`,
       ` same => n,Set(CHANNEL(audiowriteformat)=slin)`,
