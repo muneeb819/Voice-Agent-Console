@@ -1073,7 +1073,7 @@ function createApp(viciBridge) {
         const src = pickSource(req, res);
         if (!src)
             return;
-        res.json({ ok: true, report: await (0, dialer_reports_1.buildCampaignReport)(src, (0, db_1.getConsoleState)(), (0, db_1.listBridgeCallLogs)(1000), reportDate(req.query.date)) });
+        res.json({ ok: true, report: await (0, dialer_reports_1.buildCampaignReport)(src, (0, db_1.getConsoleState)(), (0, db_1.listBridgeCallLogs)(db_1.BRIDGE_LOG_RETENTION), reportDate(req.query.date)) });
     }));
     app.get('/api/reports/lists', asyncRoute(async (req, res) => {
         const src = pickSource(req, res);
@@ -1083,10 +1083,10 @@ function createApp(viciBridge) {
     }));
     app.get('/api/reports/bots', (req, res) => {
         const hours = Math.min(24 * 30, Math.max(1, Number(req.query.hours) || 24));
-        res.json({ ok: true, report: (0, dialer_reports_1.buildBotReport)((0, db_1.listBridgeCallLogs)(1000), hours) });
+        res.json({ ok: true, report: (0, dialer_reports_1.buildBotReport)((0, db_1.listBridgeCallLogs)(db_1.BRIDGE_LOG_RETENTION), hours) });
     });
     app.get('/api/reports/problems', (_req, res) => {
-        res.json({ ok: true, problems: (0, dialer_reports_1.buildProblems)((0, db_1.listBridgeCallLogs)(1000), (0, alerts_1.listAlerts)().alerts) });
+        res.json({ ok: true, problems: (0, dialer_reports_1.buildProblems)((0, db_1.listBridgeCallLogs)(db_1.BRIDGE_LOG_RETENTION), (0, alerts_1.listAlerts)().alerts) });
     });
     // One-button health scan: every check says what it found and what to do about it.
     app.get('/api/diagnostics', asyncRoute(async (_req, res) => {

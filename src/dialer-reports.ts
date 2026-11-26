@@ -1,5 +1,5 @@
 import type { AlertRecord } from './alerts';
-import type { BridgeCallLogRecord } from './db';
+import { BRIDGE_LOG_RETENTION, type BridgeCallLogRecord } from './db';
 import type { Campaign, ConsoleState } from './types';
 
 /**
@@ -34,6 +34,45 @@ export interface DialerQueryResult {
   /** Parsed rows (pipe-separated fields). Empty when the dialer had nothing to report. */
   rows: string[][];
   problem?: ReportProblem;
+}
+
+/** Runs `fn` over `items` with at most `limit` at a time, so one slow dialer cannot stack up waits. */
+export async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+const REPORT_CONCURRENCY = 5;
+const UNREACHABLE_TITLE = 'The dialer cannot be reached';
+
+export interface Coverage {
+  /** Calls available to the reports. */
+  kept: number;
+  oldestAt: string | null;
+  /** True when the console has dropped calls older than `oldestAt` that fall inside the requested window. */
+  limited: boolean;
+  note: string;
+}
+
+/** Says plainly when the kept calls do not reach back as far as the report asks. */
+export function coverageOf(logs: BridgeCallLogRecord[], windowStartMs: number, retention = BRIDGE_LOG_RETENTION): Coverage {
+  const times = logs.map((l) => Date.parse(l.startedAt)).filter((t) => Number.isFinite(t));
+  const oldest = times.length ? Math.min(...times) : null;
+  const limited = logs.length >= retention && oldest !== null && oldest > windowStartMs;
+  return {
+    kept: logs.length,
+    oldestAt: oldest === null ? null : new Date(oldest).toISOString(),
+    limited,
+    note: limited ? `This console keeps only the newest ${retention} calls, so these bot numbers start at ${new Date(oldest!).toLocaleString()}, not at the start of the period.` : '',
+  };
 }
 
 const BLANK_NOTE = 'The dialer answered with no rows.';
@@ -140,12 +179,16 @@ export async function buildRealtime(
     new Set(state.campaigns.filter((c) => c.xferType === 'ingroup' && c.xferTarget).map((c) => String(c.xferTarget)))
   );
   const inGroups: RealtimeReport['inGroups'] = [];
-  if (groups.length) {
-    const r = await runDialerQuery(source, 'in_group_status', { in_groups: groups.join('|'), stage: 'pipe', header: 'NO' });
-    if (r.ok) for (const g of groups) inGroups.push({ id: g, rows: r.rows.filter((row) => row[0] === g || row.includes(g)) });
-    else if (r.problem) problems.push(r.problem);
-  }
-  return { dialer: { id: source.id, label: source.label }, at: new Date().toISOString(), agents, inGroups, bot, problems };
+  // One request per group: with several groups the dialer folds them into a single combined row.
+  const answers = await mapLimit(groups.slice(0, 10), REPORT_CONCURRENCY, (g) =>
+    runDialerQuery(source, 'in_group_status', { in_groups: g, stage: 'pipe', header: 'NO' })
+  );
+  groups.slice(0, 10).forEach((g, i) => {
+    if (answers[i].ok) inGroups.push({ id: g, rows: answers[i].rows });
+    else if (answers[i].problem) problems.push(answers[i].problem!);
+  });
+  const uniqueProblems = dedupeProblems(problems);
+  return { dialer: { id: source.id, label: source.label }, at: new Date().toISOString(), agents, inGroups, bot, problems: uniqueProblems };
 }
 
 export interface CampaignReportRow {
@@ -195,21 +238,24 @@ export async function buildCampaignReport(
   state: ConsoleState,
   logs: BridgeCallLogRecord[],
   date: string
-): Promise<{ date: string; rows: CampaignReportRow[]; problems: ReportProblem[] }> {
+): Promise<{ date: string; rows: CampaignReportRow[]; coverage: Coverage; problems: ReportProblem[] }> {
   const problems: ReportProblem[] = [];
-  const rows: CampaignReportRow[] = [];
-  for (const c of campaignsOf(state)) {
-    const q = await runDialerQuery(source, 'call_status_stats', { campaigns: c.viciCampaign, query_date: date });
+  const camps = campaignsOf(state);
+  const answers = await mapLimit(camps, REPORT_CONCURRENCY, (c) =>
+    runDialerQuery(source, 'call_status_stats', { campaigns: c.viciCampaign, query_date: date })
+  );
+  const rows: CampaignReportRow[] = camps.map((c, i) => {
+    const q = answers[i];
     if (!q.ok && q.problem) problems.push(q.problem);
-    rows.push({
+    return {
       campaign: c.viciCampaign,
       name: c.name,
       dialer: q.rows,
       dialerNote: q.ok ? (q.rows.length ? '' : BLANK_NOTE) : q.problem!.title,
       bot: summarizeLogs(logs.filter((l) => l.viciCampaign === c.viciCampaign && dayOf(l.startedAt) === date)),
-    });
-  }
-  return { date, rows, problems: dedupeProblems(problems) };
+    };
+  });
+  return { date, rows, coverage: coverageOf(logs, Date.parse(`${date}T00:00:00Z`)), problems: dedupeProblems(problems) };
 }
 
 export function listIdsOf(state: ConsoleState): Array<{ listId: string; campaign: string }> {
@@ -229,11 +275,21 @@ export function listIdsOf(state: ConsoleState): Array<{ listId: string; campaign
 export async function buildListReport(source: DialerSource, state: ConsoleState) {
   const problems: ReportProblem[] = [];
   const lists: Array<{ listId: string; campaign: string; rows: string[][]; note: string }> = [];
-  for (const l of listIdsOf(state).slice(0, 30)) {
+  const wanted = listIdsOf(state).slice(0, 30);
+  let unreachable = false;
+  await mapLimit(wanted, REPORT_CONCURRENCY, async (l) => {
+    if (unreachable) {
+      lists.push({ ...l, rows: [], note: 'Skipped: the dialer did not answer.' });
+      return;
+    }
     const q = await runDialerQuery(source, 'list_info', { list_id: l.listId, dialable_count: 'Y', leads_counts: 'Y' });
-    if (!q.ok && q.problem) problems.push(q.problem);
+    if (!q.ok && q.problem) {
+      problems.push(q.problem);
+      if (q.problem.title === UNREACHABLE_TITLE) unreachable = true;
+    }
     lists.push({ ...l, rows: q.rows, note: q.ok ? (q.rows.length ? '' : BLANK_NOTE) : q.problem!.title });
-  }
+  });
+  lists.sort((a, b) => wanted.findIndex((w) => w.listId === a.listId) - wanted.findIndex((w) => w.listId === b.listId));
   return { lists, problems: dedupeProblems(problems) };
 }
 
@@ -242,6 +298,7 @@ export interface BotReport {
   totals: BotNumbers;
   byBot: Array<{ agentId: string; agentName: string } & BotNumbers>;
   byCampaign: Array<{ campaign: string } & BotNumbers>;
+  coverage: Coverage;
 }
 
 export function buildBotReport(logs: BridgeCallLogRecord[], sinceHours: number, now = Date.now()): BotReport {
@@ -255,6 +312,7 @@ export function buildBotReport(logs: BridgeCallLogRecord[], sinceHours: number, 
   const names = new Map(inWindow.map((l) => [l.agentId, l.agentName]));
   return {
     sinceHours,
+    coverage: coverageOf(logs, cutoff),
     totals: summarizeLogs(inWindow),
     byBot: [...group((l) => l.agentId)].map(([agentId, ls]) => ({ agentId, agentName: names.get(agentId) || agentId, ...summarizeLogs(ls) })).sort((a, b) => b.calls - a.calls),
     byCampaign: [...group((l) => l.viciCampaign || 'UNASSIGNED')].map(([campaign, ls]) => ({ campaign, ...summarizeLogs(ls) })).sort((a, b) => b.calls - a.calls),

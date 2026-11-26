@@ -124,6 +124,9 @@ export interface SimulatorCallLogRecord {
   }>;
 }
 
+/** How many of the newest calls are kept (and their recordings). Reports can only cover this many. */
+export const BRIDGE_LOG_RETENTION = 200;
+
 export interface BridgeCallLogRecord {
   id: string;
   transport: 'audiosocket' | 'sip_rtp';
@@ -731,11 +734,11 @@ export function saveBridgeCallLog(record: BridgeCallLogRecord): void {
       JSON.stringify(record.viciApiAudit)
     );
 
-  const stale = conn.prepare('SELECT recording_file FROM bridge_calls WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT 200)').all() as Array<{ recording_file: string | null }>;
+  const stale = conn.prepare(`SELECT recording_file FROM bridge_calls WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ${BRIDGE_LOG_RETENTION})`).all() as Array<{ recording_file: string | null }>;
   for (const row of stale) removeBridgeRecording(row.recording_file);
   conn.prepare(`
     DELETE FROM bridge_calls
-    WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT 200)
+    WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ${BRIDGE_LOG_RETENTION})
   `).run();
   })();
 }

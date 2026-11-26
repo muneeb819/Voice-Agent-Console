@@ -64,6 +64,7 @@ import {
   getConsoleState,
   closeDb,
   getSimulatorCallLog,
+  BRIDGE_LOG_RETENTION,
   listBridgeCallLogs,
   listGreetingLibrary,
   listRevisions,
@@ -1239,7 +1240,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   app.get('/api/reports/campaigns', asyncRoute(async (req: Request, res: Response) => {
     const src = pickSource(req, res);
     if (!src) return;
-    res.json({ ok: true, report: await buildCampaignReport(src, getConsoleState(), listBridgeCallLogs(1000), reportDate(req.query.date)) });
+    res.json({ ok: true, report: await buildCampaignReport(src, getConsoleState(), listBridgeCallLogs(BRIDGE_LOG_RETENTION), reportDate(req.query.date)) });
   }));
 
   app.get('/api/reports/lists', asyncRoute(async (req: Request, res: Response) => {
@@ -1250,11 +1251,11 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   app.get('/api/reports/bots', (req: Request, res: Response) => {
     const hours = Math.min(24 * 30, Math.max(1, Number(req.query.hours) || 24));
-    res.json({ ok: true, report: buildBotReport(listBridgeCallLogs(1000), hours) });
+    res.json({ ok: true, report: buildBotReport(listBridgeCallLogs(BRIDGE_LOG_RETENTION), hours) });
   });
 
   app.get('/api/reports/problems', (_req: Request, res: Response) => {
-    res.json({ ok: true, problems: buildProblems(listBridgeCallLogs(1000), listAlerts().alerts) });
+    res.json({ ok: true, problems: buildProblems(listBridgeCallLogs(BRIDGE_LOG_RETENTION), listAlerts().alerts) });
   });
 
   // One-button health scan: every check says what it found and what to do about it.

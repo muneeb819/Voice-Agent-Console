@@ -5418,7 +5418,7 @@
     </div>
 
     <div class="card"><h3 style="margin:0 0 6px">Campaign performance · ${esc((cp && cp.date) || reportsState.date || 'today')}</h3>${rpErr(dt.campaigns)}
-     ${cp ? rpTable(botHead.map((h, i) => (i === 0 ? 'Campaign (bot numbers)' : h)), cp.rows.map((r) => botRow(`${r.name} · ${r.campaign}`, r.bot))) : ''}
+     ${cp && cp.coverage && cp.coverage.note ? `<div class="note wn">${esc(cp.coverage.note)}</div>` : ''}${cp ? rpTable(botHead.map((h, i) => (i === 0 ? 'Campaign (bot numbers)' : h)), cp.rows.map((r) => botRow(`${r.name} · ${r.campaign}`, r.bot))) : ''}
      ${cp ? cp.rows.map((r) => (r.dialerNote ? `<div class="note"><b>${esc(r.campaign)}</b> dialer report: ${esc(r.dialerNote)}</div>` : '') + rpRaw(r.dialer)).join('') : ''}
     </div>
 
@@ -5427,7 +5427,7 @@
     </div>
 
     <div class="card"><h3 style="margin:0 0 6px">Bot performance · ${esc(reportsState.hours === 1 ? 'last hour' : reportsState.hours === 24 ? 'last 24 hours' : 'last 7 days')}</h3>${rpErr(dt.bots)}
-     ${bt ? rpTable(botHead.map((h, i) => (i === 0 ? 'Bot' : h)), [botRow('All bots', bt.totals), ...bt.byBot.map((b) => botRow(b.agentName, b))]) : ''}
+     ${bt && bt.coverage && bt.coverage.note ? `<div class="note wn">${esc(bt.coverage.note)}</div>` : ''}${bt ? rpTable(botHead.map((h, i) => (i === 0 ? 'Bot' : h)), [botRow('All bots', bt.totals), ...bt.byBot.map((b) => botRow(b.agentName, b))]) : ''}
      ${bt && bt.byCampaign.length ? `<div style="margin-top:8px">${rpTable(botHead.map((h, i) => (i === 0 ? 'Campaign' : h)), bt.byCampaign.map((c) => botRow(c.campaign, c)))}</div>` : ''}
     </div>`;
     const reload = () => {

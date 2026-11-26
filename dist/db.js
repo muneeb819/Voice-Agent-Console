@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.BRIDGE_LOG_RETENTION = void 0;
 exports.closeDb = closeDb;
 exports.getDb = getDb;
 exports.listGreetingLibrary = listGreetingLibrary;
@@ -101,6 +102,8 @@ function openSqliteEngine(dbPath) {
 }
 const DB_PATH = path_1.default.join(data_paths_1.DATA_DIR, 'console.sqlite');
 const JSON_MIRROR_PATH = path_1.default.join(data_paths_1.DATA_DIR, 'console-state.json');
+/** How many of the newest calls are kept (and their recordings). Reports can only cover this many. */
+exports.BRIDGE_LOG_RETENTION = 200;
 let db = null;
 function closeDb() {
     if (db) {
@@ -605,12 +608,12 @@ function saveBridgeCallLog(record) {
         transcript_json, functions_json, vici_api_audit_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run(record.id, record.transport, record.exten, record.callerCode, record.leadId, record.phone, record.campaignId, record.viciCampaign, record.agentId, record.agentName, record.greetingId || null, record.remoteAgentUser, record.startedAt, record.endedAt, record.durationMs, record.turns, record.avgTtfbMs, record.disposition, record.transferredTo, record.dncAdded ? 1 : 0, record.recordingFile || null, record.recordingBytes || 0, JSON.stringify(record.transcript), JSON.stringify(record.functionCalls), JSON.stringify(record.viciApiAudit));
-        const stale = conn.prepare('SELECT recording_file FROM bridge_calls WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT 200)').all();
+        const stale = conn.prepare(`SELECT recording_file FROM bridge_calls WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ${exports.BRIDGE_LOG_RETENTION})`).all();
         for (const row of stale)
             (0, call_recorder_1.removeBridgeRecording)(row.recording_file);
         conn.prepare(`
     DELETE FROM bridge_calls
-    WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT 200)
+    WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ${exports.BRIDGE_LOG_RETENTION})
   `).run();
     })();
 }

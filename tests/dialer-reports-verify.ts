@@ -7,6 +7,8 @@ import {
   buildProblems,
   buildRealtime,
   buildSources,
+  coverageOf,
+  mapLimit,
   classifyDialerReply,
   countAgentStates,
   listIdsOf,
@@ -102,6 +104,46 @@ const log = (over: Record<string, any>): any => ({
   assert.strictEqual(xfer.count, 2);
   assert(/remote agent/.test(xfer.suggestion));
   assert.strictEqual(buildProblems([log({ viciApiAudit: bad.viciApiAudit, startedAt: '2020-01-01T00:00:00Z' })], []).length, 0, 'old failures are not shown');
+
+  // Several in-groups: one request each, so the dialer's combined row cannot hide any of them
+  const two = normalizeState(createDefaultState());
+  two.campaigns = two.campaigns.slice(0, 2).map((c, i) => ({ ...c, viciCampaign: `C${i}`, xferType: 'ingroup' as const, xferTarget: i ? 'SUPPORT' : 'SALESLINE' }));
+  calls.length = 0;
+  const rt2 = await buildRealtime(ok, two, { activeCalls: 0, capacity: null });
+  assert.deepStrictEqual(calls.filter((c) => c.fn === 'in_group_status').map((c) => c.params.in_groups).sort(), ['SALESLINE', 'SUPPORT']);
+  assert.deepStrictEqual(rt2.inGroups.map((g) => g.id).sort(), ['SALESLINE', 'SUPPORT']);
+
+  // Many lists with a dead dialer: bounded concurrency, and the rest are skipped instead of waited for
+  const many = normalizeState(createDefaultState());
+  many.campaigns = [{ ...many.campaigns[0], viciCampaign: 'M1', lists: Array.from({ length: 30 }, (_, i) => String(2000 + i)).join(',') }];
+  calls.length = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const slowDead: DialerSource = {
+    id: 'default', label: 'dead', type: 'vicidial',
+    query: async (fn) => {
+      calls.push({ fn, params: {} });
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight--;
+      return { ok: false, status: 0, text: 'ERROR: fetch failed' };
+    },
+  };
+  const deadLists = await buildListReport(slowDead, many);
+  assert(maxInFlight <= 5, `at most 5 requests at once (saw ${maxInFlight})`);
+  assert(calls.length <= 5 && deadLists.lists.length === 30, `a dead dialer is asked ${calls.length} times, not 30; every list still appears`);
+  assert.strictEqual(deadLists.problems.length, 1);
+  assert.deepStrictEqual(deadLists.lists.map((l) => l.listId), Array.from({ length: 30 }, (_, i) => String(2000 + i)), 'lists stay in order');
+  assert.deepStrictEqual(await mapLimit([1, 2, 3], 2, async (n) => n * 2), [2, 4, 6]);
+
+  // The console keeps only 200 calls: say so when a window reaches further back
+  const recent = Array.from({ length: 200 }, (_, i) => log({ startedAt: new Date(Date.now() - i * 60000).toISOString() }));
+  const week = coverageOf(recent, Date.now() - 7 * 86400_000);
+  assert(week.limited && /newest 200 calls/.test(week.note), 'a 7-day window over a full log is flagged');
+  assert(!coverageOf(recent, Date.now() - 60_000).limited, 'a window the log fully covers is not flagged');
+  assert(!coverageOf(recent.slice(0, 50), Date.now() - 7 * 86400_000).limited, 'a log below the limit is complete');
+  assert(buildBotReport(recent, 168).coverage.limited);
 
   // A dialer is a source: this is where a second dialer would be added
   const srcs = buildSources(state, () => async () => ({ ok: true, status: 200, text: '' }));
