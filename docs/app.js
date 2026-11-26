@@ -2816,13 +2816,102 @@
     return `<div class="note ${long.length ? 'wn' : ''}">${used} greeting line${used === 1 ? '' : 's'} in use, picked at random with no repeats until all have been used.${long.length ? ` ${long.length} line${long.length === 1 ? ' is' : 's are'} over ${max} words and will be skipped.` : ''} Write <code>{timeOfDay}</code> to say morning, afternoon or evening for the caller's time zone.</div>`;
   }
 
+  // Short help shown by the ? next to each control, keyed by the control's data path.
+  const HELP = {
+    "a.name": "The bot's name in this console and on exports. Callers never hear it unless your prompt says to use it.",
+    "a.mode": "Which calls this bot handles: ones the dialer places out, ones that come in through an in-group, or both.",
+    "a.language": "Language code the bot listens and speaks in, for example en or en-US. More than one can be listed.",
+    "a.acceptViciCalls": "Lets the bridge answer the dialer's call and load the lead's details before the bot says its first word. Leave on for VICIdial calls.",
+    "a.prompt": "The bot's main instructions: who it is, what to ask, when to transfer and what never to say. Campaign rules are added on top and win if they conflict.",
+    "a.greeting": "The opening line used when random greetings are off or none of them fits the call.",
+    "a.randomGreetingEnabled": "Picks one saved greeting line at random for each call so the opening does not sound the same every time.",
+    "a.injectCampaignDisclosure": "Adds the campaign's recording notice to the start of the greeting when this bot is linked to a campaign.",
+    "a.behavior.speakingStyle": "Personality, tone and goal in your own words. This is the only tone guidance the bot gets; the tone menu is used only when this is empty.",
+    "a.behavior.expressionStyle": "A ready-made tone, used only when the personality box is empty.",
+    "a.behavior.vocalGestures": "Lets the bot use short natural reactions such as 'Mm-hmm'. Off means it answers plainly.",
+    "a.behavior.allowGeneralQa": "On: the bot answers off-topic questions briefly, then returns to the call. Off: it politely stays on topic.",
+    "a.behavior.selfIntro": "What the bot says about itself when a caller asks who it is or what it does.",
+    "a.behavior.bargeIn": "What happens when the caller talks over the bot: stop at once (local detection plus Deepgram), stop when Deepgram says so, or finish the sentence first.",
+    "a.behavior.bargeInSensitivityPct": "How easily caller sound interrupts the bot. Higher stops the bot sooner but reacts to background noise more. 0 to 100.",
+    "a.behavior.latencyProfile": "How long replies run: ultra gives one or two short sentences, balanced two or three, detailed three to five.",
+    "a.flow.waitForHello": "The bot lets the caller say hello first before it speaks. Off: it speaks after a short pause.",
+    "a.flow.waitForHelloSec": "How long to wait in silence before the bot asks whether anyone is there.",
+    "a.flow.greetingLines": "Opening lines, one per line. Keep them short and end with a question so the caller answers.",
+    "a.flow.greetingMaxWords": "Longest opening allowed. Longer lines are cut so the caller is not kept waiting.",
+    "a.flow.introLine": "What the bot says right after the caller answers the greeting, for example who it is and why it is calling.",
+    "a.flow.transferOnYes": "If the caller says yes to the introduction question, transfer to a live agent straight away.",
+    "a.flow.repeatLine": "What the bot says when it did not catch the caller's words.",
+    "a.flow.noAnswerLine": "What the bot says when the caller stays silent.",
+    "a.flow.noAnswerRepeats": "How many times to ask if anyone is there. 0 means say the greeting instead.",
+    "a.flow.voiceDeliveryEnabled": "Adds guidance on intonation, pace and phrasing to the bot's instructions. It is dropped first if a call's instructions get too long.",
+    "a.flow.voiceDelivery": "How the bot should sound: pace, warmth, pauses, sentence length. Leave blank to restore the default.",
+    "a.stt.eot": "How sure the system must be that the caller has finished before the bot replies. Higher waits longer and interrupts less. 0.5 to 1.0.",
+    "a.stt.eager": "Lets the bot start preparing a reply early. Lower starts sooner but may be wasted if the caller keeps talking. 0.3 to 0.9.",
+    "a.stt.eotms": "The most silence, in milliseconds, before the caller's turn is treated as finished.",
+    "a.stt.keyterms": "Words or phrases the listener should favour, such as product, company or person names, separated by commas.",
+    "a.llm.temp": "How varied the replies are. Lower is steadier and more predictable, higher is more varied. 0 to 2.",
+    "a.llm.reasoning": "How much the model thinks before answering. Higher can be more careful but slower. Only some models use it.",
+    "a.tts.voice": "This bot's own voice. Leave on the global voice to use the one set in Plug-Ins. Copies of a bot get a different voice automatically.",
+    "a.tts.speed": "Speaking speed for Flux voices. 1.0 is normal. Aura voices ignore this.",
+    "a.tts.expr": "How lively a Flux voice sounds. 0 is its tuned default, plus is livelier, minus is flatter. Aura voices ignore this.",
+    "a.tts.expressiveness": "Emotion strength for self-hosted voices. About 0.5 sounds natural, 0.7 and above is more expressive.",
+    "a.tts.variation": "How much a self-hosted voice varies from line to line. Higher is livelier and less repetitive.",
+    "a.audio.inEnc": "Format of the caller audio arriving from the dialer. Must match the dialer's setting.",
+    "a.audio.inRate": "Sample rate of the caller audio, in Hz. Phone lines are 8000.",
+    "a.audio.outEnc": "Format of the bot audio sent back to the dialer. Must match the dialer's setting.",
+    "a.audio.outRate": "Sample rate of the bot audio, in Hz. Phone lines are 8000.",
+    "c.name": "The campaign's name in this console.",
+    "c.viciCampaign": "The campaign ID exactly as it is in VICIdial. Calls are matched to this campaign by it.",
+    "c.lists": "The VICIdial list IDs this campaign dials. For reference only: VICIdial decides which lists dial.",
+    "c.start": "The hours this campaign is meant to call. For reference only: set the real call times in VICIdial.",
+    "c.end": "The end of the hours this campaign is meant to call. For reference only.",
+    "c.tz": "The lead's timezone. Used so greetings say the right time of day.",
+    "c.maxCalls": "The most AI calls this campaign may hold at the same time. Calls over the limit are turned away and raise an alert.",
+    "c.maxCallSec": "Hard time limit per call in seconds. Near the end the bot is told to transfer or wrap up. 0 means no limit.",
+    "c.xferType": "Where qualified callers go: a VICIdial closer in-group (keeps the screen-pop), an Asterisk extension, or an outside number.",
+    "c.xferTarget": "The in-group ID, extension or phone number that matches the transfer type above.",
+    "c.fallback": "What to do if no live agent is free, for example 'Dispo CALLBK' to mark the lead for a call back.",
+    "c.dnc": "When the bot records a Do-Not-Call result, the caller is added to VICIdial's DNC list.",
+    "c.disclosure": "The recording notice for this campaign. It can be added to the start of the greeting.",
+    "c.dispos": "The result codes the bot may set for this campaign, separated by commas. Others are refused.",
+    "c.complianceRules": "Mandatory rules and banned claims for this campaign. They override the bot's own instructions if the two conflict.",
+    "v.viciBaseUrl": "The address of the VICIdial web server, for example https://dialer.example.com.",
+    "v.nonAgentApiPath": "Path of VICIdial's non-agent API, used to read and update leads and to add DNC numbers.",
+    "v.agentApiPath": "Path of VICIdial's agent API, used to transfer and hang up calls.",
+    "v.apiUser": "The VICIdial API user the console logs in as. Its password is saved under API Keys.",
+    "v.source": "A short tag sent with every API call so you can tell this console's actions apart in VICIdial logs.",
+    "v.transport": "Which kind of call connection the generated dialplan highlights. Both listeners run either way.",
+    "v.sipConnectionMode": "How the dialer and bridge find each other: the dialer sends calls to the bridge, the bridge registers with the dialer, or both.",
+    "v.sipRegistrarHost": "The address of the SIP server the bridge registers with.",
+    "v.sipRegistrarPort": "The UDP port of that SIP server.",
+    "v.sipDomain": "SIP domain to register under, if the dialer needs one. Leave blank to use the registrar address.",
+    "v.sipUsername": "The SIP account the bridge registers as. Its password is saved under API Keys.",
+    "v.sipAuthUsername": "Only if the SIP login name differs from the SIP username.",
+    "v.sipTransportProtocol": "SIP over UDP is the only transport the bridge supports today.",
+    "v.bridgeHost": "The address the dialer should use to reach this bridge.",
+    "v.sipPort": "The UDP port the bridge listens on for SIP calls. Avoid 5060 on ViciBox, it is already in use.",
+    "v.bridgePort": "The TCP port the bridge listens on for Asterisk AudioSocket calls.",
+    "v.aiExten": "The extension prefix the dialer dials to reach a bot.",
+    "v.remoteAgentUser": "The first remote-agent user number. Each campaign slot uses the next one up.",
+    "v.inIngroup": "The in-group that receives inbound calls dropped to a bot.",
+    "v.amiHost": "The address of the dialer's Asterisk manager interface (AMI).",
+    "v.amiPort": "The AMI TCP port, normally 5038. It must be open from this server.",
+    "v.amiUser": "The AMI user the console logs in as. Its secret is saved under API Keys.",
+    "v.sipReferFallback": "Backup route: if the API and AMI transfers both fail, ask the dialer to move the call over SIP (REFER)."
+  };
+
+  const helpButton = (path, label) =>
+    HELP[path]
+      ? `<button type="button" class="help-btn" data-help="${path}" aria-expanded="false" aria-label="Help: ${esc(label)}">?</button>`
+      : '';
+
   const F = (label, path, type = 'text', opts = [], attrs = '') => {
     const val = getPath(path);
     const fieldId = `vac-field-${++fieldSerial}`;
     const dp = `data-p="${path}" id="${fieldId}"`;
     label = String(label).replace(/\uFE0F/g, '').trim(); // stray emoji residue made labels look misaligned
     if (type === 'chk') {
-      return `<label class="chk-label"><input type="checkbox" style="width:auto" ${dp} ${val ? 'checked' : ''}>${label}</label>`;
+      return `<label class="chk-label"><input type="checkbox" style="width:auto" ${dp} ${val ? 'checked' : ''}>${label}${helpButton(path, label)}</label>`;
     }
     let fieldHtml = '';
     if (type === 'sel') {
@@ -2845,7 +2934,7 @@
     }
     // Label and control are ONE grid item; as siblings, a 2/3-column row put
     // labels and boxes into different cells (labels floated over other fields).
-    return `<div class="fld"><label for="${fieldId}">${label}</label>${fieldHtml}</div>`;
+    return `<div class="fld"><label for="${fieldId}">${label}${helpButton(path, label)}</label>${fieldHtml}</div>`;
   };
 
   const providersByKind = (kind) => S.providers.filter((p) => p.kind === kind).map((p) => [p.id, p.name]);
@@ -7160,7 +7249,7 @@
      <h2>Telephony Media &amp; Control Transport (Both Listeners Run Simultaneously)</h2>
      ${F('Primary Dialplan Mode Highlighted in Export', 'v.transport', 'sel', [
        ['sip_trunk', 'SIP + RTP G.711 μ-law peer (on the bridge SIP port)'],
-       ['audiosocket', 'Asterisk AudioSocket TCP (:9092 — Native Asterisk 18+ / ViciBox 11-12)'],
+       ['audiosocket', 'Asterisk AudioSocket (TCP, needs the AudioSocket module on the dialer)'],
      ])}
      <div class="row r3">
       ${F('Bridge Host / IP', 'v.bridgeHost')}
@@ -8364,6 +8453,43 @@
     if (tab === 'voice') renderVoiceCatalogSection();
     if (tab === 'test' && !sim.active) render();
   }
+
+  // One shared help popover for every ? button.
+  let helpPopEl = null;
+  const closeHelp = () => {
+    if (helpPopEl) helpPopEl.hidden = true;
+    document.querySelectorAll('.help-btn[aria-expanded="true"]').forEach((b) => b.setAttribute('aria-expanded', 'false'));
+  };
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.help-btn');
+    if (!btn) {
+      if (!e.target.closest('.help-pop')) closeHelp();
+      return;
+    }
+    e.preventDefault(); // the ? sits inside a <label>; don't toggle the control
+    const wasOpen = btn.getAttribute('aria-expanded') === 'true';
+    closeHelp();
+    if (wasOpen) return;
+    if (!helpPopEl) {
+      helpPopEl = document.createElement('div');
+      helpPopEl.className = 'help-pop';
+      helpPopEl.setAttribute('role', 'tooltip');
+      helpPopEl.id = 'help-pop';
+      document.body.appendChild(helpPopEl);
+    }
+    helpPopEl.textContent = HELP[btn.dataset.help] || '';
+    helpPopEl.hidden = false;
+    const r = btn.getBoundingClientRect();
+    const width = Math.min(280, window.innerWidth - 16);
+    helpPopEl.style.width = `${width}px`;
+    helpPopEl.style.left = `${Math.max(8, Math.min(r.left + window.scrollX, window.scrollX + window.innerWidth - width - 8))}px`;
+    helpPopEl.style.top = `${r.bottom + window.scrollY + 6}px`;
+    btn.setAttribute('aria-expanded', 'true');
+    btn.setAttribute('aria-describedby', 'help-pop');
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeHelp();
+  });
 
   document.addEventListener('click', (e) => {
     const pop = document.getElementById('account-popover');
