@@ -74,6 +74,11 @@ async function main() {
       assert.equal((await call(p, 'GET', operatorCookie)).status, 403, p);
     }
     assert.equal((await call(`/api/users/${operator.user!.id}/status`, 'POST', operatorCookie, { active: false })).status, 403);
+    assert.equal((await call('/api/bot-sleep', 'POST', operatorCookie, { sleeping: true })).status, 403,
+      'an operator cannot put every bot to sleep');
+    assert.equal((await call('/api/bot-sleep', 'POST', viewerCookie, { sleeping: true })).status, 403,
+      'a viewer cannot put every bot to sleep');
+    assert.equal((await call('/api/bot-sleep', 'GET', operatorCookie)).status, 200, 'an operator can read the sleep status');
     assert.equal((await call(`/api/users/${operator.user!.id}/role`, 'POST', viewerCookie, { role: 'owner' })).status, 403);
     assert.equal((await call(`/api/users/${operator.user!.id}/revoke-sessions`, 'POST', operatorCookie, {})).status, 403);
     assert.equal((await call('/api/users')).status, 401, 'anonymous account listing is rejected');
