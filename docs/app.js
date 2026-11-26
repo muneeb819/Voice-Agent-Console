@@ -2055,6 +2055,7 @@
     logs: [],
     analytics: null,
     usage: null,
+    alerts: null,
     loaded: false,
     ws: null,
     verifyRunning: false,
@@ -4559,10 +4560,11 @@
       return;
     }
     try {
-      const [statusRes, anaRes, usageRes] = await Promise.all([fetch('/api/vici/status'), fetch('/api/vici/analytics'), fetch('/api/usage/report?days=7')]);
+      const [statusRes, anaRes, usageRes, alertsRes] = await Promise.all([fetch('/api/vici/status'), fetch('/api/vici/analytics'), fetch('/api/usage/report?days=7'), fetch('/api/alerts')]);
       const data = await statusRes.json();
       const anaData = await anaRes.json();
       try { const u = await usageRes.json(); if (u && u.ok) viciMon.usage = u; } catch {}
+      try { const al = await alertsRes.json(); if (al && al.ok) viciMon.alerts = al; } catch {}
       if (data.ok) {
         viciMon.status = data.bridge || null;
         viciMon.logs = data.logs || [];
@@ -5787,6 +5789,22 @@
       </button>
      </div>
     </div>
+
+    ${(() => {
+      const al = viciMon.alerts;
+      if (!al || !al.alerts || !al.alerts.length) return '';
+      const when = (iso) => { try { return new Date(iso).toLocaleString(); } catch { return iso; } };
+      const rows = al.alerts.slice(0, 8).map((x) => `<div class="row" style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--bd);${x.acknowledged ? 'opacity:.6' : ''}">
+        <span class="pill ${x.severity === 'critical' ? 'er' : 'wn'}">${x.severity === 'critical' ? 'Critical' : 'Warning'}</span>
+        <div style="flex:1;min-width:0"><b>${esc(x.title)}</b>${x.count > 1 ? ` <span class="pill">×${x.count}</span>` : ''}<div class="note" style="margin:2px 0 0">${esc(x.detail || '')} · last ${esc(when(x.lastAt))}</div></div>
+        ${x.acknowledged ? '' : `<button type="button" class="g cmd-mini-btn" data-alert-ack="${esc(x.id)}">Dismiss</button>`}
+       </div>`).join('');
+      return `<div class="card" style="margin:10px 0">
+       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <h3 style="margin:0">Alerts ${al.unacknowledged ? `<span class="pill er">${al.unacknowledged} new</span>` : '<span class="pill ok">all read</span>'}</h3>
+        ${al.unacknowledged ? '<button type="button" class="g cmd-mini-btn" data-alert-ack-all="1">Mark all read</button>' : ''}
+       </div>${rows}</div>`;
+    })()}
 
     <div class="cmd-score-card ready-stage ${healthClass}" data-ready-stage aria-label="System readiness, ${T.score} out of 100">
      <div class="ready-stage-top">
@@ -8382,6 +8400,13 @@
       renderExecutiveCommandDeck();
       return;
     }
+    if (d.alertAck || d.alertAckAll) {
+      try {
+        await fetch('/api/alerts/ack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d.alertAck ? { id: d.alertAck } : {}) });
+      } catch {}
+      await loadViciBridgeStatus();
+      return;
+    }
     if (b.id === 'btn-bot-sleep') {
       const asleep = viciMon.status?.botSleep?.sleeping === true;
       if (!asleep && !window.confirm('Put the bots to sleep? New calls will be turned away until you wake them. Calls already in progress finish normally.')) return;
@@ -9724,10 +9749,25 @@
     }
   });
 
+  // New alerts (for example a call turned away at the campaign limit) arrive without any call event,
+  // so the alert list is checked on its own and the Command deck redraws only when it changed.
+  async function refreshAlerts() {
+    try {
+      const r = await fetch('/api/alerts');
+      const al = await r.json();
+      if (!al || !al.ok) return;
+      const stamp = (x) => `${x.unacknowledged}|${(x.alerts && x.alerts[0] && x.alerts[0].lastAt) || ''}|${(x.alerts && x.alerts[0] && x.alerts[0].count) || 0}`;
+      const changed = !viciMon.alerts || stamp(al) !== stamp(viciMon.alerts);
+      viciMon.alerts = al;
+      if (changed && tab === 'dashboard') renderExecutiveCommandDeck();
+    } catch {}
+  }
+
   loadFromServer();
   setInterval(() => {
     if (!document.hidden && S && !serverlessCloudMode) {
       refreshTelemetryOverview(true);
+      refreshAlerts();
     }
   }, 15000);
 })();
