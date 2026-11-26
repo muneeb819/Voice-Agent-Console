@@ -15,7 +15,17 @@ for (const a of state.agents) {
   assert.strictEqual(a.flow!.defaultSkillsEnabled, true, `${a.name}: default skills on`);
   assert.ok(composeBehavioralPrompt(a, campaign).includes(DEFAULT_SKILLS_HEADER), `${a.name}: prompt carries the skills`);
 }
-assert.ok(DEFAULT_SKILLS_TEXT.length < 3000, 'the skills block stays compact');
+assert.ok(DEFAULT_SKILLS_TEXT.length < 5600, 'the skills block stays compact');
+
+// Every area is present once, no line is repeated, and nothing duplicates a rule that other sections own.
+const skillLines = DEFAULT_SKILLS_TEXT.split('\n');
+assert.strictEqual(new Set(skillLines).size, skillLines.length, 'no repeated line in the skills block');
+for (const area of ['Conversation craft:', 'Spoken delivery:', 'Human sound:', 'Objections and awkward moments:', 'Complex conversations:', 'Sales steps', 'Call types and rule posture:', 'Consistency:']) {
+  assert.strictEqual(skillLines.filter((l) => l.startsWith(area)).length, 1, `${area} appears exactly once`);
+}
+assert.ok(!/NEVER INVENT FACTS|set_disposition|end_call/.test(DEFAULT_SKILLS_TEXT), 'integrity and call-ending rules stay in their own sections');
+assert.ok(/stop calling me/.test(DEFAULT_SKILLS_TEXT) && /never assume a human/.test(DEFAULT_SKILLS_TEXT), 'opt-out and machine handling are covered');
+assert.ok(!/not an AI|not a robot|tell (them|the caller) you are (a )?(human|person)/i.test(DEFAULT_SKILLS_TEXT), 'no line denies being an AI');
 
 // A brand-new bot (no flow saved) and a duplicate both get them; a duplicate keeps its own on/off choice.
 const fresh = normalizeState({ ...createDefaultState(), agents: [{ ...state.agents[0], id: 'fresh', flow: undefined }] } as any).agents.find((a) => a.id === 'fresh')!;
