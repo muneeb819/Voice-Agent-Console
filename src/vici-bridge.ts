@@ -26,6 +26,7 @@ import { CALL_LIMIT_CLOSING_LINE, TRANSFER_INTENT_AUTOCOMPLETE_MS, TRANSFER_INTE
 export { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt } from './call-limit';
 import { Agent, Campaign, ConsoleState } from './types';
 import { SipRegistrationClient } from './vici-sip-registration';
+import { getBotSleep, isBotSleeping } from './bot-sleep';
 import { buildReferRequest, ReferTracker, sanitizeReferTarget, type ReferResult } from './sip-refer';
 import { isScreeningEnabled, NativeAmdResult, recordScreeningDecision, ScreeningDecision, sendScreeningDisposition, startCallScreening } from './screening';
 import type { ScreeningSession } from './screening/session';
@@ -303,6 +304,7 @@ export class VicidialBridgeService {
     dncCount: 0,
     rejectedUntrustedIpCount: 0,
     rejectedOverCapacityCount: 0,
+    rejectedAsleepCount: 0,
     audioSocketListening: false,
     sipRtpListening: false,
     lastError: null as string | null,
@@ -423,6 +425,7 @@ export class VicidialBridgeService {
       bindHost: this.host,
       audioSocketPort: this.audioSocketPort,
       sipPort: this.sipPort,
+      botSleep: getBotSleep(),
       activeCallsCount: this.activeCalls.size,
       activeCalls: Array.from(this.activeCalls.values()),
       sipRegistration: this.sipRegistrationClient?.snapshot() || { status: 'stopped', registrar: '', expiresAt: null, lastError: null },
@@ -434,6 +437,16 @@ export class VicidialBridgeService {
     if (!closer) return false;
     closer('supervisor_force_hangup');
     return true;
+  }
+
+  /** Ends every call in progress; returns how many were told to hang up. */
+  public hangupAllCalls(reason = 'bots_put_to_sleep'): number {
+    let ended = 0;
+    for (const closer of Array.from(this.activeSessionClosers.values())) {
+      closer(reason);
+      ended += 1;
+    }
+    return ended;
   }
 
   public async forceTransferCall(callId: string, reason = 'Supervisor forced live transfer'): Promise<boolean> {
@@ -483,6 +496,10 @@ export class VicidialBridgeService {
       ? { ...state.vici, viciBaseUrl: this.viciApiBaseOverride }
       : state.vici;
 
+    if (isBotSleeping()) {
+      this.stats.rejectedAsleepCount += 1;
+      throw new Error('Bots are asleep: new calls are not being answered.');
+    }
     const exten = String(input.exten || '').trim();
     const resolved = resolveCampaignAndAgent(state, exten, { rotate: true });
     if (resolved.error || !resolved.campaign || !resolved.agent) {
@@ -918,6 +935,12 @@ export class VicidialBridgeService {
         const uriMatch = /sip:([^@;>\s]+)/i.exec(requestUri || '');
         const exten = firstHeader(headers, 'x-vici-exten') || (uriMatch ? uriMatch[1] : '');
 
+        if (isBotSleeping()) {
+          this.stats.rejectedAsleepCount += 1;
+          sendSipResponse('503 Service Unavailable', headers, toRaw, ['Warning: 399 ViciBridge "Bots asleep"'], '', rinfo);
+          return;
+        }
+
         // Campaign maxCalls concurrency guard
         const curStateForCap = getConsoleState();
         const resolvedForCap = resolveCampaignAndAgent(curStateForCap, exten);
@@ -1301,6 +1324,16 @@ export class VicidialBridgeService {
     const startedAtIso = new Date().toISOString();
     const startedAtMs = Date.now();
     const recorder = new StereoCallRecorder8k(startedAtMs);
+
+    if (isBotSleeping()) {
+      this.stats.rejectedAsleepCount += 1;
+      opts.hooks.hangupTransport();
+      return {
+        onCallerPcm8k: () => {},
+        onCallerDtmf: () => {},
+        onTransportClosed: () => {},
+      };
+    }
 
     const missingGlobalServices = (['stt', 'llm', 'tts'] as const).filter((kind) => {
       const selected = state.services?.[kind];

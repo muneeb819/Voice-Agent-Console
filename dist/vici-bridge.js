@@ -68,6 +68,7 @@ Object.defineProperty(exports, "callLimitMsForCampaign", { enumerable: true, get
 Object.defineProperty(exports, "callLimitSchedule", { enumerable: true, get: function () { return call_limit_2.callLimitSchedule; } });
 Object.defineProperty(exports, "callLimitWrapUpPrompt", { enumerable: true, get: function () { return call_limit_2.callLimitWrapUpPrompt; } });
 const vici_sip_registration_1 = require("./vici-sip-registration");
+const bot_sleep_1 = require("./bot-sleep");
 const sip_refer_1 = require("./sip-refer");
 const screening_1 = require("./screening");
 const vici_client_1 = require("./vici-client");
@@ -247,6 +248,7 @@ class VicidialBridgeService {
         dncCount: 0,
         rejectedUntrustedIpCount: 0,
         rejectedOverCapacityCount: 0,
+        rejectedAsleepCount: 0,
         audioSocketListening: false,
         sipRtpListening: false,
         lastError: null,
@@ -373,6 +375,7 @@ class VicidialBridgeService {
             bindHost: this.host,
             audioSocketPort: this.audioSocketPort,
             sipPort: this.sipPort,
+            botSleep: (0, bot_sleep_1.getBotSleep)(),
             activeCallsCount: this.activeCalls.size,
             activeCalls: Array.from(this.activeCalls.values()),
             sipRegistration: this.sipRegistrationClient?.snapshot() || { status: 'stopped', registrar: '', expiresAt: null, lastError: null },
@@ -384,6 +387,15 @@ class VicidialBridgeService {
             return false;
         closer('supervisor_force_hangup');
         return true;
+    }
+    /** Ends every call in progress; returns how many were told to hang up. */
+    hangupAllCalls(reason = 'bots_put_to_sleep') {
+        let ended = 0;
+        for (const closer of Array.from(this.activeSessionClosers.values())) {
+            closer(reason);
+            ended += 1;
+        }
+        return ended;
     }
     async forceTransferCall(callId, reason = 'Supervisor forced live transfer') {
         const xfer = this.activeSessionTransferrers.get(callId);
@@ -422,6 +434,10 @@ class VicidialBridgeService {
         const effectiveVici = this.viciApiBaseOverride
             ? { ...state.vici, viciBaseUrl: this.viciApiBaseOverride }
             : state.vici;
+        if ((0, bot_sleep_1.isBotSleeping)()) {
+            this.stats.rejectedAsleepCount += 1;
+            throw new Error('Bots are asleep: new calls are not being answered.');
+        }
         const exten = String(input.exten || '').trim();
         const resolved = resolveCampaignAndAgent(state, exten, { rotate: true });
         if (resolved.error || !resolved.campaign || !resolved.agent) {
@@ -812,6 +828,11 @@ class VicidialBridgeService {
                     // Parse dialed extension from Request-URI: sip:88001@<bridge-host>:5062
                     const uriMatch = /sip:([^@;>\s]+)/i.exec(requestUri || '');
                     const exten = firstHeader(headers, 'x-vici-exten') || (uriMatch ? uriMatch[1] : '');
+                    if ((0, bot_sleep_1.isBotSleeping)()) {
+                        this.stats.rejectedAsleepCount += 1;
+                        sendSipResponse('503 Service Unavailable', headers, toRaw, ['Warning: 399 ViciBridge "Bots asleep"'], '', rinfo);
+                        return;
+                    }
                     // Campaign maxCalls concurrency guard
                     const curStateForCap = (0, db_1.getConsoleState)();
                     const resolvedForCap = resolveCampaignAndAgent(curStateForCap, exten);
@@ -1196,6 +1217,15 @@ class VicidialBridgeService {
         const startedAtIso = new Date().toISOString();
         const startedAtMs = Date.now();
         const recorder = new call_recorder_1.StereoCallRecorder8k(startedAtMs);
+        if ((0, bot_sleep_1.isBotSleeping)()) {
+            this.stats.rejectedAsleepCount += 1;
+            opts.hooks.hangupTransport();
+            return {
+                onCallerPcm8k: () => { },
+                onCallerDtmf: () => { },
+                onTransportClosed: () => { },
+            };
+        }
         const missingGlobalServices = ['stt', 'llm', 'tts'].filter((kind) => {
             const selected = state.services?.[kind];
             const provider = state.providers.find((p) => p.kind === kind && p.id === selected?.providerId);
