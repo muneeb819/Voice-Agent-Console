@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.asyncRoute = asyncRoute;
 exports.createApp = createApp;
 exports.createServerWithSimulator = createServerWithSimulator;
+const bot_sleep_1 = require("./bot-sleep");
 const process_guards_1 = require("./process-guards");
 const voice_clone_1 = require("./voice-clone");
 const smoke_test_1 = require("./smoke-test");
@@ -1008,6 +1009,20 @@ function createApp(viciBridge) {
     app.post('/api/vici/register-call', handleRegisterCall);
     app.get('/api/vici/precall', handleRegisterCall);
     app.post('/api/vici/precall', handleRegisterCall);
+    app.get('/api/bot-sleep', (_req, res) => {
+        res.json({ ok: true, ...(0, bot_sleep_1.getBotSleep)() });
+    });
+    app.post('/api/bot-sleep', (req, res) => {
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        if (typeof body.sleeping !== 'boolean') {
+            res.status(400).json({ ok: false, error: 'Send {"sleeping": true} or {"sleeping": false}.' });
+            return;
+        }
+        const status = (0, bot_sleep_1.setBotSleep)(body.sleeping, 'console');
+        // Optionally cut calls already in progress; by default they finish normally.
+        const ended = body.sleeping && body.endActiveCalls === true && viciBridge ? viciBridge.hangupAllCalls() : 0;
+        res.json({ ok: true, ...status, endedActiveCalls: ended });
+    });
     app.get('/api/vici/status', (_req, res) => {
         res.json({
             ok: true,

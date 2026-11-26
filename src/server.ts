@@ -1,3 +1,4 @@
+import { getBotSleep, setBotSleep } from './bot-sleep';
 import { installProcessGuards } from './process-guards';
 import {
   CloneError,
@@ -1159,6 +1160,22 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   app.post('/api/vici/register-call', handleRegisterCall);
   app.get('/api/vici/precall', handleRegisterCall);
   app.post('/api/vici/precall', handleRegisterCall);
+
+  app.get('/api/bot-sleep', (_req: Request, res: Response) => {
+    res.json({ ok: true, ...getBotSleep() });
+  });
+
+  app.post('/api/bot-sleep', (req: Request, res: Response) => {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    if (typeof body.sleeping !== 'boolean') {
+      res.status(400).json({ ok: false, error: 'Send {"sleeping": true} or {"sleeping": false}.' });
+      return;
+    }
+    const status = setBotSleep(body.sleeping, 'console');
+    // Optionally cut calls already in progress; by default they finish normally.
+    const ended = body.sleeping && body.endActiveCalls === true && viciBridge ? viciBridge.hangupAllCalls() : 0;
+    res.json({ ok: true, ...status, endedActiveCalls: ended });
+  });
 
   app.get('/api/vici/status', (_req: Request, res: Response) => {
     res.json({

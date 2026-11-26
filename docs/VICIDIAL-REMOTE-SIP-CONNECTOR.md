@@ -105,3 +105,12 @@ When a bot qualifies a caller, the bridge tries to move the call in this order a
 The REFER step only runs for an extension target, and can be switched off under VICIdial settings ("Backup transfer: ask the dialer over SIP (REFER) if API and AMI fail"). Every attempt is written to the VICIdial API audit log as `SIP REFER -> <extension>`.
 
 The dialer must accept REFER on the `ai-bridge` peer. It may need `allowtransfer=yes` (chan_sip) or the equivalent, and the REFER context must be able to reach the transfer extension. This path has been unit tested but not yet exercised against a live dialer.
+
+## Putting the bots to sleep
+
+The Command deck has a **Sleep bots / Wake bots** button. While asleep, the bridge answers every new call with `503 "Bots asleep"` (and refuses `register-call`) before any campaign, speech or AI service is opened, so no STT, LLM or TTS usage is spent. Calls already in progress finish normally.
+
+- API: `GET /api/bot-sleep`, `POST /api/bot-sleep {"sleeping": true|false, "endActiveCalls": true|false}` (`endActiveCalls` also hangs up calls in progress).
+- The setting is stored in `data/bot-sleep.json`, not in the console state, so a stale open console tab cannot switch it back. It survives restarts.
+- The bridge status shows `botSleep` and `rejectedAsleepCount`.
+- Sleeping stops the bots answering; VICIdial keeps dialing. To stop dialing too, pause the campaign or the remote agents in VICIdial.

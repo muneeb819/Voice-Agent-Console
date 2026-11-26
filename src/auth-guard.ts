@@ -370,6 +370,7 @@ export function apiAuthMiddleware(req: Request, res: Response, next: NextFunctio
       (p.startsWith('/screening/') && req.method !== 'GET' && req.method !== 'HEAD') ||
       p === '/speech-service/test' ||
       p === '/vici/verify' ||
+      (p === '/bot-sleep' && req.method !== 'GET' && req.method !== 'HEAD') ||
       p === '/deepgram/verify' ||
       (p === '/speech-service/status' && (req.query.url !== undefined || req.query.apiKey !== undefined)) ||
       /^\/vici\/calls\/[^/]+\/(?:hangup|transfer)$/.test(p);

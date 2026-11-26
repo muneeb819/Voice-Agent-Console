@@ -5776,6 +5776,10 @@
       <span class="cmd-cert-badge ${healthClass === 'ok' ? '' : healthClass}">${esc(certText)}</span>
      </div>
      <div class="cmd-actions-cluster">
+      ${(() => {
+        const asleep = viciMon.status?.botSleep?.sleeping === true;
+        return `<button type="button" class="${asleep ? 'b' : 'g'} cmd-mini-btn" id="btn-bot-sleep" title="${asleep ? 'Bots are asleep: new calls are turned away and no speech or AI usage is spent. Click to wake them.' : 'Put the bots to sleep: new calls are turned away and no speech or AI usage is spent. Calls in progress finish normally.'}">${asleep ? 'Wake bots' : 'Sleep bots'}</button>`;
+      })()}
       <button type="button" class="g cmd-mini-btn" id="btn-cmd-refresh" title="Refresh live server, simulator &amp; VICIdial telemetry">
        ${DECK_ICONS.refresh} ${cmdDeckState.syncing ? 'Syncing…' : 'Sync'}
       </button>
@@ -8362,6 +8366,22 @@
         window.localStorage?.setItem(CMD_DECK_COMPACT_KEY, cmdDeckState.compact ? '1' : '0');
       } catch {}
       renderExecutiveCommandDeck();
+      return;
+    }
+    if (b.id === 'btn-bot-sleep') {
+      const asleep = viciMon.status?.botSleep?.sleeping === true;
+      if (!asleep && !window.confirm('Put the bots to sleep? New calls will be turned away until you wake them. Calls already in progress finish normally.')) return;
+      b.disabled = true;
+      try {
+        const r = await fetch('/api/bot-sleep', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sleeping: !asleep }) });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'Could not change sleep mode');
+      } catch (err) {
+        b.disabled = false;
+        window.alert(err && err.message ? err.message : 'Could not change sleep mode');
+        return;
+      }
+      await loadViciBridgeStatus();
       return;
     }
     if (b.id === 'btn-cmd-refresh') {
