@@ -32,6 +32,7 @@ const db_1 = require("./db");
 const defaults_1 = require("./defaults");
 const state_guard_1 = require("./state-guard");
 const data_paths_1 = require("./data-paths");
+const voice_pick_1 = require("./voice-pick");
 const deepgram_catalog_1 = require("./deepgram-catalog");
 const env_store_1 = require("./env-store");
 const live_simulator_1 = require("./live-simulator");
@@ -1300,6 +1301,17 @@ function createApp(viciBridge) {
                 error: err?.message || 'Deepgram diagnostic check failed',
             });
         }
+    }));
+    // Suggests a female English voice that no other bot is using, for duplicated bots.
+    app.get('/api/voices/suggest', asyncRoute(async (req, res) => {
+        const taken = String(req.query.taken || '').split(',').map((v) => v.trim()).filter(Boolean);
+        const catalog = await (0, deepgram_catalog_1.fetchDeepgramVoiceCatalog)(false);
+        const pick = (0, voice_pick_1.pickDistinctFemaleVoice)(catalog.voices, taken);
+        if (!pick.voice) {
+            res.status(404).json({ ok: false, error: 'No female English voice is available in the catalog' });
+            return;
+        }
+        res.json({ ok: true, voice: pick.voice.id, displayName: pick.voice.displayName, reused: pick.reused });
     }));
     app.get('/api/deepgram/voices', asyncRoute(async (req, res) => {
         try {

@@ -9,6 +9,7 @@ const DEFAULT_NO_ANSWER_LINE = FLOW_DEFAULTS.noAnswerLine;
 import { assignCampaignSlots, normalizeCampaignAgents } from './campaign-assignment';
 import { normalizeBargeInPct, presetForPct } from './barge-in';
 import { SENTINEL_QA_AGENT, SENTINEL_QA_TESTS } from './sentinel-qa';
+import { isValidVoiceId } from './voice-pick';
 
 
 function normalizeFlow(raw: any): import('./types').AgentFlow {
@@ -1137,6 +1138,7 @@ export function normalizeState(raw: any): ConsoleState {
               | 'high',
           },
           tts: {
+            voice: isValidVoiceId(a.tts?.voice) ? String(a.tts.voice).trim() : '',
             speed: num(a.tts?.speed, 1.0, 0.5, 1.5),
             // +1 by default: livelier pitch movement (intonation) on Flux voices.
             expr: Math.round(num(a.tts?.expr, 1, -2, 2)),

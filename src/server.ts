@@ -76,6 +76,7 @@ import {
 import { createDefaultState, normalizeState } from './defaults';
 import { credentialRoutingChanges } from './state-guard';
 import { DATA_DIR } from './data-paths';
+import { pickDistinctFemaleVoice } from './voice-pick';
 import {
   fetchAllowedSampleAudio,
   fetchDeepgramLlmModels,
@@ -1479,6 +1480,18 @@ export function createApp(viciBridge?: VicidialBridgeService) {
         error: err?.message || 'Deepgram diagnostic check failed',
       });
     }
+  }));
+
+  // Suggests a female English voice that no other bot is using, for duplicated bots.
+  app.get('/api/voices/suggest', asyncRoute(async (req: Request, res: Response) => {
+    const taken = String(req.query.taken || '').split(',').map((v) => v.trim()).filter(Boolean);
+    const catalog = await fetchDeepgramVoiceCatalog(false);
+    const pick = pickDistinctFemaleVoice(catalog.voices, taken);
+    if (!pick.voice) {
+      res.status(404).json({ ok: false, error: 'No female English voice is available in the catalog' });
+      return;
+    }
+    res.json({ ok: true, voice: pick.voice.id, displayName: pick.voice.displayName, reused: pick.reused });
   }));
 
   app.get('/api/deepgram/voices', asyncRoute(async (req: Request, res: Response) => {

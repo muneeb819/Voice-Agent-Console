@@ -17,6 +17,7 @@ const DEFAULT_NO_ANSWER_LINE = persona_1.FLOW_DEFAULTS.noAnswerLine;
 const campaign_assignment_1 = require("./campaign-assignment");
 const barge_in_1 = require("./barge-in");
 const sentinel_qa_1 = require("./sentinel-qa");
+const voice_pick_1 = require("./voice-pick");
 function normalizeFlow(raw) {
     const f = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
     const text = (v, fallback, max) => (typeof v === 'string' ? v : fallback).slice(0, max);
@@ -1025,6 +1026,7 @@ function normalizeState(raw) {
                     reasoning: (['low', 'medium', 'high'].includes(a.llm?.reasoning) ? a.llm.reasoning : 'low'),
                 },
                 tts: {
+                    voice: (0, voice_pick_1.isValidVoiceId)(a.tts?.voice) ? String(a.tts.voice).trim() : '',
                     speed: num(a.tts?.speed, 1.0, 0.5, 1.5),
                     // +1 by default: livelier pitch movement (intonation) on Flux voices.
                     expr: Math.round(num(a.tts?.expr, 1, -2, 2)),

@@ -75,6 +75,7 @@ export interface Agent {
     reasoning: 'low' | 'medium' | 'high';
   };
   tts: {
+    voice?: string;          // this bot's own voice; empty = use the global voice from Plug-Ins
     speed: number;
     expr: number;
     expressiveness?: number; // self-hosted Chatterbox: emotion intensity (exaggeration), 0.25-2
