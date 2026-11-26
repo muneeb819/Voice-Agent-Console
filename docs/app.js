@@ -2998,6 +2998,25 @@
   </div>`;
   }
 
+  // Voices a bot can pick from its own tab: the live catalog, women's voices first so a quick choice sounds right.
+  function botVoiceOptions(agent) {
+    const globalModel = S.services?.tts?.model || 'not selected';
+    const opts = [['', `Use global voice (${globalModel})`]];
+    const isDeepgram = globalServiceProvider('tts')?.type === 'deepgram';
+    if (!isDeepgram) return opts;
+    if (!voiceCatalog.loaded && !voiceCatalog.loading) {
+      ensureVoiceCatalogLoaded().then(() => {
+        if (voiceCatalog.loaded && tab === 'agents') render();
+      });
+    }
+    const list = (voiceCatalog.voices || []).filter((v) => v.primaryLanguage === 'en' || (v.languages || []).some((l) => /^en/i.test(l)));
+    list.sort((x, y) => Number(y.gender === 'feminine') - Number(x.gender === 'feminine') || String(x.displayName).localeCompare(String(y.displayName)));
+    for (const v of list) opts.push([v.id, `${v.displayName} · ${v.gender === 'feminine' ? 'female' : 'male'} · ${v.accent}`]);
+    const own = agent?.tts?.voice;
+    if (own && !opts.some((o) => o[0] === own)) opts.push([own, own]);
+    return opts;
+  }
+
   const renderSelectorBar = (kind) => {
     const arr = kind === 'a' ? S.agents : S.campaigns;
     const locked = sim.active || sim.connecting || sim.recordingSaving;
@@ -6386,7 +6405,10 @@
      </div>
 
      <h2>Text-to-Speech (Speak) <a class="g" href="${esc(sectionHref('voice', { agentId: a.id }))}" data-t="voice" style="font-size:11px;padding:3px 8px;text-transform:none"> Open Real Voice Lab →</a></h2>
-     <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · <code>${esc(S.services?.tts?.model || 'not selected')}</code> (Plug-Ins). Voice selection is global; per-bot speed/expression are not sent to Deepgram and were removed.</div>
+     <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · <code>${esc(S.services?.tts?.model || 'not selected')}</code> (Plug-Ins). Choose this bot's own voice below, or leave it on the global voice. Per-bot speed/expression are not sent to Deepgram and were removed.</div>
+     <div class="row">
+      ${F('Voice for this bot', 'a.tts.voice', 'sel', botVoiceOptions(a))}
+     </div>
 
      <h2>Telephony Audio Stream</h2>
      <div class="row">
@@ -9375,6 +9397,13 @@
         const clone = JSON.parse(JSON.stringify(currentObj));
         clone.id = uid('ag');
         clone.name = `${currentObj.name} (Copy)`;
+        // A copy should not sound like the original: ask for a female voice no other bot uses.
+        try {
+          const taken = arr.map((x) => x.tts?.voice || S.services?.tts?.model || '').filter(Boolean);
+          const r = await fetch('/api/voices/suggest?taken=' + encodeURIComponent(taken.join(',')));
+          const j = await r.json();
+          if (j && j.ok && j.voice && globalServiceProvider('tts')?.type === 'deepgram') clone.tts = { ...(clone.tts || {}), voice: j.voice };
+        } catch {}
         arr.push(clone);
         cur.a = clone.id;
         S.tests[clone.id] = JSON.parse(JSON.stringify(S.tests[currentObj.id] || []));

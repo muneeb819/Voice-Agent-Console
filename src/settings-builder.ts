@@ -3,6 +3,7 @@ import { getSecret } from './env-store';
 import { deepgramModelsForProviderType, VOICE_AGENT_STT_MODELS } from './defaults';
 import { composeOpening, localizeGreeting, openingInstruction } from './opening';
 import { composeBehavioralPrompt, callPromptReport } from './persona';
+import { voiceFitsProvider } from './voice-pick';
 import { campaignAgentIds, campaignExtension, campaignHasAgent, campaignSlot, phoneBotPool, primaryCampaignAgent } from './campaign-assignment';
 
 export function isPlainObject(val: unknown): val is Record<string, any> {
@@ -227,7 +228,10 @@ export function buildDeepgramSettings(
 
   // LLMs are Deepgram-managed only; do not expose per-plugin BYO endpoints to agents.
   // 3. Speak (TTS)
-  const selectedTtsModel = String(state.services?.tts?.model || '').trim();
+  // A bot's own voice wins when the chosen TTS provider can speak it; otherwise the global voice is used.
+  const botVoice = String(agent.tts?.voice || '').trim();
+  const selectedTtsModel =
+    botVoice && voiceFitsProvider(botVoice, tp.type || '') ? botVoice : String(state.services?.tts?.model || '').trim();
   const availableTtsModels = String(tp.models || '').split(',').map((entry) => entry.trim()).filter(Boolean);
   const isDeepgramVoice = tp.type === 'deepgram' && /^(flux|aura)-/i.test(selectedTtsModel);
   const isSpeechServiceVoice =
@@ -372,6 +376,13 @@ export function validateAgent(state: ConsoleState, agent: Agent): ValidationItem
   push(Boolean(sp), 'One global STT provider is selected in Plug-Ins');
   push(Boolean(lp), 'One global LLM provider is selected in Plug-Ins');
   push(Boolean(tp), 'One global TTS provider is selected in Plug-Ins');
+  const ownVoice = String(agent.tts?.voice || '').trim();
+  if (ownVoice) {
+    push(
+      voiceFitsProvider(ownVoice, tp?.type || ''),
+      `This bot's own voice "${ownVoice}" can be spoken by the selected TTS provider (otherwise the global voice is used)`
+    );
+  }
 
   // STT validations
   const isLocalStt = Boolean(sp && sp.type === 'speech_service');

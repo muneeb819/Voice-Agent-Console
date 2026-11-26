@@ -131,3 +131,10 @@ The Command deck shows an **Alerts** card when something needs attention: a fail
 - API: `GET /api/alerts`, `POST /api/alerts/ack` (`{"id": "..."}`, or `{}` for all).
 - Alerts are kept in `data/alerts.json` (newest 100). Credentials are removed from the text before it is stored.
 - Alerts are shown in the console only. Pushing them to WhatsApp, email or Telegram needs a channel and credentials from you.
+
+## Each bot can have its own voice
+
+Every bot has a **Voice for this bot** choice on its Agents tab. Left on "Use global voice", it speaks with the voice chosen in Plug-Ins. Picking a voice there changes only that bot, so several bots on one campaign can sound different.
+
+- **Duplicate** now gives the copy a female English voice that no other bot is using, so a copy never sounds like its original. When every suitable voice is already in use, the least-used one is reused.
+- If the saved voice cannot be spoken by the selected TTS provider, the call falls back to the global voice and the pre-flight check says so.
