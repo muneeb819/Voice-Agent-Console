@@ -7,6 +7,7 @@ exports.asyncRoute = asyncRoute;
 exports.createApp = createApp;
 exports.createServerWithSimulator = createServerWithSimulator;
 const bot_sleep_1 = require("./bot-sleep");
+const alerts_1 = require("./alerts");
 const usage_ledger_1 = require("./usage-ledger");
 const process_guards_1 = require("./process-guards");
 const voice_clone_1 = require("./voice-clone");
@@ -1015,6 +1016,14 @@ function createApp(viciBridge) {
         const requested = typeof req.query.days === 'string' ? Number(req.query.days) : 7;
         const days = Number.isFinite(requested) ? Math.max(1, Math.min(60, Math.floor(requested))) : 7;
         res.json({ ok: true, ...(0, usage_ledger_1.buildUsageReport)((0, usage_ledger_1.readLedger)(), undefined, days) });
+    });
+    app.get('/api/alerts', (_req, res) => {
+        res.json({ ok: true, ...(0, alerts_1.listAlerts)() });
+    });
+    app.post('/api/alerts/ack', (req, res) => {
+        const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+        const id = typeof body.id === 'string' && body.id ? body.id.slice(0, 40) : undefined;
+        res.json({ ok: true, changed: (0, alerts_1.acknowledgeAlerts)(id), ...(0, alerts_1.listAlerts)() });
     });
     app.get('/api/bot-sleep', (_req, res) => {
         res.json({ ok: true, ...(0, bot_sleep_1.getBotSleep)() });

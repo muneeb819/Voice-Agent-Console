@@ -1,4 +1,5 @@
 import { getBotSleep, setBotSleep } from './bot-sleep';
+import { acknowledgeAlerts, listAlerts } from './alerts';
 import { buildUsageReport, readLedger, reconcileOpenConnections } from './usage-ledger';
 import { installProcessGuards } from './process-guards';
 import {
@@ -1168,6 +1169,16 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     const requested = typeof req.query.days === 'string' ? Number(req.query.days) : 7;
     const days = Number.isFinite(requested) ? Math.max(1, Math.min(60, Math.floor(requested))) : 7;
     res.json({ ok: true, ...buildUsageReport(readLedger(), undefined, days) });
+  });
+
+  app.get('/api/alerts', (_req: Request, res: Response) => {
+    res.json({ ok: true, ...listAlerts() });
+  });
+
+  app.post('/api/alerts/ack', (req: Request, res: Response) => {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const id = typeof body.id === 'string' && body.id ? body.id.slice(0, 40) : undefined;
+    res.json({ ok: true, changed: acknowledgeAlerts(id), ...listAlerts() });
   });
 
   app.get('/api/bot-sleep', (_req: Request, res: Response) => {

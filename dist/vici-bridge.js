@@ -70,6 +70,7 @@ Object.defineProperty(exports, "callLimitWrapUpPrompt", { enumerable: true, get:
 const vici_sip_registration_1 = require("./vici-sip-registration");
 const bot_sleep_1 = require("./bot-sleep");
 const usage_ledger_1 = require("./usage-ledger");
+const alerts_1 = require("./alerts");
 const sip_refer_1 = require("./sip-refer");
 const screening_1 = require("./screening");
 const vici_client_1 = require("./vici-client");
@@ -845,6 +846,7 @@ class VicidialBridgeService {
                     if (this.isCampaignOverCapacity(resolvedForCap.campaign)) {
                         this.stats.rejectedOverCapacityCount += 1;
                         this.stats.lastError = `Campaign "${resolvedForCap.campaign?.name}" at maxCalls capacity (${resolvedForCap.campaign?.maxCalls})`;
+                        (0, alerts_1.raiseAlert)({ kind: 'call_rejected', title: `Campaign "${resolvedForCap.campaign?.name}" is full`, detail: this.stats.lastError, key: `call_rejected:${resolvedForCap.campaign?.id}` });
                         sendSipResponse('486 Busy Here', headers, toRaw, [], '', rinfo);
                         return;
                     }
@@ -1408,6 +1410,13 @@ class VicidialBridgeService {
                 addTranscript('system', `Transferred caller to ${transferredTo} (${detail})`);
             }
             else {
+                (0, alerts_1.raiseAlert)({
+                    kind: 'transfer_failed',
+                    severity: 'critical',
+                    title: `Transfer to ${xferTarget} failed`,
+                    detail: `A qualified caller could not be sent to the closer. ${detail || 'No reason given.'}`,
+                    key: `transfer_failed:${xferType}:${xferTarget}`,
+                });
                 // Apply campaign fallback (e.g. "Dispo CALLBK") so no qualified lead is dropped silently
                 const fallbackCodeMatch = /dispo\s+([A-Z0-9_]{2,6})/i.exec(campaign.fallback || '');
                 const fbCode = fallbackCodeMatch ? fallbackCodeMatch[1].toUpperCase() : 'CALLBK';
@@ -1792,6 +1801,7 @@ class VicidialBridgeService {
             if (!dgKey && !customAgentUrl) {
                 this.stats.lastError = 'Missing DEEPGRAM_API_KEY for live VICIdial call';
                 addTranscript('system', '✗ Missing DEEPGRAM_API_KEY — ending call');
+                (0, alerts_1.raiseAlert)({ kind: 'missing_key', severity: 'critical', title: 'Deepgram API key is missing', detail: 'Calls cannot start until a Deepgram key is set in API Keys.', key: 'missing_key:deepgram' });
                 await finalizeSession('missing_deepgram_key');
                 return;
             }
@@ -1869,6 +1879,16 @@ class VicidialBridgeService {
                 res.on('data', (c) => (body += c.toString()));
                 res.on('end', () => {
                     this.stats.lastError = `Deepgram HTTP ${res.statusCode}: ${body.slice(0, 180)}`;
+                    {
+                        const kind = (0, alerts_1.classifyProviderError)(`${res.statusCode} ${body}`);
+                        (0, alerts_1.raiseAlert)({
+                            kind,
+                            severity: 'critical',
+                            title: `Deepgram refused the connection (HTTP ${res.statusCode})`,
+                            detail: this.stats.lastError,
+                            key: `${kind}:http:${res.statusCode}`,
+                        });
+                    }
                     addTranscript('system', `✗ ${this.stats.lastError}`);
                     finalizeSession(`deepgram_http_${res.statusCode}`);
                 });
@@ -2162,6 +2182,16 @@ class VicidialBridgeService {
                     }
                     case 'Error': {
                         this.stats.lastError = `${evt.code || 'DG_ERROR'}: ${evt.description || JSON.stringify(evt)}`;
+                        {
+                            const kind = (0, alerts_1.classifyProviderError)(this.stats.lastError);
+                            (0, alerts_1.raiseAlert)({
+                                kind,
+                                severity: kind === 'llm_overload' ? 'warning' : 'critical',
+                                title: kind === 'llm_overload' ? 'Speech or AI provider is overloaded' : 'Speech or AI provider error',
+                                detail: this.stats.lastError,
+                                key: `${kind}:${evt.code || 'DG_ERROR'}`,
+                            });
+                        }
                         addTranscript('system', `✗ Deepgram Error: ${this.stats.lastError}`);
                         await finalizeSession('deepgram_error');
                         break;
@@ -2176,11 +2206,13 @@ class VicidialBridgeService {
             });
             dgWs.on('error', (err) => {
                 this.stats.lastError = err.message;
+                (0, alerts_1.raiseAlert)({ kind: 'provider_error', severity: 'critical', title: 'Deepgram connection error', detail: err.message, key: 'provider_error:ws' });
                 if (!closed)
                     finalizeSession('deepgram_ws_error').catch(() => { });
             });
         })().catch((err) => {
             this.stats.lastError = `Bridge session failed: ${err?.message || 'unknown error'}`;
+            (0, alerts_1.raiseAlert)({ kind: 'bridge_error', severity: 'critical', title: 'A call failed inside the bridge', detail: this.stats.lastError, key: 'bridge_error:session' });
             void finalizeSession('bridge_session_error').catch(() => { });
         });
         return {

@@ -123,3 +123,11 @@ Deepgram bills agent time for as long as a connection stays open, not only while
 - API: `GET /api/usage/report?days=7`.
 - Connections still open count as provisional time, a connection that crosses UTC midnight is split between the two days, and a connection left open by a crash is recovered from the last 30-second heartbeat and marked as estimated.
 - It counts from the moment this version is installed. Use it to check the total against Deepgram's own dashboard.
+
+## Alerts
+
+The Command deck shows an **Alerts** card when something needs attention: a failed closer transfer, a speech or AI provider that is overloaded or refusing the connection, a missing Deepgram key, a call that failed inside the bridge, or a campaign that is full. The same problem repeating within 10 minutes is shown once with a count (×N) and marked unread again. **Dismiss** or **Mark all read** clears the unread count.
+
+- API: `GET /api/alerts`, `POST /api/alerts/ack` (`{"id": "..."}`, or `{}` for all).
+- Alerts are kept in `data/alerts.json` (newest 100). Credentials are removed from the text before it is stored.
+- Alerts are shown in the console only. Pushing them to WhatsApp, email or Telegram needs a channel and credentials from you.
