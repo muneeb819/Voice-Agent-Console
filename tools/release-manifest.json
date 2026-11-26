@@ -336,6 +336,7 @@
   "tests/console-cleanup-verify.ts",
   "tests/help-popups-verify.ts",
   "tests/dialer-reports-verify.ts",
+  "tests/default-skills-verify.ts",
   "tests/diagnostics-verify.ts",
   "tests/process-guards-verify.ts",
   "tests/phone-bot-rotation-verify.ts",

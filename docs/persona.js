@@ -18,6 +18,25 @@
   const VOICE_DELIVERY_RESERVE = 2500;
   const MAX_CAMPAIGN_RULES = 8000;
 
+  // Default skills every bot carries: conversation craft, spoken delivery, and persona/voice consistency.
+  // One shared text so a new bot, a duplicated bot and a saved bot all behave the same. It is lower priority than
+  // the bot's own instructions and campaign rules: added only where it fits, and reported when it does not.
+  const DEFAULT_SKILLS_HEADER = '=== DEFAULT SKILLS (CONVERSATION CRAFT, SPOKEN DELIVERY, CONSISTENCY) ===';
+  const DEFAULT_SKILLS_TEXT = [
+    'Conversation craft:',
+    '- Sound like a warm, competent person on a phone: contractions, everyday words, one idea per sentence, 10 to 18 words. Never read lists or repeat the caller\'s whole sentence back; vary how your turns start.',
+    '- Fillers ("sure", "okay", "got it", "let me see") at most once per turn and often none; never stacked, never in the first line or in compliance wording. If you need a moment, say a short bridge such as "One moment while I check that" instead of going silent.',
+    '- Listen to how the caller sounds, not only the words: hesitation ("I guess", "maybe") means unsure, not yes, so make the next step smaller and confirm plainly. Two signs of frustration (short answers, "I already told you", sighing, interrupting) means stop the script, own any mistake once, and slow down. Match their energy one notch softer; stay steady and lower with an angry caller, never brighter.',
+    '- When the caller shares something personal (a loss, illness, money worries, being alone), reply as a person first in one sentence, then pause; never use it to sell. After a recent bereavement or hospital stay, offer to call another time.',
+    '- One question per turn, open before closed, built on their last answer: acknowledge, connect, ask. Remember what they told you (name, family, what they declined, corrections) and never ask the same thing twice; reuse their own words.',
+    '- Answer a question they ask before returning to your step. If they ask to be removed or say stop calling, comply at once, confirm politely and end the call. When you hand off, say exactly what happens next and how long it takes.',
+    'Spoken delivery:',
+    '- Write only what is meant to be heard: no markdown, bullets, brackets or emojis. Say numbers, dates, money and phone numbers the way a person would, and slow down for them by breaking them into short groups. Give the caller a second or two of silence before filling it, longer if they are thinking.',
+    '- Do not rush a hesitant or older caller and do not drag for a brisk one. End questions with a question mark and statements with a full stop so the voice rises and settles correctly.',
+    'Consistency:',
+    '- Stay the same person for the whole call: same name, same manner, same level of warmth, same way of speaking. Never describe your own voice or settings and never say you are reading a script.',
+  ].join('\n');
+
   const TONE_MAP = {
     warm_empathetic: 'Warm, caring, empathetic, and reassuring — sound genuinely attentive and natural.',
     energetic_upbeat: 'Bright, upbeat, friendly, and enthusiastic — speak with a natural smile in your voice.',
@@ -85,6 +104,7 @@
     // timing from the words and punctuation the bot writes, so these are
     // written as things the bot controls in its text.
     voiceDeliveryEnabled: true,
+    defaultSkillsEnabled: true,
     voiceDelivery: [
       'Intonation (rise and fall of pitch): end real questions with a question mark so your voice rises; end statements with a full stop so it settles. Put the most important word near the end of the sentence, where the voice naturally lands.',
       'Pace (speech rate): slow down for what matters (names, numbers, eligibility, the transfer) by breaking it into short phrases; keep small talk light and quicker. Match the caller: slower and clearer for older or confused callers.',
@@ -210,6 +230,8 @@
       ? ['', '=== VOICE DELIVERY (INTONATION, PACE, TONE, PHRASING, DURATION) ===', delivery]
       : [];
 
+    const skillsLines = fl.defaultSkillsEnabled !== false ? ['', DEFAULT_SKILLS_HEADER, DEFAULT_SKILLS_TEXT] : [];
+
     lines.push(...callFlowLines(agent));
 
     if (campaign) {
@@ -247,14 +269,22 @@
       ? [...lines.slice(0, deliveryAt), ...deliveryLines, ...lines.slice(deliveryAt)].join('\n').trim()
       : withoutDelivery;
     const deliveryFits = basePrompt.length + 1 + withDelivery.length <= MAX_PROMPT_LENGTH - VOICE_DELIVERY_RESERVE;
-    const suffix = deliveryFits ? withDelivery : withoutDelivery;
+    const afterDelivery = deliveryFits ? withDelivery : withoutDelivery;
+    // The default skills sit beside the delivery guidance and come after it in priority, so they never displace it.
+    // They go before the call-ending and integrity lines, which must stay last.
+    const withSkills = skillsLines.length
+      ? [...lines.slice(0, deliveryAt), ...(deliveryFits ? deliveryLines : []), ...skillsLines, ...lines.slice(deliveryAt)].join('\n').trim()
+      : afterDelivery;
+    const skillsFit = skillsLines.length > 0 && basePrompt.length + 1 + withSkills.length <= MAX_PROMPT_LENGTH - VOICE_DELIVERY_RESERVE;
+    const suffix = skillsFit ? withSkills : afterDelivery;
     const voiceDeliveryOmitted = deliveryLines.length > 0 && !deliveryFits;
-    if (!suffix) return { basePrompt, safeBase: basePrompt, suffix: '', prompt: basePrompt, voiceDeliveryOmitted };
+    const defaultSkillsOmitted = skillsLines.length > 0 && !skillsFit;
+    if (!suffix) return { basePrompt, safeBase: basePrompt, suffix: '', prompt: basePrompt, voiceDeliveryOmitted, defaultSkillsOmitted };
     const truncationNote = '\n[Agent prompt shortened to preserve the mandatory campaign rules below.]';
     const availableBaseLength = Math.max(0, MAX_PROMPT_LENGTH - suffix.length - 1 - truncationNote.length);
     const safeBase = basePrompt.slice(0, availableBaseLength);
     const note = basePrompt.length > safeBase.length ? truncationNote : '';
-    return { basePrompt, safeBase, suffix, prompt: `${safeBase}${note}\n${suffix}`.trim(), voiceDeliveryOmitted };
+    return { basePrompt, safeBase, suffix, prompt: `${safeBase}${note}\n${suffix}`.trim(), voiceDeliveryOmitted, defaultSkillsOmitted };
   }
 
   /**
@@ -292,6 +322,7 @@
       callWillFail: phoneChars > 25000,
       builtInChars: Math.max(0, parts.suffix.length - Math.min(rules.length, MAX_CAMPAIGN_RULES)),
       voiceDeliveryOmitted: Boolean(parts.voiceDeliveryOmitted),
+      defaultSkillsOmitted: Boolean(parts.defaultSkillsOmitted),
     };
   }
 
@@ -617,5 +648,7 @@
     MAX_CAMPAIGN_RULES,
     callPromptReport,
     FLOW_DEFAULTS,
+    DEFAULT_SKILLS_HEADER,
+    DEFAULT_SKILLS_TEXT,
   };
 });
