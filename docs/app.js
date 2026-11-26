@@ -2998,6 +2998,17 @@
   </div>`;
   }
 
+  // Same rule as the server's pickDistinctFemaleVoice: female English, Flux first, an unused one if any is left.
+  function pickFemaleVoiceFromCatalog(voices, taken) {
+    const family = (v) => (v.family === 'flux-v2' ? 0 : v.family === 'aura-2' ? 10 : 20) + (v.featured ? 0 : 5);
+    const list = voices
+      .filter((v) => v.gender === 'feminine' && (v.primaryLanguage === 'en' || (v.languages || []).some((l) => /^en/i.test(l))))
+      .sort((x, y) => family(x) - family(y) || String(x.id).localeCompare(String(y.id)));
+    if (!list.length) return '';
+    const uses = (id) => taken.filter((t) => t === id).length;
+    return (list.find((v) => !uses(v.id)) || [...list].sort((x, y) => uses(x.id) - uses(y.id))[0]).id;
+  }
+
   // Voices a bot can pick from its own tab: the live catalog, women's voices first so a quick choice sounds right.
   function botVoiceOptions(agent) {
     const globalModel = S.services?.tts?.model || 'not selected';
@@ -9398,12 +9409,23 @@
         clone.id = uid('ag');
         clone.name = `${currentObj.name} (Copy)`;
         // A copy should not sound like the original: ask for a female voice no other bot uses.
-        try {
+        if (globalServiceProvider('tts')?.type === 'deepgram') {
           const taken = arr.map((x) => x.tts?.voice || S.services?.tts?.model || '').filter(Boolean);
-          const r = await fetch('/api/voices/suggest?taken=' + encodeURIComponent(taken.join(',')));
-          const j = await r.json();
-          if (j && j.ok && j.voice && globalServiceProvider('tts')?.type === 'deepgram') clone.tts = { ...(clone.tts || {}), voice: j.voice };
-        } catch {}
+          let picked = '';
+          if (!serverlessCloudMode) {
+            try {
+              const r = await fetch('/api/voices/suggest?taken=' + encodeURIComponent(taken.join(',')));
+              const j = await r.json();
+              if (j && j.ok && j.voice) picked = j.voice;
+            } catch {}
+          }
+          if (!picked) {
+            // Static/serverless builds have no backend route: choose from the catalog file the page already loads.
+            await ensureVoiceCatalogLoaded();
+            picked = pickFemaleVoiceFromCatalog(voiceCatalog.voices || [], taken);
+          }
+          if (picked) clone.tts = { ...(clone.tts || {}), voice: picked };
+        }
         arr.push(clone);
         cur.a = clone.id;
         S.tests[clone.id] = JSON.parse(JSON.stringify(S.tests[currentObj.id] || []));

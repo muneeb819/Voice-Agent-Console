@@ -65,5 +65,6 @@ const server = fs.readFileSync(path.join(__dirname, '../src/server.ts'), 'utf8')
 const app = fs.readFileSync(path.join(__dirname, '../public/app.js'), 'utf8');
 assert(server.includes("'/api/voices/suggest'") && server.includes('pickDistinctFemaleVoice'), 'server exposes the voice suggestion');
 assert(app.includes("'a.tts.voice'") && app.includes('/api/voices/suggest'), 'console has the per-bot voice select and asks for a distinct voice on duplicate');
+assert(app.includes('pickFemaleVoiceFromCatalog') && app.includes('serverlessCloudMode'), 'static/serverless builds pick from the catalog file instead of the server route');
 
 console.log('voice-pick-verify: all checks passed');
