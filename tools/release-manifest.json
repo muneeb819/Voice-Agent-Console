@@ -332,6 +332,7 @@
   "tests/webhook-ssrf-verify.ts",
   "tests/dialplan-pattern-verify.ts",
   "tests/console-cleanup-verify.ts",
+  "tests/help-popups-verify.ts",
   "tests/diagnostics-verify.ts",
   "tests/process-guards-verify.ts",
   "tests/phone-bot-rotation-verify.ts",

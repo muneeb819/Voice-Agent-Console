@@ -4312,3 +4312,9 @@ label.vclone-file, :root[data-theme] label.vclone-file { text-transform: none !i
 .screen-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .screen-tbl th { text-align: left; font-weight: 600; opacity: .75; padding: 6px 8px; border-bottom: 1px solid var(--line, rgba(127,127,127,.25)); }
 .screen-tbl td { padding: 6px 8px; border-bottom: 1px solid var(--line, rgba(127,127,127,.15)); vertical-align: top; }
+
+/* ? help buttons next to each control */
+.help-btn { margin-left: 6px; width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid currentColor; background: transparent; color: inherit; font: 600 10px/1 inherit; opacity: .6; cursor: pointer; vertical-align: middle; }
+.help-btn:hover, .help-btn:focus-visible, .help-btn[aria-expanded="true"] { opacity: 1; }
+.help-pop { position: absolute; z-index: 1000; padding: 8px 10px; border-radius: 8px; background: #111827; color: #f9fafb; font-size: 12px; line-height: 1.4; box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+.help-pop[hidden] { display: none; }
