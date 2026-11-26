@@ -45,6 +45,7 @@ const vici_bridge_1 = require("./vici-bridge");
 const vici_client_1 = require("./vici-client");
 const vici_loopback_tester_1 = require("./vici-loopback-tester");
 const webhook_executor_1 = require("./webhook-executor");
+const own_agent_1 = require("./own-agent");
 const screening_1 = require("./screening");
 const user_store_1 = require("./user-store");
 const demo_tunnel_1 = require("./demo-tunnel");
@@ -1882,9 +1883,17 @@ function createServerWithSimulator(bridgeOpts) {
     const simWss = (0, live_simulator_1.attachLiveSimulator)(undefined, true);
     const monitorWss = viciBridge ? viciBridge.createMonitorWebSocketServer() : null;
     const listenWss = viciBridge ? viciBridge.createListenWebSocketServer() : null;
+    // The own voice engine (VOICE_ENGINE=own): the bridge connects here instead of to Deepgram. It is not a
+    // browser, so it is checked by a random per-process token on loopback instead of origin and sign-in.
+    const ownAgent = String(process.env.VOICE_ENGINE || '').toLowerCase() === 'own' ? (0, own_agent_1.createOwnAgentServer)() : null;
+    if (ownAgent)
+        server.ownAgentUrl = ownAgent.url;
+    server.on('close', () => ownAgent?.close());
     server.on('upgrade', (req, socket, head) => {
         socket.on('error', () => { });
         try {
+            if (ownAgent && ownAgent.handleUpgrade(req, socket, head))
+                return;
             if (!(0, request_origin_1.isSameOriginRequest)(req, app.get('trust proxy fn'))) {
                 socket.write('HTTP/1.1 403 Forbidden\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nForbidden');
                 socket.destroy();
@@ -1977,6 +1986,10 @@ if (require.main === module) {
                 onListening = () => {
                     server.removeListener('error', onError);
                     process.env.PORT = String(candidatePort);
+                    if (server.ownAgentUrl) {
+                        process.env.DEEPGRAM_AGENT_URL = server.ownAgentUrl(candidatePort);
+                        console.log('[VoiceAgentConsole] Own voice engine on: calls use your speech service and language model, not Deepgram.');
+                    }
                     console.log(`[VoiceAgentConsole] Server listening on ${bindHost}:${candidatePort}${debugMode ? ' [DEBUG MODE]' : ''}`);
                     if (debugMode) {
                         const currentState = (0, db_1.getConsoleState)();
