@@ -16,7 +16,7 @@ const settings_builder_1 = require("./settings-builder");
 const opening_1 = require("./opening");
 const persona_1 = require("./persona");
 const AGENT_FIELDS = ['name', 'mode', 'greeting', 'prompt', 'randomGreetingEnabled', 'flow', 'injectCampaignDisclosure', 'acceptViciCalls', 'language', 'behavior', 'stt', 'llm', 'audio', 'fnIds'];
-const CAMPAIGN_FIELDS = ['name', 'viciCampaign', 'lists', 'agentId', 'agentIds', 'start', 'end', 'tz', 'attempts', 'retry', 'maxCalls', 'maxCallSec', 'xferType', 'xferTarget', 'fallback', 'dnc', 'disclosure', 'dispos', 'complianceRules'];
+const CAMPAIGN_FIELDS = ['name', 'viciCampaign', 'lists', 'agentId', 'agentIds', 'start', 'end', 'tz', 'maxCalls', 'maxCallSec', 'xferType', 'xferTarget', 'fallback', 'dnc', 'disclosure', 'dispos', 'complianceRules'];
 const NAMES = {
     prompt: 'Bot instructions', greeting: 'Opening line', complianceRules: 'Campaign rules', name: 'Name', disclosure: 'Recording notice',
     maxCallSec: 'Max call length', dispos: 'Allowed call results', xferTarget: 'Transfer destination', xferType: 'Transfer type',

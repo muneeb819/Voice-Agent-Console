@@ -27,7 +27,7 @@ export interface SmokeResult {
 export interface RevisionSnapshot { id: number; saved_at: string; state: any }
 
 const AGENT_FIELDS = ['name', 'mode', 'greeting', 'prompt', 'randomGreetingEnabled', 'flow', 'injectCampaignDisclosure', 'acceptViciCalls', 'language', 'behavior', 'stt', 'llm', 'audio', 'fnIds'];
-const CAMPAIGN_FIELDS = ['name', 'viciCampaign', 'lists', 'agentId', 'agentIds', 'start', 'end', 'tz', 'attempts', 'retry', 'maxCalls', 'maxCallSec', 'xferType', 'xferTarget', 'fallback', 'dnc', 'disclosure', 'dispos', 'complianceRules'];
+const CAMPAIGN_FIELDS = ['name', 'viciCampaign', 'lists', 'agentId', 'agentIds', 'start', 'end', 'tz', 'maxCalls', 'maxCallSec', 'xferType', 'xferTarget', 'fallback', 'dnc', 'disclosure', 'dispos', 'complianceRules'];
 const NAMES: Record<string, string> = {
   prompt: 'Bot instructions', greeting: 'Opening line', complianceRules: 'Campaign rules', name: 'Name', disclosure: 'Recording notice',
   maxCallSec: 'Max call length', dispos: 'Allowed call results', xferTarget: 'Transfer destination', xferType: 'Transfer type',

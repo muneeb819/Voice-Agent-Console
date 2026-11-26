@@ -616,12 +616,12 @@
   };
   const NAV_ITEMS = [
     { key: 'dashboard', icon: 'dashboard', label: 'Dashboard', sub: 'Executive Command & Overview', group: 'Overview' },
-    { key: 'agents', icon: 'agents', label: 'Agents', sub: 'Personas, Speed & Barge-In', group: 'Studio Builder' },
+    { key: 'agents', icon: 'agents', label: 'Agents', sub: 'Personas, voice & barge-in', group: 'Studio Builder' },
     { key: 'plugins', icon: 'plugins', label: 'Plug-ins', sub: 'STT, Deepgram LLMs & TTS', group: 'Studio Builder' },
     { key: 'campaigns', icon: 'campaigns', label: 'Campaigns', sub: 'Dialer Rules & Transfers', group: 'Studio Builder' },
-    { key: 'voice', icon: 'voice', label: 'Voice Lab', sub: '139 Flux v2 & Aura Voices', group: 'Studio Builder' },
+    { key: 'voice', icon: 'voice', label: 'Voice Lab', sub: 'Flux v2 & Aura voices, cloning later', group: 'Studio Builder' },
     { key: 'test', icon: 'test', label: 'Live Bot', sub: 'Browser voice test', group: 'Live & Operations' },
-    { key: 'vici', icon: 'vici', label: 'Vici Bridge', sub: 'SIP:5062 & AudioSocket', group: 'Live & Operations' },
+    { key: 'vici', icon: 'vici', label: 'Vici Bridge', sub: 'SIP & AudioSocket', group: 'Live & Operations' },
     { key: 'wallboard', icon: 'wallboard', label: 'Wallboard', sub: 'KPIs & Stereo Recordings', group: 'Live & Operations' },
     { key: 'export', icon: 'export', label: 'Export', sub: 'Settings JSON & Backup', group: 'Live & Operations' },
   ];
@@ -6144,7 +6144,8 @@
     const recSecs = vclone.recording ? Math.round((Date.now() - vclone.recStart) / 1000) : 0;
     const isEleven = vclone.provider === 'elevenlabs';
     return `<div class="card vclone" id="vclone">
-     <h2>Voice Cloning</h2>
+     <h2>Voice Cloning <span class="pill">Later · optional</span></h2>
+     <div class="note">Cloning is not needed to go live: the bots work with the ready-made voices above. Use it later, and only with the speaker's written consent.</div>
      <div class="note">Create a voice from a short recording of a real person — <b>only with their permission</b>. A consent record is kept for every voice.</div>
      <div class="vclone-grid">
       <div class="vclone-form">
@@ -6441,7 +6442,7 @@
      </div>
 
      <h2>Text-to-Speech (Speak) <a class="g" href="${esc(sectionHref('voice', { agentId: a.id }))}" data-t="voice" style="font-size:11px;padding:3px 8px;text-transform:none"> Open Real Voice Lab →</a></h2>
-     <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · <code>${esc(S.services?.tts?.model || 'not selected')}</code> (Plug-Ins). Choose this bot's own voice below, or leave it on the global voice. Per-bot speed/expression are not sent to Deepgram and were removed.</div>
+     <div class="note">Global TTS: <b>${esc(tp.name || 'Not selected')}</b> · <code>${esc(S.services?.tts?.model || 'not selected')}</code> (Plug-Ins). Choose this bot's own voice below, or leave it on the global voice. Speed and expressivity apply to Flux voices only; Aura voices ignore them.</div>
      <div class="row">
       ${F('Voice for this bot', 'a.tts.voice', 'sel', botVoiceOptions(a))}
      </div>
@@ -6505,16 +6506,14 @@
      ${renderCampaignAgentAssignment(C())}
      <div class="row">
       ${F('VICIdial Campaign ID', 'c.viciCampaign')}
-      ${F('VICIdial List IDs', 'c.lists')}
+      ${F('VICIdial List IDs (for reference: VICIdial decides which lists dial)', 'c.lists')}
      </div>
      <div class="row">
-      ${F('Calling window start', 'c.start', 'time')}
-      ${F('Calling window end', 'c.end', 'time')}
+      ${F('Calling window start (for reference: set the real call times in VICIdial)', 'c.start', 'time')}
+      ${F('Calling window end (for reference)', 'c.end', 'time')}
      </div>
      ${F('Lead Timezone', 'c.tz')}
-     <div class="row r3">
-      ${F('Max dial attempts', 'c.attempts', 'number', [], 'min="1" max="20" step="1"')}
-      ${F('Retry delay (min)', 'c.retry', 'number', [], 'min="1" step="1"')}
+     <div class="row">
       ${F('Max concurrent AI calls', 'c.maxCalls', 'number', [], 'min="1" step="1"')}
      </div>
      <div class="row">
@@ -6537,7 +6536,7 @@
      <div id="rules-reach">${renderRulesReachMeter(C())}</div>
      ${F('Allowed VICIdial disposition codes for this campaign (comma-separated)', 'c.dispos')}
      <div class="note">These codes control explicit agent disposition requests. Caller silence does not select a code or end the call.</div>
-     ${F('Scrub leads against DNC list before dialing', 'c.dnc', 'chk')}
+     ${F('Add the caller to the VICIdial DNC list when the bot records a Do-Not-Call result', 'c.dnc', 'chk')}
     </div>
     <div class="card sticky">
      <h2>Campaign Readiness</h2>
@@ -7160,7 +7159,7 @@
 
      <h2>Telephony Media &amp; Control Transport (Both Listeners Run Simultaneously)</h2>
      ${F('Primary Dialplan Mode Highlighted in Export', 'v.transport', 'sel', [
-       ['sip_trunk', 'SIP + RTP G.711 μ-law Peer (:5062 — Works on ALL ViciBox / Asterisk 13, 16, 18+)'],
+       ['sip_trunk', 'SIP + RTP G.711 μ-law peer (on the bridge SIP port)'],
        ['audiosocket', 'Asterisk AudioSocket TCP (:9092 — Native Asterisk 18+ / ViciBox 11-12)'],
      ])}
      <div class="row r3">
@@ -8069,7 +8068,7 @@
       ['AMI_SECRET', 'Asterisk AMI Secret (cron pass in /etc/asterisk/manager.conf)'],
       ['CUSTOM_WEBHOOK_SECRET', 'Custom CRM / Webhook Secret (usable as {{CUSTOM_WEBHOOK_SECRET}} in Function headers)'],
       ['ADMIN_PASSWORD', 'Console Admin Password (Step 4 — locks:533 Web UI & WebSockets while keeping local Asterisk whitelisted)'],
-      ['BRIDGE_ALLOWED_IPS', 'Allowed Asterisk IPs/CIDRs for SIP:5062 & AudioSocket:9092 (e.g. 10.0.0.0/8,192.168.1.50)'],
+      ['BRIDGE_ALLOWED_IPS', 'Allowed Asterisk IPs/CIDRs for the SIP and AudioSocket listeners (e.g. 10.0.0.0/8,192.168.1.50)'],
     ];
 
     form.innerHTML = keySpecs
@@ -9492,8 +9491,6 @@
           start: '09:00',
           end: '20:00',
           tz: 'America/New_York',
-          attempts: 3,
-          retry: 120,
           maxCalls: 10,
           maxCallSec: 70,
           xferType: 'ingroup',
