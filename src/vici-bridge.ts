@@ -844,7 +844,10 @@ export class VicidialBridgeService {
       const raw = msgBuf.toString('utf8');
       const { startLine, headers, body } = parseSipMessage(raw);
       if (startLine && startLine.startsWith('SIP/2.0')) {
-        referTracker.handleResponse(firstHeader(headers, 'call-id', 'i').slice(0, 256), firstHeader(headers, 'cseq'), startLine);
+        // Only a trusted peer may answer a pending REFER.
+        if (isBridgePeerIpAllowed(rinfo.address)) {
+          referTracker.handleResponse(firstHeader(headers, 'call-id', 'i').slice(0, 256), firstHeader(headers, 'cseq'), startLine);
+        }
         return;
       }
       if (!startLine) return;
@@ -887,6 +890,7 @@ export class VicidialBridgeService {
         // Progress of a REFER we sent (Event: refer, sipfrag body). Acknowledge so the dialer stops retrying.
         const dlg = dialogs.get(callId);
         sendSipResponse('200 OK', headers, dlg?.localToHeaderWithTag || toRaw, [], '', rinfo);
+        referTracker.handleNotify(callId, body);
         return;
       }
 

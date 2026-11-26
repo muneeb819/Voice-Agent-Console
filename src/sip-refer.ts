@@ -89,65 +89,113 @@ export function referOutcome(status: number): 'pending' | 'accepted' | 'failed' 
   return 'failed';
 }
 
-/** Matches REFER responses to the waiting transfer. One tracker per SIP socket. */
+/** Final status of a REFER, taken from the sipfrag body of a NOTIFY (Event: refer). */
+export function parseSipfragStatus(body: string): { status: number; reason: string } | null {
+  const line = String(body || '').split(/\r?\n/).find((l) => /^SIP\/2\.0\s+\d{3}/i.test(l.trim()));
+  return line ? parseSipResponseLine(line) : null;
+}
+
+interface PendingRefer {
+  settle: (result: ReferResult) => void;
+  /** True once the dialer answered 2xx; the transfer outcome then comes in a NOTIFY. */
+  accepted: boolean;
+  /** Called when the 2xx arrives, to start the wait for the final NOTIFY. */
+  armNotifyWait: () => void;
+}
+
+/**
+ * Matches REFER responses and NOTIFYs to the waiting transfer. One tracker per SIP socket.
+ * A 2xx to REFER only means "request accepted"; the transfer has succeeded only when a
+ * NOTIFY reports a final 2xx (or the dialer releases our leg after accepting).
+ */
 export class ReferTracker {
-  private readonly pending = new Map<string, (result: ReferResult) => void>();
+  private readonly pending = new Map<string, PendingRefer>();
 
   private key(callId: string, cseq: number): string {
     return `${callId}|${cseq}`;
   }
 
-  /**
-   * Resolves with the dialer's answer, or a failure when none arrives in time.
-   * `send` is called once immediately and once more after `retryMs` if there is
-   * still no answer, because the request travels over UDP.
-   */
-  wait(callId: string, cseq: number, send: () => void, timeoutMs = 5000, retryMs = 1000): Promise<ReferResult> {
+  wait(callId: string, cseq: number, send: () => void, timeoutMs = 5000, retryMs = 1000, notifyTimeoutMs = 8000): Promise<ReferResult> {
     const key = this.key(callId, cseq);
     return new Promise<ReferResult>((resolve) => {
       let retryTimer: NodeJS.Timeout | null = null;
       let timeoutTimer: NodeJS.Timeout | null = null;
-      const finish = (result: ReferResult) => {
+      const settle = (result: ReferResult) => {
         if (retryTimer) clearTimeout(retryTimer);
         if (timeoutTimer) clearTimeout(timeoutTimer);
         this.pending.delete(key);
         resolve(result);
       };
-      this.pending.set(key, finish);
+      const entry: PendingRefer = {
+        settle,
+        accepted: false,
+        armNotifyWait: () => {
+          if (retryTimer) clearTimeout(retryTimer);
+          if (timeoutTimer) clearTimeout(timeoutTimer);
+          timeoutTimer = setTimeout(
+            () => settle({ ok: false, message: 'REFER accepted but the dialer never reported the transfer result' }),
+            notifyTimeoutMs
+          );
+        },
+      };
+      this.pending.set(key, entry);
       try {
         send();
       } catch (err: any) {
-        finish({ ok: false, message: `REFER could not be sent: ${err?.message || 'unknown error'}` });
+        settle({ ok: false, message: `REFER could not be sent: ${err?.message || 'unknown error'}` });
         return;
       }
       retryTimer = setTimeout(() => {
-        if (!this.pending.has(key)) return;
+        if (!this.pending.has(key) || entry.accepted) return;
         try { send(); } catch {}
       }, retryMs);
-      timeoutTimer = setTimeout(() => finish({ ok: false, message: 'REFER timed out: no answer from the dialer' }), timeoutMs);
+      timeoutTimer = setTimeout(() => settle({ ok: false, message: 'REFER timed out: no answer from the dialer' }), timeoutMs);
     });
   }
 
-  /** Feed every SIP response the socket receives; returns true when it belonged to a waiting REFER. */
+  /** Feed every SIP response from a trusted peer; returns true when it belonged to a waiting REFER. */
   handleResponse(callId: string, cseqHeader: string, startLine: string): boolean {
     const cseq = parseCseqHeader(cseqHeader);
     const status = parseSipResponseLine(startLine);
     if (!cseq || !status || cseq.method !== 'REFER') return false;
-    const finish = this.pending.get(this.key(callId, cseq.num));
-    if (!finish) return false;
+    const entry = this.pending.get(this.key(callId, cseq.num));
+    if (!entry) return false;
     const outcome = referOutcome(status.status);
     if (outcome === 'pending') return true;
-    finish({
-      ok: outcome === 'accepted',
-      message: `${status.status} ${status.reason}`.trim(),
-    });
+    if (outcome === 'failed') {
+      entry.settle({ ok: false, message: `${status.status} ${status.reason}`.trim() });
+      return true;
+    }
+    if (!entry.accepted) {
+      entry.accepted = true;
+      entry.armNotifyWait();
+    }
     return true;
   }
 
-  /** Drops a waiting REFER when its call ends. */
+  /** Feed a NOTIFY (Event: refer) body; a final status settles the transfer. */
+  handleNotify(callId: string, body: string): boolean {
+    const frag = parseSipfragStatus(body);
+    if (!frag) return false;
+    for (const [key, entry] of Array.from(this.pending.entries())) {
+      if (!key.startsWith(`${callId}|`) || !entry.accepted) continue;
+      const outcome = referOutcome(frag.status);
+      if (outcome === 'pending') return true;
+      entry.settle({ ok: outcome === 'accepted', message: `transfer ${frag.status} ${frag.reason}`.trim() });
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Called when the call ends. If the dialer had accepted the REFER, it released our leg
+   * to complete the transfer, which counts as success; otherwise the wait fails.
+   */
   cancel(callId: string, reason = 'call ended before the dialer answered the REFER'): void {
-    for (const [key, finish] of Array.from(this.pending.entries())) {
-      if (key.startsWith(`${callId}|`)) finish({ ok: false, message: reason });
+    for (const [key, entry] of Array.from(this.pending.entries())) {
+      if (!key.startsWith(`${callId}|`)) continue;
+      if (entry.accepted) entry.settle({ ok: true, message: 'dialer released the call after accepting the REFER' });
+      else entry.settle({ ok: false, message: reason });
     }
   }
 }

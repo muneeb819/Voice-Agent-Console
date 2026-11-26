@@ -51,9 +51,38 @@ async function main() {
   const accepted = tracker.wait('c1', 2, () => { sends += 1; }, 2000, 500);
   assert(tracker.handleResponse('c1', '2 REFER', 'SIP/2.0 100 Trying') === true, '100 consumed');
   assert(tracker.handleResponse('c1', '2 REFER', 'SIP/2.0 202 Accepted') === true, '202 consumed');
+  let settled = false;
+  accepted.then(() => { settled = true; });
+  await new Promise((r) => setTimeout(r, 50));
+  assert(!settled, '202 alone must not report success');
+  tracker.handleNotify('c1', 'SIP/2.0 100 Trying\r\n');
+  await new Promise((r) => setTimeout(r, 20));
+  assert(!settled, 'provisional NOTIFY must not settle');
+  tracker.handleNotify('c1', 'SIP/2.0 200 OK\r\n');
   const okRes = await accepted;
-  assert(okRes.ok && okRes.message.startsWith('202'), 'accepted result');
+  assert(okRes.ok && /200/.test(okRes.message), 'final NOTIFY 200 settles success');
   assert(sends === 1, 'sent once when answered fast');
+
+  // Accepted, then the transfer itself fails
+  const failedXfer = tracker.wait('c5', 6, () => {}, 2000, 500, 2000);
+  tracker.handleResponse('c5', '6 REFER', 'SIP/2.0 202 Accepted');
+  tracker.handleNotify('c5', 'SIP/2.0 503 Service Unavailable\r\n');
+  const fx = await failedXfer;
+  assert(!fx.ok && /503/.test(fx.message), 'failed NOTIFY reports failure');
+
+  // Accepted, then dialer hangs up our leg = transfer completed
+  const released = tracker.wait('c6', 7, () => {}, 2000, 500, 2000);
+  tracker.handleResponse('c6', '7 REFER', 'SIP/2.0 202 Accepted');
+  tracker.cancel('c6');
+  assert((await released).ok, 'BYE after 202 counts as transferred');
+
+  // Accepted but no result ever arrives
+  const silent = await (async () => {
+    const w = tracker.wait('c7', 8, () => {}, 2000, 500, 200);
+    tracker.handleResponse('c7', '8 REFER', 'SIP/2.0 202 Accepted');
+    return w;
+  })();
+  assert(!silent.ok && /never reported/.test(silent.message), 'missing NOTIFY fails');
 
   // Tracker: refusal
   const refused = tracker.wait('c2', 3, () => {}, 2000, 500);

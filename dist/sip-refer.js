@@ -9,6 +9,7 @@ exports.buildReferRequest = buildReferRequest;
 exports.parseSipResponseLine = parseSipResponseLine;
 exports.parseCseqHeader = parseCseqHeader;
 exports.referOutcome = referOutcome;
+exports.parseSipfragStatus = parseSipfragStatus;
 const crypto_1 = __importDefault(require("crypto"));
 /** Dialplan extensions are digits, letters and a few symbols; anything else could inject SIP headers. */
 function sanitizeReferTarget(raw) {
@@ -67,23 +68,27 @@ function referOutcome(status) {
         return 'accepted';
     return 'failed';
 }
-/** Matches REFER responses to the waiting transfer. One tracker per SIP socket. */
+/** Final status of a REFER, taken from the sipfrag body of a NOTIFY (Event: refer). */
+function parseSipfragStatus(body) {
+    const line = String(body || '').split(/\r?\n/).find((l) => /^SIP\/2\.0\s+\d{3}/i.test(l.trim()));
+    return line ? parseSipResponseLine(line) : null;
+}
+/**
+ * Matches REFER responses and NOTIFYs to the waiting transfer. One tracker per SIP socket.
+ * A 2xx to REFER only means "request accepted"; the transfer has succeeded only when a
+ * NOTIFY reports a final 2xx (or the dialer releases our leg after accepting).
+ */
 class ReferTracker {
     pending = new Map();
     key(callId, cseq) {
         return `${callId}|${cseq}`;
     }
-    /**
-     * Resolves with the dialer's answer, or a failure when none arrives in time.
-     * `send` is called once immediately and once more after `retryMs` if there is
-     * still no answer, because the request travels over UDP.
-     */
-    wait(callId, cseq, send, timeoutMs = 5000, retryMs = 1000) {
+    wait(callId, cseq, send, timeoutMs = 5000, retryMs = 1000, notifyTimeoutMs = 8000) {
         const key = this.key(callId, cseq);
         return new Promise((resolve) => {
             let retryTimer = null;
             let timeoutTimer = null;
-            const finish = (result) => {
+            const settle = (result) => {
                 if (retryTimer)
                     clearTimeout(retryTimer);
                 if (timeoutTimer)
@@ -91,48 +96,86 @@ class ReferTracker {
                 this.pending.delete(key);
                 resolve(result);
             };
-            this.pending.set(key, finish);
+            const entry = {
+                settle,
+                accepted: false,
+                armNotifyWait: () => {
+                    if (retryTimer)
+                        clearTimeout(retryTimer);
+                    if (timeoutTimer)
+                        clearTimeout(timeoutTimer);
+                    timeoutTimer = setTimeout(() => settle({ ok: false, message: 'REFER accepted but the dialer never reported the transfer result' }), notifyTimeoutMs);
+                },
+            };
+            this.pending.set(key, entry);
             try {
                 send();
             }
             catch (err) {
-                finish({ ok: false, message: `REFER could not be sent: ${err?.message || 'unknown error'}` });
+                settle({ ok: false, message: `REFER could not be sent: ${err?.message || 'unknown error'}` });
                 return;
             }
             retryTimer = setTimeout(() => {
-                if (!this.pending.has(key))
+                if (!this.pending.has(key) || entry.accepted)
                     return;
                 try {
                     send();
                 }
                 catch { }
             }, retryMs);
-            timeoutTimer = setTimeout(() => finish({ ok: false, message: 'REFER timed out: no answer from the dialer' }), timeoutMs);
+            timeoutTimer = setTimeout(() => settle({ ok: false, message: 'REFER timed out: no answer from the dialer' }), timeoutMs);
         });
     }
-    /** Feed every SIP response the socket receives; returns true when it belonged to a waiting REFER. */
+    /** Feed every SIP response from a trusted peer; returns true when it belonged to a waiting REFER. */
     handleResponse(callId, cseqHeader, startLine) {
         const cseq = parseCseqHeader(cseqHeader);
         const status = parseSipResponseLine(startLine);
         if (!cseq || !status || cseq.method !== 'REFER')
             return false;
-        const finish = this.pending.get(this.key(callId, cseq.num));
-        if (!finish)
+        const entry = this.pending.get(this.key(callId, cseq.num));
+        if (!entry)
             return false;
         const outcome = referOutcome(status.status);
         if (outcome === 'pending')
             return true;
-        finish({
-            ok: outcome === 'accepted',
-            message: `${status.status} ${status.reason}`.trim(),
-        });
+        if (outcome === 'failed') {
+            entry.settle({ ok: false, message: `${status.status} ${status.reason}`.trim() });
+            return true;
+        }
+        if (!entry.accepted) {
+            entry.accepted = true;
+            entry.armNotifyWait();
+        }
         return true;
     }
-    /** Drops a waiting REFER when its call ends. */
+    /** Feed a NOTIFY (Event: refer) body; a final status settles the transfer. */
+    handleNotify(callId, body) {
+        const frag = parseSipfragStatus(body);
+        if (!frag)
+            return false;
+        for (const [key, entry] of Array.from(this.pending.entries())) {
+            if (!key.startsWith(`${callId}|`) || !entry.accepted)
+                continue;
+            const outcome = referOutcome(frag.status);
+            if (outcome === 'pending')
+                return true;
+            entry.settle({ ok: outcome === 'accepted', message: `transfer ${frag.status} ${frag.reason}`.trim() });
+            return true;
+        }
+        return false;
+    }
+    /**
+     * Called when the call ends. If the dialer had accepted the REFER, it released our leg
+     * to complete the transfer, which counts as success; otherwise the wait fails.
+     */
     cancel(callId, reason = 'call ended before the dialer answered the REFER') {
-        for (const [key, finish] of Array.from(this.pending.entries())) {
-            if (key.startsWith(`${callId}|`))
-                finish({ ok: false, message: reason });
+        for (const [key, entry] of Array.from(this.pending.entries())) {
+            if (!key.startsWith(`${callId}|`))
+                continue;
+            if (entry.accepted)
+                entry.settle({ ok: true, message: 'dialer released the call after accepting the REFER' });
+            else
+                entry.settle({ ok: false, message: reason });
         }
     }
 }
