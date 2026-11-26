@@ -55,6 +55,10 @@ export interface DiagnosticInputs {
     ami(): Promise<ProbeResult>;
     disk(): Promise<DiskResult>;
   };
+  /** True when the console runs its own voice engine (VOICE_ENGINE=own) instead of Deepgram's Voice Agent. */
+  ownEngine?: boolean;
+  /** Set when OWN_LLM_BASE_URL points the thinking step at your own server. */
+  ownLlmUrl?: boolean;
   now?: () => number;
   /** How long any one probe may take before it counts as unanswered. */
   probeTimeoutMs?: number;
@@ -129,19 +133,45 @@ export async function runDiagnostics(input: DiagnosticInputs): Promise<Diagnosti
   const findings: DiagnosticFinding[] = [];
   const add = (f: DiagnosticFinding) => findings.push(f);
 
+  const own = Boolean(input.ownEngine);
   const hasDeepgramKey = Boolean(secrets.DEEPGRAM_API_KEY?.configured);
   const viciUrl = String(state.vici?.viciBaseUrl || '').trim();
   const amiConfigured = Boolean(String(state.vici?.amiHost || '').trim() && String(state.vici?.amiUser || '').trim());
 
   // Slow checks run side by side so the whole scan takes as long as the slowest one, not the sum.
   const [dg, api, ami, disk] = await Promise.all([
-    hasDeepgramKey ? bounded(probes.deepgram, { ok: false, detail: 'No answer from Deepgram within 6 seconds' }, limit) : Promise.resolve(null),
+    hasDeepgramKey && !own ? bounded(probes.deepgram, { ok: false, detail: 'No answer from Deepgram within 6 seconds' }, limit) : Promise.resolve(null),
     viciUrl ? bounded(probes.viciApi, { ok: false, detail: 'No answer from the dialer web server within 6 seconds' }, limit) : Promise.resolve(null),
     amiConfigured ? bounded(probes.ami, { ok: false, detail: 'No answer on the AMI port within 6 seconds' }, limit) : Promise.resolve(null),
     bounded(probes.disk, { writable: false, freeBytes: null } as DiskResult, limit),
   ]);
 
+  if (own) {
+    const svc = state.services;
+    const provOf = (kind: 'stt' | 'tts' | 'llm', id?: string) => state.providers.find((p) => p.kind === kind && p.id === id);
+    const stt = provOf('stt', svc?.stt?.providerId);
+    const tts = provOf('tts', svc?.tts?.providerId);
+    const llm = provOf('llm', svc?.llm?.providerId);
+    const problems: string[] = [];
+    if (!stt || stt.type !== 'speech_service') problems.push('listening is not set to your speech service');
+    if (!tts || tts.type !== 'speech_service') problems.push('the voice is not a self-hosted voice');
+    if (!input.ownLlmUrl) {
+      const key = llm?.type === 'groq' ? 'GROQ_API_KEY' : llm?.type === 'open_ai' ? 'OPENAI_API_KEY' : '';
+      if (!key) problems.push('the thinking model must be OpenAI or Groq (or set OWN_LLM_BASE_URL)');
+      else if (!secrets[key]?.configured) problems.push(`${key} is not saved`);
+    }
+    add(
+      problems.length
+        ? { id: 'engine.own', area: 'Setup', title: 'Own voice engine is ready', status: 'fail', detail: `The console runs its own voice engine, but ${problems.join('; ')}. Calls would end at once.`, suggestion: 'Fix these in Plug-ins and API Keys, or remove VOICE_ENGINE=own to go back to Deepgram.' }
+        : { id: 'engine.own', area: 'Setup', title: 'Own voice engine is ready', status: 'ok', detail: 'Calls use your speech service and your language model. Deepgram is not used.', suggestion: '' }
+    );
+  }
+
   // Keys
+  if (own) {
+    add({ id: 'keys.deepgram', area: 'Keys', title: 'Deepgram key saved', status: 'skipped', detail: 'Not needed: the own voice engine is on.', suggestion: '' });
+    add({ id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'skipped', detail: 'Not needed: the own voice engine is on.', suggestion: '' });
+  } else {
   add(
     hasDeepgramKey
       ? { id: 'keys.deepgram', area: 'Keys', title: 'Deepgram key saved', status: 'ok', detail: 'A Deepgram key is configured.', suggestion: '' }
@@ -155,6 +185,7 @@ export async function runDiagnostics(input: DiagnosticInputs): Promise<Diagnosti
     );
   } else {
     add({ id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'skipped', detail: 'Skipped because no key is saved.', suggestion: '' });
+  }
   }
 
   // Bots

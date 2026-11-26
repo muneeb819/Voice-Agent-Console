@@ -1098,6 +1098,8 @@ function createApp(viciBridge) {
             bridge: viciBridge ? viciBridge.getStatus() : null,
             botSleep: (0, bot_sleep_1.getBotSleep)(),
             alerts: (0, alerts_1.listAlerts)().alerts,
+            ownEngine: String(process.env.VOICE_ENGINE || '').toLowerCase() === 'own',
+            ownLlmUrl: Boolean(String(process.env.OWN_LLM_BASE_URL || '').trim()),
             probes: {
                 deepgram: () => (0, diagnostics_1.probeDeepgramKey)((0, env_store_1.getSecret)('DEEPGRAM_API_KEY')),
                 viciApi: async () => {

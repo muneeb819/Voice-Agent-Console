@@ -130,5 +130,33 @@ function alert(over: Partial<AlertRecord>): AlertRecord {
   assert(server.includes("'/api/diagnostics'") && server.includes('runDiagnostics('), 'server exposes the scan');
   assert(app.includes('btn-run-scan') && app.includes('/api/diagnostics'), 'Command deck has the scan button');
 
+  // Own voice engine: Deepgram rows are skipped and readiness is judged on the speech service and the model.
+  {
+    let dgCalled = false;
+    const mk = (over: Partial<DiagnosticInputs> = {}) => {
+      const b = base({ secrets: { OPENAI_API_KEY: { configured: true } }, ownEngine: true, probes: { ...base().probes, deepgram: async () => { dgCalled = true; return { ok: true, detail: '' }; } }, ...over });
+      return b;
+    };
+    const notReady = await runDiagnostics(mk());
+    assert.equal(find(notReady, 'keys.deepgram').status, 'skipped');
+    assert(!dgCalled, 'Deepgram is not contacted in own mode');
+    assert.equal(find(notReady, 'engine.own').status, 'fail', 'default providers are Deepgram, so own mode is not ready');
+    assert(/listening|voice/.test(find(notReady, 'engine.own').detail));
+    const ready = mk();
+    const st = ready.state as any;
+    const stt = st.providers.find((p: any) => p.kind === 'stt' && p.type === 'speech_service');
+    const tts = st.providers.find((p: any) => p.kind === 'tts' && p.type === 'speech_service');
+    if (stt && tts) {
+      st.services.stt = { providerId: stt.id, model: stt.model || 'whisper' };
+      st.services.tts = { providerId: tts.id, model: 'af_heart' };
+      const llm = st.providers.find((p: any) => p.kind === 'llm' && p.type === 'open_ai');
+      if (llm) st.services.llm = { providerId: llm.id, model: 'gpt-4o-mini' };
+      assert.equal(find(await runDiagnostics(ready), 'engine.own').status, 'ok', 'ready when speech service + OpenAI key');
+      const noLlmKey = await runDiagnostics({ ...ready, secrets: {} });
+      assert(/OPENAI_API_KEY/.test(find(noLlmKey, 'engine.own').detail));
+      assert.equal(find(await runDiagnostics({ ...ready, secrets: {}, ownLlmUrl: true }), 'engine.own').status, 'ok', 'own LLM server needs no key');
+    }
+  }
+
   console.log('diagnostics-verify: all checks passed');
 })().catch((e) => { console.error(e); process.exit(1); });
