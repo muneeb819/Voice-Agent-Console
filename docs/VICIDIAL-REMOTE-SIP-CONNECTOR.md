@@ -162,3 +162,21 @@ The **Reports** tab and the `/api/reports/*` endpoints are read-only. They keep 
 | `GET /api/reports/problems` | Failed dialer requests and active alerts, each with what to do |
 
 Every endpoint takes the same `dialer` id, so a second dialer is added by returning one more source from `buildSources()` in `src/dialer-reports.ts`; the reports themselves do not change.
+
+## Own voice engine (leave Deepgram)
+
+Set `VOICE_ENGINE=own` in the console's environment and restart. The bridge then talks to a small engine inside the console instead of Deepgram's Voice Agent, so one call is:
+
+1. **Listening**: caller audio goes to your self-hosted speech service (`/v1/stream/stt`).
+2. **Thinking**: the words go to an OpenAI-compatible language model (OpenAI, Groq, or your own vLLM/Ollama server).
+3. **Speaking**: each sentence of the reply is spoken by your speech service (`/v1/audio/speech`, streamed), starting as soon as the first sentence is ready.
+
+Needs:
+
+- Listening provider = the self-hosted speech service, and a self-hosted voice (Kokoro or Chatterbox) on the bot. Deepgram listening or voices are refused with a clear message.
+- A thinking provider of OpenAI or Groq with its key under API Keys, or `OWN_LLM_BASE_URL` (and optionally `OWN_LLM_API_KEY`) pointing at your own server; that setting wins for every provider type.
+- No Deepgram key is needed in this mode.
+
+Behaviour: the caller talking stops the bot at once; bot functions (transfer, webhooks) work the same; a model failure is a warning plus a short spoken "say that again" and only three failures in a row end the call. The engine listens on loopback with a random per-start token, so it is not reachable from outside.
+
+Not yet in own mode: the per-bot "barge-in off" setting is not passed to the engine.

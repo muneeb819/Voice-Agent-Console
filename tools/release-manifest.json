@@ -339,5 +339,10 @@
   "tests/diagnostics-verify.ts",
   "tests/process-guards-verify.ts",
   "tests/phone-bot-rotation-verify.ts",
-  "docs/CALL-SCREENING.md"
+  "docs/CALL-SCREENING.md",
+  "dist/own-agent.js",
+  "dist/own-llm.js",
+  "src/own-agent.ts",
+  "src/own-llm.ts",
+  "tests/own-agent-verify.ts"
 ]
