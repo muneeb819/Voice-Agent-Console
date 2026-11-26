@@ -92,3 +92,16 @@ The dialer operator remains responsible for DID routing, campaigns, leads, carri
 8. Increase concurrency gradually only after media quality and transfer behavior are verified.
 
 A successful REGISTER response or a passing local test is not proof of an end-to-end live VICIdial call. Do not enable production traffic until the dialer administrator has verified the actual PBX configuration and the full test sequence.
+
+## Transfer order and the SIP REFER backup
+
+When a bot qualifies a caller, the bridge tries to move the call in this order and stops at the first one that works:
+
+1. VICIdial Agent API (`ra_call_control`)
+2. Asterisk AMI Redirect (needs TCP 5038 open from the console server)
+3. SIP REFER (backup): the bridge asks the dialer, inside the call it already holds, to send the caller to the transfer extension. It needs no extra port.
+4. If all three fail, the call gets the campaign's callback disposition.
+
+The REFER step only runs for an extension target, and can be switched off under VICIdial settings ("Backup transfer: ask the dialer over SIP (REFER) if API and AMI fail"). Every attempt is written to the VICIdial API audit log as `SIP REFER -> <extension>`.
+
+The dialer must accept REFER on the `ai-bridge` peer. It may need `allowtransfer=yes` (chan_sip) or the equivalent, and the REFER context must be able to reach the transfer extension. This path has been unit tested but not yet exercised against a live dialer.

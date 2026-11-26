@@ -6,7 +6,7 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-const allSteps = ['step1', 'step2', 'performance', 'remote-agent-user', 'phone-bot-rotation', 'speech-url', 'webhook-ssrf', 'process-guards', 'mock-audio', 'live-bot', 'simulator-recording', 'greetings', 'opening', 'bridge-opening', 'persona', 'qa-bot', 'step3', 'step4', 'security', 'backend-audit', 'sip-registration', 'account-lifecycle', 'hardening', 'bot-functions', 'barge-in', 'smoke-test', 'voice-clone', 'call-start', 'live-listen', 'voice-delivery', 'screening', 'installer-port80', 'health', 'static-site', 'static-console'];
+const allSteps = ['step1', 'step2', 'performance', 'remote-agent-user', 'phone-bot-rotation', 'speech-url', 'webhook-ssrf', 'process-guards', 'mock-audio', 'live-bot', 'simulator-recording', 'greetings', 'opening', 'bridge-opening', 'persona', 'qa-bot', 'step3', 'step4', 'security', 'backend-audit', 'sip-registration', 'sip-refer', 'account-lifecycle', 'hardening', 'bot-functions', 'barge-in', 'smoke-test', 'voice-clone', 'call-start', 'live-listen', 'voice-delivery', 'screening', 'installer-port80', 'health', 'static-site', 'static-console'];
 const requestedSteps = process.argv.slice(2);
 const steps = requestedSteps.length ? requestedSteps : allSteps;
 

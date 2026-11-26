@@ -7096,6 +7096,9 @@
       ${F('AMI Port', 'v.amiPort', 'number', [], 'min="1" max="65535" step="1"')}
       ${F('AMI Username', 'v.amiUser')}
      </div>
+     <div class="row">
+      ${F('Backup transfer: ask the dialer over SIP (REFER) if API and AMI fail', 'v.sipReferFallback', 'chk')}
+     </div>
      <div class="note">
       Passwords (<code>VICI_API_PASS</code>, <code>AMI_SECRET</code>, <code>DEEPGRAM_API_KEY</code>) live exclusively in the server <code>.env</code> file — click <b> API Keys</b> in the side panel to manage them safely.
      </div>
