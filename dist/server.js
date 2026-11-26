@@ -33,6 +33,7 @@ const defaults_1 = require("./defaults");
 const state_guard_1 = require("./state-guard");
 const data_paths_1 = require("./data-paths");
 const voice_pick_1 = require("./voice-pick");
+const diagnostics_1 = require("./diagnostics");
 const deepgram_catalog_1 = require("./deepgram-catalog");
 const env_store_1 = require("./env-store");
 const live_simulator_1 = require("./live-simulator");
@@ -1047,6 +1048,46 @@ function createApp(viciBridge) {
             logs: (0, db_1.listBridgeCallLogs)(20),
         });
     });
+    // One-button health scan: every check says what it found and what to do about it.
+    app.get('/api/diagnostics', asyncRoute(async (_req, res) => {
+        const st = (0, db_1.getConsoleState)();
+        const report = await (0, diagnostics_1.runDiagnostics)({
+            state: st,
+            secrets: (0, env_store_1.getSecretsStatus)(),
+            bridge: viciBridge ? viciBridge.getStatus() : null,
+            botSleep: (0, bot_sleep_1.getBotSleep)(),
+            alerts: (0, alerts_1.listAlerts)().alerts,
+            probes: {
+                deepgram: () => (0, diagnostics_1.probeDeepgramKey)((0, env_store_1.getSecret)('DEEPGRAM_API_KEY')),
+                viciApi: async () => {
+                    const r = await new vici_client_1.VicidialApiClient(st.vici).checkVersion();
+                    return { ok: r.ok, detail: r.ok ? String(r.versionText || 'The dialer answered.').split('\n')[0].slice(0, 120) : 'The dialer web server answered, but not with its version.' };
+                },
+                ami: async () => {
+                    const r = await new ami_client_1.AsteriskAmiClient(st.vici).ping();
+                    return { ok: r.ok, detail: r.ok ? 'AMI answered the ping.' : String(r.message || 'AMI refused the login or the connection.').slice(0, 160) };
+                },
+                disk: async () => {
+                    const probeFile = path_1.default.join(data_paths_1.DATA_DIR, `.diag-${process.pid}`);
+                    let writable = false;
+                    try {
+                        fs_1.default.writeFileSync(probeFile, 'x');
+                        fs_1.default.unlinkSync(probeFile);
+                        writable = true;
+                    }
+                    catch { }
+                    let freeBytes = null;
+                    try {
+                        const sf = fs_1.default.statfsSync(data_paths_1.DATA_DIR);
+                        freeBytes = Number(sf.bavail) * Number(sf.bsize);
+                    }
+                    catch { }
+                    return { writable, freeBytes };
+                },
+            },
+        });
+        res.json({ ok: true, report });
+    }));
     app.get('/api/vici/logs', (req, res) => {
         const requested = typeof req.query.limit === 'string' ? Number(req.query.limit) : 25;
         const limit = Number.isFinite(requested) && requested > 0 ? Math.max(1, Math.min(200, Math.floor(requested))) : 25;

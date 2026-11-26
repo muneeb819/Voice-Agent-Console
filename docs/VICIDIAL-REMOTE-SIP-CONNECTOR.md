@@ -138,3 +138,9 @@ Every bot has a **Voice for this bot** choice on its Agents tab. Left on "Use gl
 
 - **Duplicate** now gives the copy a female English voice that no other bot is using, so a copy never sounds like its original. When every suitable voice is already in use, the least-used one is reused.
 - If the saved voice cannot be spoken by the selected TTS provider, the call falls back to the global voice and the pre-flight check says so.
+
+## Diagnostic scan
+
+The Command deck has a **Diagnostic scan** card. **Run scan** checks, in one pass: the Deepgram key (saved, and accepted by Deepgram), whether bots are asleep, the call bridge and its SIP registration, calls turned away for capacity, the dialer web API, the dialer AMI port, unread transfer failures and critical alerts, the pre-flight checks of every campaign and bot, and whether the data folder is writable with space left.
+
+Every row is OK, Review, Problem or Skipped, and every row that is not OK says in plain words what to fix. Slow checks run side by side and are cut off after 6 seconds, so the scan never hangs. The scan is read-only: it changes nothing and places no calls. API: `GET /api/diagnostics`.

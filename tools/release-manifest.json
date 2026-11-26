@@ -40,6 +40,7 @@
   "dist/db.js",
   "dist/deepgram-catalog.js",
   "dist/defaults.js",
+  "dist/diagnostics.js",
   "dist/demo-tunnel.js",
   "dist/env-store.js",
   "dist/g711.js",
@@ -225,6 +226,7 @@
   "src/db.ts",
   "src/deepgram-catalog.ts",
   "src/defaults.ts",
+  "src/diagnostics.ts",
   "src/demo-tunnel.ts",
   "src/env-store.ts",
   "src/g711.ts",
@@ -329,6 +331,7 @@
   "tests/speech-url-verify.ts",
   "tests/webhook-ssrf-verify.ts",
   "tests/dialplan-pattern-verify.ts",
+  "tests/diagnostics-verify.ts",
   "tests/process-guards-verify.ts",
   "tests/phone-bot-rotation-verify.ts",
   "docs/CALL-SCREENING.md"
