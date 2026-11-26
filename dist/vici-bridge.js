@@ -406,6 +406,17 @@ class VicidialBridgeService {
         await xfer(reason);
         return true;
     }
+    /** One place for both transports (SIP and AudioSocket) to count and report a call turned away at the campaign limit. */
+    recordCapacityRejection(campaign) {
+        this.stats.rejectedOverCapacityCount += 1;
+        this.stats.lastError = `Campaign "${campaign?.name}" at maxCalls capacity (${campaign?.maxCalls})`;
+        (0, alerts_1.raiseAlert)({
+            kind: 'call_rejected',
+            title: `Campaign "${campaign?.name}" is full`,
+            detail: this.stats.lastError,
+            key: `call_rejected:${campaign?.id}`,
+        });
+    }
     isCampaignOverCapacity(campaign) {
         if (!campaign || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
             return false;
@@ -844,9 +855,7 @@ class VicidialBridgeService {
                         return;
                     }
                     if (this.isCampaignOverCapacity(resolvedForCap.campaign)) {
-                        this.stats.rejectedOverCapacityCount += 1;
-                        this.stats.lastError = `Campaign "${resolvedForCap.campaign?.name}" at maxCalls capacity (${resolvedForCap.campaign?.maxCalls})`;
-                        (0, alerts_1.raiseAlert)({ kind: 'call_rejected', title: `Campaign "${resolvedForCap.campaign?.name}" is full`, detail: this.stats.lastError, key: `call_rejected:${resolvedForCap.campaign?.id}` });
+                        this.recordCapacityRejection(resolvedForCap.campaign);
                         sendSipResponse('486 Busy Here', headers, toRaw, [], '', rinfo);
                         return;
                     }
@@ -1244,8 +1253,7 @@ class VicidialBridgeService {
             };
         }
         if (this.isCampaignOverCapacity(campaign)) {
-            this.stats.rejectedOverCapacityCount += 1;
-            this.stats.lastError = `Campaign "${campaign?.name}" at maxCalls capacity (${campaign?.maxCalls})`;
+            this.recordCapacityRejection(campaign);
             opts.hooks.hangupTransport();
             return {
                 onCallerPcm8k: () => { },

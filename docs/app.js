@@ -9749,10 +9749,25 @@
     }
   });
 
+  // New alerts (for example a call turned away at the campaign limit) arrive without any call event,
+  // so the alert list is checked on its own and the Command deck redraws only when it changed.
+  async function refreshAlerts() {
+    try {
+      const r = await fetch('/api/alerts');
+      const al = await r.json();
+      if (!al || !al.ok) return;
+      const stamp = (x) => `${x.unacknowledged}|${(x.alerts && x.alerts[0] && x.alerts[0].lastAt) || ''}|${(x.alerts && x.alerts[0] && x.alerts[0].count) || 0}`;
+      const changed = !viciMon.alerts || stamp(al) !== stamp(viciMon.alerts);
+      viciMon.alerts = al;
+      if (changed && tab === 'dashboard') renderExecutiveCommandDeck();
+    } catch {}
+  }
+
   loadFromServer();
   setInterval(() => {
     if (!document.hidden && S && !serverlessCloudMode) {
       refreshTelemetryOverview(true);
+      refreshAlerts();
     }
   }, 15000);
 })();

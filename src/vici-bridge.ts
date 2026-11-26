@@ -458,6 +458,18 @@ export class VicidialBridgeService {
     return true;
   }
 
+  /** One place for both transports (SIP and AudioSocket) to count and report a call turned away at the campaign limit. */
+  private recordCapacityRejection(campaign?: Campaign): void {
+    this.stats.rejectedOverCapacityCount += 1;
+    this.stats.lastError = `Campaign "${campaign?.name}" at maxCalls capacity (${campaign?.maxCalls})`;
+    raiseAlert({
+      kind: 'call_rejected',
+      title: `Campaign "${campaign?.name}" is full`,
+      detail: this.stats.lastError,
+      key: `call_rejected:${campaign?.id}`,
+    });
+  }
+
   private isCampaignOverCapacity(campaign?: Campaign): boolean {
     if (!campaign || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
       return false;
@@ -952,9 +964,7 @@ export class VicidialBridgeService {
           return;
         }
         if (this.isCampaignOverCapacity(resolvedForCap.campaign)) {
-          this.stats.rejectedOverCapacityCount += 1;
-          this.stats.lastError = `Campaign "${resolvedForCap.campaign?.name}" at maxCalls capacity (${resolvedForCap.campaign?.maxCalls})`;
-          raiseAlert({ kind: 'call_rejected', title: `Campaign "${resolvedForCap.campaign?.name}" is full`, detail: this.stats.lastError, key: `call_rejected:${resolvedForCap.campaign?.id}` });
+          this.recordCapacityRejection(resolvedForCap.campaign);
           sendSipResponse('486 Busy Here', headers, toRaw, [], '', rinfo);
           return;
         }
@@ -1354,8 +1364,7 @@ export class VicidialBridgeService {
     }
 
     if (this.isCampaignOverCapacity(campaign)) {
-      this.stats.rejectedOverCapacityCount += 1;
-      this.stats.lastError = `Campaign "${campaign?.name}" at maxCalls capacity (${campaign?.maxCalls})`;
+      this.recordCapacityRejection(campaign);
       opts.hooks.hangupTransport();
       return {
         onCallerPcm8k: () => {},
