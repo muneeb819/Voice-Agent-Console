@@ -27,6 +27,7 @@ export { CALL_LIMIT_CLOSING_LINE, callLimitMsForCampaign, callLimitSchedule, cal
 import { Agent, Campaign, ConsoleState } from './types';
 import { SipRegistrationClient } from './vici-sip-registration';
 import { getBotSleep, isBotSleeping } from './bot-sleep';
+import { trackAgentConnection } from './usage-ledger';
 import { buildReferRequest, ReferTracker, sanitizeReferTarget, type ReferResult } from './sip-refer';
 import { isScreeningEnabled, NativeAmdResult, recordScreeningDecision, ScreeningDecision, sendScreeningDisposition, startCallScreening } from './screening';
 import type { ScreeningSession } from './screening/session';
@@ -1995,6 +1996,8 @@ export class VicidialBridgeService {
         headers: dgKey ? { Authorization: `Token ${dgKey}` } : {},
         family: 4,
       });
+
+      trackAgentConnection(dgWs, 'phone_call', callId);
 
       dgWs.on('unexpected-response', (_req, res) => {
         let body = '';

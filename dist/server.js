@@ -7,6 +7,7 @@ exports.asyncRoute = asyncRoute;
 exports.createApp = createApp;
 exports.createServerWithSimulator = createServerWithSimulator;
 const bot_sleep_1 = require("./bot-sleep");
+const usage_ledger_1 = require("./usage-ledger");
 const process_guards_1 = require("./process-guards");
 const voice_clone_1 = require("./voice-clone");
 const smoke_test_1 = require("./smoke-test");
@@ -1009,6 +1010,12 @@ function createApp(viciBridge) {
     app.post('/api/vici/register-call', handleRegisterCall);
     app.get('/api/vici/precall', handleRegisterCall);
     app.post('/api/vici/precall', handleRegisterCall);
+    (0, usage_ledger_1.reconcileOpenConnections)();
+    app.get('/api/usage/report', (req, res) => {
+        const requested = typeof req.query.days === 'string' ? Number(req.query.days) : 7;
+        const days = Number.isFinite(requested) ? Math.max(1, Math.min(60, Math.floor(requested))) : 7;
+        res.json({ ok: true, ...(0, usage_ledger_1.buildUsageReport)((0, usage_ledger_1.readLedger)(), undefined, days) });
+    });
     app.get('/api/bot-sleep', (_req, res) => {
         res.json({ ok: true, ...(0, bot_sleep_1.getBotSleep)() });
     });

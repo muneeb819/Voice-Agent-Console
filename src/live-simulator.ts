@@ -1,4 +1,5 @@
 import http from 'http';
+import { trackAgentConnection } from './usage-ledger';
 import { BargeInGate, normalizeBargeInPct } from './barge-in';
 import { CALL_LIMIT_CLOSING_LINE, TRANSFER_INTENT_AUTOCOMPLETE_MS, TRANSFER_INTENT_GRACE_MS, announcesTransfer, callerDeclined, callLimitMsForCampaign, callLimitSchedule, callLimitWrapUpPrompt, transferBlockedPrompt } from './call-limit';
 import { getAuthenticatedUser, isRequestAuthorized } from './auth-guard';
@@ -747,6 +748,7 @@ export function attachLiveSimulator(server?: http.Server, noServer = false): Web
           finalizeCall('upstream_error');
           return;
         }
+        trackAgentConnection(dgWs, 'simulator', callId);
         connectTimer = setTimeout(() => {
           if (!settingsApplied && !closed) {
             sendFatalError('UPSTREAM_TIMEOUT', 'Deepgram did not confirm the session settings in time.');
