@@ -50,12 +50,13 @@ ok(prompt.includes(HEADER), 'live call Settings carry the voice delivery section
 const near: any = normalizeState(createDefaultState());
 const nb = near.agents[0];
 const nc = near.campaigns.find((c: any) => (c.agentIds || []).includes(nb.id)) || near.campaigns[0];
-const off = { ...nb, flow: { ...nb.flow, voiceDeliveryEnabled: false } };
+// The default skills set has its own test; it is switched off here so the room arithmetic measures delivery alone.
+const off = { ...nb, flow: { ...nb.flow, voiceDeliveryEnabled: false, defaultSkillsEnabled: false } };
 const builtIn = composeBehavioralPrompt({ ...off, prompt: '' }, nc).length;
 for (const room of [200, 1500, 2400, 4000]) {
   const line = 'Ask about Medicare Part A and B, then confirm the zip code.\n';
   const target = 24950 - builtIn - room;
-  const big = { ...nb, prompt: line.repeat(Math.ceil(target / line.length)).slice(0, target) };
+  const big = { ...nb, flow: { ...nb.flow, defaultSkillsEnabled: false }, prompt: line.repeat(Math.ceil(target / line.length)).slice(0, target) };
   const bigOff = { ...big, flow: { ...big.flow, voiceDeliveryEnabled: false } };
   const rOn = callPromptReport(big, nc, 300);
   const rOff = callPromptReport(bigOff, nc, 300);

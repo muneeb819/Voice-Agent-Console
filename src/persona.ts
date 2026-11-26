@@ -26,14 +26,16 @@ interface PersonaApi {
     speakingStyle: string; greetingLines: string; repeatLine: string; noAnswerLine: string;
     waitForHello: boolean; waitForHelloSec: number; noAnswerRepeats: number; greetingMaxWords: number;
     introLine: string; transferOnYes: boolean;
-    voiceDeliveryEnabled: boolean; voiceDelivery: string;
+    voiceDeliveryEnabled: boolean; voiceDelivery: string; defaultSkillsEnabled: boolean;
   };
   MAX_PROMPT_LENGTH: number;
   MAX_CAMPAIGN_RULES: number;
+  DEFAULT_SKILLS_HEADER: string;
+  DEFAULT_SKILLS_TEXT: string;
   callPromptReport(agent: any, campaign: any, openingChars?: number): {
     instructionsChars: number; instructionsCutChars: number; instructionsLines: number; cutLines: string[];
     rulesChars: number; rulesCutChars: number; rulesLimit: number; callChars: number; phoneChars: number;
-    phoneLimit: number; phoneRoom: number; callWillFail: boolean; builtInChars: number; voiceDeliveryOmitted: boolean;
+    phoneLimit: number; phoneRoom: number; callWillFail: boolean; builtInChars: number; voiceDeliveryOmitted: boolean; defaultSkillsOmitted: boolean;
   };
 }
 
@@ -54,4 +56,6 @@ export const {
   MAX_PROMPT_LENGTH,
   MAX_CAMPAIGN_RULES,
   callPromptReport,
+  DEFAULT_SKILLS_HEADER,
+  DEFAULT_SKILLS_TEXT,
 } = api;

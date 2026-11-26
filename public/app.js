@@ -2847,6 +2847,7 @@
     "a.flow.repeatLine": "What the bot says when it did not catch the caller's words.",
     "a.flow.noAnswerLine": "What the bot says when the caller stays silent.",
     "a.flow.noAnswerRepeats": "How many times to ask if anyone is there. 0 means say the greeting instead.",
+    "a.flow.defaultSkillsEnabled": "Human conversation craft, spoken delivery and a steady persona. Every new, duplicated and saved bot has it. Dropped first if a call's instructions get too long.",
     "a.flow.voiceDeliveryEnabled": "Adds guidance on intonation, pace and phrasing to the bot's instructions. It is dropped first if a call's instructions get too long.",
     "a.flow.voiceDelivery": "How the bot should sound: pace, warmth, pauses, sentence length. Leave blank to restore the default.",
     "a.stt.eot": "How sure the system must be that the caller has finished before the bot replies. Higher waits longer and interrupts less. 0.5 to 1.0.",
@@ -6193,8 +6194,9 @@
       }
       if (r.callWillFail) return `<div class="reach-er">✗ <b>${esc(c.name)}:</b> ${fmtN(r.phoneChars)} of ${fmtN(r.phoneLimit)} characters with the opening — calls cannot start. Shorten the instructions.</div>`;
       const cls = r.phoneRoom < 1000 ? 'reach-wn' : 'reach-ok';
-      const omitted = r.voiceDeliveryOmitted ? `<div class="reach-wn">! <b>${esc(c.name)}:</b> voice delivery guidance is left out of calls: the prompt has no room for it. Shorten the instructions or campaign rules to include it.</div>` : '';
-      return `<div class="${cls}">${cls === 'reach-ok' ? '✓' : '!'} <b>${esc(c.name)}:</b> all ${fmtN(r.instructionsLines)} lines reach calls · call prompt ${fmtN(r.phoneChars)} / ${fmtN(r.phoneLimit)} (${fmtN(r.phoneRoom)} to spare)</div>${omitted}`;
+      const skillsOmitted = r.defaultSkillsOmitted && !r.voiceDeliveryOmitted ? `<div class="reach-wn">! <b>${esc(c.name)}:</b> the default skills set is left out of calls: the prompt has no room for it. Shorten the instructions or campaign rules to include it.</div>` : '';
+      const omitted = r.voiceDeliveryOmitted ? `<div class="reach-wn">! <b>${esc(c.name)}:</b> voice delivery guidance and the default skills set are left out of calls: the prompt has no room for it. Shorten the instructions or campaign rules to include it.</div>` : '';
+      return `<div class="${cls}">${cls === 'reach-ok' ? '✓' : '!'} <b>${esc(c.name)}:</b> all ${fmtN(r.instructionsLines)} lines reach calls · call prompt ${fmtN(r.phoneChars)} / ${fmtN(r.phoneLimit)} (${fmtN(r.phoneRoom)} to spare)</div>${omitted}${skillsOmitted}`;
     }).join('')}</div>`;
   }
 
@@ -6641,6 +6643,7 @@
      </div>
      ${F(' Self-Introduction Bio (spoken naturally when asked "Who are you?" or "Introduce yourself")', 'a.behavior.selfIntro', 'ta')}
      ${F('Personality &amp; speaking style (the only tone guidance the bot gets; the tone menu above is used only when this is empty)', 'a.behavior.speakingStyle', 'ta', [], 'style="min-height:110px"')}
+     ${F('Default skills set: human conversation craft, spoken delivery and a steady persona (on for every bot by default)', 'a.flow.defaultSkillsEnabled', 'chk')}
      ${F('Natural voice delivery: intonation, pace, tone, phrasing and word length (on for every bot by default)', 'a.flow.voiceDeliveryEnabled', 'chk')}
      ${F('Voice delivery guidance (leave blank to restore the default)', 'a.flow.voiceDelivery', 'ta', [], 'style="min-height:150px"')}
      <div class="note">The voice engine turns these words and punctuation into pitch and timing. For stronger rise and fall, use a Flux voice with expressivity +1 (Voice Lab), or raise Emotion intensity for a self-hosted voice. Speed sets the overall pace.</div>

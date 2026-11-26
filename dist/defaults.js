@@ -17,7 +17,7 @@ const campaign_assignment_1 = require("./campaign-assignment");
 const barge_in_1 = require("./barge-in");
 const sentinel_qa_1 = require("./sentinel-qa");
 const voice_pick_1 = require("./voice-pick");
-function normalizeFlow(raw) {
+function normalizeFlow(raw, skillsDefault = true) {
     const f = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
     const text = (v, fallback, max) => (typeof v === 'string' ? v : fallback).slice(0, max);
     const num = (v, fallback, min, max) => { const n = Number(v); return v !== null && v !== '' && Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback; };
@@ -32,6 +32,8 @@ function normalizeFlow(raw) {
         transferOnYes: Boolean(f.transferOnYes),
         repeatLine: text(f.repeatLine, DEFAULT_REPEAT_LINE, 300),
         voiceDeliveryEnabled: f.voiceDeliveryEnabled !== undefined ? Boolean(f.voiceDeliveryEnabled) : true,
+        // On for every bot (new, duplicated and saved) unless the operator turns it off. The QA reviewer (a_qa) never takes calls, so it starts off.
+        defaultSkillsEnabled: f.defaultSkillsEnabled !== undefined ? Boolean(f.defaultSkillsEnabled) : skillsDefault,
         // Every bot gets the default delivery guidance until it is edited; a blank box restores it.
         voiceDelivery: (typeof f.voiceDelivery === 'string' && f.voiceDelivery.trim() ? f.voiceDelivery : persona_1.FLOW_DEFAULTS.voiceDelivery).slice(0, 3000),
     };
@@ -998,7 +1000,7 @@ function normalizeState(raw) {
                 acceptViciCalls: isNovaAgent ? true : a.acceptViciCalls !== undefined ? Boolean(a.acceptViciCalls) : hadLegacyAccept,
                 injectCampaignDisclosure: a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : false,
                 behavior,
-                flow: normalizeFlow(a.flow),
+                flow: normalizeFlow(a.flow, agentId !== 'a_qa'),
                 stt: {
                     keyterms: String(a.stt?.keyterms ?? ''),
                     eot: num(a.stt?.eot, 0.55, 0.1, 0.9),
