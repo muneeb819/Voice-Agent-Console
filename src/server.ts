@@ -64,6 +64,7 @@ import {
   getConsoleState,
   closeDb,
   getSimulatorCallLog,
+  BRIDGE_LOG_RETENTION,
   listBridgeCallLogs,
   listGreetingLibrary,
   listRevisions,
@@ -78,6 +79,14 @@ import { credentialRoutingChanges } from './state-guard';
 import { DATA_DIR } from './data-paths';
 import { pickDistinctFemaleVoice } from './voice-pick';
 import { probeDeepgramKey, runDiagnostics } from './diagnostics';
+import {
+  buildBotReport,
+  buildCampaignReport,
+  buildListReport,
+  buildProblems,
+  buildRealtime,
+  buildSources,
+} from './dialer-reports';
 import {
   fetchAllowedSampleAudio,
   fetchDeepgramLlmModels,
@@ -1205,6 +1214,48 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       bridge: viciBridge ? viciBridge.getStatus() : null,
       logs: listBridgeCallLogs(20),
     });
+  });
+
+  // Dialer reports: read-only. Dialer numbers come from the dialer; bot numbers from this console's own call records.
+  const reportSources = () => buildSources(getConsoleState(), (st) => (fn, params) => new VicidialApiClient(st.vici).report(fn, params));
+  const pickSource = (req: Request, res: Response) => {
+    const id = String(req.query.dialer || 'default');
+    const src = reportSources().find((s) => s.id === id);
+    if (!src) res.status(404).json({ ok: false, error: `No dialer called "${id.slice(0, 40)}".` });
+    return src;
+  };
+  const reportDate = (raw: unknown) => (/^\d{4}-\d{2}-\d{2}$/.test(String(raw || '')) ? String(raw) : new Date().toISOString().slice(0, 10));
+
+  app.get('/api/reports/dialers', (_req: Request, res: Response) => {
+    res.json({ ok: true, dialers: reportSources().map(({ id, label, type }) => ({ id, label, type })) });
+  });
+
+  app.get('/api/reports/realtime', asyncRoute(async (req: Request, res: Response) => {
+    const src = pickSource(req, res);
+    if (!src) return;
+    const st = viciBridge ? viciBridge.getStatus() : null;
+    res.json({ ok: true, report: await buildRealtime(src, getConsoleState(), { activeCalls: st?.activeCalls?.length || 0, capacity: null }) });
+  }));
+
+  app.get('/api/reports/campaigns', asyncRoute(async (req: Request, res: Response) => {
+    const src = pickSource(req, res);
+    if (!src) return;
+    res.json({ ok: true, report: await buildCampaignReport(src, getConsoleState(), listBridgeCallLogs(BRIDGE_LOG_RETENTION), reportDate(req.query.date)) });
+  }));
+
+  app.get('/api/reports/lists', asyncRoute(async (req: Request, res: Response) => {
+    const src = pickSource(req, res);
+    if (!src) return;
+    res.json({ ok: true, report: await buildListReport(src, getConsoleState()) });
+  }));
+
+  app.get('/api/reports/bots', (req: Request, res: Response) => {
+    const hours = Math.min(24 * 30, Math.max(1, Number(req.query.hours) || 24));
+    res.json({ ok: true, report: buildBotReport(listBridgeCallLogs(BRIDGE_LOG_RETENTION), hours) });
+  });
+
+  app.get('/api/reports/problems', (_req: Request, res: Response) => {
+    res.json({ ok: true, problems: buildProblems(listBridgeCallLogs(BRIDGE_LOG_RETENTION), listAlerts().alerts) });
   });
 
   // One-button health scan: every check says what it found and what to do about it.

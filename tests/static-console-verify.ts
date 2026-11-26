@@ -116,7 +116,7 @@ async function run() {
 
   // Navigation entries are real anchors with project-relative section URLs.
   const navLinks = [...d.querySelectorAll('#nav a.nav-item')] as HTMLAnchorElement[];
-  assert.equal(navLinks.length, 9, 'Every side-rail section is a link');
+  assert.equal(navLinks.length, 10, 'Every side-rail section is a link');
   for (const link of navLinks) {
     const href = link.getAttribute('href') || '';
     assert(href.startsWith('/Voice-Agent-Console/?tab='), `Link keeps the GitHub Pages subpath: ${href}`);
