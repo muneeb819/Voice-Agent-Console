@@ -96,7 +96,7 @@
     return Boolean(owner) && draft.owner === owner;
   }
 
-  const SECTION_TABS = ['dashboard', 'agents', 'plugins', 'campaigns', 'voice', 'test', 'vici', 'wallboard', 'export'];
+  const SECTION_TABS = ['dashboard', 'agents', 'plugins', 'campaigns', 'voice', 'test', 'vici', 'wallboard', 'reports', 'export'];
   function readViewLocation() {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -611,6 +611,8 @@
     vici: '<svg viewBox="0 0 24 24" focusable="false"><path d="M4 13v-1a8 8 0 0 1 16 0v1M4 13H3a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h3v-7H4zM20 13h1a2 2 0 0 1 2 2v2a2 2 0 0 1-2 2h-3v-7h2z"/><path d="M17 19a5 5 0 0 1-5 3h-2"/></svg>',
     wallboard:
       '<svg viewBox="0 0 24 24" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2.5"/><path d="M7 16v-4M12 16V8M17 16v-6M6 18h12"/><path d="m6.5 9 4-2 3 2 4-3"/></svg>',
+    reports:
+      '<svg viewBox="0 0 24 24" focusable="false"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h7M9 9h2"/></svg>',
     export:
       '<svg viewBox="0 0 24 24" focusable="false"><path d="M12 3v11M8 10l4 4 4-4"/><path d="M4 16.5v3A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5v-3"/><path d="M7 7V4.5A1.5 1.5 0 0 1 8.5 3H15l5 5v1"/></svg>',
   };
@@ -623,6 +625,7 @@
     { key: 'test', icon: 'test', label: 'Live Bot', sub: 'Browser voice test', group: 'Live & Operations' },
     { key: 'vici', icon: 'vici', label: 'Vici Bridge', sub: 'SIP & AudioSocket', group: 'Live & Operations' },
     { key: 'wallboard', icon: 'wallboard', label: 'Wallboard', sub: 'KPIs & Stereo Recordings', group: 'Live & Operations' },
+    { key: 'reports', icon: 'reports', label: 'Reports', sub: 'Dialer & bot performance', group: 'Live & Operations' },
     { key: 'export', icon: 'export', label: 'Export', sub: 'Settings JSON & Backup', group: 'Live & Operations' },
   ];
 
@@ -641,6 +644,7 @@
     }
     if (tab === 'vici') return viciMon && viciMon.active ? 'Bridge live' : 'Bridge monitor';
     if (tab === 'wallboard') return 'Wallboard live';
+    if (tab === 'reports') return reportsState.loading ? 'Refreshing' : 'Read-only';
     if (tab === 'export') return 'Snapshot ready';
     return 'Live editor';
   }
@@ -5306,6 +5310,136 @@
 
   const CMD_DECK_COMPACT_KEY = 'vac_cmd_deck_compact_v1';
   // Last diagnostic scan shown on the Command deck.
+  // ---------------------------------------------------------------- reports
+  // Dialer numbers come from the dialer; bot numbers come from this console's own call records.
+  const reportsState = { dialer: 'default', dialers: [], hours: 24, date: '', loading: false, loadedAt: 0, data: {}, error: '' };
+  let reportsTimer = null;
+
+  async function loadReports() {
+    if (reportsState.loading || serverlessCloudMode) return;
+    reportsState.loading = true;
+    reportsState.error = '';
+    const d = encodeURIComponent(reportsState.dialer);
+    const date = reportsState.date || new Date().toISOString().slice(0, 10);
+    const get = async (name, qs) => {
+      try {
+        const r = await fetch(`/api/reports/${name}?${qs}`);
+        const j = await r.json();
+        return j.ok ? j : { error: j.error || 'The report could not run' };
+      } catch (err) {
+        return { error: String(err.message || err) };
+      }
+    };
+    try {
+      if (!reportsState.dialers.length) {
+        const j = await get('dialers', '');
+        reportsState.dialers = j.dialers || [];
+      }
+      const [realtime, campaigns, lists, bots, problems] = await Promise.all([
+        get('realtime', `dialer=${d}`),
+        get('campaigns', `dialer=${d}&date=${date}`),
+        get('lists', `dialer=${d}`),
+        get('bots', `hours=${reportsState.hours}`),
+        get('problems', ''),
+      ]);
+      reportsState.data = { realtime, campaigns, lists, bots, problems };
+      reportsState.loadedAt = Date.now();
+    } finally {
+      reportsState.loading = false;
+    }
+    if (tab === 'reports') render();
+  }
+
+  const rpTable = (head, rows) =>
+    rows.length
+      ? `<div style="overflow-x:auto"><table class="tbl" style="width:100%;font-size:12.5px"><thead><tr>${head.map((h) => `<th style="text-align:left;padding:4px 8px">${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows
+          .map((r) => `<tr>${r.map((c) => `<td style="padding:4px 8px;border-top:1px solid var(--bd)">${esc(c)}</td>`).join('')}</tr>`)
+          .join('')}</tbody></table></div>`
+      : '';
+  const rpRaw = (rows) =>
+    rows && rows.length
+      ? `<details style="margin-top:4px"><summary class="note" style="cursor:pointer">Dialer rows (${rows.length}), exactly as the dialer sent them</summary>${rpTable(
+          Array.from({ length: Math.max(...rows.map((r) => r.length)) }, (_, i) => `Column ${i + 1}`),
+          rows,
+        )}</details>`
+      : '';
+  const rpErr = (sec) => (sec && sec.error ? `<div class="note" style="color:var(--er)">${esc(sec.error)}</div>` : '');
+  const rpProblem = (p) =>
+    `<div style="padding:6px 0;border-top:1px solid var(--bd)"><b>${esc(p.title)}</b> <span class="note" style="margin:0">· ${esc(p.area)}${p.count > 1 ? ` · ${p.count}×` : ''}</span>
+     <div class="note" style="margin:2px 0 0">${esc(p.detail)}</div><div class="note" style="margin:2px 0 0"><b>Fix:</b> ${esc(p.suggestion)}</div></div>`;
+  const botRow = (label, b) => [label, b.calls, `${b.transfers} (${b.transferRate}%)`, b.dnc, `${b.avgDurationSec}s`, b.avgTtfbMs == null ? '–' : `${b.avgTtfbMs} ms`];
+  const botHead = ['', 'Calls', 'Transfers', 'DNC', 'Avg length', 'Avg first-word delay'];
+
+  function renderReportsTab(m) {
+    if (serverlessCloudMode) {
+      m.innerHTML = '<div class="card"><h2>Reports</h2><div class="note">Reports read from the dialer and the live bridge, so they are available when this console is connected to your server.</div></div>';
+      return;
+    }
+    if (!reportsState.loadedAt && !reportsState.loading) loadReports();
+    if (!reportsTimer) {
+      reportsTimer = setInterval(() => {
+        if (tab === 'reports' && !document.hidden) loadReports();
+      }, 30000);
+    }
+    const dt = reportsState.data;
+    const rt = dt.realtime && dt.realtime.report;
+    const cp = dt.campaigns && dt.campaigns.report;
+    const ls = dt.lists && dt.lists.report;
+    const bt = dt.bots && dt.bots.report;
+    const pr = (dt.problems && dt.problems.problems) || [];
+    const dialerProblems = [...(rt ? rt.problems : []), ...(cp ? cp.problems : []), ...(ls ? ls.problems : [])];
+    const allProblems = [...dialerProblems, ...pr];
+    const states = rt && rt.agents ? Object.entries(rt.agents.byState).map(([k, v]) => `<span class="pill">${esc(k)} ${v}</span>`).join(' ') : '';
+    m.innerHTML = `
+    <div class="card">
+     <div class="sim-header">
+      <h2 style="margin:0">Reports</h2>
+      <div class="bar" style="margin:0">
+       <label class="note" style="margin:0">Dialer <select id="rp-dialer">${reportsState.dialers.map((x) => `<option value="${esc(x.id)}" ${x.id === reportsState.dialer ? 'selected' : ''}>${esc(x.label)}</option>`).join('')}</select></label>
+       <label class="note" style="margin:0">Day <input type="date" id="rp-date" value="${esc(reportsState.date || new Date().toISOString().slice(0, 10))}"></label>
+       <label class="note" style="margin:0">Bots over <select id="rp-hours">${[[1, 'last hour'], [24, 'last 24 hours'], [168, 'last 7 days']].map(([v, l]) => `<option value="${v}" ${v === reportsState.hours ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+       <button class="g" id="btn-rp-refresh" ${reportsState.loading ? 'disabled' : ''}>${reportsState.loading ? 'Loading…' : '↻ Refresh'}</button>
+      </div>
+     </div>
+     <div class="note">Read-only. Dialer numbers come from the dialer; bot numbers come from this console's own call records. Refreshes every 30 seconds.</div>
+    </div>
+
+    <div class="card"><h3 style="margin:0 0 6px">Real-time</h3>${rpErr(dt.realtime)}
+     ${rt ? `<div>
+       ${rt.agents ? `<span class="pill ok">${rt.agents.loggedIn} agent${rt.agents.loggedIn === 1 ? '' : 's'} logged in</span> ${states}` : '<span class="pill wn">Agents not available</span>'}
+       <span class="pill">${rt.bot.activeCalls} bot call${rt.bot.activeCalls === 1 ? '' : 's'} live now</span>
+      </div>
+      ${rt.inGroups.map((g) => `<div style="margin-top:6px"><b>${esc(g.id)}</b>${rpRaw(g.rows)}</div>`).join('')}
+      ${rt.agents ? rpRaw(rt.agents.rows) : ''}` : reportsState.loading ? '<div class="note">Loading…</div>' : ''}
+    </div>
+
+    <div class="card"><h3 style="margin:0 0 6px">Problems and what to do</h3>
+     ${allProblems.length ? allProblems.map(rpProblem).join('') : `<div class="note">${reportsState.loadedAt ? 'No problems found in the last 24 hours.' : 'Loading…'}</div>`}
+    </div>
+
+    <div class="card"><h3 style="margin:0 0 6px">Campaign performance · ${esc((cp && cp.date) || reportsState.date || 'today')}</h3>${rpErr(dt.campaigns)}
+     ${cp ? rpTable(botHead.map((h, i) => (i === 0 ? 'Campaign (bot numbers)' : h)), cp.rows.map((r) => botRow(`${r.name} · ${r.campaign}`, r.bot))) : ''}
+     ${cp ? cp.rows.map((r) => (r.dialerNote ? `<div class="note"><b>${esc(r.campaign)}</b> dialer report: ${esc(r.dialerNote)}</div>` : '') + rpRaw(r.dialer)).join('') : ''}
+    </div>
+
+    <div class="card"><h3 style="margin:0 0 6px">List performance</h3>${rpErr(dt.lists)}
+     ${ls ? (ls.lists.length ? ls.lists.map((l) => `<div style="padding:4px 0;border-top:1px solid var(--bd)"><b>List ${esc(l.listId)}</b> <span class="note" style="margin:0">· ${esc(l.campaign)}${l.note ? ` · ${esc(l.note)}` : ''}</span>${rpRaw(l.rows)}</div>`).join('') : '<div class="note">No list numbers are set on your campaigns. Add them under Campaigns.</div>') : ''}
+    </div>
+
+    <div class="card"><h3 style="margin:0 0 6px">Bot performance · ${esc(reportsState.hours === 1 ? 'last hour' : reportsState.hours === 24 ? 'last 24 hours' : 'last 7 days')}</h3>${rpErr(dt.bots)}
+     ${bt ? rpTable(botHead.map((h, i) => (i === 0 ? 'Bot' : h)), [botRow('All bots', bt.totals), ...bt.byBot.map((b) => botRow(b.agentName, b))]) : ''}
+     ${bt && bt.byCampaign.length ? `<div style="margin-top:8px">${rpTable(botHead.map((h, i) => (i === 0 ? 'Campaign' : h)), bt.byCampaign.map((c) => botRow(c.campaign, c)))}</div>` : ''}
+    </div>`;
+    const reload = () => {
+      reportsState.loadedAt = 0;
+      loadReports();
+    };
+    m.querySelector('#btn-rp-refresh')?.addEventListener('click', reload);
+    m.querySelector('#rp-dialer')?.addEventListener('change', (e) => { reportsState.dialer = e.target.value; reload(); });
+    m.querySelector('#rp-date')?.addEventListener('change', (e) => { reportsState.date = e.target.value; reload(); });
+    m.querySelector('#rp-hours')?.addEventListener('change', (e) => { reportsState.hours = Number(e.target.value) || 24; reload(); });
+  }
+
   const diagState = { running: false, report: null, error: '' };
   const cmdDeckState = {
     serverTelemetry: null,
@@ -7414,6 +7548,8 @@
      </div>
     </div>
    `;
+    } else if (tab === 'reports') {
+      renderReportsTab(m);
     } else if (tab === 'export') {
       m.innerHTML = `
     <div class="card">

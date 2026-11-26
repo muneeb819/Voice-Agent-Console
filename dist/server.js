@@ -34,6 +34,7 @@ const state_guard_1 = require("./state-guard");
 const data_paths_1 = require("./data-paths");
 const voice_pick_1 = require("./voice-pick");
 const diagnostics_1 = require("./diagnostics");
+const dialer_reports_1 = require("./dialer-reports");
 const deepgram_catalog_1 = require("./deepgram-catalog");
 const env_store_1 = require("./env-store");
 const live_simulator_1 = require("./live-simulator");
@@ -1047,6 +1048,45 @@ function createApp(viciBridge) {
             bridge: viciBridge ? viciBridge.getStatus() : null,
             logs: (0, db_1.listBridgeCallLogs)(20),
         });
+    });
+    // Dialer reports: read-only. Dialer numbers come from the dialer; bot numbers from this console's own call records.
+    const reportSources = () => (0, dialer_reports_1.buildSources)((0, db_1.getConsoleState)(), (st) => (fn, params) => new vici_client_1.VicidialApiClient(st.vici).report(fn, params));
+    const pickSource = (req, res) => {
+        const id = String(req.query.dialer || 'default');
+        const src = reportSources().find((s) => s.id === id);
+        if (!src)
+            res.status(404).json({ ok: false, error: `No dialer called "${id.slice(0, 40)}".` });
+        return src;
+    };
+    const reportDate = (raw) => (/^\d{4}-\d{2}-\d{2}$/.test(String(raw || '')) ? String(raw) : new Date().toISOString().slice(0, 10));
+    app.get('/api/reports/dialers', (_req, res) => {
+        res.json({ ok: true, dialers: reportSources().map(({ id, label, type }) => ({ id, label, type })) });
+    });
+    app.get('/api/reports/realtime', asyncRoute(async (req, res) => {
+        const src = pickSource(req, res);
+        if (!src)
+            return;
+        const st = viciBridge ? viciBridge.getStatus() : null;
+        res.json({ ok: true, report: await (0, dialer_reports_1.buildRealtime)(src, (0, db_1.getConsoleState)(), { activeCalls: st?.activeCalls?.length || 0, capacity: null }) });
+    }));
+    app.get('/api/reports/campaigns', asyncRoute(async (req, res) => {
+        const src = pickSource(req, res);
+        if (!src)
+            return;
+        res.json({ ok: true, report: await (0, dialer_reports_1.buildCampaignReport)(src, (0, db_1.getConsoleState)(), (0, db_1.listBridgeCallLogs)(1000), reportDate(req.query.date)) });
+    }));
+    app.get('/api/reports/lists', asyncRoute(async (req, res) => {
+        const src = pickSource(req, res);
+        if (!src)
+            return;
+        res.json({ ok: true, report: await (0, dialer_reports_1.buildListReport)(src, (0, db_1.getConsoleState)()) });
+    }));
+    app.get('/api/reports/bots', (req, res) => {
+        const hours = Math.min(24 * 30, Math.max(1, Number(req.query.hours) || 24));
+        res.json({ ok: true, report: (0, dialer_reports_1.buildBotReport)((0, db_1.listBridgeCallLogs)(1000), hours) });
+    });
+    app.get('/api/reports/problems', (_req, res) => {
+        res.json({ ok: true, problems: (0, dialer_reports_1.buildProblems)((0, db_1.listBridgeCallLogs)(1000), (0, alerts_1.listAlerts)().alerts) });
     });
     // One-button health scan: every check says what it found and what to do about it.
     app.get('/api/diagnostics', asyncRoute(async (_req, res) => {

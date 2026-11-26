@@ -144,3 +144,21 @@ Every bot has a **Voice for this bot** choice on its Agents tab. Left on "Use gl
 The Command deck has a **Diagnostic scan** card. **Run scan** checks, in one pass: the Deepgram key (saved, and accepted by Deepgram), whether bots are asleep, the call bridge and its SIP registration, calls turned away for capacity, the dialer web API, the dialer AMI port, unread transfer failures and critical alerts, the pre-flight checks of every campaign and bot, and whether the data folder is writable with space left.
 
 Every row is OK, Review, Problem or Skipped, and every row that is not OK says in plain words what to fix. Slow checks run side by side and are cut off after 6 seconds, so the scan never hangs. The scan is read-only: it changes nothing and places no calls. API: `GET /api/diagnostics`.
+
+## Reports
+
+The **Reports** tab and the `/api/reports/*` endpoints are read-only. They keep two kinds of numbers apart:
+
+- **Dialer numbers** come from VICIdial's own report API (`logged_in_agents`, `in_group_status`, `call_status_stats`, `list_info`). They are shown exactly as the dialer sends them, because the column layout differs between VICIdial versions. If your version lacks a function, that section says so and the rest still works.
+- **Bot numbers** (calls, transfers, DNC, call length, first-word delay) come from this console's own call records, per bot and per campaign.
+
+| Endpoint | What it returns |
+| --- | --- |
+| `GET /api/reports/dialers` | The dialers that can be reported on |
+| `GET /api/reports/realtime?dialer=` | Agents logged in (counted by state), in-group status, live bot calls |
+| `GET /api/reports/campaigns?dialer=&date=YYYY-MM-DD` | Per campaign: the dialer's call status report plus bot numbers for that day |
+| `GET /api/reports/lists?dialer=` | Per list on your campaigns: the dialer's list info |
+| `GET /api/reports/bots?hours=` | Per bot and per campaign (1 hour to 30 days) |
+| `GET /api/reports/problems` | Failed dialer requests and active alerts, each with what to do |
+
+Every endpoint takes the same `dialer` id, so a second dialer is added by returning one more source from `buildSources()` in `src/dialer-reports.ts`; the reports themselves do not change.

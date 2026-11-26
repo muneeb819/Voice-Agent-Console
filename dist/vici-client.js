@@ -180,6 +180,12 @@ class VicidialApiClient {
             return { ok: false, status: 0, text: `ERROR: ${errMsg}` };
         }
     }
+    /** Read-only call to a non-agent API function (reports, status). Never changes dialer data. */
+    async report(fnName, params = {}) {
+        if (!/^[a-z_]{3,40}$/.test(fnName))
+            return { ok: false, status: 0, text: 'ERROR: invalid function name' };
+        return this.callEndpoint('non_agent_api', fnName, this.nonAgentUrl, params, 8000);
+    }
     async checkVersion() {
         const res = await this.callEndpoint('non_agent_api', 'version', this.nonAgentUrl, {}, 4000);
         return {
