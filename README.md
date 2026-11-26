@@ -163,7 +163,7 @@ The **Dashboard** is the first navigation item and the default page; existing `?
 - Configuration edits are explicit-save. Moving between sections does not force a save or discard the draft; the bottom-right **Save & Verify** dock appears only while changes need saving or a failed save needs retry. **Discard** restores the last saved state. The original tab can recover its own unsaved draft after a reload, but static-demo saved settings still live only in that browser profile.
 - **Fleet Matrix** starts with campaign names only. Selecting a campaign opens its live activity badge, configuration readiness, assigned bots, and retained-call analytics. **Active** means the connected bridge currently reports a live call for that campaign; **Inactive** means it reports none. Static demos show **Status unavailable** rather than inventing production activity. Analytics cover retained records only (up to 200 bridge calls and 100 browser tests across the console), not lifetime totals.
 
-See [opening test results](OPENING-TEST-RESULTS.md) for this release's commands, results and limitations. The tests use temporary data and environment files, loopback ports, synthetic credentials and mocked services. External `fetch` calls are blocked by default and the live Deepgram test is reported as skipped. A live run may incur provider charges and requires explicit opt-in with `VAC_TEST_LIVE=1` and a test key:
+See [opening test results](docs/reports/OPENING-TEST-RESULTS.md) for this release's commands, results and limitations. The tests use temporary data and environment files, loopback ports, synthetic credentials and mocked services. External `fetch` calls are blocked by default and the live Deepgram test is reported as skipped. A live run may incur provider charges and requires explicit opt-in with `VAC_TEST_LIVE=1` and a test key:
 
 ```bash
 npm run build
@@ -174,7 +174,7 @@ npm test
 
 ## Audit, remediation and EC2 readiness
 
-The 2026-11-19 deep audit, every fix, the executed verification evidence, residual risks and the EC2 runbook are in [`AUDIT-REPORT-2026-11-19.md`](AUDIT-REPORT-2026-11-19.md). The machine-readable findings sheet is [`AUDIT-FINDINGS-2026-11-19.csv`](AUDIT-FINDINGS-2026-11-19.csv). The older `docs/AUDIT-REPORT.md` is retained as historical context and is explicitly marked superseded.
+The 2026-11-19 deep audit, every fix, the executed verification evidence, residual risks and the EC2 runbook are in [`AUDIT-REPORT-2026-11-19.md`](docs/reports/AUDIT-REPORT-2026-11-19.md). The machine-readable findings sheet is [`AUDIT-FINDINGS-2026-11-19.csv`](AUDIT-FINDINGS-2026-11-19.csv). The older `docs/AUDIT-REPORT.md` is retained as historical context and is explicitly marked superseded.
 
 ## Docker / Render Deployment
 

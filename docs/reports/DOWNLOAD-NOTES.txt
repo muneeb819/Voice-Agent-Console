@@ -1,6 +1,6 @@
 ================================================================================
 MMA DIGITAL LABS — VOICE AGENT CONSOLE (FULL PRODUCTION & DEMO RELEASE)
-Build: nova-3.5 | Verification: see AUDIT-REPORT-2026-11-19.md (executed locally)
+Build: nova-3.5 | Verification: see AUDIT-REPORT-2026-11-19.md (same folder) (executed locally)
 ================================================================================
 
 INCLUDED LATEST FEATURES & ARCHITECTURE:

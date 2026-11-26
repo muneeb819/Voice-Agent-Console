@@ -440,17 +440,6 @@ export function chooseOpeningLine(agent: { id: string; randomGreetingEnabled?: b
   }
 }
 
-/** Continue with the configured opening if the library or rotation is unavailable. */
-export function trySelectGreeting(agentId: string, enabled: boolean, savedOpening = ''): GreetingRecord | null {
-  if (!enabled) return null;
-  try {
-    return selectGreetingForAgent(agentId, savedOpening);
-  } catch (err) {
-    console.error('[greetings] Could not select a greeting; using the configured opening:', err instanceof Error ? err.message : err);
-    return null;
-  }
-}
-
 function writeJsonMirror(state: ConsoleState): void {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   const tmpPath = `${JSON_MIRROR_PATH}.${process.pid}.${Date.now()}.tmp`;

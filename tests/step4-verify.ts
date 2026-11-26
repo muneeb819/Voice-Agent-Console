@@ -458,7 +458,7 @@ async function run() {
         normalizedTarList.includes(`${archiveRoot}/dist/server.js`) &&
         normalizedTarList.includes(`${archiveRoot}/dist/opening.js`) &&
         normalizedTarList.includes(`${archiveRoot}/public/opening.js`) &&
-        normalizedTarList.includes(`${archiveRoot}/opening-test-results.md`) &&
+        normalizedTarList.includes(`${archiveRoot}/docs/reports/opening-test-results.md`) &&
         normalizedTarList.includes(`${archiveRoot}/vicibox-production-runbook.md`),
       'Release tarball is missing a required installer, runtime, opening helper, runbook, or test-results document'
     );

@@ -9,7 +9,6 @@ exports.listGreetingLibrary = listGreetingLibrary;
 exports.selectGreetingForAgent = selectGreetingForAgent;
 exports.selectGreetingLine = selectGreetingLine;
 exports.chooseOpeningLine = chooseOpeningLine;
-exports.trySelectGreeting = trySelectGreeting;
 exports.getConsoleState = getConsoleState;
 exports.saveConsoleState = saveConsoleState;
 exports.recentRevisionSnapshots = recentRevisionSnapshots;
@@ -375,18 +374,6 @@ function chooseOpeningLine(agent) {
     }
     catch (err) {
         console.error('[greetings] Could not pick a greeting; using the saved opening:', err instanceof Error ? err.message : err);
-        return null;
-    }
-}
-/** Continue with the configured opening if the library or rotation is unavailable. */
-function trySelectGreeting(agentId, enabled, savedOpening = '') {
-    if (!enabled)
-        return null;
-    try {
-        return selectGreetingForAgent(agentId, savedOpening);
-    }
-    catch (err) {
-        console.error('[greetings] Could not select a greeting; using the configured opening:', err instanceof Error ? err.message : err);
         return null;
     }
 }
