@@ -68,6 +68,7 @@ Object.defineProperty(exports, "callLimitMsForCampaign", { enumerable: true, get
 Object.defineProperty(exports, "callLimitSchedule", { enumerable: true, get: function () { return call_limit_2.callLimitSchedule; } });
 Object.defineProperty(exports, "callLimitWrapUpPrompt", { enumerable: true, get: function () { return call_limit_2.callLimitWrapUpPrompt; } });
 const vici_sip_registration_1 = require("./vici-sip-registration");
+const sip_refer_1 = require("./sip-refer");
 const screening_1 = require("./screening");
 const vici_client_1 = require("./vici-client");
 /**
@@ -703,6 +704,7 @@ class VicidialBridgeService {
         const sock = dgram_1.default.createSocket('udp4');
         this.sipSocket = sock;
         const dialogs = new Map();
+        const referTracker = new sip_refer_1.ReferTracker();
         const parseSipMessage = (raw) => {
             const sep = raw.indexOf('\r\n\r\n');
             const headBlock = sep >= 0 ? raw.slice(0, sep) : raw;
@@ -750,7 +752,14 @@ class VicidialBridgeService {
             try {
                 const raw = msgBuf.toString('utf8');
                 const { startLine, headers, body } = parseSipMessage(raw);
-                if (!startLine || startLine.startsWith('SIP/2.0'))
+                if (startLine && startLine.startsWith('SIP/2.0')) {
+                    // Only a trusted peer may answer a pending REFER.
+                    if ((0, auth_guard_1.isBridgePeerIpAllowed)(rinfo.address)) {
+                        referTracker.handleResponse(firstHeader(headers, 'call-id', 'i').slice(0, 256), firstHeader(headers, 'cseq'), startLine);
+                    }
+                    return;
+                }
+                if (!startLine)
                     return;
                 const [methodRaw, requestUri] = startLine.split(/\s+/);
                 const method = (methodRaw || '').toUpperCase();
@@ -774,6 +783,13 @@ class VicidialBridgeService {
                     return;
                 }
                 if (method === 'ACK') {
+                    return;
+                }
+                if (method === 'NOTIFY') {
+                    // Progress of a REFER we sent (Event: refer, sipfrag body). Acknowledge so the dialer stops retrying.
+                    const dlg = dialogs.get(callId);
+                    sendSipResponse('200 OK', headers, dlg?.localToHeaderWithTag || toRaw, [], '', rinfo);
+                    referTracker.handleNotify(callId, body);
                     return;
                 }
                 if (method === 'BYE' || method === 'CANCEL') {
@@ -1005,10 +1021,12 @@ class VicidialBridgeService {
                         rtpSocket.send(rtpPkt, remoteRtpPort, remoteRtpIp);
                         hooks.onFramePlayed?.(pcmFrame);
                     }, 20);
+                    let localCseq = 0;
                     const cleanupRtpAndBye = (sendByeToAsterisk) => {
                         if (rtpClosed)
                             return;
                         rtpClosed = true;
+                        referTracker.cancel(callId);
                         clearInterval(rtpPacer);
                         dialogs.delete(callId);
                         try {
@@ -1023,7 +1041,7 @@ class VicidialBridgeService {
                                 `From: ${localToWithTag}`,
                                 `To: ${fromRaw}`,
                                 `Call-ID: ${callId}`,
-                                'CSeq: 1 BYE',
+                                `CSeq: ${++localCseq} BYE`,
                                 'Content-Length: 0',
                                 '',
                                 '',
@@ -1047,6 +1065,29 @@ class VicidialBridgeService {
                         },
                         hangupTransport: () => {
                             cleanupRtpAndBye(true);
+                        },
+                        referTransport: async (target) => {
+                            if (rtpClosed || !this.sipSocket)
+                                return { ok: false, message: 'SIP call already ended' };
+                            if (!(0, sip_refer_1.sanitizeReferTarget)(target))
+                                return { ok: false, message: 'Transfer target is not a dialplan extension' };
+                            const cseq = ++localCseq;
+                            const sendRefer = () => {
+                                const { message } = (0, sip_refer_1.buildReferRequest)({
+                                    remoteContactUri,
+                                    localHost: localIpForSdp,
+                                    localPort: this.sipPort,
+                                    fromHeader: localToWithTag,
+                                    toHeader: fromRaw,
+                                    callId,
+                                    cseq,
+                                    contactUser: exten || 'bridge',
+                                    target,
+                                    referHost: rinfo.address,
+                                });
+                                this.sipSocket?.send(Buffer.from(message, 'utf8'), rinfo.port, rinfo.address);
+                            };
+                            return referTracker.wait(callId, cseq, sendRefer);
                         },
                     };
                     const sessionCallbacks = this.launchCallSession({
@@ -1314,6 +1355,21 @@ class VicidialBridgeService {
                 });
                 xferOk = amiRes.ok;
                 detail = amiRes.message;
+            }
+            // Last resort: ask the dialer over the SIP call itself (no extra port needed).
+            // Only for a dialplan extension target, and only when the console option is on.
+            if (!xferOk && xferType === 'extension' && opts.hooks.referTransport && (0, db_1.getConsoleState)().vici.sipReferFallback !== false) {
+                const referRes = await opts.hooks.referTransport(xferTarget);
+                viciClient.auditLog.push({
+                    ts: new Date().toISOString(),
+                    api: 'sip',
+                    fn: 'REFER',
+                    urlOrAction: `SIP REFER -> ${xferTarget}`,
+                    ok: referRes.ok,
+                    responseText: referRes.message,
+                });
+                detail = referRes.ok ? `SIP REFER accepted (${referRes.message})` : `${detail ? `${detail}; ` : ''}SIP REFER failed: ${referRes.message}`;
+                xferOk = referRes.ok;
             }
             if (xferOk) {
                 transferredTo = `${xferType}:${xferTarget}`;

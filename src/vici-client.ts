@@ -32,7 +32,7 @@ export interface HydratedViciLead {
 
 export interface ViciApiAuditEntry {
   ts: string;
-  api: 'non_agent_api' | 'agent_api' | 'ami';
+  api: 'non_agent_api' | 'agent_api' | 'ami' | 'sip';
   fn: string;
   urlOrAction: string;
   ok: boolean;

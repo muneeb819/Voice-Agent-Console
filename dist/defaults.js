@@ -586,6 +586,7 @@ function createDefaultState() {
             amiHost: '127.0.0.1',
             amiPort: 5038,
             amiUser: 'cron',
+            sipReferFallback: true,
         },
         tests: {
             a_nova: [
@@ -1116,6 +1117,7 @@ function normalizeState(raw) {
         amiHost: textOr(rawAmiHost, base.vici.amiHost),
         amiPort: Math.round(num(src.vici?.amiPort, 5038, 1, 65535)),
         amiUser: textOr(src.vici?.amiUser === 'bridge' ? 'cron' : src.vici?.amiUser, base.vici.amiUser),
+        sipReferFallback: src.vici?.sipReferFallback !== false,
     };
     const tests = {};
     if (src.tests && typeof src.tests === 'object') {

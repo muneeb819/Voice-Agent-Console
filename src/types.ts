@@ -136,6 +136,8 @@ export interface ViciConfig {
   amiHost: string;
   amiPort: number;
   amiUser: string;
+  /** Backup transfer: if the Agent API and AMI both fail, ask the dialer to transfer the call over SIP (REFER). */
+  sipReferFallback: boolean;
 }
 
 export interface TestScenario {
