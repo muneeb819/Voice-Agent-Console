@@ -69,6 +69,7 @@ Object.defineProperty(exports, "callLimitSchedule", { enumerable: true, get: fun
 Object.defineProperty(exports, "callLimitWrapUpPrompt", { enumerable: true, get: function () { return call_limit_2.callLimitWrapUpPrompt; } });
 const vici_sip_registration_1 = require("./vici-sip-registration");
 const bot_sleep_1 = require("./bot-sleep");
+const usage_ledger_1 = require("./usage-ledger");
 const sip_refer_1 = require("./sip-refer");
 const screening_1 = require("./screening");
 const vici_client_1 = require("./vici-client");
@@ -1862,6 +1863,7 @@ class VicidialBridgeService {
                 headers: dgKey ? { Authorization: `Token ${dgKey}` } : {},
                 family: 4,
             });
+            (0, usage_ledger_1.trackAgentConnection)(dgWs, 'phone_call', callId);
             dgWs.on('unexpected-response', (_req, res) => {
                 let body = '';
                 res.on('data', (c) => (body += c.toString()));

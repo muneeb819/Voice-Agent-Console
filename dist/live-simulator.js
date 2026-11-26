@@ -37,6 +37,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.attachLiveSimulator = attachLiveSimulator;
+const usage_ledger_1 = require("./usage-ledger");
 const barge_in_1 = require("./barge-in");
 const call_limit_1 = require("./call-limit");
 const auth_guard_1 = require("./auth-guard");
@@ -747,6 +748,7 @@ function attachLiveSimulator(server, noServer = false) {
                     finalizeCall('upstream_error');
                     return;
                 }
+                (0, usage_ledger_1.trackAgentConnection)(dgWs, 'simulator', callId);
                 connectTimer = setTimeout(() => {
                     if (!settingsApplied && !closed) {
                         sendFatalError('UPSTREAM_TIMEOUT', 'Deepgram did not confirm the session settings in time.');

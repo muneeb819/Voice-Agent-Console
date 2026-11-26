@@ -2054,6 +2054,7 @@
     status: null,
     logs: [],
     analytics: null,
+    usage: null,
     loaded: false,
     ws: null,
     verifyRunning: false,
@@ -4558,9 +4559,10 @@
       return;
     }
     try {
-      const [statusRes, anaRes] = await Promise.all([fetch('/api/vici/status'), fetch('/api/vici/analytics')]);
+      const [statusRes, anaRes, usageRes] = await Promise.all([fetch('/api/vici/status'), fetch('/api/vici/analytics'), fetch('/api/usage/report?days=7')]);
       const data = await statusRes.json();
       const anaData = await anaRes.json();
+      try { const u = await usageRes.json(); if (u && u.ok) viciMon.usage = u; } catch {}
       if (data.ok) {
         viciMon.status = data.bridge || null;
         viciMon.logs = data.logs || [];
@@ -7135,6 +7137,18 @@
       </div>
      </div>
 
+     ${(() => {
+       const u = viciMon.usage;
+       if (!u) return '';
+       const fmtDay = (d) => esc(d.day);
+       const rows = (u.days || []).map((d) => `<tr><td>${fmtDay(d)}</td><td>${d.connections}</td><td><b>${d.hours} h</b></td><td>${d.phoneHours} h</td><td>${d.simulatorHours} h</td><td>${d.longestMinutes} min</td></tr>`).join('');
+       const stuck = (u.openNow || []).filter((c) => c.minutes >= 15);
+       return `<div class="card" style="margin:10px 0">
+        <h3 style="margin:0 0 4px">Deepgram agent usage <span class="pill" title="Deepgram bills agent time for as long as a connection stays open, even when nobody is talking. This counts every connection this console opens, from open to close, in UTC days.">?</span></h3>
+        ${u.empty ? '<p class="note">Counting started with this version, so there is nothing to show yet.</p>' : `<table class="tbl"><thead><tr><th>Day (UTC)</th><th>Connections</th><th>Total</th><th>Phone calls</th><th>Simulator</th><th>Longest</th></tr></thead><tbody>${rows}</tbody></table>`}
+        ${stuck.length ? `<p class="note" style="color:var(--er,#c0392b)">Open for 15 minutes or more right now: ${stuck.map((c) => `${esc(c.source === 'simulator' ? 'simulator' : 'phone call')} ${esc(c.ref)} (${c.minutes} min)`).join(', ')}</p>` : ''}
+       </div>`;
+     })()}
      <p class="note">Analytics use retained logs only: up to 200 bridge calls and 100 simulator calls, not lifetime totals.</p>
      <div class="sim-kpis">
       <div class="kpi"><div class="kpi-lbl">Retained Bridge Calls (max 200)</div><div class="kpi-val">${ana.totalBridgeCalls ?? 0}</div></div>

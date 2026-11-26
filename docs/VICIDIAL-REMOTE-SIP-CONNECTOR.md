@@ -114,3 +114,11 @@ The Command deck has a **Sleep bots / Wake bots** button. While asleep, the brid
 - The setting is stored in `data/bot-sleep.json`, not in the console state, so a stale open console tab cannot switch it back. It survives restarts.
 - The bridge status shows `botSleep` and `rejectedAsleepCount`.
 - Sleeping stops the bots answering; VICIdial keeps dialing. To stop dialing too, pause the campaign or the remote agents in VICIdial.
+
+## Deepgram usage report
+
+Deepgram bills agent time for as long as a connection stays open, not only while someone is talking. The console records the open and close time of every Deepgram agent connection it makes (phone calls and the simulator) in `data/usage-ledger.jsonl`.
+
+- The wallboard shows a **Deepgram agent usage** card: connections and hours per UTC day, split into phone calls and simulator, the longest connection, and any connection open for 15 minutes or more right now.
+- API: `GET /api/usage/report?days=7`.
+- It counts from the moment this version is installed. Use it to check the total against Deepgram's own dashboard.
