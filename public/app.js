@@ -7141,7 +7141,7 @@
        const u = viciMon.usage;
        if (!u) return '';
        const fmtDay = (d) => esc(d.day);
-       const rows = (u.days || []).map((d) => `<tr><td>${fmtDay(d)}</td><td>${d.connections}</td><td><b>${d.hours} h</b></td><td>${d.phoneHours} h</td><td>${d.simulatorHours} h</td><td>${d.longestMinutes} min</td></tr>`).join('');
+       const rows = (u.days || []).map((d) => `<tr><td>${fmtDay(d)}</td><td>${d.connections}</td><td><b>${d.hours} h</b>${d.openHours ? ` <small>(${d.openHours} h still open)</small>` : ''}</td><td>${d.phoneHours} h</td><td>${d.simulatorHours} h</td><td>${d.longestMinutes} min</td></tr>`).join('');
        const stuck = (u.openNow || []).filter((c) => c.minutes >= 15);
        return `<div class="card" style="margin:10px 0">
         <h3 style="margin:0 0 4px">Deepgram agent usage <span class="pill" title="Deepgram bills agent time for as long as a connection stays open, even when nobody is talking. This counts every connection this console opens, from open to close, in UTC days.">?</span></h3>

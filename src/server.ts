@@ -1,5 +1,5 @@
 import { getBotSleep, setBotSleep } from './bot-sleep';
-import { buildUsageReport, readLedger } from './usage-ledger';
+import { buildUsageReport, readLedger, reconcileOpenConnections } from './usage-ledger';
 import { installProcessGuards } from './process-guards';
 import {
   CloneError,
@@ -1161,6 +1161,8 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   app.post('/api/vici/register-call', handleRegisterCall);
   app.get('/api/vici/precall', handleRegisterCall);
   app.post('/api/vici/precall', handleRegisterCall);
+
+  reconcileOpenConnections();
 
   app.get('/api/usage/report', (req: Request, res: Response) => {
     const requested = typeof req.query.days === 'string' ? Number(req.query.days) : 7;

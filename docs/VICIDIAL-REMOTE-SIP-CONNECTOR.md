@@ -121,4 +121,5 @@ Deepgram bills agent time for as long as a connection stays open, not only while
 
 - The wallboard shows a **Deepgram agent usage** card: connections and hours per UTC day, split into phone calls and simulator, the longest connection, and any connection open for 15 minutes or more right now.
 - API: `GET /api/usage/report?days=7`.
+- Connections still open count as provisional time, a connection that crosses UTC midnight is split between the two days, and a connection left open by a crash is recovered from the last 30-second heartbeat and marked as estimated.
 - It counts from the moment this version is installed. Use it to check the total against Deepgram's own dashboard.

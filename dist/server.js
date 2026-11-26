@@ -1010,6 +1010,7 @@ function createApp(viciBridge) {
     app.post('/api/vici/register-call', handleRegisterCall);
     app.get('/api/vici/precall', handleRegisterCall);
     app.post('/api/vici/precall', handleRegisterCall);
+    (0, usage_ledger_1.reconcileOpenConnections)();
     app.get('/api/usage/report', (req, res) => {
         const requested = typeof req.query.days === 'string' ? Number(req.query.days) : 7;
         const days = Number.isFinite(requested) ? Math.max(1, Math.min(60, Math.floor(requested))) : 7;

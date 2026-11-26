@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.reconcileOpenConnections = reconcileOpenConnections;
 exports.trackAgentConnection = trackAgentConnection;
 exports.readLedger = readLedger;
 exports.openConnections = openConnections;
@@ -16,6 +17,76 @@ const open = new Map();
 let nextId = 1;
 function filePath() {
     return path_1.default.join(data_paths_1.DATA_DIR, FILE_NAME);
+}
+const OPEN_FILE_NAME = 'usage-open.json';
+const HEARTBEAT_MS = 30_000;
+let heartbeat = null;
+function openFilePath() {
+    return path_1.default.join(data_paths_1.DATA_DIR, OPEN_FILE_NAME);
+}
+/** Writes the connections that are open right now, with the time of writing as proof they were alive. */
+function persistOpen() {
+    try {
+        fs_1.default.mkdirSync(data_paths_1.DATA_DIR, { recursive: true });
+        if (open.size === 0) {
+            fs_1.default.rmSync(openFilePath(), { force: true });
+            return;
+        }
+        const payload = { aliveAt: new Date().toISOString(), open: Array.from(open.values()) };
+        const tmp = `${openFilePath()}.tmp`;
+        fs_1.default.writeFileSync(tmp, JSON.stringify(payload), { mode: 0o600 });
+        fs_1.default.renameSync(tmp, openFilePath());
+    }
+    catch {
+        // Usage tracking must never break a call.
+    }
+}
+function syncHeartbeat() {
+    if (open.size > 0 && !heartbeat) {
+        heartbeat = setInterval(persistOpen, HEARTBEAT_MS);
+        heartbeat.unref?.();
+    }
+    else if (open.size === 0 && heartbeat) {
+        clearInterval(heartbeat);
+        heartbeat = null;
+    }
+}
+/**
+ * After a crash or restart, connections that were still open have no close event.
+ * Record each one as ending at the last heartbeat, so its billed time is not lost.
+ * Run once when the process starts.
+ */
+let reconciled = false;
+function reconcileOpenConnections() {
+    // Once per process: a second call would mistake this process's own live connections for crashed ones.
+    if (reconciled || open.size > 0)
+        return 0;
+    reconciled = true;
+    let recovered = 0;
+    try {
+        const saved = JSON.parse(fs_1.default.readFileSync(openFilePath(), 'utf8'));
+        const aliveAtMs = Date.parse(saved?.aliveAt);
+        for (const c of Array.isArray(saved?.open) ? saved.open : []) {
+            if (!c || typeof c.openedAtMs !== 'number' || !Number.isFinite(aliveAtMs))
+                continue;
+            const endMs = Math.max(aliveAtMs, c.openedAtMs);
+            append({
+                source: c.source === 'simulator' ? 'simulator' : 'phone_call',
+                ref: String(c.ref || 'unknown').slice(0, 80),
+                openedAt: new Date(c.openedAtMs).toISOString(),
+                closedAt: new Date(endMs).toISOString(),
+                ms: endMs - c.openedAtMs,
+                closeCode: null,
+                estimated: true,
+            });
+            recovered += 1;
+        }
+        fs_1.default.rmSync(openFilePath(), { force: true });
+    }
+    catch {
+        // Nothing saved means nothing to recover.
+    }
+    return recovered;
 }
 function append(record) {
     try {
@@ -46,6 +117,8 @@ function trackAgentConnection(ws, source, ref) {
             return;
         counted = true;
         open.set(id, { source, ref, openedAtMs: Date.now() });
+        persistOpen();
+        syncHeartbeat();
     };
     if (ws.readyState === 1)
         start();
@@ -55,6 +128,8 @@ function trackAgentConnection(ws, source, ref) {
         if (!conn)
             return;
         open.delete(id);
+        persistOpen();
+        syncHeartbeat();
         const closedAtMs = Date.now();
         append({
             source: conn.source,
@@ -94,30 +169,63 @@ function openConnections(now = Date.now()) {
         ms: now - c.openedAtMs,
     }));
 }
+const DAY_MS = 86_400_000;
+/** Cuts [startMs, endMs) at UTC midnights, so a connection that crosses midnight counts toward both days. */
+function splitByUtcDay(startMs, endMs) {
+    const parts = [];
+    let cursor = startMs;
+    while (cursor < endMs) {
+        const nextMidnight = (Math.floor(cursor / DAY_MS) + 1) * DAY_MS;
+        const stop = Math.min(endMs, nextMidnight);
+        parts.push({ day: new Date(cursor).toISOString().slice(0, 10), ms: stop - cursor });
+        cursor = stop;
+    }
+    return parts;
+}
 function buildUsageReport(records, open_ = openConnections(), dayCount = 7) {
-    const byDay = new Map();
+    const days = new Map();
+    const add = (source, ref, startMs, endMs, isOpen) => {
+        for (const part of splitByUtcDay(startMs, endMs)) {
+            const d = days.get(part.day) || { ids: new Set(), ms: 0, phoneMs: 0, simulatorMs: 0, openMs: 0, longestMs: 0 };
+            d.ids.add(`${source}:${ref}:${startMs}`);
+            d.ms += part.ms;
+            if (source === 'simulator')
+                d.simulatorMs += part.ms;
+            else
+                d.phoneMs += part.ms;
+            if (isOpen)
+                d.openMs += part.ms;
+            d.longestMs = Math.max(d.longestMs, endMs - startMs);
+            days.set(part.day, d);
+        }
+    };
     for (const r of records) {
-        const day = r.openedAt.slice(0, 10);
-        const list = byDay.get(day) || [];
-        list.push(r);
-        byDay.set(day, list);
+        const startMs = Date.parse(r.openedAt);
+        if (Number.isFinite(startMs))
+            add(r.source, r.ref, startMs, startMs + Math.max(0, r.ms), false);
+    }
+    for (const c of open_) {
+        const startMs = Date.parse(c.openedAt);
+        if (Number.isFinite(startMs))
+            add(c.source, c.ref, startMs, startMs + Math.max(0, c.ms), true);
     }
     const hours = (ms) => Number((ms / 3600000).toFixed(2));
-    const days = Array.from(byDay.entries())
+    const rows = Array.from(days.entries())
         .sort((a, b) => (a[0] < b[0] ? 1 : -1))
         .slice(0, Math.max(1, dayCount))
-        .map(([day, rows]) => ({
+        .map(([day, d]) => ({
         day,
-        connections: rows.length,
-        hours: hours(rows.reduce((s, r) => s + r.ms, 0)),
-        phoneHours: hours(rows.filter((r) => r.source === 'phone_call').reduce((s, r) => s + r.ms, 0)),
-        simulatorHours: hours(rows.filter((r) => r.source === 'simulator').reduce((s, r) => s + r.ms, 0)),
-        longestMinutes: Math.round(Math.max(...rows.map((r) => r.ms)) / 60000),
+        connections: d.ids.size,
+        hours: hours(d.ms),
+        phoneHours: hours(d.phoneMs),
+        simulatorHours: hours(d.simulatorMs),
+        longestMinutes: Math.round(d.longestMs / 60000),
+        openHours: hours(d.openMs),
     }));
     return {
-        days,
+        days: rows,
         openNow: open_.map((c) => ({ source: c.source, ref: c.ref, openedAt: c.openedAt, minutes: Math.round(c.ms / 60000) })),
-        empty: records.length === 0,
+        empty: records.length === 0 && open_.length === 0,
         since: records.length ? records.reduce((m, r) => (r.openedAt < m ? r.openedAt : m), records[0].openedAt) : null,
     };
 }
