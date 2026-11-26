@@ -26,6 +26,8 @@ export interface DiagnosticReport {
 export interface ProbeResult {
   ok: boolean;
   detail: string;
+  /** Why a probe failed: the key was refused, or the service could not be reached. Drives the advice shown. */
+  kind?: 'auth' | 'unreachable';
 }
 
 export interface DiskResult {
@@ -41,6 +43,8 @@ export interface DiagnosticInputs {
     sipRegistration?: { status: string; lastError?: string | null };
     rejectedOverCapacityCount?: number;
     rejectedAsleepCount?: number;
+    audioSocketListening?: boolean;
+    sipRtpListening?: boolean;
     lastError?: string | null;
   };
   botSleep: { sleeping: boolean };
@@ -59,6 +63,36 @@ export interface DiagnosticInputs {
 export const PROBE_TIMEOUT_MS = 6000;
 const LOW_DISK_WARN = 500 * 1024 * 1024;
 const LOW_DISK_FAIL = 100 * 1024 * 1024;
+
+/**
+ * Asks Deepgram whether it accepts the saved key, with its own request that is cancelled on timeout
+ * (so a slow Deepgram never leaves work running after the scan finished).
+ */
+export async function probeDeepgramKey(
+  apiKey: string,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = 5000
+): Promise<ProbeResult> {
+  try {
+    const res = await fetchImpl('https://api.deepgram.com/v1/models', {
+      headers: { Authorization: `Token ${apiKey}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.status === 401) return { ok: false, kind: 'auth', detail: 'Deepgram refused the saved key (401 Unauthorized).' };
+    if (res.status === 403) return { ok: true, detail: 'Deepgram accepted the key (it is limited in scope, which is fine for calls).' };
+    if (res.ok) return { ok: true, detail: 'Deepgram accepted the key.' };
+    return { ok: false, kind: 'unreachable', detail: `Deepgram answered with status ${res.status}, so the key could not be checked just now.` };
+  } catch (err: any) {
+    const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+    return { ok: false, kind: 'unreachable', detail: timedOut ? 'Deepgram did not answer in time.' : `Could not reach Deepgram: ${String(err?.message || err).slice(0, 120)}` };
+  }
+}
+
+function deepgramAdvice(kind: ProbeResult['kind']): string {
+  if (kind === 'auth') return 'Paste a current Deepgram key in Settings and check the Deepgram account has credit, then scan again.';
+  if (kind === 'unreachable') return 'Deepgram could not be reached just now. The key may be fine: check the server\'s internet connection and scan again.';
+  return 'Scan again. If it keeps failing, check the key in Settings and the server\'s connection to Deepgram.';
+}
 
 async function bounded<T>(work: () => Promise<T>, fallback: T, ms = PROBE_TIMEOUT_MS): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
@@ -117,7 +151,7 @@ export async function runDiagnostics(input: DiagnosticInputs): Promise<Diagnosti
     add(
       dg.ok
         ? { id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'ok', detail: dg.detail || 'Deepgram answered.', suggestion: '' }
-        : { id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'fail', detail: dg.detail || 'Deepgram did not accept the request.', suggestion: 'Check the key is current and the Deepgram account has credit, then scan again.' }
+        : { id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'fail', detail: dg.detail || 'Deepgram did not accept the request.', suggestion: deepgramAdvice(dg.kind) }
     );
   } else {
     add({ id: 'keys.deepgram_live', area: 'Keys', title: 'Deepgram accepts the key', status: 'skipped', detail: 'Skipped because no key is saved.', suggestion: '' });
@@ -134,7 +168,14 @@ export async function runDiagnostics(input: DiagnosticInputs): Promise<Diagnosti
   if (!bridge) {
     add({ id: 'bridge.running', area: 'Bridge', title: 'Call bridge is running', status: 'fail', detail: 'The call bridge is not running, so calls cannot reach any bot.', suggestion: 'Restart the console service and scan again.' });
   } else {
-    add({ id: 'bridge.running', area: 'Bridge', title: 'Call bridge is running', status: 'ok', detail: 'The call bridge is listening.', suggestion: '' });
+    // The bridge object exists even when it failed to start, so the listener itself must be checked.
+    const viaSip = state.vici?.transport !== 'audiosocket';
+    const listening = viaSip ? Boolean(bridge.sipRtpListening) : Boolean(bridge.audioSocketListening);
+    add(
+      listening
+        ? { id: 'bridge.running', area: 'Bridge', title: 'Call bridge is running', status: 'ok', detail: `The call bridge is listening for ${viaSip ? 'SIP calls' : 'AudioSocket calls'}.`, suggestion: '' }
+        : { id: 'bridge.running', area: 'Bridge', title: 'Call bridge is running', status: 'fail', detail: `The call bridge is not listening for ${viaSip ? 'SIP calls' : 'AudioSocket calls'}, so no call can reach a bot. ${bridge.lastError || ''}`.trim(), suggestion: 'Check the bridge port is free and the bind address is right, then restart the console service and scan again.' }
+    );
     const mode = state.vici?.sipConnectionMode;
     const usesRegistration = state.vici?.transport === 'sip_trunk' && (mode === 'registration' || mode === 'hybrid');
     const reg = bridge.sipRegistration;

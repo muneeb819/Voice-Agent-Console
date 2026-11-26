@@ -2,7 +2,7 @@ import assert from 'assert';
 import fs from 'fs';
 import path from 'path';
 import { createDefaultState, normalizeState } from '../src/defaults';
-import { runDiagnostics, type DiagnosticInputs, type DiagnosticReport } from '../src/diagnostics';
+import { probeDeepgramKey, runDiagnostics, type DiagnosticInputs, type DiagnosticReport } from '../src/diagnostics';
 import type { AlertRecord } from '../src/alerts';
 
 const ok = async () => ({ ok: true, detail: 'fine' });
@@ -14,7 +14,7 @@ function base(over: Partial<DiagnosticInputs> = {}): DiagnosticInputs {
   return {
     state,
     secrets: { DEEPGRAM_API_KEY: { configured: true } },
-    bridge: { sipRegistration: { status: 'registered' }, rejectedOverCapacityCount: 0 },
+    bridge: { sipRegistration: { status: 'registered' }, rejectedOverCapacityCount: 0, sipRtpListening: true, audioSocketListening: true },
     botSleep: { sleeping: false },
     alerts: [],
     probes: { deepgram: ok, viciApi: ok, ami: ok, disk: async () => ({ writable: true, freeBytes: 50 * 1024 ** 3 }) },
@@ -75,10 +75,10 @@ function alert(over: Partial<AlertRecord>): AlertRecord {
   const stReg = base().state;
   stReg.vici.transport = 'sip_trunk';
   stReg.vici.sipConnectionMode = 'registration';
-  assert.equal(find(await runDiagnostics(base({ state: stReg, bridge: { sipRegistration: { status: 'failed', lastError: '403 Forbidden' } } })), 'bridge.sip').status, 'fail', 'failed registration is a problem');
-  assert(/403 Forbidden/.test(find(await runDiagnostics(base({ state: stReg, bridge: { sipRegistration: { status: 'failed', lastError: '403 Forbidden' } } })), 'bridge.sip').detail), 'registration error is shown');
+  assert.equal(find(await runDiagnostics(base({ state: stReg, bridge: { sipRegistration: { status: 'failed', lastError: '403 Forbidden' }, sipRtpListening: true } })), 'bridge.sip').status, 'fail', 'failed registration is a problem');
+  assert(/403 Forbidden/.test(find(await runDiagnostics(base({ state: stReg, bridge: { sipRegistration: { status: 'failed', lastError: '403 Forbidden' }, sipRtpListening: true } })), 'bridge.sip').detail), 'registration error is shown');
   assert.equal(find(await runDiagnostics(base({ state: stReg })), 'bridge.sip').status, 'ok', 'registered is fine');
-  assert.equal(find(await runDiagnostics(base({ bridge: { sipRegistration: { status: 'registered' }, rejectedOverCapacityCount: 3 } })), 'bridge.capacity').status, 'warn', 'turned-away calls are flagged');
+  assert.equal(find(await runDiagnostics(base({ bridge: { sipRegistration: { status: 'registered' }, rejectedOverCapacityCount: 3, sipRtpListening: true } })), 'bridge.capacity').status, 'warn', 'turned-away calls are flagged');
   const tf = await runDiagnostics(base({ alerts: [alert({}), alert({ id: 'a2', acknowledged: true, kind: 'transfer_failed' })] }));
   assert.equal(find(tf, 'transfers.recent').status, 'fail', 'unread transfer failures are a problem');
   assert.equal(find(await runDiagnostics(base({ alerts: [alert({ acknowledged: true })] })), 'transfers.recent').status, 'ok', 'acknowledged failures stop counting');
@@ -90,6 +90,39 @@ function alert(over: Partial<AlertRecord>): AlertRecord {
   assert.equal(find(await disk(true, 50 * 1024 ** 2), 'server.disk').status, 'fail', 'almost-full disk is a problem');
   assert.equal(find(await disk(true, 300 * 1024 ** 2), 'server.disk').status, 'warn', 'low disk is a warning');
   assert.equal(find(await disk(true, null), 'server.disk').status, 'ok', 'unknown free space is fine when writable');
+
+
+  // A bridge object that failed to start must not look healthy.
+  const dead = await runDiagnostics(base({ bridge: { sipRtpListening: false, audioSocketListening: false, lastError: 'EADDRINUSE 5060' } }));
+  assert.equal(find(dead, 'bridge.running').status, 'fail', 'bridge that is not listening is a problem');
+  assert(/EADDRINUSE/.test(find(dead, 'bridge.running').detail), 'the start error is shown');
+  const stAudio = base().state;
+  stAudio.vici.transport = 'audiosocket';
+  assert.equal(find(await runDiagnostics(base({ state: stAudio, bridge: { sipRtpListening: false, audioSocketListening: true } })), 'bridge.running').status, 'ok', 'AudioSocket mode looks at the AudioSocket listener');
+  assert.equal(find(await runDiagnostics(base({ state: stAudio, bridge: { sipRtpListening: true, audioSocketListening: false } })), 'bridge.running').status, 'fail', 'and not at the SIP one');
+
+  // Deepgram probe: a refused key and an unreachable service are told apart, and the request is cancellable.
+  let seenSignal: AbortSignal | undefined;
+  const fake = (status: number | Error) => (async (_url: any, init: any) => {
+    seenSignal = init?.signal;
+    if (status instanceof Error) throw status;
+    return { status, ok: status >= 200 && status < 300 } as Response;
+  }) as unknown as typeof fetch;
+  assert.deepEqual((await probeDeepgramKey('k', fake(200))).ok, true, '200 accepts the key');
+  assert(seenSignal instanceof AbortSignal, 'the request carries an abort signal so it is cancelled on timeout');
+  const refused = await probeDeepgramKey('k', fake(401));
+  assert(!refused.ok && refused.kind === 'auth', '401 means the key was refused');
+  assert((await probeDeepgramKey('k', fake(403))).ok, '403 means a scoped key, which is fine');
+  const down = await probeDeepgramKey('k', fake(503));
+  assert(!down.ok && down.kind === 'unreachable', 'a Deepgram outage is not blamed on the key');
+  const slow = await probeDeepgramKey('k', fake(Object.assign(new Error('x'), { name: 'TimeoutError' })));
+  assert(!slow.ok && slow.kind === 'unreachable' && /in time/.test(slow.detail), 'a timeout is reported as unreachable');
+  const authRun = await runDiagnostics(base({ probes: { ...base().probes, deepgram: async () => refused } }));
+  const downRun = await runDiagnostics(base({ probes: { ...base().probes, deepgram: async () => down } }));
+  assert(/current Deepgram key/.test(find(authRun, 'keys.deepgram_live').suggestion), 'refused key gets key advice');
+  assert(/could not be reached/.test(find(downRun, 'keys.deepgram_live').suggestion), 'an outage gets connection advice, not key advice');
+  const src = fs.readFileSync(path.join(__dirname, '../src/server.ts'), 'utf8');
+  assert(src.includes('probeDeepgramKey(') && !/deepgram: async \(\) => \{\s*const catalog/.test(src), 'the scan no longer uses the retrying voice-catalog fetch');
 
   // Wiring.
   const server = fs.readFileSync(path.join(__dirname, '../src/server.ts'), 'utf8');

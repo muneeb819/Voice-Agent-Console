@@ -77,7 +77,7 @@ import { createDefaultState, normalizeState } from './defaults';
 import { credentialRoutingChanges } from './state-guard';
 import { DATA_DIR } from './data-paths';
 import { pickDistinctFemaleVoice } from './voice-pick';
-import { runDiagnostics } from './diagnostics';
+import { probeDeepgramKey, runDiagnostics } from './diagnostics';
 import {
   fetchAllowedSampleAudio,
   fetchDeepgramLlmModels,
@@ -1217,12 +1217,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       botSleep: getBotSleep(),
       alerts: listAlerts().alerts,
       probes: {
-        deepgram: async () => {
-          const catalog = await fetchDeepgramVoiceCatalog(true);
-          return catalog.authenticated && catalog.source === 'deepgram_live_api'
-            ? { ok: true, detail: `Deepgram answered with ${catalog.voices.length} voices.` }
-            : { ok: false, detail: 'Deepgram did not accept the saved key (the built-in voice list was used instead).' };
-        },
+        deepgram: () => probeDeepgramKey(getSecret('DEEPGRAM_API_KEY')),
         viciApi: async () => {
           const r = await new VicidialApiClient(st.vici).checkVersion();
           return { ok: r.ok, detail: r.ok ? String(r.versionText || 'The dialer answered.').split('\n')[0].slice(0, 120) : 'The dialer web server answered, but not with its version.' };

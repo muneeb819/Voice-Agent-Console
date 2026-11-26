@@ -1058,12 +1058,7 @@ function createApp(viciBridge) {
             botSleep: (0, bot_sleep_1.getBotSleep)(),
             alerts: (0, alerts_1.listAlerts)().alerts,
             probes: {
-                deepgram: async () => {
-                    const catalog = await (0, deepgram_catalog_1.fetchDeepgramVoiceCatalog)(true);
-                    return catalog.authenticated && catalog.source === 'deepgram_live_api'
-                        ? { ok: true, detail: `Deepgram answered with ${catalog.voices.length} voices.` }
-                        : { ok: false, detail: 'Deepgram did not accept the saved key (the built-in voice list was used instead).' };
-                },
+                deepgram: () => (0, diagnostics_1.probeDeepgramKey)((0, env_store_1.getSecret)('DEEPGRAM_API_KEY')),
                 viciApi: async () => {
                     const r = await new vici_client_1.VicidialApiClient(st.vici).checkVersion();
                     return { ok: r.ok, detail: r.ok ? String(r.versionText || 'The dialer answered.').split('\n')[0].slice(0, 120) : 'The dialer web server answered, but not with its version.' };
