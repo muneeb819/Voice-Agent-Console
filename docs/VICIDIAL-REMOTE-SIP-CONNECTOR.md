@@ -180,3 +180,7 @@ Needs:
 Behaviour: the caller talking stops the bot at once; bot functions (transfer, webhooks) work the same; a model failure is a warning plus a short spoken "say that again" and only three failures in a row end the call. The engine listens on loopback with a random per-start token, so it is not reachable from outside.
 
 Not yet in own mode: the per-bot "barge-in off" setting is not passed to the engine.
+
+## Default skills set
+
+Every bot carries one built-in block in its call prompt: human conversation craft (short natural sentences, listening to mood, one question at a time, remembering what the caller said), spoken delivery (only words meant to be heard, numbers said like a person) and a steady persona. It is on by default for new, duplicated and saved bots; a checkbox on the bot's Agents tab turns it off for that bot, and a duplicate keeps the original's choice. It sits beside the voice delivery guidance, before the integrity rules (which stay last), and is the first thing dropped when a call prompt is nearly full; the Agents tab says so when that happens. The QA reviewer bot starts with it off because it never takes calls.
