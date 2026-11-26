@@ -91,13 +91,6 @@ export function defaultVoiceAgentSttModel(language?: string): VoiceAgentSttModel
   return 'nova-3';
 }
 
-export function normalizeVoiceAgentSttModel(model: unknown, language?: string): VoiceAgentSttModel {
-  const value = textOr(model, '').trim();
-  return VOICE_AGENT_STT_MODELS.includes(value as VoiceAgentSttModel)
-    ? (value as VoiceAgentSttModel)
-    : defaultVoiceAgentSttModel(language);
-}
-
 export function defaultSelfIntroForAgent(id: string, name: string): string {
   return defaultSelfIntro(id, name);
 }

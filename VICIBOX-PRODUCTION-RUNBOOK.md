@@ -5,7 +5,7 @@
 >
 > **Status:** VICIdial deployment and integration are paused until the servers are ready. This historical runbook contains environment-specific examples, not proof of a working production connection. Do not apply its PBX settings or make live calls until the operator resumes that work and verifies the environment.
 >
-> **Opening behavior:** rotation selects one of the 1,100 retained rows to vary the saved opening, without appending the full imported greeting. Bot audio is held for at least 0.5 seconds after provider readiness; that fixed wait does not prove the caller has spoken or that the opening was heard. A linked campaign recording notice is optional and existing explicit choices are preserved; disabling it does not disable recording or remove consent obligations. Review the agent's identity, complete script, claims and required disclosures before real calls. See the README's [greeting rotation section](README.md#imported-greetings-and-call-rotation) and [test results](OPENING-TEST-RESULTS.md) for limitations.
+> **Opening behavior:** rotation selects one of the 1,100 retained rows to vary the saved opening, without appending the full imported greeting. Bot audio is held for at least 0.5 seconds after provider readiness; that fixed wait does not prove the caller has spoken or that the opening was heard. A linked campaign recording notice is optional and existing explicit choices are preserved; disabling it does not disable recording or remove consent obligations. Review the agent's identity, complete script, claims and required disclosures before real calls. See the README's [greeting rotation section](README.md#imported-greetings-and-call-rotation) and [test results](docs/reports/OPENING-TEST-RESULTS.md) for limitations.
 
 ---
 

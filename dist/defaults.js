@@ -2,7 +2,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SEEDED_BUILTIN_BOTS = exports.DEEPGRAM_LLM_PROVIDERS = exports.DEEPGRAM_MANAGED_LLM_CATALOG = exports.DEFAULT_MAX_CALL_SEC = exports.SPEECH_SERVICE_DEFAULT_VOICES = exports.SPEECH_SERVICE_STT_MODELS = exports.MISSING_CAMPAIGN_RULES = exports.VOICE_AGENT_STT_MODELS = exports.DEFAULT_GREETING_LINES = exports.DEFAULT_SPEAKING_STYLE = void 0;
 exports.defaultVoiceAgentSttModel = defaultVoiceAgentSttModel;
-exports.normalizeVoiceAgentSttModel = normalizeVoiceAgentSttModel;
 exports.defaultSelfIntroForAgent = defaultSelfIntroForAgent;
 exports.normalizeMaxCallSec = normalizeMaxCallSec;
 exports.deepgramModelsForProviderType = deepgramModelsForProviderType;
@@ -90,12 +89,6 @@ function defaultVoiceAgentSttModel(language) {
     // Nova-3 is multilingual and is the Voice Agent API's default listen model.
     void language;
     return 'nova-3';
-}
-function normalizeVoiceAgentSttModel(model, language) {
-    const value = textOr(model, '').trim();
-    return exports.VOICE_AGENT_STT_MODELS.includes(value)
-        ? value
-        : defaultVoiceAgentSttModel(language);
 }
 function defaultSelfIntroForAgent(id, name) {
     return (0, persona_1.defaultSelfIntro)(id, name);
