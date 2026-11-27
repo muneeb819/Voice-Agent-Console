@@ -1,5 +1,5 @@
 import { getBotSleep, setBotSleep } from './bot-sleep';
-import { applyDialerSleep } from './dialer-sleep';
+import { applyCampaignDialing, getCampaignDialing, setCampaignDialingFlag } from './campaign-dialing';
 import { acknowledgeAlerts, listAlerts } from './alerts';
 import { buildUsageReport, readLedger, reconcileOpenConnections } from './usage-ledger';
 import { installProcessGuards } from './process-guards';
@@ -1198,7 +1198,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     res.json({ ok: true, ...getBotSleep() });
   });
 
-  app.post('/api/bot-sleep', async (req: Request, res: Response) => {
+  app.post('/api/bot-sleep', (req: Request, res: Response) => {
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
     if (typeof body.sleeping !== 'boolean') {
       res.status(400).json({ ok: false, error: 'Send {"sleeping": true} or {"sleeping": false}.' });
@@ -1207,21 +1207,38 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     setBotSleep(body.sleeping, 'console');
     // Optionally cut calls already in progress; by default they finish normally.
     const ended = body.sleeping && body.endActiveCalls === true && viciBridge ? viciBridge.hangupAllCalls() : 0;
-    // The dialer follows the switch: asleep stops its campaigns, awake starts them again.
-    let dialer: Awaited<ReturnType<typeof applyDialerSleep>>;
+    res.json({ ok: true, ...getBotSleep(), endedActiveCalls: ended });
+  });
+
+  // Campaign dialing: a separate switch from bot sleep. Off turns the console's campaigns off in
+  // VICIdial so it stops dialing; on turns back exactly the ones this switch turned off.
+  // Calls already in progress are never touched.
+  app.get('/api/campaign-dialing', (_req: Request, res: Response) => {
+    res.json({ ok: true, ...getCampaignDialing() });
+  });
+
+  app.post('/api/campaign-dialing', async (req: Request, res: Response) => {
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    if (typeof body.off !== 'boolean') {
+      res.status(400).json({ ok: false, error: 'Send {"off": true} or {"off": false}.' });
+      return;
+    }
+    setCampaignDialingFlag(body.off, 'console');
+    let dialer: Awaited<ReturnType<typeof applyCampaignDialing>>;
     try {
       const st = getConsoleState();
-      dialer = await applyDialerSleep(body.sleeping, st.campaigns, new VicidialApiClient(st.vici));
+      dialer = await applyCampaignDialing(body.off, st.campaigns, new VicidialApiClient(st.vici));
     } catch (err: any) {
       dialer = { changed: [], failed: [{ campaign: '', error: String(err?.message || err).slice(0, 200) }], skipped: '' };
     }
-    res.json({ ok: true, ...getBotSleep(), endedActiveCalls: ended, dialer });
+    res.json({ ok: true, ...getCampaignDialing(), dialer });
   });
 
   app.get('/api/vici/status', (_req: Request, res: Response) => {
     res.json({
       ok: true,
       bridge: viciBridge ? viciBridge.getStatus() : null,
+      campaignDialing: getCampaignDialing(),
       logs: listBridgeCallLogs(20),
     });
   });

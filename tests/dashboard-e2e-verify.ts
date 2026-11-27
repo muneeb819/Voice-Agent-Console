@@ -10,7 +10,8 @@ process.env.VAC_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'vac-dash-'));
 const { JSDOM, VirtualConsole } = require('jsdom');
 import { createServerWithSimulator } from '../src/server';
 import { getConsoleState, saveConsoleState } from '../src/db';
-import { setBotSleep, setDialerOutcome, getBotSleep } from '../src/bot-sleep';
+import { setBotSleep, getBotSleep } from '../src/bot-sleep';
+import { setCampaignDialingFlag, getCampaignDialing, applyCampaignDialing } from '../src/campaign-dialing';
 
 const pub = path.resolve(__dirname, '..', 'public');
 const read = (f: string) => fs.readFileSync(path.join(pub, f), 'utf8');
@@ -82,7 +83,7 @@ async function main() {
     st.campaigns = sc.ids.map((vid, i) => ({ ...tmpl, id: `c_t${i}`, name: sc.names[i], viciCampaign: vid, slot: i + 1 }));
     st.vici = { ...st.vici, viciBaseUrl: viciOrigin };
     saveConsoleState(st);
-    setBotSleep(false, 'reset'); setDialerOutcome([], []);
+    setBotSleep(false, 'reset'); setCampaignDialingFlag(false, 'reset'); { const c = getCampaignDialing(); if (c.pausedCampaigns.length) { /* clear leftovers from a previous scenario */ require('fs').writeFileSync(require('path').join(process.env.VAC_DATA_DIR!, 'campaign-dialing.json'), JSON.stringify({ off: false, since: null, by: '', pausedCampaigns: [], dialerErrors: [] })); } }
     viciLog.length = 0; viciFail.clear(); sc.fail.forEach((f) => viciFail.add(f));
     const distinct = [...new Set(sc.ids.map((i) => i.trim()).filter(Boolean))];
     const valid = distinct.filter((i) => /^[A-Za-z0-9_-]{1,20}$/.test(i));
@@ -101,7 +102,7 @@ async function main() {
     w.fetch = async (input: any, init?: any) => {
       const u = new URL(String(input), origin + '/');
       if (u.pathname.endsWith('/api/auth/status')) return new Response(JSON.stringify({ ok: true, authenticated: true, user: { fullName: 'Test', email: 't@x.test' } }), { headers: { 'content-type': 'application/json' } });
-      if (init?.method === 'POST' && u.pathname === '/api/bot-sleep') posts.push(JSON.parse(init.body));
+      if (init?.method === 'POST' && (u.pathname === '/api/bot-sleep' || u.pathname === '/api/campaign-dialing')) posts.push({ path: u.pathname, ...JSON.parse(init.body) });
       inflight++;
       try { return await fetch(u.toString(), init); } finally { inflight--; }
     };
@@ -140,57 +141,76 @@ async function main() {
     check(viciLog.length === 0, T('declined confirm leaves VICIdial alone'));
     check(/Sleep bots/.test(btn()?.textContent || ''), T('declined confirm keeps label'));
 
+    const pressId = async (id: string) => { d.getElementById(id)!.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true, button: 0 })); await settle(); };
+    const camp = () => d.getElementById('btn-campaign-dialing') as HTMLButtonElement | null;
+    check(camp() && /Campaigns off/.test(camp()!.textContent || ''), T('campaign button starts as Campaigns off'));
     for (let cyc = 1; cyc <= 3; cyc++) {
-      // --- sleep
       cycTag = ` cycle ${cyc}`;
       confirmAnswer = true; confirms.length = 0; alerts.length = 0; viciLog.length = 0; posts.length = 0;
-      await press();
-      check(confirms.length === 1, T('confirm asked once for sleep'));
-      check(posts.length === 1 && posts[0].sleeping === true, T('sleep posts {sleeping:true}'));
+
+      // ---- bots sleep: bridge only, VICIdial is not touched
+      await pressId('btn-bot-sleep');
+      check(posts.length === 1 && posts[0].path === '/api/bot-sleep' && posts[0].sleeping === true, T('sleep posts {sleeping:true} to the bot switch'));
       check(getBotSleep().sleeping === true, T('server records the bots asleep'));
+      check(viciLog.length === 0, T('bot sleep does not touch VICIdial'));
+      check(!getCampaignDialing().off, T('bot sleep leaves campaign dialing alone'));
+      check(/Wake bots/.test(btn()?.textContent || '') && btn()?.classList.contains('b'), T('asleep label and style'));
+      check(/asleep/i.test(btn()?.title || '') && !btn()?.disabled, T('asleep tooltip, button usable'));
+      check(alerts.length === 0, T('bot sleep shows no alert'));
+      check(/Campaigns off/.test(camp()?.textContent || ''), T('campaign button unchanged by bot sleep'));
+
+      // ---- campaigns off: VICIdial stops dialing
+      posts.length = 0;
+      await pressId('btn-campaign-dialing');
+      check(confirms.length >= 1 && confirms.some((m) => /Turn the campaigns off/.test(m)), T('confirm asked before turning campaigns off'));
+      check(posts.length === 1 && posts[0].path === '/api/campaign-dialing' && posts[0].off === true, T('posts {off:true} to the campaign switch'));
+      check(getCampaignDialing().off === true, T('server records campaigns off'));
+      check(getBotSleep().sleeping === true, T('campaign off leaves bot sleep alone'));
       check(viciLog.filter((l) => l.active === 'N').length === valid.length, T(`dialer got one OFF per valid campaign (${valid.length}), got ${viciLog.length}`));
-      check(viciLog.every((l) => l.active === 'N'), T('sleep only ever turns campaigns off'));
+      check(viciLog.every((l) => l.active === 'N'), T('off only ever turns campaigns off'));
       check(new Set(viciLog.map((l) => l.id)).size === viciLog.length, T('no campaign is switched twice'));
       for (const id of valid) check(viciLog.some((l) => l.id === id), T(`campaign ${id} was switched off`));
-      check(JSON.stringify([...getBotSleep().pausedCampaigns].sort()) === JSON.stringify([...expectOk].sort()), T('only campaigns that really turned off are remembered'));
-      check(getBotSleep().dialerErrors.length === expectFail.length, T('failures are kept for the screen'));
-      check(/Wake bots/.test(btn()?.textContent || ''), T('asleep label says Wake bots'));
-      check(btn()?.classList.contains('b') && !btn()?.classList.contains('g'), T('asleep button uses the highlighted style'));
-      check(/asleep/i.test(btn()?.title || ''), T('asleep tooltip says asleep'));
-      check(!btn()?.disabled, T('button is usable again after sleep'));
+      check(JSON.stringify([...getCampaignDialing().pausedCampaigns].sort()) === JSON.stringify([...expectOk].sort()), T('only campaigns that really turned off are remembered'));
+      check(getCampaignDialing().dialerErrors.length === expectFail.length, T('failures are kept for the screen'));
+      check(/Campaigns on/.test(camp()?.textContent || '') && camp()?.classList.contains('b'), T('off label and style'));
+      check(!camp()?.disabled, T('campaign button usable after off'));
       if (expectFail.length) {
-        check(alerts.length === 1, T('one plain-language note after a partial sleep'));
+        check(alerts.length === 1, T('one plain-language note after a partial off'));
         for (const id of expectFail) check((alerts[0] || '').includes(id), T(`note names ${id}`));
-        check(/still turned away/.test(alerts[0] || ''), T('note says calls are still refused'));
+        check(/may keep dialing/.test(alerts[0] || ''), T('note says VICIdial may keep dialing'));
       } else if (!valid.length) {
         check(alerts.length === 1 && /No campaign has a VICIdial campaign id/.test(alerts[0] || ''), T('no-campaign case is reported, not faked'));
       } else {
-        check(alerts.length === 0, T('clean sleep shows no alert'));
+        check(alerts.length === 0, T('clean off shows no alert'));
       }
-      check(!/undefined|NaN|\[object/.test(d.getElementById('m')?.textContent || ''), T('asleep dashboard has no undefined/NaN'));
+      check(!/undefined|NaN|\[object/.test(d.getElementById('m')?.textContent || ''), T('dashboard text has no undefined/NaN while off'));
 
-      // --- wake (with the dialer still failing for the same campaigns)
+      // ---- campaigns on: exactly what was turned off comes back
       alerts.length = 0; viciLog.length = 0; confirms.length = 0; posts.length = 0;
-      await press();
-      check(confirms.length === 0, T('wake asks no confirmation'));
+      await pressId('btn-campaign-dialing');
+      check(confirms.length === 0, T('turning campaigns on asks no confirmation'));
+      check(posts.length === 1 && posts[0].path === '/api/campaign-dialing' && posts[0].off === false, T('posts {off:false}'));
+      check(getCampaignDialing().off === false, T('server records campaigns on'));
+      check(viciLog.every((l) => l.active === 'Y'), T('on only turns campaigns on'));
+      check(JSON.stringify(viciLog.map((l) => l.id).sort()) === JSON.stringify([...expectOk].sort()), T('on resumes exactly the campaigns off turned off'));
+      check(getCampaignDialing().pausedCampaigns.length === 0, T('nothing left paused after a clean on'));
+      check(/Campaigns off/.test(camp()?.textContent || '') && camp()?.classList.contains('g'), T('on label and style'));
+      check(alerts.length === 0, T('clean on shows no alert'));
+      check(getBotSleep().sleeping === true, T('campaign on leaves bot sleep alone'));
+
+      // ---- bots wake
+      posts.length = 0; viciLog.length = 0;
+      await pressId('btn-bot-sleep');
       check(posts.length === 1 && posts[0].sleeping === false, T('wake posts {sleeping:false}'));
       check(getBotSleep().sleeping === false, T('server records the bots awake'));
-      check(viciLog.every((l) => l.active === 'Y'), T('wake only turns campaigns on'));
-      check(JSON.stringify(viciLog.map((l) => l.id).sort()) === JSON.stringify([...expectOk].sort()), T('wake resumes exactly the campaigns sleep turned off'));
-      const stillFailing = expectOk.filter((i) => viciFail.has(i));
-      check(stillFailing.length === 0, T('(setup) failing campaigns were never remembered'));
-      check(/Sleep bots/.test(btn()?.textContent || ''), T('awake label is back'));
-      check(btn()?.classList.contains('g'), T('awake style is back'));
-      check(getBotSleep().pausedCampaigns.length === 0, T('nothing left paused after a clean wake'));
-      check(alerts.length === 0, T('clean wake shows no alert'));
-
-
+      check(confirms.length === 0 && viciLog.length === 0, T('wake asks nothing and leaves VICIdial alone'));
+      check(/Sleep bots/.test(btn()?.textContent || '') && btn()?.classList.contains('g'), T('awake label and style'));
     }
     cycTag = '';
     // --- calls after wake are no longer refused by the sleep guard; status is exposed
     const status = await (await fetch(`${origin}/api/vici/status`)).json();
     check(status?.bridge?.botSleep?.sleeping === false, T('bridge status shows awake'));
-    check(Array.isArray(status?.bridge?.botSleep?.pausedCampaigns), T('bridge status carries the paused list'));
+    check(status?.campaignDialing?.off === false && Array.isArray(status?.campaignDialing?.pausedCampaigns), T('status carries the campaign dialing switch'));
     w.close();
   }
 
@@ -199,19 +219,19 @@ async function main() {
     const st: any = getConsoleState();
     st.campaigns = ['MEDICARE', 'FETEST'].map((vid, i) => ({ ...st.campaigns[0], id: `c_w${i}`, name: vid, viciCampaign: vid, slot: i + 1 }));
     saveConsoleState(st);
-    setBotSleep(false, 'reset'); setDialerOutcome([], []); viciLog.length = 0; viciFail.clear();
-    const { applyDialerSleep } = require('../src/dialer-sleep');
+    setBotSleep(false, 'reset'); setCampaignDialingFlag(false, 'reset'); viciLog.length = 0; viciFail.clear(); { const c = getCampaignDialing(); if (c.pausedCampaigns.length) { /* clear leftovers from a previous scenario */ require('fs').writeFileSync(require('path').join(process.env.VAC_DATA_DIR!, 'campaign-dialing.json'), JSON.stringify({ off: false, since: null, by: '', pausedCampaigns: [], dialerErrors: [] })); } } viciLog.length = 0; viciFail.clear();
+    const applyDialerSleep = applyCampaignDialing;
     const { VicidialApiClient } = require('../src/vici-client');
     const cl = new VicidialApiClient({ ...(getConsoleState() as any).vici, viciBaseUrl: viciOrigin }, 'pw');
-    setBotSleep(true, 't'); await applyDialerSleep(true, (getConsoleState() as any).campaigns, cl);
+    setCampaignDialingFlag(true, 't'); await applyDialerSleep(true, (getConsoleState() as any).campaigns, cl);
     viciFail.add('FETEST'); viciLog.length = 0;
-    setBotSleep(false, 't'); const w1 = await applyDialerSleep(false, (getConsoleState() as any).campaigns, cl);
+    setCampaignDialingFlag(false, 't'); const w1 = await applyDialerSleep(false, (getConsoleState() as any).campaigns, cl);
     check(w1.failed.length === 1 && w1.failed[0].campaign === 'FETEST', 'failing wake reports FETEST');
-    check(getBotSleep().pausedCampaigns.join() === 'FETEST', 'failed wake keeps FETEST for retry');
+    check(getCampaignDialing().pausedCampaigns.join() === 'FETEST', 'failed wake keeps FETEST for retry');
     viciFail.clear(); viciLog.length = 0;
     const w2 = await applyDialerSleep(false, (getConsoleState() as any).campaigns, cl);
     check(w2.failed.length === 0 && viciLog.length === 1 && viciLog[0].id === 'FETEST' && viciLog[0].active === 'Y', 'second wake retries only FETEST');
-    check(getBotSleep().pausedCampaigns.length === 0, 'retry clears the list');
+    check(getCampaignDialing().pausedCampaigns.length === 0, 'retry clears the list');
   }
 
   await viciBridge!.stop?.();

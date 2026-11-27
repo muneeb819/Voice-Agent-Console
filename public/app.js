@@ -4655,11 +4655,11 @@
     const done = (dialer.changed || []).join(', ');
     const failed = dialer.failed || [];
     const lines = [];
-    if (done) lines.push(nowAsleep ? 'Dialing stopped in VICIdial for: ' + done + '.' : 'Dialing started again in VICIdial for: ' + done + '.');
+    if (done) lines.push(nowAsleep ? 'Campaigns turned off in VICIdial: ' + done + '.' : 'Campaigns turned on in VICIdial: ' + done + '.');
     if (dialer.skipped) lines.push(dialer.skipped);
     if (failed.length) {
       lines.push('VICIdial did not accept the change for: ' + failed.map((f) => (f.campaign || 'dialer') + ' (' + f.error + ')').join('; ') + '.');
-      lines.push(nowAsleep ? 'New calls are still turned away by the bots, but the dialer may keep dialing: pause those campaigns in VICIdial.' : 'Start those campaigns in VICIdial yourself, or press Wake again to retry.');
+      lines.push(nowAsleep ? 'VICIdial may keep dialing those campaigns: turn them off in VICIdial.' : 'Turn those campaigns on in VICIdial yourself, or press Campaigns on again to retry.');
     }
     return failed.length || dialer.skipped ? lines.join('\n') : '';
   }
@@ -4706,6 +4706,7 @@
       try { const al = await alertsRes.json(); if (al && al.ok) viciMon.alerts = al; } catch {}
       if (data.ok) {
         viciMon.status = data.bridge || null;
+        viciMon.campaignDialing = data.campaignDialing || null;
         viciMon.logs = data.logs || [];
         viciMon.loaded = true;
       }
@@ -6054,6 +6055,10 @@
       ${(() => {
         const asleep = viciMon.status?.botSleep?.sleeping === true;
         return `<button type="button" class="${asleep ? 'b' : 'g'} cmd-mini-btn" id="btn-bot-sleep" title="${asleep ? 'Bots are asleep: new calls are turned away and no speech or AI usage is spent. Click to wake them.' : 'Put the bots to sleep: new calls are turned away and no speech or AI usage is spent. Calls in progress finish normally.'}">${asleep ? 'Wake bots' : 'Sleep bots'}</button>`;
+      })()}
+      ${(() => {
+        const off = viciMon.campaignDialing?.off === true;
+        return `<button type="button" class="${off ? 'b' : 'g'} cmd-mini-btn" id="btn-campaign-dialing" title="${off ? 'Campaigns are off in VICIdial: it is not dialing. Click to turn them back on.' : 'Turn the campaigns off in VICIdial so it stops dialing. Calls in progress finish normally.'}">${off ? 'Campaigns on' : 'Campaigns off'}</button>`;
       })()}
       <button type="button" class="g cmd-mini-btn" id="btn-cmd-refresh" title="Refresh live server, simulator &amp; VICIdial telemetry">
        ${DECK_ICONS.refresh} ${cmdDeckState.syncing ? 'Syncing…' : 'Sync'}
@@ -8761,23 +8766,39 @@
       await loadViciBridgeStatus();
       return;
     }
+    if (b.id === 'btn-campaign-dialing') {
+      const off = viciMon.campaignDialing?.off === true;
+      if (!off && !window.confirm('Turn the campaigns off in VICIdial? It stops dialing new calls. Calls already in progress finish normally.')) return;
+      b.disabled = true;
+      let note = '';
+      try {
+        const r = await fetch('/api/campaign-dialing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ off: !off }) });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'Could not change campaign dialing');
+        note = sleepDialerNote(!off, j.dialer);
+      } catch (err) {
+        b.disabled = false;
+        window.alert(err && err.message ? err.message : 'Could not change campaign dialing');
+        return;
+      }
+      await loadViciBridgeStatus();
+      if (note) window.alert(note);
+      return;
+    }
     if (b.id === 'btn-bot-sleep') {
       const asleep = viciMon.status?.botSleep?.sleeping === true;
       if (!asleep && !window.confirm('Put the bots to sleep? New calls will be turned away until you wake them. Calls already in progress finish normally.')) return;
       b.disabled = true;
-      let sleepNote = '';
       try {
         const r = await fetch('/api/bot-sleep', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sleeping: !asleep }) });
         const j = await r.json();
         if (!j.ok) throw new Error(j.error || 'Could not change sleep mode');
-        sleepNote = sleepDialerNote(!asleep, j.dialer);
       } catch (err) {
         b.disabled = false;
         window.alert(err && err.message ? err.message : 'Could not change sleep mode');
         return;
       }
       await loadViciBridgeStatus();
-      if (sleepNote) window.alert(sleepNote);
       return;
     }
     if (b.id === 'btn-cmd-refresh') {
