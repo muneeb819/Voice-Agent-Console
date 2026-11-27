@@ -150,10 +150,17 @@ export function rtpInactivityTimeoutMs(env: NodeJS.ProcessEnv = process.env): nu
   return Number.isFinite(sec) && sec > 0 ? Math.round(sec * 1000) : 0;
 }
 
+/** An inactive bot, or one using all of its lines, is skipped when the next call picks a bot. */
+function botTakesPhoneCalls(agent: Agent, callsOnBot?: (agentId: string) => number): boolean {
+  if (agent.active === false) return false;
+  const lines = Number(agent.lines || 0);
+  return !(callsOnBot && lines > 0 && callsOnBot(agent.id) >= lines);
+}
+
 export function resolveCampaignAndAgent(
   state: ConsoleState,
   dialedExten: string,
-  opts: { rotate?: boolean; agentId?: string } = {}
+  opts: { rotate?: boolean; agentId?: string; callsOnBot?: (agentId: string) => number } = {}
 ): { campaign?: Campaign; agent?: Agent; remoteAgentUser: string; campaignIndex: number; error?: string } {
   const cleanExten = String(dialedExten || '').trim();
   const prefix = String(state.vici.aiExten || '8800').trim();
@@ -183,7 +190,11 @@ export function resolveCampaignAndAgent(
   } else if (opts.rotate) {
     // Every ready bot assigned to the campaign takes phone calls in turn; a bot
     // that is not ready is left out so it never blocks the others.
-    const ready = pickPhoneBot(state, campaign, (candidate) => getCampaignCallReadinessBlockers(state, campaign, candidate).length === 0);
+    const ready = pickPhoneBot(
+      state,
+      campaign,
+      (candidate) => botTakesPhoneCalls(candidate, opts.callsOnBot) && getCampaignCallReadinessBlockers(state, campaign, candidate).length === 0
+    );
     if (ready) agent = ready;
   }
   if (!agent) {
@@ -195,6 +206,13 @@ export function resolveCampaignAndAgent(
     };
   }
 
+  if (opts.rotate && agent.active === false) {
+    return { campaign, agent, remoteAgentUser, campaignIndex: idx, error: `Bot “${agent.name}” is inactive, so it takes no phone calls. Make it active to use it.` };
+  }
+  const lines = Number(agent.lines || 0);
+  if (opts.rotate && opts.callsOnBot && lines > 0 && opts.callsOnBot(agent.id) >= lines) {
+    return { campaign, agent, remoteAgentUser, campaignIndex: idx, error: `Bot “${agent.name}” is using all of its ${lines} lines.` };
+  }
   const blockers = getCampaignCallReadinessBlockers(state, campaign, agent);
   if (blockers.length) {
     return {
@@ -428,6 +446,7 @@ export class VicidialBridgeService {
       audioSocketPort: this.audioSocketPort,
       sipPort: this.sipPort,
       botSleep: getBotSleep(),
+      botStatuses: this.botStatuses(),
       activeCallsCount: this.activeCalls.size,
       activeCalls: Array.from(this.activeCalls.values()),
       sipRegistration: this.sipRegistrationClient?.snapshot() || { status: 'stopped', registrar: '', expiresAt: null, lastError: null },
@@ -470,8 +489,47 @@ export class VicidialBridgeService {
     });
   }
 
+  /**
+   * Live status of every bot, in the words a dialer's real-time screen uses:
+   * asleep, inactive, idle (ready, no call), waiting (a call is registered for it and the caller is not
+   * connected yet), in call, transferring. One row per bot that belongs to a campaign.
+   */
+  private botStatuses() {
+    const state = getConsoleState();
+    const sleeping = isBotSleeping();
+    const seen = new Set<string>();
+    const rows: Array<{ agentId: string; name: string; status: string; calls: number; lines: number; campaigns: string[] }> = [];
+    for (const campaign of state.campaigns) {
+      for (const agent of phoneBotPool(state, campaign)) {
+        const existing = rows.find((r) => r.agentId === agent.id);
+        if (existing) { existing.campaigns.push(campaign.name); continue; }
+        if (seen.has(agent.id)) continue;
+        seen.add(agent.id);
+        const mine = [...this.activeCalls.values()].filter((c) => c.agentId === agent.id);
+        const pending = [...this.preCallRegistry.values()].filter((r) => r.agent?.id === agent.id).length;
+        let status = 'idle';
+        // A call in progress is shown as it is, even while asleep or inactive: it finishes first.
+        if (mine.some((c) => c.state === 'transferring')) status = 'transferring';
+        else if (mine.length) status = 'in_call';
+        else if (sleeping) status = 'asleep';
+        else if (agent.active === false) status = 'inactive';
+        else if (pending) status = 'waiting';
+        rows.push({ agentId: agent.id, name: agent.name, status, calls: mine.length, lines: Number(agent.lines || 0), campaigns: [campaign.name] });
+      }
+    }
+    return rows;
+  }
+
+  /** Calls a bot has right now: answered calls plus calls registered for it and not yet answered. */
+  private callsOnBot(agentId: string): number {
+    let n = 0;
+    for (const c of this.activeCalls.values()) if (c.agentId === agentId) n += 1;
+    for (const rec of this.preCallRegistry.values()) if (rec.agent?.id === agentId) n += 1;
+    return n;
+  }
+
   private isCampaignOverCapacity(campaign?: Campaign): boolean {
-    if (!campaign || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
+    if (!campaign || campaign.maxCallsEnabled === false || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
       return false;
     }
     let activeOnCampaign = 0;
@@ -515,7 +573,7 @@ export class VicidialBridgeService {
       throw new Error('Bots are asleep: new calls are not being answered.');
     }
     const exten = String(input.exten || '').trim();
-    const resolved = resolveCampaignAndAgent(state, exten, { rotate: true });
+    const resolved = resolveCampaignAndAgent(state, exten, { rotate: true, callsOnBot: (id) => this.callsOnBot(id) });
     if (resolved.error || !resolved.campaign || !resolved.agent) {
       throw new Error(resolved.error || 'Campaign assignment is required before call registration.');
     }
@@ -1313,7 +1371,7 @@ export class VicidialBridgeService {
       : state.vici;
 
     const exten = String(opts.preCall?.exten || '').trim();
-    const resolved = resolveCampaignAndAgent(state, exten, opts.preCall ? { agentId: opts.preCall.agent.id } : { rotate: true });
+    const resolved = resolveCampaignAndAgent(state, exten, opts.preCall ? { agentId: opts.preCall.agent.id } : { rotate: true, callsOnBot: (id: string) => this.callsOnBot(id) });
     if (resolved.error || !resolved.campaign || !resolved.agent) {
       this.stats.lastError = resolved.error || 'Campaign assignment is required before the bridge can start a call.';
       opts.hooks.hangupTransport();
@@ -1499,6 +1557,7 @@ export class VicidialBridgeService {
     const executeTransferAction = async (args: { reason: string; confirmed_age?: string }) => {
       if (transferExecuted || closed) return;
       transferExecuted = true;
+      updateState('transferring');
       transferCompletion = new Promise<void>((resolve) => { resolveTransferCompletion = resolve; });
 
       const xferType = campaign?.xferType || 'ingroup';

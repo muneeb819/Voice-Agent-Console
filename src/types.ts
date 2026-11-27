@@ -62,6 +62,8 @@ export interface Agent {
   prompt: string;
   acceptViciCalls: boolean; // Bridge lifecycle flag (hydrates lead before Deepgram session)
   injectCampaignDisclosure: boolean; // Prepends campaign disclosure to greeting when linked
+  active?: boolean; // Phone switch: an inactive bot takes no phone calls (browser tests still work). Missing = active.
+  lines?: number; // Calls this bot may take at once on the phone; 0 or missing = no per-bot limit.
   behavior: AgentBehavior;
   flow?: AgentFlow; // always present after loading (normalizeState fills defaults)
   stt: {
@@ -103,6 +105,7 @@ export interface Campaign {
   end: string;
   tz: string;
   maxCalls: number;
+  maxCallsEnabled?: boolean; // The campaign-wide call limit only applies when ticked. Missing = ticked (older data).
   maxCallSec: number; // Hard per-call time limit in seconds (0 = no limit).
   xferType: 'ingroup' | 'extension' | 'number';
   xferTarget: string;

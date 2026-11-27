@@ -1188,6 +1188,8 @@
         ag.greeting = migratedOpening;
         mutated = true;
       }
+      if (typeof ag.active !== 'boolean') ag.active = true;
+      ag.lines = Number.isFinite(Number(ag.lines)) ? Math.min(1000, Math.max(0, Math.round(Number(ag.lines)))) : 0;
       if (typeof ag.injectCampaignDisclosure !== 'boolean') {
         ag.injectCampaignDisclosure = false;
         mutated = true;
@@ -2703,7 +2705,7 @@
             : `Agent API ra_call_control (stage=EXTENSIONTRANSFER, consultative=NO, exten=${c.xferTarget})`;
         return [
           `; [Campaign slot ${slot}: ${c.name}]`,
-          `;  VICIdial Campaign ID: ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCalls}`,
+          `;  VICIdial Campaign ID: ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCallsEnabled === false ? 'no campaign limit' : c.maxCalls}`,
           `;  Assigned Bot Pool: ${pool || '(missing)'}`,
           `;  Telephone Persona: ${ag ? ag.name : '(missing)'} (${ag?.mode || 'outbound'}); browser tests may select any assigned bot`,
           `;  Remote Agent Exten: ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + slot - 1})`,
@@ -2829,6 +2831,8 @@
     "a.prompt": "The bot's main instructions: who it is, what to ask, when to transfer and what never to say. Campaign rules are added on top and win if they conflict.",
     "a.greeting": "The opening line used when random greetings are off or none of them fits the call.",
     "a.randomGreetingEnabled": "Picks one saved greeting line at random for each call so the opening does not sound the same every time.",
+    "a.active": "An inactive bot takes no phone calls and costs nothing. Switch it on to let it answer calls for its campaign. Browser tests still work while it is off.",
+    "a.lines": "How many phone calls this bot may handle at the same moment, such as 5, 10, 20 or 50. At the limit new calls go to another active bot. 0 means no limit for this bot.",
     "a.injectCampaignDisclosure": "Adds the campaign's recording notice to the start of the greeting when this bot is linked to a campaign.",
     "a.behavior.speakingStyle": "Personality, tone and goal in your own words. This is the only tone guidance the bot gets; the tone menu is used only when this is empty.",
     "a.behavior.expressionStyle": "A ready-made tone, used only when the personality box is empty.",
@@ -2871,7 +2875,8 @@
     "c.start": "The hours this campaign is meant to call. For reference only: set the real call times in VICIdial.",
     "c.end": "The end of the hours this campaign is meant to call. For reference only.",
     "c.tz": "The lead's timezone. Used so greetings say the right time of day.",
-    "c.maxCalls": "The most AI calls this campaign may hold at the same time. Calls over the limit are turned away and raise an alert.",
+    "c.maxCalls": "The most AI calls this campaign may hold at the same time. Calls over the limit are turned away and raise an alert. Only used when the limit box above is ticked.",
+    "c.maxCallsEnabled": "Tick to use one call limit for the whole campaign. Untick and the campaign has no limit of its own; each bot still follows its own lines.",
     "c.maxCallSec": "Hard time limit per call in seconds. Near the end the bot is told to transfer or wrap up. 0 means no limit.",
     "c.xferType": "Where qualified callers go: a VICIdial closer in-group (keeps the screen-pop), an Asterisk extension, or an outside number.",
     "c.xferTarget": "The in-group ID, extension or phone number that matches the transfer type above.",
@@ -4649,6 +4654,21 @@
     </div>`;
   }
 
+  /** Plain-language result of the sleep/wake button for the VICIdial dialer. */
+  function sleepDialerNote(nowAsleep, dialer) {
+    if (!dialer) return '';
+    const done = (dialer.changed || []).join(', ');
+    const failed = dialer.failed || [];
+    const lines = [];
+    if (done) lines.push(nowAsleep ? 'Campaigns turned off in VICIdial: ' + done + '.' : 'Campaigns turned on in VICIdial: ' + done + '.');
+    if (dialer.skipped) lines.push(dialer.skipped);
+    if (failed.length) {
+      lines.push('VICIdial did not accept the change for: ' + failed.map((f) => (f.campaign || 'dialer') + ' (' + f.error + ')').join('; ') + '.');
+      lines.push(nowAsleep ? 'VICIdial may keep dialing those campaigns: turn them off in VICIdial.' : 'Turn those campaigns on in VICIdial yourself, or press Campaigns on again to retry.');
+    }
+    return failed.length || dialer.skipped ? lines.join('\n') : '';
+  }
+
   async function loadViciBridgeStatus() {
     if (serverlessCloudMode) {
       // The old static demo invented bridge CDRs and latency. Keep any old
@@ -4691,6 +4711,7 @@
       try { const al = await alertsRes.json(); if (al && al.ok) viciMon.alerts = al; } catch {}
       if (data.ok) {
         viciMon.status = data.bridge || null;
+        viciMon.campaignDialing = data.campaignDialing || null;
         viciMon.logs = data.logs || [];
         viciMon.loaded = true;
       }
@@ -6040,6 +6061,10 @@
         const asleep = viciMon.status?.botSleep?.sleeping === true;
         return `<button type="button" class="${asleep ? 'b' : 'g'} cmd-mini-btn" id="btn-bot-sleep" title="${asleep ? 'Bots are asleep: new calls are turned away and no speech or AI usage is spent. Click to wake them.' : 'Put the bots to sleep: new calls are turned away and no speech or AI usage is spent. Calls in progress finish normally.'}">${asleep ? 'Wake bots' : 'Sleep bots'}</button>`;
       })()}
+      ${(() => {
+        const off = viciMon.campaignDialing?.off === true;
+        return `<button type="button" class="${off ? 'b' : 'g'} cmd-mini-btn" id="btn-campaign-dialing" title="${off ? 'Campaigns are off in VICIdial: it is not dialing. Click to turn them back on.' : 'Turn the campaigns off in VICIdial so it stops dialing. Calls in progress finish normally.'}">${off ? 'Campaigns on' : 'Campaigns off'}</button>`;
+      })()}
       <button type="button" class="g cmd-mini-btn" id="btn-cmd-refresh" title="Refresh live server, simulator &amp; VICIdial telemetry">
        ${DECK_ICONS.refresh} ${cmdDeckState.syncing ? 'Syncing…' : 'Sync'}
       </button>
@@ -6083,6 +6108,17 @@
        </div>
        <div style="margin:6px 0">${summary}${rep ? ` <span class="note" style="margin:0">· ${esc(new Date(rep.ranAt).toLocaleTimeString())}</span>` : ''}</div>
        ${diagState.error ? `<div class="note" style="color:var(--er)">${esc(diagState.error)}</div>` : ''}${rows}</div>`;
+    })()}
+
+    ${(() => {
+      const rows = Array.isArray(viciMon.status?.botStatuses) ? viciMon.status.botStatuses : [];
+      if (!rows.length) return '';
+      const label = { idle: 'Idle', waiting: 'Waiting for caller', in_call: 'In call', transferring: 'Transferring', asleep: 'Asleep', inactive: 'Inactive' };
+      const cls = { idle: 'ok', waiting: 'ok', in_call: 'wn', transferring: 'wn', asleep: 'b', inactive: 'b' };
+      return `<div class="card" id="bot-status-card" style="margin-bottom:10px"><h3 style="margin:0 0 6px">Bots live</h3>
+       <table class="tbl"><thead><tr><th>Bot</th><th>Status</th><th>Calls</th><th>Campaign</th></tr></thead><tbody>${rows
+         .map((r) => `<tr data-bot-status="${esc(r.status)}"><td>${esc(r.name)}</td><td><span class="pill ${cls[r.status] || 'ok'}">${esc(label[r.status] || r.status)}</span></td><td>${Number(r.calls) || 0}${Number(r.lines) > 0 ? ' / ' + Number(r.lines) : ''}</td><td>${esc((r.campaigns || []).join(', '))}</td></tr>`)
+         .join('')}</tbody></table></div>`;
     })()}
 
     <div class="cmd-score-card ready-stage ${healthClass}" data-ready-stage aria-label="System readiness, ${T.score} out of 100">
@@ -6590,6 +6626,8 @@
        ['both', 'Both Outbound & Inbound'],
      ])}
      ${F('Bridge VICIdial call-connect & automatic lead hydration (recommended — replaces hallucinated LLM accept tool)', 'a.acceptViciCalls', 'chk')}
+     ${F('Active: this bot takes phone calls (turn off to keep it asleep; browser tests still work)', 'a.active', 'chk')}
+     ${F('Lines: how many calls this bot takes at once (0 = no limit for this bot)', 'a.lines', 'number', [], 'min="0" max="1000" step="1"')}
      ${F('Include the linked campaign recording notice (optional)', 'a.injectCampaignDisclosure', 'chk')}
      <div class="note wn">Spoken campaign notice only — does not turn off recording.</div>
      <h2>Call start &amp; greeting</h2>
@@ -6740,7 +6778,8 @@
      </div>
      ${F('Lead Timezone', 'c.tz')}
      <div class="row">
-      ${F('Max concurrent AI calls', 'c.maxCalls', 'number', [], 'min="1" step="1"')}
+      ${F('Use a campaign-wide call limit (optional; tick it, set the number, and save)', 'c.maxCallsEnabled', 'chk')}
+      ${F('Max concurrent AI calls for the whole campaign', 'c.maxCalls', 'number', [], `min="1" step="1"${C().maxCallsEnabled === false ? ' disabled' : ''}`)}
      </div>
      <div class="row">
       ${F('Max call length (seconds, 0 = no limit)', 'c.maxCallSec', 'number', [], 'min="0" max="900" step="5"')}
@@ -7543,7 +7582,7 @@
      </div>
      <div class="ck">
       <span class="ok">✓</span>
-      <span>Campaign <code>maxCalls</code> Capacity Guard Active (SIP <code>486 Busy Here</code>)</span>
+      <span>Per-bot lines and the optional campaign call limit are enforced (calls over the limit are turned away)</span>
      </div>
      <div class="ck">
       <span class="ok">✓</span>
@@ -8746,6 +8785,25 @@
       await loadViciBridgeStatus();
       return;
     }
+    if (b.id === 'btn-campaign-dialing') {
+      const off = viciMon.campaignDialing?.off === true;
+      if (!off && !window.confirm('Turn the campaigns off in VICIdial? It stops dialing new calls. Calls already in progress finish normally.')) return;
+      b.disabled = true;
+      let note = '';
+      try {
+        const r = await fetch('/api/campaign-dialing', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ off: !off }) });
+        const j = await r.json();
+        if (!j.ok) throw new Error(j.error || 'Could not change campaign dialing');
+        note = sleepDialerNote(!off, j.dialer);
+      } catch (err) {
+        b.disabled = false;
+        window.alert(err && err.message ? err.message : 'Could not change campaign dialing');
+        return;
+      }
+      await loadViciBridgeStatus();
+      if (note) window.alert(note);
+      return;
+    }
     if (b.id === 'btn-bot-sleep') {
       const asleep = viciMon.status?.botSleep?.sleeping === true;
       if (!asleep && !window.confirm('Put the bots to sleep? New calls will be turned away until you wake them. Calls already in progress finish normally.')) return;
@@ -9757,6 +9815,7 @@
           end: '20:00',
           tz: 'America/New_York',
           maxCalls: 10,
+          maxCallsEnabled: false,
           maxCallSec: 70,
           xferType: 'ingroup',
           xferTarget: '',
@@ -10081,6 +10140,11 @@
         nextVal = t.value;
       }
       setPath(t.dataset.p, nextVal);
+
+      if (t.dataset.p === 'c.maxCallsEnabled') {
+        const lim = document.querySelector('[data-p="c.maxCalls"]');
+        if (lim) lim.disabled = !t.checked;
+      }
 
       if (t.dataset.p === 'a.name') {
         const opt = document.querySelector(`#sel-a option[value="${CSS.escape(A().id)}"]`);

@@ -1108,6 +1108,8 @@ export function normalizeState(raw: any): ConsoleState {
           acceptViciCalls: isNovaAgent ? true : a.acceptViciCalls !== undefined ? Boolean(a.acceptViciCalls) : hadLegacyAccept,
           injectCampaignDisclosure:
             a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : false,
+          active: a.active !== false,
+          lines: Math.round(num(a.lines, 0, 0, 1000)),
           behavior,
           flow: normalizeFlow(a.flow, agentId !== 'a_qa'),
           stt: {
@@ -1161,6 +1163,7 @@ export function normalizeState(raw: any): ConsoleState {
           end: textOr(c.end, '20:00'),
           tz: textOr(c.tz, 'America/New_York'),
           maxCalls: Math.round(num(c.maxCalls, 10, 1, 1000)),
+          maxCallsEnabled: c.maxCallsEnabled !== undefined ? Boolean(c.maxCallsEnabled) : true,
           maxCallSec: normalizeMaxCallSec(c.maxCallSec),
           xferType: (['ingroup', 'extension', 'number'].includes(c.xferType) ? c.xferType : 'ingroup') as
             | 'ingroup'
