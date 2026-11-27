@@ -482,11 +482,12 @@ class VicidialBridgeService {
                 n += 1;
         return n;
     }
+    pendingSipInvites = new Map();
     isCampaignOverCapacity(campaign) {
         if (!campaign || campaign.maxCallsEnabled === false || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
             return false;
         }
-        let activeOnCampaign = 0;
+        let activeOnCampaign = this.pendingSipInvites.get(campaign.id) || 0;
         for (const c of this.activeCalls.values()) {
             if (c.campaignId === campaign.id) {
                 activeOnCampaign += 1;
@@ -599,6 +600,13 @@ class VicidialBridgeService {
             this.monitorWss.close();
             this.monitorWss = null;
         }
+        if (this.listenWss) {
+            for (const client of this.listenWss.clients)
+                client.terminate();
+            this.listenWss.close();
+            this.listenWss = null;
+        }
+        this.pendingSipInvites.clear();
         const closing = Array.from(this.activeSessionClosers.values()).map(async (closer) => {
             try {
                 await closer('bridge_shutdown');
@@ -873,7 +881,7 @@ class VicidialBridgeService {
                 if (method === 'OPTIONS') {
                     const tag = crypto_1.default.randomBytes(4).toString('hex');
                     const toWithTag = /;tag=/i.test(toRaw) ? toRaw : `${toRaw};tag=${tag}`;
-                    sendSipResponse('200 OK', headers, toWithTag, ['Allow: INVITE, ACK, CANCEL, OPTIONS, BYE'], '', rinfo);
+                    sendSipResponse('200 OK', headers, toWithTag, ['Allow: INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, NOTIFY'], '', rinfo);
                     return;
                 }
                 if (method === 'ACK') {
@@ -911,18 +919,40 @@ class VicidialBridgeService {
                         sendSipResponse('503 Service Unavailable', headers, toRaw, ['Warning: 399 ViciBridge "Bots asleep"'], '', rinfo);
                         return;
                     }
-                    // Campaign maxCalls concurrency guard
+                    // Campaign maxCalls concurrency guard (uses rotation + active bot load so
+                    // an inactive/full primary bot falls through to a ready secondary bot,
+                    // and reserves a pending slot synchronously before async RTP bind so
+                    // concurrent INVITEs cannot race past maxCalls).
                     const curStateForCap = (0, db_1.getConsoleState)();
-                    const resolvedForCap = resolveCampaignAndAgent(curStateForCap, exten);
+                    const resolvedForCap = resolveCampaignAndAgent(curStateForCap, exten, {
+                        rotate: true,
+                        callsOnBot: (id) => this.callsOnBot(id),
+                    });
                     if (resolvedForCap.error) {
                         this.stats.lastError = resolvedForCap.error;
                         sendSipResponse('503 Service Unavailable', headers, toRaw, ['Warning: 399 ViciBridge "Campaign not ready"'], '', rinfo);
                         return;
                     }
+                    const capCampaignId = resolvedForCap.campaign?.id || '';
                     if (this.isCampaignOverCapacity(resolvedForCap.campaign)) {
                         this.recordCapacityRejection(resolvedForCap.campaign);
                         sendSipResponse('486 Busy Here', headers, toRaw, [], '', rinfo);
                         return;
+                    }
+                    let pendingSlotHeld = false;
+                    const releasePendingSlot = () => {
+                        if (!pendingSlotHeld || !capCampaignId)
+                            return;
+                        pendingSlotHeld = false;
+                        const cur = this.pendingSipInvites.get(capCampaignId) || 0;
+                        if (cur <= 1)
+                            this.pendingSipInvites.delete(capCampaignId);
+                        else
+                            this.pendingSipInvites.set(capCampaignId, cur - 1);
+                    };
+                    if (capCampaignId) {
+                        this.pendingSipInvites.set(capCampaignId, (this.pendingSipInvites.get(capCampaignId) || 0) + 1);
+                        pendingSlotHeld = true;
                     }
                     // Parse From header: "V1027153012000104892" <sip:3055550192@<bridge-host>>;tag=as123
                     const dispMatch = /^\s*"?([^"<]+?)"?\s*<sip:([^@;>]+)/i.exec(fromRaw);
@@ -938,6 +968,7 @@ class VicidialBridgeService {
                     const rawRemoteRtpIp = cMatch ? cMatch[1].trim() : rinfo.address;
                     let remoteRtpIp = rawRemoteRtpIp.toLowerCase() === 'localhost' ? '127.0.0.1' : rawRemoteRtpIp;
                     if (net_1.default.isIP(remoteRtpIp) === 0) {
+                        releasePendingSlot();
                         sendSipResponse('488 Not Acceptable Here', headers, toRaw, [], '', rinfo);
                         return;
                     }
@@ -949,6 +980,7 @@ class VicidialBridgeService {
                         remoteRtpIp = rinfo.address;
                     }
                     if (!Number.isInteger(remoteRtpPort) || remoteRtpPort < 1024 || remoteRtpPort > 65535 || !(0, auth_guard_1.isBridgePeerIpAllowed)(remoteRtpIp)) {
+                        releasePendingSlot();
                         this.stats.lastError = 'SIP SDP media endpoint is missing or outside the trusted PBX allowlist.';
                         sendSipResponse('488 Not Acceptable Here', headers, toRaw, [], '', rinfo);
                         return;
@@ -993,6 +1025,7 @@ class VicidialBridgeService {
                         });
                     }
                     catch {
+                        releasePendingSlot();
                         try {
                             rtpSocket.close();
                         }
@@ -1008,6 +1041,7 @@ class VicidialBridgeService {
                     catch { } });
                     // An earlier concurrent INVITE may have won while this socket was binding.
                     if (dialogs.has(callId)) {
+                        releasePendingSlot();
                         try {
                             rtpSocket.close();
                         }
@@ -1054,6 +1088,7 @@ class VicidialBridgeService {
                         }
                     })();
                     if (!preReg) {
+                        releasePendingSlot();
                         try {
                             rtpSocket.close();
                         }
@@ -1066,7 +1101,7 @@ class VicidialBridgeService {
                         this.preCallRegistry.delete(preReg.uuid);
                     sendSipResponse('200 OK', headers, localToWithTag, [
                         `Contact: <sip:${exten || 'bridge'}@${localIpForSdp}:${this.sipPort}>`,
-                        'Allow: INVITE, ACK, CANCEL, OPTIONS, BYE',
+                        'Allow: INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, NOTIFY',
                     ], sdpAnswer, rinfo);
                     let rtpClosed = false;
                     let txPcmQueue = Buffer.alloc(0);
@@ -1188,6 +1223,9 @@ class VicidialBridgeService {
                             return referTracker.wait(callId, cseq, sendRefer);
                         },
                     };
+                    // Hand off the reserved concurrency slot synchronously to launchCallSession
+                    // (no await between release and activeCalls.set, so concurrent INVITEs cannot slip in).
+                    releasePendingSlot();
                     const sessionCallbacks = this.launchCallSession({
                         transport: 'sip_rtp',
                         sessionUuid: preReg.uuid,
@@ -1327,6 +1365,7 @@ class VicidialBridgeService {
             };
         }
         this.stats.totalCalls += 1;
+        this.stats.lastError = null;
         let closed = false;
         let settingsApplied = false;
         let selectedGreeting = null;
@@ -1394,20 +1433,72 @@ class VicidialBridgeService {
             transferredTo: null,
         };
         this.activeCalls.set(callId, summary);
-        // Multi-line remote agents: use the VICIdial user that actually holds this
-        // call, so transfers and hang-ups reach the right line.
+        // Track live VICIdial call ID (Y.../V.../M...). On-hook remote agents
+        // arrive with RINGAGENT... and resolve their live Y.../V... call ID via
+        // non_agent_api.php?function=agent_status&stage=csv&header=YES.
+        let liveCallerCode = parsedCaller.isVicidialCallId ? parsedCaller.callerCode : '';
+        let hasLiveViciCallId = Boolean(parsedCaller.isVicidialCallId && parsedCaller.callerCode);
+        let agentUserResolvedFromVici = false;
+        let agentUserRefreshed = false;
         let agentUserLookup = Promise.resolve();
         if (opts.preCall?.agentUserPromise) {
             agentUserLookup = opts.preCall.agentUserPromise.then((u) => {
-                if (u && u !== remoteAgentUser) {
-                    remoteAgentUser = u;
-                    summary.remoteAgentUser = u;
+                if (u) {
+                    agentUserResolvedFromVici = true;
+                    if (u !== remoteAgentUser) {
+                        remoteAgentUser = u;
+                        summary.remoteAgentUser = u;
+                    }
                 }
             });
         }
         // VICIdial control actions wait for that lookup (it ends on its own HTTP
         // timeout); the campaign user is used only if the lookup really fails.
         const awaitAgentUser = () => Promise.race([agentUserLookup, new Promise((r) => setTimeout(r, 15000))]);
+        const resolveLiveRemoteAgentUser = async (forceAgentStatus = false) => {
+            await awaitAgentUser();
+            // 1) If we already have a V/Y/M call_id but the pre-answer lookup at
+            //    INVITE time saw VDAD/VDCL/empty, re-check callid_info once now that
+            //    the Remote Agent is live on the call.
+            if (hasLiveViciCallId && !agentUserResolvedFromVici && !agentUserRefreshed) {
+                agentUserRefreshed = true;
+                const fresh = await lookupCallAgentUser(viciClient, liveCallerCode);
+                if (fresh) {
+                    agentUserResolvedFromVici = true;
+                    if (fresh !== remoteAgentUser) {
+                        remoteAgentUser = fresh;
+                        summary.remoteAgentUser = fresh;
+                    }
+                }
+            }
+            // 2) On-hook remote agents (RINGAGENT...) or calls without a live Y/V
+            //    call_id yet: query agent_status CSV (header=YES) across the remote
+            //    agent's line range to resolve live Y.../V... call_id, lead_id, and
+            //    the exact line user (e.g. 9003..9010).
+            if ((!hasLiveViciCallId || forceAgentStatus) && (parsedCaller.isRingAgent || !hasLiveViciCallId || forceAgentStatus)) {
+                const live = await viciClient.resolveLiveViciCall({
+                    baseRemoteAgentUser: resolved.remoteAgentUser,
+                    candidateUsers: [remoteAgentUser],
+                    maxLines: Math.max(Number(campaign?.maxCalls || 10), 10),
+                    phone: summary.phone,
+                    campaignId: campaign?.viciCampaign,
+                });
+                if (live.ok && live.callerCode) {
+                    liveCallerCode = live.callerCode;
+                    hasLiveViciCallId = true;
+                    summary.callerCode = live.callerCode;
+                    if (live.remoteAgentUser) {
+                        agentUserResolvedFromVici = true;
+                        remoteAgentUser = live.remoteAgentUser;
+                        summary.remoteAgentUser = live.remoteAgentUser;
+                    }
+                    if (live.leadId && !summary.leadId)
+                        summary.leadId = live.leadId;
+                    if (live.phone && (!summary.phone || !/\d{7}/.test(summary.phone)))
+                        summary.phone = live.phone;
+                }
+            }
+        };
         this.broadcastMonitor({ type: 'call_started', call: summary, status: this.getStatus() });
         const addTranscript = (role, content) => {
             const entry = { ts: new Date().toISOString(), role, content };
@@ -1430,19 +1521,50 @@ class VicidialBridgeService {
             transferExecuted = true;
             updateState('transferring');
             transferCompletion = new Promise((resolve) => { resolveTransferCompletion = resolve; });
-            const xferType = campaign?.xferType || 'ingroup';
-            const xferTarget = campaign?.xferTarget || 'DEFAULTINGROUP';
+            const rawXferType = campaign?.xferType || 'ingroup';
+            const xferTarget = String(campaign?.xferTarget || 'DEFAULTINGROUP').trim();
+            // Numeric transfer targets (e.g. 8200) are dialplan extensions, never in-groups.
+            const xferType = rawXferType === 'ingroup' && /^\d{2,15}$/.test(xferTarget) ? 'extension' : rawXferType;
             let xferOk = false;
             let detail = '';
-            if (parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
-                await awaitAgentUser();
-                const raRes = await viciClient.transferRemoteAgentCall({
-                    callerCode: parsedCaller.callerCode,
+            const hadLeadBeforeResolve = Boolean(summary.leadId);
+            if (hasLiveViciCallId || parsedCaller.isRingAgent) {
+                await resolveLiveRemoteAgentUser();
+            }
+            // If leadId was just discovered from agent_status on an on-hook RINGAGENT
+            // call, ensure the lead status + closer notes are written before transfer.
+            if (!hadLeadBeforeResolve && summary.leadId) {
+                await viciClient.updateLeadDisposition({
+                    leadId: summary.leadId,
+                    phone: summary.phone,
+                    status: disposition || 'XFER',
+                    notes: `[AI Qualified] ${args.reason || 'Verified lead ready for closer'}`,
+                }).catch(() => { });
+            }
+            if (hasLiveViciCallId && liveCallerCode) {
+                let raRes = await viciClient.transferRemoteAgentCall({
+                    callerCode: liveCallerCode,
                     remoteAgentUser,
                     xferType,
                     xferTarget,
                     status: disposition || 'XFER',
                 });
+                // If callid_info reported an upstream fronter user instead of this
+                // verifier Remote Agent user, retry once with agent_status / base RA user.
+                if (!raRes.ok && resolved.remoteAgentUser && remoteAgentUser !== resolved.remoteAgentUser) {
+                    const fallbackRes = await viciClient.transferRemoteAgentCall({
+                        callerCode: liveCallerCode,
+                        remoteAgentUser: resolved.remoteAgentUser,
+                        xferType,
+                        xferTarget,
+                        status: disposition || 'XFER',
+                    });
+                    if (fallbackRes.ok) {
+                        remoteAgentUser = resolved.remoteAgentUser;
+                        summary.remoteAgentUser = remoteAgentUser;
+                        raRes = fallbackRes;
+                    }
+                }
                 xferOk = raRes.ok;
                 detail = raRes.responseText;
             }
@@ -1481,6 +1603,7 @@ class VicidialBridgeService {
             if (xferOk) {
                 transferredTo = `${xferType}:${xferTarget}`;
                 this.stats.completedTransfers += 1;
+                this.stats.lastError = null;
                 addTranscript('system', `Transferred caller to ${transferredTo} (${detail})`);
             }
             else {
@@ -1510,10 +1633,10 @@ class VicidialBridgeService {
                     addTranscript('system', `Transfer failed (${detail}); fallback disposition ${fbCode} ${fallbackUpdate.ok ? 'was accepted' : 'was NOT accepted'} by VICIdial.`);
                 }
             }
-            updateState('transferred');
+            updateState(xferOk ? 'transferred' : 'transfer_failed');
             resolveTransferCompletion?.();
             resolveTransferCompletion = null;
-            finalizeSession('transferred_to_closer');
+            finalizeSession(xferOk ? 'transferred_to_closer' : 'transfer_failed');
         };
         const finalizeSession = async (reason) => {
             if (closed)
@@ -1554,20 +1677,25 @@ class VicidialBridgeService {
             }
             // Do not race a HANGUP ahead of an in-flight EXTENSIONTRANSFER when the
             // mock/transport closes immediately after requesting the transfer.
-            if (transferCompletion && reason !== 'transferred_to_closer') {
+            if (transferCompletion && reason !== 'transferred_to_closer' && reason !== 'transfer_failed') {
                 await Promise.race([transferCompletion, new Promise((resolve) => setTimeout(resolve, 12000))]);
             }
             opts.hooks.hangupTransport();
-            await awaitAgentUser();
+            if (hasLiveViciCallId || parsedCaller.isRingAgent) {
+                await resolveLiveRemoteAgentUser();
+            }
+            else {
+                await awaitAgentUser();
+            }
             // Screened as not a person: the screening module sends the status once,
             // retries, frees the remote-agent slot and reads the status back.
-            if (screeningNonHuman && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
+            if (screeningNonHuman && hasLiveViciCallId && liveCallerCode) {
                 await (0, screening_1.sendScreeningDisposition)({
                     callId,
                     campaignId: campaign.id,
                     campaignViciId: campaign.viciCampaign || '',
                     leadId: summary.leadId || '',
-                    callerCode: parsedCaller.callerCode,
+                    callerCode: liveCallerCode,
                     remoteAgentUser,
                     phone: summary.phone || '',
                     nativeAmd: screening?.nativeAmd || { status: 'NONE', cause: '', authenticated: false },
@@ -1578,15 +1706,24 @@ class VicidialBridgeService {
                     transcript.push({ ts: new Date().toISOString(), role: 'system', content: `Screening disposition error: ${err?.message || 'unknown'}` });
                 });
             }
-            else if (!transferredTo && parsedCaller.isVicidialCallId && parsedCaller.callerCode) {
+            else if (!transferredTo && hasLiveViciCallId && liveCallerCode) {
                 // Release Remote Agent call slot via ra_call_control HANGUP if call was NOT transferred
-                await viciClient
+                const hu = await viciClient
                     .hangupRemoteAgentCall({
-                    callerCode: parsedCaller.callerCode,
+                    callerCode: liveCallerCode,
                     remoteAgentUser,
                     status: disposition || 'NA',
                 })
-                    .catch(() => { });
+                    .catch(() => ({ ok: false, responseText: '' }));
+                if (!hu.ok && resolved.remoteAgentUser && remoteAgentUser !== resolved.remoteAgentUser) {
+                    await viciClient
+                        .hangupRemoteAgentCall({
+                        callerCode: liveCallerCode,
+                        remoteAgentUser: resolved.remoteAgentUser,
+                        status: disposition || 'NA',
+                    })
+                        .catch(() => { });
+                }
             }
             // Listening ends with the call, and each stop is recorded before the call record is saved.
             this.closeListeners(callId, reason);
@@ -1607,7 +1744,7 @@ class VicidialBridgeService {
                 id: callId,
                 transport: opts.transport,
                 exten,
-                callerCode: parsedCaller.callerCode || '(direct)',
+                callerCode: liveCallerCode || parsedCaller.callerCode || '(direct)',
                 leadId: summary.leadId,
                 phone: summary.phone || '',
                 campaignId: campaign?.id || null,
@@ -1728,13 +1865,17 @@ class VicidialBridgeService {
             }
             let hydratedLead;
             try {
-                hydratedLead = opts.preCall
-                    ? await opts.preCall.leadPromise
-                    : await viciClient.fetchLeadInfo({
-                        leadId: parsedCaller.leadId,
-                        phone: parsedCaller.phone,
-                        campaignId: campaign?.viciCampaign,
-                    });
+                if (parsedCaller.isRingAgent && !summary.leadId) {
+                    await resolveLiveRemoteAgentUser();
+                }
+                hydratedLead =
+                    opts.preCall && !parsedCaller.isRingAgent
+                        ? await opts.preCall.leadPromise
+                        : await viciClient.fetchLeadInfo({
+                            leadId: summary.leadId || parsedCaller.leadId,
+                            phone: summary.phone || parsedCaller.phone,
+                            campaignId: campaign?.viciCampaign,
+                        });
             }
             catch {
                 hydratedLead = {

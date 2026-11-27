@@ -17,7 +17,8 @@ def test_health_and_ready(client):
     assert client.get("/healthz").status_code == 200
     r = client.get("/readyz")
     assert r.status_code == 200 and r.json()["status"] == "ready"
-    assert b"speech_http_requests_total" in client.get("/metrics").content
+    assert client.get("/metrics").status_code == 401
+    assert b"speech_http_requests_total" in client.get("/metrics", headers=H).content
 
 
 def test_models_endpoint(client):

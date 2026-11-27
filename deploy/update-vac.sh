@@ -9,12 +9,27 @@ if [ -z "${VAC_UPDATE_COPY:-}" ]; then
   TMP=$(mktemp /tmp/update-vac.XXXXXX.sh)
   cp "$0" "$TMP"
   VAC_UPDATE_COPY=1 exec bash "$TMP" "$@"
+else
+  trap 'rm -f "$0"' EXIT
 fi
 
 REPO_DIR="$HOME/Voice-Agent-Console"
 REPO="muneeb819/Voice-Agent-Console"
 INSTALL_DIR="/opt/voice-agent-console"
-PUBLIC_IP="54.79.152.235"
+PUBLIC_IP="${PUBLIC_IP:-}"
+if [ -z "$PUBLIC_IP" ]; then
+  IMDS_TOKEN="$(curl -fsS --max-time 2 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)"
+  if [ -n "$IMDS_TOKEN" ]; then
+    PUBLIC_IP="$(curl -fsS --max-time 2 -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)"
+  fi
+  if [ -z "$PUBLIC_IP" ]; then
+    PUBLIC_IP="$(curl -fsS --max-time 3 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || curl -fsS --max-time 3 https://checkip.amazonaws.com 2>/dev/null | tr -d '[:space:]' || true)"
+  fi
+fi
+if [ -z "$PUBLIC_IP" ]; then
+  echo "ERROR: Set PUBLIC_IP=<server-public-ip> before running deploy/update-vac.sh." >&2
+  exit 1
+fi
 KEY="$HOME/.ssh/vac_deploy"
 
 say() { printf '\n\033[1;36m=== %s ===\033[0m\n' "$*"; }
@@ -79,12 +94,14 @@ git log --oneline -5
 say "3/6 Backing up data and settings"
 BACKUP="$HOME/vac-backup-$(date +%Y%m%d-%H%M).tgz"
 if sudo test -d "$INSTALL_DIR"; then
+  umask 077
   if ! sudo tar czf "$BACKUP" -C "$INSTALL_DIR" --ignore-failed-read data .env || ! sudo tar tzf "$BACKUP" >/dev/null; then
     echo "ERROR: the backup failed (disk full?). Nothing was deployed." >&2
     df -h "$HOME" >&2
     exit 1
   fi
   sudo chown "$(id -u):$(id -g)" "$BACKUP" 2>/dev/null || true
+  chmod 600 "$BACKUP"
   echo "Backup: $BACKUP ($(du -h "$BACKUP" | cut -f1))"
   ls -1t "$HOME"/vac-backup-*.tgz 2>/dev/null | tail -n +6 | xargs -r rm -f   # keep the last 5
 else

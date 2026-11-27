@@ -4,18 +4,19 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
-# Run as UID 1000 (compatible with Hugging Face Spaces, Kubernetes & standard Docker).
+# Run as the built-in non-root `node` user (UID 1000 — compatible with
+# Hugging Face Spaces, Kubernetes & standard Docker without colliding with
+# the existing UID 1000 in node:22-slim).
 # Ports below 1024 are privileged on Linux, so the container listens on 8080.
-RUN useradd -m -u 1000 appuser \
-  && mkdir -p /data/recordings \
-  && chown -R appuser:appuser /data
-WORKDIR /home/appuser/app
+RUN mkdir -p /data/recordings /home/node/app \
+  && chown -R node:node /data /home/node/app
+WORKDIR /home/node/app
 
-COPY --chown=appuser:appuser package.json package-lock.json ./
-USER appuser
+COPY --chown=node:node package.json package-lock.json ./
+USER node
 RUN npm ci --no-audit --no-fund
 
-COPY --chown=appuser:appuser . .
+COPY --chown=node:node . .
 RUN npm run build \
   && mkdir -p data/recordings \
   && npm prune --omit=dev --no-audit --no-fund

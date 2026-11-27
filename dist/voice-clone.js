@@ -97,8 +97,22 @@ async function elevenError(res) {
         return new CloneError(`ElevenLabs: ${detail || 'your plan does not allow this (voice cloning needs a paid plan).'}`, 402, 'ELEVENLABS_PLAN');
     return new CloneError(`ElevenLabs error ${res.status}${detail ? `: ${detail}` : ''}`, res.status >= 500 ? 502 : 400, 'ELEVENLABS_ERROR');
 }
+async function safeFetch(fetchImpl, url, init, providerName = 'Upstream') {
+    try {
+        return await fetchImpl(url, init);
+    }
+    catch (err) {
+        if (err instanceof CloneError)
+            throw err;
+        throw new CloneError(`${providerName} could not be reached: ${err?.message || 'network error'}`, 502, 'UPSTREAM_UNAVAILABLE');
+    }
+}
 async function elevenListClones(fetchImpl = fetch) {
-    const res = await fetchImpl(`${exports.ELEVEN_API}/v1/voices`, { headers: { 'xi-api-key': elevenKey() } });
+    const res = await safeFetch(fetchImpl, `${exports.ELEVEN_API}/v1/voices`, {
+        headers: { 'xi-api-key': elevenKey() },
+        redirect: 'error',
+        signal: AbortSignal.timeout(15000),
+    }, 'ElevenLabs');
     if (!res.ok)
         throw await elevenError(res);
     const data = await res.json();
@@ -115,7 +129,11 @@ async function elevenListClones(fetchImpl = fetch) {
 }
 /** Ready-made voices on the ElevenLabs account (premade, library, generated): not clones. */
 async function elevenListLibrary(fetchImpl = fetch) {
-    const res = await fetchImpl(`${exports.ELEVEN_API}/v1/voices`, { headers: { 'xi-api-key': elevenKey() } });
+    const res = await fetchImpl(`${exports.ELEVEN_API}/v1/voices`, {
+        headers: { 'xi-api-key': elevenKey() },
+        redirect: 'error',
+        signal: AbortSignal.timeout(15000),
+    });
     if (!res.ok)
         throw await elevenError(res);
     const data = await res.json();
@@ -153,11 +171,13 @@ async function elevenSetExpressiveness(voiceId, preset, fetchImpl = fetch) {
     if (!Object.prototype.hasOwnProperty.call(exports.EXPRESSIVE_PRESETS, preset))
         throw new CloneError('Choose Warm, Balanced or Steady.');
     const { label: _label, ...settings } = exports.EXPRESSIVE_PRESETS[preset];
-    const res = await fetchImpl(`${exports.ELEVEN_API}/v1/voices/${voiceId}/settings/edit`, {
+    const res = await safeFetch(fetchImpl, `${exports.ELEVEN_API}/v1/voices/${voiceId}/settings/edit`, {
         method: 'POST',
         headers: { 'xi-api-key': elevenKey(), 'Content-Type': 'application/json' },
         body: JSON.stringify(settings),
-    });
+        redirect: 'error',
+        signal: AbortSignal.timeout(15000),
+    }, 'ElevenLabs');
     if (!res.ok)
         throw await elevenError(res);
     return preset;
@@ -169,7 +189,13 @@ async function elevenCreateClone(req, fetchImpl = fetch) {
     form.append('remove_background_noise', req.removeBackgroundNoise ? 'true' : 'false');
     form.append('labels', JSON.stringify({ speaker: req.speakerName.slice(0, 60), source: 'voice-agent-console' }));
     form.append('files', new Blob([new Uint8Array(req.sample)], { type: req.mimeType }), req.filename);
-    const res = await fetchImpl(`${exports.ELEVEN_API}/v1/voices/add`, { method: 'POST', headers: { 'xi-api-key': elevenKey() }, body: form });
+    const res = await safeFetch(fetchImpl, `${exports.ELEVEN_API}/v1/voices/add`, {
+        method: 'POST',
+        headers: { 'xi-api-key': elevenKey() },
+        body: form,
+        redirect: 'error',
+        signal: AbortSignal.timeout(30000),
+    }, 'ElevenLabs');
     if (!res.ok)
         throw await elevenError(res);
     const data = await res.json();
@@ -180,11 +206,13 @@ async function elevenCreateClone(req, fetchImpl = fetch) {
 async function elevenPreview(voiceId, text, fetchImpl = fetch) {
     if (!/^[A-Za-z0-9]{8,64}$/.test(voiceId))
         throw new CloneError('Unknown ElevenLabs voice id.');
-    const res = await fetchImpl(`${exports.ELEVEN_API}/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
+    const res = await safeFetch(fetchImpl, `${exports.ELEVEN_API}/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`, {
         method: 'POST',
         headers: { 'xi-api-key': elevenKey(), 'Content-Type': 'application/json', Accept: 'audio/mpeg' },
         body: JSON.stringify({ text: String(text || '').slice(0, 600), model_id: exports.ELEVEN_LIVE_MODELS[0] }),
-    });
+        redirect: 'error',
+        signal: AbortSignal.timeout(20000),
+    }, 'ElevenLabs');
     if (!res.ok)
         throw await elevenError(res);
     return Buffer.from(await res.arrayBuffer());
@@ -192,7 +220,12 @@ async function elevenPreview(voiceId, text, fetchImpl = fetch) {
 async function elevenDelete(voiceId, fetchImpl = fetch) {
     if (!/^[A-Za-z0-9]{8,64}$/.test(voiceId))
         throw new CloneError('Unknown ElevenLabs voice id.');
-    const res = await fetchImpl(`${exports.ELEVEN_API}/v1/voices/${voiceId}`, { method: 'DELETE', headers: { 'xi-api-key': elevenKey() } });
+    const res = await safeFetch(fetchImpl, `${exports.ELEVEN_API}/v1/voices/${voiceId}`, {
+        method: 'DELETE',
+        headers: { 'xi-api-key': elevenKey() },
+        redirect: 'error',
+        signal: AbortSignal.timeout(15000),
+    }, 'ElevenLabs');
     if (!res.ok && res.status !== 404)
         throw await elevenError(res);
 }
@@ -231,7 +264,11 @@ function speechServiceUrl() {
     return base.replace(/\/+$/, '');
 }
 async function selfHostedListClones(fetchImpl = fetch) {
-    const res = await fetchImpl(`${speechServiceUrl()}/v1/voices`, { headers: (0, speech_service_client_1.getSpeechServiceHeaders)() });
+    const res = await fetchImpl(`${speechServiceUrl()}/v1/voices`, {
+        headers: (0, speech_service_client_1.getSpeechServiceHeaders)(),
+        redirect: 'error',
+        signal: AbortSignal.timeout(15000),
+    });
     if (!res.ok)
         throw await speechServiceError(res);
     const data = await res.json();
@@ -252,7 +289,13 @@ async function selfHostedCreateClone(req, fetchImpl = fetch) {
     form.append('speaker_name', req.speakerName);
     form.append('consent_confirmed', 'true');
     form.append('consent_statement', req.consentStatement);
-    const res = await fetchImpl(`${speechServiceUrl()}/v1/voices`, { method: 'POST', headers: (0, speech_service_client_1.getSpeechServiceHeaders)(), body: form });
+    const res = await fetchImpl(`${speechServiceUrl()}/v1/voices`, {
+        method: 'POST',
+        headers: (0, speech_service_client_1.getSpeechServiceHeaders)(),
+        body: form,
+        redirect: 'error',
+        signal: AbortSignal.timeout(30000),
+    });
     if (!res.ok)
         throw await speechServiceError(res);
     const data = await res.json();
@@ -261,7 +304,12 @@ async function selfHostedCreateClone(req, fetchImpl = fetch) {
 async function selfHostedDelete(id, fetchImpl = fetch) {
     if (!/^[0-9a-f]{32}$/.test(id))
         throw new CloneError('Unknown self-hosted voice id.');
-    const res = await fetchImpl(`${speechServiceUrl()}/v1/voices/${id}`, { method: 'DELETE', headers: (0, speech_service_client_1.getSpeechServiceHeaders)() });
+    const res = await fetchImpl(`${speechServiceUrl()}/v1/voices/${id}`, {
+        method: 'DELETE',
+        headers: (0, speech_service_client_1.getSpeechServiceHeaders)(),
+        redirect: 'error',
+        signal: AbortSignal.timeout(15000),
+    });
     if (!res.ok && res.status !== 404)
         throw await speechServiceError(res);
 }

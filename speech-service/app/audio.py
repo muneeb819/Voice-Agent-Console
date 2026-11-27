@@ -137,14 +137,18 @@ def encode_audio(x: np.ndarray, src_rate: int, fmt: str, out_rate: int | None) -
             if fmt == "mp3"
             else ["-c:a", "libopus", "-b:a", "48k", "-f", "ogg"]
         )
-        proc = subprocess.run(
-            [
-                ffmpeg, "-nostdin", "-v", "error", "-f", "s16le",
-                "-ar", str(out_rate), "-ac", "1", "-i", "pipe:0", *codec, "pipe:1",
-            ],
-            input=float_to_pcm16(y).tobytes(),
-            capture_output=True,
-        )
+        try:
+            proc = subprocess.run(
+                [
+                    ffmpeg, "-nostdin", "-v", "error", "-f", "s16le",
+                    "-ar", str(out_rate), "-ac", "1", "-i", "pipe:0", *codec, "pipe:1",
+                ],
+                input=float_to_pcm16(y).tobytes(),
+                capture_output=True,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            raise AudioError("Encoding timed out")
         if proc.returncode != 0:
             raise AudioError("Encoding failed")
         return proc.stdout, FORMAT_MIME[fmt]

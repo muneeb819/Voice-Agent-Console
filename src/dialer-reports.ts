@@ -387,6 +387,175 @@ export function buildProblems(logs: BridgeCallLogRecord[], alerts: AlertRecord[]
   return out.sort((a, b) => b.count - a.count);
 }
 
+export interface KeyedTable {
+  headers: string[];
+  records: Array<Record<string, string>>;
+  rows: string[][];
+}
+
+export interface UserActivityStatsReport {
+  dialer: { id: string; label: string };
+  at: string;
+  dateRange: { start: string; end: string };
+  requestedUsers: string[];
+  campaign: string | null;
+  userGroup: string | null;
+  summary: {
+    loggedInCount: number;
+    byState: Record<string, number>;
+    statsRowCount: number;
+    queriedUsers: number;
+  };
+  liveAgents: KeyedTable | null;
+  userDetails: Array<{ user: string; ok: boolean; profile: Record<string, string> | null; rows: string[][] }>;
+  liveStatus: Array<{ user: string; ok: boolean; status: Record<string, string> | null; rows: string[][] }>;
+  statsExport: KeyedTable | null;
+  problems: ReportProblem[];
+}
+
+export function parseKeyedRows(text: string): KeyedTable {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !/^NOTICE:/i.test(l));
+  if (!lines.length) return { headers: [], records: [], rows: [] };
+  const delim = lines[0].includes('|') ? '|' : ',';
+  const rows = lines.map((l) => l.split(delim).map((c) => c.trim().replace(/^"|"$/g, '')));
+  if (rows.length < 2) return { headers: [], records: [], rows };
+  const headers = rows[0].map((h, i) => (h || `col_${i + 1}`).toLowerCase().replace(/\s+/g, '_'));
+  const records = rows.slice(1).map((vals) => {
+    const obj: Record<string, string> = {};
+    for (let i = 0; i < headers.length; i += 1) {
+      obj[headers[i]] = vals[i] ?? '';
+    }
+    return obj;
+  });
+  return { headers, records, rows: rows.slice(1) };
+}
+
+export const MAX_USER_ACTIVITY_TARGETS = 20;
+
+export async function buildUserActivityStats(
+  source: DialerSource,
+  opts: {
+    users?: string[];
+    datetimeStart: string;
+    datetimeEnd: string;
+    campaign?: string;
+    userGroup?: string;
+  }
+): Promise<UserActivityStatsReport> {
+  const problems: ReportProblem[] = [];
+  const cleanUsers = Array.from(
+    new Set(
+      (opts.users || [])
+        .map((u) => String(u || '').trim())
+        .filter((u) => /^[A-Za-z0-9_.@-]{1,20}$/.test(u))
+    )
+  ).slice(0, MAX_USER_ACTIVITY_TARGETS);
+
+  const campaign = opts.campaign && /^[A-Za-z0-9_-]{1,20}$/.test(opts.campaign.trim()) ? opts.campaign.trim() : '';
+  const userGroup = opts.userGroup && /^[A-Za-z0-9_-]{1,20}$/.test(opts.userGroup.trim()) ? opts.userGroup.trim() : '';
+
+  const loggedParams: Record<string, string> = { stage: 'pipe', header: 'YES', show_sub_status: 'YES' };
+  if (campaign) loggedParams.campaigns = campaign;
+  if (userGroup) loggedParams.user_groups = userGroup;
+
+  const statsParams: Record<string, string> = {
+    datetime_start: opts.datetimeStart,
+    datetime_end: opts.datetimeEnd,
+    stage: 'pipe',
+    header: 'YES',
+    time_format: 'H',
+  };
+  if (cleanUsers.length === 1) statsParams.agent_user = cleanUsers[0];
+  if (campaign) statsParams.campaign_id = campaign;
+  if (userGroup) statsParams.user_group = userGroup;
+
+  const [loggedRaw, statsRaw] = await Promise.all([
+    source.query('logged_in_agents', loggedParams),
+    source.query('agent_stats_export', statsParams),
+  ]);
+
+  let liveAgents: KeyedTable | null = null;
+  if (loggedRaw.ok) {
+    liveAgents = parseKeyedRows(loggedRaw.text);
+  } else {
+    const c = classifyDialerReply('logged_in_agents', loggedRaw.status, loggedRaw.text);
+    problems.push({ id: `dialer.${source.id}.logged_in_agents`, area: 'Dialer', count: 1, ...c });
+  }
+
+  let statsExport: KeyedTable | null = null;
+  if (statsRaw.ok) {
+    const parsed = parseKeyedRows(statsRaw.text);
+    if (cleanUsers.length > 1) {
+      const wanted = new Set(cleanUsers.map((u) => u.toLowerCase()));
+      const filtered = parsed.records.filter((r) => wanted.has(String(r.user || r.agent_user || '').toLowerCase()));
+      statsExport = { headers: parsed.headers, records: filtered, rows: filtered.map((r) => parsed.headers.map((h) => r[h] || '')) };
+    } else {
+      statsExport = parsed;
+    }
+  } else {
+    const c = classifyDialerReply('agent_stats_export', statsRaw.status, statsRaw.text);
+    problems.push({ id: `dialer.${source.id}.agent_stats_export`, area: 'Dialer', count: 1, ...c });
+  }
+
+  const dialerUnreachable = problems.some((p) => p.title === UNREACHABLE_TITLE);
+  const userDetails: UserActivityStatsReport['userDetails'] = [];
+  const liveStatus: UserActivityStatsReport['liveStatus'] = [];
+
+  if (cleanUsers.length && !dialerUnreachable) {
+    const perUser = await mapLimit(cleanUsers, REPORT_CONCURRENCY, async (u) => {
+      const [detRaw, stRaw] = await Promise.all([
+        source.query('user_details', { agent_user: u, stage: 'pipe', header: 'YES' }),
+        source.query('agent_status', { agent_user: u, stage: 'csv', header: 'YES' }),
+      ]);
+      return { user: u, detRaw, stRaw };
+    });
+
+    for (const item of perUser) {
+      if (item.detRaw.ok) {
+        const parsed = parseKeyedRows(item.detRaw.text);
+        userDetails.push({ user: item.user, ok: true, profile: parsed.records[0] || null, rows: parsed.rows });
+      } else {
+        const c = classifyDialerReply('user_details', item.detRaw.status, item.detRaw.text);
+        problems.push({ id: `dialer.${source.id}.user_details`, area: 'Dialer', count: 1, ...c });
+        userDetails.push({ user: item.user, ok: false, profile: null, rows: [] });
+      }
+
+      if (item.stRaw.ok) {
+        const parsed = parseKeyedRows(item.stRaw.text);
+        liveStatus.push({ user: item.user, ok: true, status: parsed.records[0] || null, rows: parsed.rows });
+      } else {
+        const c = classifyDialerReply('agent_status', item.stRaw.status, item.stRaw.text);
+        problems.push({ id: `dialer.${source.id}.agent_status`, area: 'Dialer', count: 1, ...c });
+        liveStatus.push({ user: item.user, ok: false, status: null, rows: [] });
+      }
+    }
+  }
+
+  const liveRows = liveAgents ? liveAgents.rows : [];
+  return {
+    dialer: { id: source.id, label: source.label },
+    at: new Date().toISOString(),
+    dateRange: { start: opts.datetimeStart, end: opts.datetimeEnd },
+    requestedUsers: cleanUsers,
+    campaign: campaign || null,
+    userGroup: userGroup || null,
+    summary: {
+      loggedInCount: liveAgents ? liveAgents.records.length : 0,
+      byState: countAgentStates(liveRows),
+      statsRowCount: statsExport ? statsExport.records.length : 0,
+      queriedUsers: cleanUsers.length,
+    },
+    liveAgents,
+    userDetails,
+    liveStatus,
+    statsExport,
+    problems: dedupeProblems(problems),
+  };
+}
+
 /** The dialers this console can report on. Add a source here to report on a second dialer. */
 export function buildSources(
   state: ConsoleState,

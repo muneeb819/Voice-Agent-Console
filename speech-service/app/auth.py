@@ -106,6 +106,6 @@ async def require_auth(request: Request) -> Principal:
 
 
 def authenticate_ws(ws: WebSocket) -> Principal | None:
-    """Headers (Authorization / X-API-Key) or ?token= for browser clients."""
+    """Authenticate WebSocket connections via Authorization or X-API-Key headers only."""
     a: Authenticator = ws.app.state.rt.auth
-    return a.verify(_token_from_headers(ws.headers) or ws.query_params.get("token"))
+    return a.verify(_token_from_headers(ws.headers))

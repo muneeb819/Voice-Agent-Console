@@ -5,9 +5,31 @@ import { ViciConfig } from './types';
 export interface ParsedViciCallerCode {
   callerCode: string;
   isVicidialCallId: boolean;
+  isRingAgent?: boolean;
   callType: 'outbound' | 'inbound' | 'manual' | 'direct';
   leadId: string | null;
   phone: string;
+}
+
+export interface AgentStatusRecord {
+  ok: boolean;
+  agentUser: string;
+  status: string;
+  callId: string;
+  leadId: string | null;
+  campaignId: string;
+  phone: string;
+  rawText: string;
+}
+
+export interface ResolvedLiveViciCall {
+  ok: boolean;
+  callerCode: string;
+  remoteAgentUser: string;
+  leadId: string | null;
+  phone: string;
+  campaignId: string;
+  status: string;
 }
 
 export interface HydratedViciLead {
@@ -97,9 +119,114 @@ export function parseVicidialCallerCode(
   return {
     callerCode: cleanName,
     isVicidialCallId: false,
+    isRingAgent: /^RINGAGENT/i.test(cleanName),
     callType: 'direct',
     leadId: /^\d{1,10}$/.test(cleanName) ? cleanName : null,
     phone: cleanPhone,
+  };
+}
+
+function splitCsvLine(line: string, delim: ',' | '|'): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        cur += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === delim && !inQuotes) {
+      out.push(cur.trim());
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur.trim());
+  return out;
+}
+
+/**
+ * Parses VICIdial non_agent_api.php?function=agent_status&stage=csv&header=YES
+ * (handles comma- or pipe-delimited output and optional header row).
+ */
+export function parseAgentStatusCsv(rawText: string, requestedUser: string): AgentStatusRecord {
+  const empty: AgentStatusRecord = {
+    ok: false,
+    agentUser: requestedUser,
+    status: '',
+    callId: '',
+    leadId: null,
+    campaignId: '',
+    phone: '',
+    rawText,
+  };
+  const lines = String(rawText || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !/^NOTICE:/i.test(l));
+  if (!lines.length || /^ERROR:/i.test(lines[0])) return empty;
+
+  const delim: ',' | '|' = lines[0].includes('|') && !lines[0].includes(',') ? '|' : ',';
+  const firstCols = splitCsvLine(lines[0], delim);
+  const looksLikeHeader = firstCols.some((c) => /^(status|call_id|lead_id|campaign_id)$/i.test(c));
+
+  let status = '';
+  let callId = '';
+  let leadId: string | null = null;
+  let campaignId = '';
+  let phone = '';
+  let agentUser = requestedUser;
+
+  if (looksLikeHeader && lines.length >= 2) {
+    const headers = firstCols.map((h) => h.toLowerCase().trim());
+    const values = splitCsvLine(lines[1], delim);
+    const map: Record<string, string> = {};
+    for (let i = 0; i < headers.length; i += 1) {
+      map[headers[i]] = (values[i] ?? '').trim();
+    }
+    status = map.status || '';
+    callId = map.call_id || map.callerid || map.caller_code || '';
+    leadId = map.lead_id && /^\d+$/.test(map.lead_id) && map.lead_id !== '0' ? map.lead_id : null;
+    campaignId = map.campaign_id || '';
+    phone = (map.phone_number || map.phone || '').replace(/[^\d+]/g, '');
+    if (map.user || map.agent_user) agentUser = map.user || map.agent_user;
+  } else {
+    // Headerless fallback: status,call_id,lead_id,campaign_id,...
+    status = firstCols[0] || '';
+    callId = firstCols[1] || '';
+    leadId = firstCols[2] && /^\d+$/.test(firstCols[2]) && firstCols[2] !== '0' ? firstCols[2] : null;
+    campaignId = firstCols[3] || '';
+    // Scan remaining columns for a 10+ digit phone number if present
+    for (let i = 4; i < firstCols.length; i += 1) {
+      const digits = firstCols[i].replace(/\D/g, '');
+      if (digits.length >= 10 && digits.length <= 15 && !/^[VYM]\d{17,21}$/i.test(firstCols[i])) {
+        phone = digits;
+      }
+    }
+  }
+
+  const parsedCid = parseVicidialCallerCode(callId, phone);
+  if (parsedCid.isVicidialCallId) {
+    callId = parsedCid.callerCode;
+    if (!leadId && parsedCid.leadId) leadId = parsedCid.leadId;
+  } else {
+    callId = '';
+  }
+
+  return {
+    ok: true,
+    agentUser,
+    status: status.toUpperCase(),
+    callId,
+    leadId,
+    campaignId,
+    phone,
+    rawText,
   };
 }
 
@@ -500,10 +627,99 @@ export class VicidialApiClient {
     return { ok: anyOk, responses };
   }
 
+  async getAgentStatus(agentUser: string): Promise<AgentStatusRecord> {
+    const cleanUser = String(agentUser || '').trim();
+    if (!cleanUser || !/^[A-Za-z0-9_.@-]{1,20}$/.test(cleanUser)) {
+      return { ok: false, agentUser: cleanUser, status: '', callId: '', leadId: null, campaignId: '', phone: '', rawText: '' };
+    }
+    const res = await this.callEndpoint(
+      'non_agent_api',
+      'agent_status',
+      this.nonAgentUrl,
+      { agent_user: cleanUser, stage: 'csv', header: 'YES' },
+      4000
+    );
+    if (!res.ok) {
+      return { ok: false, agentUser: cleanUser, status: '', callId: '', leadId: null, campaignId: '', phone: '', rawText: res.text };
+    }
+    return parseAgentStatusCsv(res.text, cleanUser);
+  }
+
+  /**
+   * Resolves the live VICIdial call_id (Y.../V.../M...) and active remote agent
+   * user (e.g. 9003..9010) from non_agent_api.php?function=agent_status&stage=csv&header=YES.
+   * Essential for On-Hook Remote Agents whose SIP INVITE arrives with RINGAGENT...
+   * instead of the customer's Y.../V... call ID.
+   */
+  async resolveLiveViciCall(opts: {
+    baseRemoteAgentUser: string;
+    candidateUsers?: string[];
+    maxLines?: number;
+    phone?: string;
+    campaignId?: string;
+  }): Promise<ResolvedLiveViciCall> {
+    const empty: ResolvedLiveViciCall = {
+      ok: false,
+      callerCode: '',
+      remoteAgentUser: opts.baseRemoteAgentUser || this.cfg.remoteAgentUser || '9001',
+      leadId: null,
+      phone: '',
+      campaignId: '',
+      status: '',
+    };
+
+    const seen = new Set<string>();
+    const users: string[] = [];
+    const addUser = (u: string | undefined) => {
+      const clean = String(u || '').trim();
+      if (clean && /^[A-Za-z0-9_.@-]{1,20}$/.test(clean) && !seen.has(clean)) {
+        seen.add(clean);
+        users.push(clean);
+      }
+    };
+    for (const u of opts.candidateUsers || []) addUser(u);
+    addUser(opts.baseRemoteAgentUser);
+    const baseNum = Number(opts.baseRemoteAgentUser);
+    const lineCount = Math.max(1, Math.min(Number(opts.maxLines || 10), 16));
+    if (Number.isInteger(baseNum) && baseNum > 0) {
+      for (let i = 0; i < lineCount; i += 1) addUser(String(baseNum + i));
+    }
+    if (!users.length) return empty;
+
+    const targetDigits = String(opts.phone || '').replace(/\D/g, '').slice(-10);
+    const targetCampaign = String(opts.campaignId || '').trim().toLowerCase();
+
+    const results = await Promise.all(users.map((u) => this.getAgentStatus(u)));
+    const withCall = results.filter((r) => r.ok && Boolean(r.callId));
+    if (!withCall.length) return empty;
+
+    const score = (r: AgentStatusRecord): number => {
+      let s = 0;
+      const rDigits = r.phone.replace(/\D/g, '').slice(-10);
+      if (targetDigits.length >= 7 && rDigits && rDigits === targetDigits) s += 100;
+      if (targetCampaign && r.campaignId.toLowerCase() === targetCampaign) s += 20;
+      if (/^(INCALL|QUEUE|CLOSER|LIVE)$/i.test(r.status)) s += 10;
+      if (r.agentUser === opts.baseRemoteAgentUser) s += 2;
+      return s;
+    };
+
+    withCall.sort((a, b) => score(b) - score(a));
+    const best = withCall[0];
+    return {
+      ok: true,
+      callerCode: best.callId,
+      remoteAgentUser: best.agentUser,
+      leadId: best.leadId,
+      phone: best.phone,
+      campaignId: best.campaignId,
+      status: best.status,
+    };
+  }
+
   /**
    * Executes Remote Agent call transfer via /agc/api.php?function=ra_call_control:
-   * - xferType === 'ingroup' -> stage=INGROUPTRANSFER&ingroup_choices=<target || DEFAULTINGROUP> (preserves closer screen-pop!)
-   * - xferType === 'extension' | 'number' -> stage=EXTENSIONTRANSFER&phone_number=<target>
+   * - xferType === 'ingroup' (non-numeric) -> stage=INGROUPTRANSFER&ingroup_choices=<target || DEFAULTINGROUP>
+   * - xferType === 'extension' | 'number' OR numeric target (e.g. 8200) -> stage=EXTENSIONTRANSFER&phone_number=<target>
    */
   async transferRemoteAgentCall(opts: {
     callerCode: string;
@@ -521,6 +737,8 @@ export class VicidialApiClient {
     }
 
     const target = (opts.xferTarget || '').trim();
+    const isNumericTarget = /^\d{2,15}$/.test(target);
+    const effectiveType = opts.xferType === 'ingroup' && isNumericTarget ? 'extension' : opts.xferType;
     const params: Record<string, string> = {
       agent_user: opts.remoteAgentUser || this.cfg.remoteAgentUser || '9001',
       value: opts.callerCode,
@@ -531,7 +749,7 @@ export class VicidialApiClient {
     }
 
     let stage = 'INGROUPTRANSFER';
-    if (opts.xferType === 'ingroup') {
+    if (effectiveType === 'ingroup') {
       stage = 'INGROUPTRANSFER';
       params.stage = stage;
       params.ingroup_choices = target || 'DEFAULTINGROUP';

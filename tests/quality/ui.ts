@@ -1,13 +1,103 @@
 // Browser checks on every console section at desktop, laptop and phone widths:
 // no script errors, every visible control has a label, every button has a name,
 // no sideways scrolling.
+import fs from 'node:fs';
+import path from 'node:path';
 import { acheck, assert, check, group } from './harness';
 
-export async function runUi(base: string, adminPassword: string) {
+function loadPlaywright(): { chromium: any } | null {
+  const candidates = [
+    process.env.PLAYWRIGHT_PATH,
+    'playwright-core',
+    'playwright',
+    '/opt/npm-tools/node_modules/playwright-core',
+  ].filter(Boolean) as string[];
+  for (const mod of candidates) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const loaded = require(mod);
+      if (loaded?.chromium) return loaded;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
+function findChromeExecutable(): string | undefined {
+  const candidates = [
+    process.env.CHROME_PATH,
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+  ].filter(Boolean) as string[];
+  for (const bin of candidates) {
+    if (fs.existsSync(bin)) return bin;
+  }
+  return undefined;
+}
+
+async function runUiJsdomFallback(base: string, adminPassword: string, tabs: string[]) {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { chromium } = require('/opt/npm-tools/node_modules/playwright-core');
-  const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'] });
+  const { JSDOM, VirtualConsole } = require('jsdom');
+  const pub = path.resolve(__dirname, '../../public');
+  const baseHtml = fs.readFileSync(path.join(pub, 'index.html'), 'utf8').replace(/<script[\s\S]*?<\/script>/g, '');
+  const scripts = ['opening.js', 'persona.js', 'brand-logos.js', 'app.js'].map((f) => fs.readFileSync(path.join(pub, f), 'utf8'));
+  const authHdr = adminPassword ? { Authorization: `Bearer ${adminPassword}` } : {};
+  const tick = (ms = 25) => new Promise<void>((r) => setTimeout(r, ms));
+
+  for (const tab of tabs) {
+    group('Front end', 'public/app.js + public/index.html', `${tab} section`);
+    const errors: string[] = [];
+    const vc = new VirtualConsole();
+    vc.on('jsdomError', (e: Error) => { if (!/Not implemented: navigation/.test(e.message)) errors.push(e.message); });
+    const dom = new JSDOM(baseHtml, { url: `${base}/?tab=${tab}`, runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole: vc });
+    const w: any = dom.window;
+    w.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+    w.AudioContext = class {};
+    w.WebSocket = class { readyState = 0; send() {} close() {} };
+    w.indexedDB = undefined;
+    const ac = new AbortController();
+    w.fetch = (input: any, init?: any) => {
+      if (ac.signal.aborted) return new Promise(() => {});
+      const u = new URL(String(input), base + '/');
+      const headers = new Headers(init?.headers || {});
+      for (const [k, v] of Object.entries(authHdr)) if (!headers.has(k)) headers.set(k, v);
+      return fetch(u.toString(), { ...init, headers, signal: init?.signal || ac.signal })
+        .then((res) => (ac.signal.aborted ? new Promise<Response>(() => {}) : res))
+        .catch((err) => (ac.signal.aborted ? new Promise<Response>(() => {}) : Promise.reject(err)));
+    };
+    try {
+      await acheck(`${tab} opens in JSDOM`, async () => {
+        for (const src of scripts) w.eval(src);
+        for (let i = 0; i < 40 && !w.document.querySelector('.nav-item.on'); i++) await tick(20);
+        await tick(60);
+        const active = w.document.querySelector('.nav-item.on')?.getAttribute('data-t');
+        assert.equal(active, tab);
+      });
+      check(`${tab} (JSDOM): no script errors`, () => assert.equal(errors.length, 0, errors.slice(0, 2).join(' | ')));
+    } finally {
+      ac.abort();
+      w.close();
+    }
+  }
+}
+
+export async function runUi(base: string, adminPassword: string) {
   const tabs = ['dashboard', 'agents', 'plugins', 'campaigns', 'voice', 'test', 'vici', 'wallboard', 'export'];
+  const pw = loadPlaywright();
+  if (!pw) {
+    await runUiJsdomFallback(base, adminPassword, tabs);
+    return;
+  }
+  const executablePath = findChromeExecutable();
+  let browser: any;
+  try {
+    browser = await pw.chromium.launch({ ...(executablePath ? { executablePath } : {}), args: ['--no-sandbox'] });
+  } catch {
+    await runUiJsdomFallback(base, adminPassword, tabs);
+    return;
+  }
   const sizes: Array<[string, number, number]> = [['desktop 1440', 1440, 900], ['laptop 1024', 1024, 768], ['phone 390', 390, 844]];
   try {
     for (const [sizeLabel, w, h] of sizes) {

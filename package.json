@@ -4,6 +4,9 @@
   "description": "Unified Voice Agent Console, Deepgram Voice Catalog, Live Simulator & VICIdial Bridge",
   "private": true,
   "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.1"
+  },
   "scripts": {
     "dev": "tsx src/server.ts",
     "start": "node dist/server.js",

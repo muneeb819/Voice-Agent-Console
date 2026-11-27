@@ -551,6 +551,7 @@ export function createDefaultState(): ConsoleState {
         end: '20:00',
         tz: 'America/New_York',
         maxCalls: 10,
+        maxCallsEnabled: true,
         maxCallSec: 70,
         xferType: 'ingroup',
         xferTarget: 'FE_CLOSERS',
@@ -578,6 +579,7 @@ export function createDefaultState(): ConsoleState {
         end: '20:00',
         tz: 'America/New_York',
         maxCalls: 15,
+        maxCallsEnabled: true,
         maxCallSec: 70,
         xferType: 'ingroup',
         xferTarget: 'MED_CLOSERS',
@@ -605,6 +607,7 @@ export function createDefaultState(): ConsoleState {
         end: '20:00',
         tz: 'America/New_York',
         maxCalls: 10,
+        maxCallsEnabled: true,
         maxCallSec: 70,
         xferType: 'ingroup',
         xferTarget: 'CONCIERGE_CLOSERS',
@@ -635,6 +638,7 @@ export function createDefaultState(): ConsoleState {
         "end": "20:00",
         "tz": "America/New_York",
         "maxCalls": 10,
+        "maxCallsEnabled": true,
         "maxCallSec": 70,
         "xferType": "ingroup",
         "xferTarget": "CLOSERS",
@@ -861,9 +865,11 @@ export function normalizeState(raw: any): ConsoleState {
   const src = seedBuiltinBots(raw.console && typeof raw.console === 'object' ? raw.console : raw, base);
 
   const usedFnIds = new Set<string>();
-  const functions: AgentFunction[] = Array.isArray(src.functions) && src.functions.length
-    ? src.functions
-        .filter((f: any) => f && typeof f === 'object' && !Array.isArray(f) && f?.name !== 'accept_vicidial_call') // Migrate legacy anti-pattern out of LLM tools
+  const validRawFunctions = Array.isArray(src.functions)
+    ? src.functions.filter((f: any) => f && typeof f === 'object' && !Array.isArray(f) && f?.name !== 'accept_vicidial_call')
+    : [];
+  const functions: AgentFunction[] = validRawFunctions.length
+    ? validRawFunctions
         .map((f: any, idx: number) => {
           let id = textOr(f.id, `fn_${idx + 1}`);
           if (usedFnIds.has(id) || id === 'f_new_function') {
@@ -924,7 +930,7 @@ export function normalizeState(raw: any): ConsoleState {
           models:
             kind === 'stt'
               ? isSpeechService
-                ? String(p.models || SPEECH_SERVICE_STT_MODELS.join(','))
+                ? textOr(p.models, SPEECH_SERVICE_STT_MODELS.join(','))
                 : VOICE_AGENT_STT_MODELS.join(',')
               : textOr(p.models, ''),
           endpoint: textOr(p.endpoint, ''),
@@ -1017,6 +1023,11 @@ export function normalizeState(raw: any): ConsoleState {
   };
 
   const num = (val: any, fallback: number, min = -1e6, max = 1e6): number => {
+    if (val === null || val === undefined || typeof val === 'boolean') return fallback;
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if (!trimmed || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed)) return fallback;
+    }
     const n = Number(val);
     return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
   };
@@ -1162,7 +1173,7 @@ export function normalizeState(raw: any): ConsoleState {
           start: textOr(c.start, '09:00'),
           end: textOr(c.end, '20:00'),
           tz: textOr(c.tz, 'America/New_York'),
-          maxCalls: Math.round(num(c.maxCalls, 10, 1, 1000)),
+          maxCalls: Math.round(num(c.maxCalls, 10, 0, 1000)),
           maxCallsEnabled: c.maxCallsEnabled !== undefined ? Boolean(c.maxCallsEnabled) : true,
           maxCallSec: normalizeMaxCallSec(c.maxCallSec),
           xferType: (['ingroup', 'extension', 'number'].includes(c.xferType) ? c.xferType : 'ingroup') as
@@ -1183,7 +1194,7 @@ export function normalizeState(raw: any): ConsoleState {
       })
     : Array.isArray(src.agents)
       ? []
-      : base.campaigns.map((c) => ({ ...c }));
+      : base.campaigns.map((c) => ({ ...c, maxCallsEnabled: c.maxCallsEnabled !== undefined ? Boolean(c.maxCallsEnabled) : true }));
 
   // Migrate legacy vici.apiUrl if present
   let viciBaseUrl = src.vici?.viciBaseUrl;
