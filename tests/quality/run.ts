@@ -46,6 +46,9 @@ async function main() {
     fs.writeFileSync(process.env.QA_OUT || '/tmp/qa-results.json', JSON.stringify(out));
     fs.writeFileSync('/tmp/qa-server.log', log);
     console.log(`TOTAL ${out.total}  PASSED ${passed}  FAILED ${out.failed}  in ${out.seconds}s  (unit ${unitCount}, api ${apiCount}, ui ${uiCount}, state fuzz ${fuzz})`);
+    if (out.failed > 0) {
+      process.exitCode = 1;
+    }
   } finally {
     srv.kill();
   }

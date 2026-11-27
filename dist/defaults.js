@@ -460,6 +460,7 @@ function createDefaultState() {
                 end: '20:00',
                 tz: 'America/New_York',
                 maxCalls: 10,
+                maxCallsEnabled: true,
                 maxCallSec: 70,
                 xferType: 'ingroup',
                 xferTarget: 'FE_CLOSERS',
@@ -486,6 +487,7 @@ function createDefaultState() {
                 end: '20:00',
                 tz: 'America/New_York',
                 maxCalls: 15,
+                maxCallsEnabled: true,
                 maxCallSec: 70,
                 xferType: 'ingroup',
                 xferTarget: 'MED_CLOSERS',
@@ -512,6 +514,7 @@ function createDefaultState() {
                 end: '20:00',
                 tz: 'America/New_York',
                 maxCalls: 10,
+                maxCallsEnabled: true,
                 maxCallSec: 70,
                 xferType: 'ingroup',
                 xferTarget: 'CONCIERGE_CLOSERS',
@@ -541,6 +544,7 @@ function createDefaultState() {
                 "end": "20:00",
                 "tz": "America/New_York",
                 "maxCalls": 10,
+                "maxCallsEnabled": true,
                 "maxCallSec": 70,
                 "xferType": "ingroup",
                 "xferTarget": "CLOSERS",
@@ -769,9 +773,11 @@ function normalizeState(raw) {
         return base;
     const src = seedBuiltinBots(raw.console && typeof raw.console === 'object' ? raw.console : raw, base);
     const usedFnIds = new Set();
-    const functions = Array.isArray(src.functions) && src.functions.length
-        ? src.functions
-            .filter((f) => f && typeof f === 'object' && !Array.isArray(f) && f?.name !== 'accept_vicidial_call') // Migrate legacy anti-pattern out of LLM tools
+    const validRawFunctions = Array.isArray(src.functions)
+        ? src.functions.filter((f) => f && typeof f === 'object' && !Array.isArray(f) && f?.name !== 'accept_vicidial_call')
+        : [];
+    const functions = validRawFunctions.length
+        ? validRawFunctions
             .map((f, idx) => {
             let id = textOr(f.id, `fn_${idx + 1}`);
             if (usedFnIds.has(id) || id === 'f_new_function') {
@@ -828,7 +834,7 @@ function normalizeState(raw) {
                 type: kind === 'stt' ? (isSpeechService ? 'speech_service' : 'deepgram') : textOr(p.type, 'deepgram'),
                 models: kind === 'stt'
                     ? isSpeechService
-                        ? String(p.models || exports.SPEECH_SERVICE_STT_MODELS.join(','))
+                        ? textOr(p.models, exports.SPEECH_SERVICE_STT_MODELS.join(','))
                         : exports.VOICE_AGENT_STT_MODELS.join(',')
                     : textOr(p.models, ''),
                 endpoint: textOr(p.endpoint, ''),
@@ -918,6 +924,13 @@ function normalizeState(raw) {
         tts: normalizeSelection('tts'),
     };
     const num = (val, fallback, min = -1e6, max = 1e6) => {
+        if (val === null || val === undefined || typeof val === 'boolean')
+            return fallback;
+        if (typeof val === 'string') {
+            const trimmed = val.trim();
+            if (!trimmed || !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(trimmed))
+                return fallback;
+        }
         const n = Number(val);
         return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
     };
@@ -1049,7 +1062,7 @@ function normalizeState(raw) {
                 start: textOr(c.start, '09:00'),
                 end: textOr(c.end, '20:00'),
                 tz: textOr(c.tz, 'America/New_York'),
-                maxCalls: Math.round(num(c.maxCalls, 10, 1, 1000)),
+                maxCalls: Math.round(num(c.maxCalls, 10, 0, 1000)),
                 maxCallsEnabled: c.maxCallsEnabled !== undefined ? Boolean(c.maxCallsEnabled) : true,
                 maxCallSec: normalizeMaxCallSec(c.maxCallSec),
                 xferType: (['ingroup', 'extension', 'number'].includes(c.xferType) ? c.xferType : 'ingroup'),
@@ -1067,7 +1080,7 @@ function normalizeState(raw) {
         })
         : Array.isArray(src.agents)
             ? []
-            : base.campaigns.map((c) => ({ ...c }));
+            : base.campaigns.map((c) => ({ ...c, maxCallsEnabled: c.maxCallsEnabled !== undefined ? Boolean(c.maxCallsEnabled) : true }));
     // Migrate legacy vici.apiUrl if present
     let viciBaseUrl = src.vici?.viciBaseUrl;
     if (!viciBaseUrl && typeof src.vici?.apiUrl === 'string') {

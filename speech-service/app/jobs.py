@@ -76,6 +76,12 @@ class JobStore:
             cur = c.execute("DELETE FROM jobs WHERE id=? AND status NOT IN ('queued','running')", (jid,))
             return cur.rowcount > 0
 
+    def abort_queued(self, jid: str) -> bool:
+        """Roll back a freshly inserted job that failed before entering the worker queue."""
+        with self._lock, self._conn() as c:
+            cur = c.execute("DELETE FROM jobs WHERE id=? AND status='queued'", (jid,))
+            return cur.rowcount > 0
+
 
 class JobManager:
     def __init__(self, rt):

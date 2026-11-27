@@ -278,6 +278,7 @@ async function synthesizeWithSpeechService(opts) {
     const baseUrl = getSpeechServiceBaseUrl(opts.explicitUrl);
     const voice = normalizeSpeechServiceVoice(opts.voice);
     const res = await fetch(`${baseUrl}/v1/audio/speech`, {
+        redirect: 'error',
         method: 'POST',
         headers: { ...getSpeechServiceHeaders(opts.explicitKey), 'Content-Type': 'application/json' },
         body: JSON.stringify({

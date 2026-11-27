@@ -152,6 +152,10 @@ function createApp(viciBridge) {
         res.setHeader('Cache-Control', 'no-store, max-age=0');
         next();
     });
+    // Authenticate and authorize /api/* requests BEFORE parsing JSON/raw bodies,
+    // so unauthenticated or under-privileged callers receive 401/403 instead of
+    // 400/413 parser responses and cannot consume body-parsing resources.
+    app.use('/api', auth_guard_1.apiAuthMiddleware);
     app.use(express_1.default.json({ limit: '4mb' }));
     app.use(express_1.default.urlencoded({ extended: false }));
     if (process.env.VAC_DEBUG === '1') {
@@ -358,9 +362,8 @@ function createApp(viciBridge) {
         (0, auth_guard_1.clearAuthCookie)(res, req);
         res.json({ ok: true, authEnabled: true, authenticated: false });
     });
-    app.use('/api', auth_guard_1.apiAuthMiddleware);
     // ---------------- account security: password change and session revocation
-    // Registered after apiAuthMiddleware. /api/auth/* is intentionally reachable
+    // apiAuthMiddleware is mounted before express.json() above. /api/auth/* is intentionally reachable
     // before authentication, so each handler below re-resolves the account from
     // the session itself; no client supplied identifier can act on another
     // account. /api/users/* additionally passes the middleware adminOnly check.
@@ -1114,6 +1117,105 @@ function createApp(viciBridge) {
     app.get('/api/reports/problems', (_req, res) => {
         res.json({ ok: true, problems: (0, dialer_reports_1.buildProblems)((0, db_1.listBridgeCallLogs)(db_1.BRIDGE_LOG_RETENTION), (0, alerts_1.listAlerts)().alerts) });
     });
+    // VICIdial User Activities & Stats API (read-only via non_agent_api.php using saved VICI API user & .env VICI_API_PASS).
+    const handleViciUserActivity = asyncRoute(async (req, res) => {
+        const src = pickSource(req, res);
+        if (!src)
+            return;
+        const rawUser = String(req.query.user || req.query.users || req.query.agent_user || '').trim();
+        const users = rawUser
+            ? rawUser.split(/[\s,]+/).map((u) => u.trim()).filter(Boolean)
+            : [];
+        const date = reportDate(req.query.date);
+        const dtRe = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}$/;
+        const rawStart = String(req.query.start || req.query.datetime_start || '').trim();
+        const rawEnd = String(req.query.end || req.query.datetime_end || '').trim();
+        const datetimeStart = dtRe.test(rawStart) ? rawStart.replace('T', ' ') : `${date} 00:00:00`;
+        const datetimeEnd = dtRe.test(rawEnd) ? rawEnd.replace('T', ' ') : `${date} 23:59:59`;
+        const campaign = String(req.query.campaign || req.query.campaign_id || '').trim();
+        const userGroup = String(req.query.userGroup || req.query.user_group || '').trim();
+        const report = await (0, dialer_reports_1.buildUserActivityStats)(src, {
+            users,
+            datetimeStart,
+            datetimeEnd,
+            campaign: campaign || undefined,
+            userGroup: userGroup || undefined,
+        });
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.json({ ok: true, apiUser: (0, db_1.getConsoleState)().vici.apiUser, report });
+    });
+    app.get('/api/vici/users/activity', handleViciUserActivity);
+    app.get('/api/reports/users', handleViciUserActivity);
+    // Configure & optionally verify the VICIdial API User credentials (password stored strictly in server .env, never returned).
+    app.post('/api/vici/api-user', asyncRoute(async (req, res) => {
+        const body = (req.body || {});
+        const apiUser = String(body.apiUser || body.username || body.user || '').trim();
+        const apiPass = typeof body.apiPass === 'string'
+            ? body.apiPass
+            : typeof body.password === 'string'
+                ? body.password
+                : '';
+        const source = String(body.source || apiUser || '').trim();
+        const rawBaseUrl = typeof body.viciBaseUrl === 'string' ? body.viciBaseUrl.trim() : '';
+        const verify = body.verify === true;
+        if (!apiUser || !/^[A-Za-z0-9_.@-]{1,20}$/.test(apiUser)) {
+            res.status(400).json({ ok: false, error: 'Valid VICIdial API username is required (1–20 alphanumeric/._@- characters).' });
+            return;
+        }
+        if (rawBaseUrl) {
+            let parsedUrl;
+            try {
+                parsedUrl = new URL(rawBaseUrl);
+            }
+            catch {
+                res.status(400).json({ ok: false, error: 'viciBaseUrl must be a valid http(s) URL.' });
+                return;
+            }
+            if (!/^https?:$/i.test(parsedUrl.protocol)) {
+                res.status(400).json({ ok: false, error: 'viciBaseUrl must use http:// or https://.' });
+                return;
+            }
+        }
+        const cur = (0, db_1.getConsoleState)();
+        const nextVici = {
+            ...cur.vici,
+            apiUser,
+            source: source || apiUser,
+            ...(rawBaseUrl ? { viciBaseUrl: rawBaseUrl.replace(/\/+$/, '') } : {}),
+        };
+        let verification = null;
+        if (verify) {
+            const probe = await new vici_client_1.VicidialApiClient(nextVici, apiPass || undefined).checkVersion();
+            verification = probe.ok
+                ? { ok: true, versionText: probe.versionText.split('\n')[0].slice(0, 140) }
+                : { ok: false, error: probe.versionText.slice(0, 200) || 'VICIdial did not respond to version check.' };
+            if (!probe.ok) {
+                res.status(502).json({ ok: false, error: verification.error, verification });
+                return;
+            }
+        }
+        if (apiPass) {
+            (0, env_store_1.updateSecrets)({ VICI_API_PASS: apiPass });
+        }
+        const saved = (0, db_1.saveConsoleState)({ ...cur, vici: nextVici }, `Configured VICIdial API user "${apiUser}"`);
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.json({
+            ok: true,
+            vici: {
+                viciBaseUrl: saved.state.vici.viciBaseUrl,
+                nonAgentApiPath: saved.state.vici.nonAgentApiPath,
+                agentApiPath: saved.state.vici.agentApiPath,
+                apiUser: saved.state.vici.apiUser,
+                source: saved.state.vici.source,
+                hasViciApiPass: Boolean((0, env_store_1.getSecret)('VICI_API_PASS')),
+            },
+            verification,
+            endpoints: {
+                userActivityStats: '/api/vici/users/activity',
+                usersReport: '/api/reports/users',
+            },
+        });
+    }));
     // One-button health scan: every check says what it found and what to do about it.
     app.get('/api/diagnostics', asyncRoute(async (_req, res) => {
         const st = (0, db_1.getConsoleState)();
@@ -1556,9 +1658,16 @@ function createApp(viciBridge) {
         }
     }));
     app.post('/api/voice-clone/preview', asyncRoute(async (req, res) => {
+        if (!isOwnerOrAdmin(req)) {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Only an owner or admin can preview cloned voices.' });
+            return;
+        }
         try {
             const provider = String(req.body?.provider || '');
-            const text = String(req.body?.text || 'Hello! This is a preview of my cloned voice.').slice(0, 600);
+            const rawText = req.body?.text !== undefined ? String(req.body.text) : 'Hello! This is a preview of my cloned voice.';
+            const text = rawText.trim().slice(0, 600);
+            if (!text)
+                throw new voice_clone_1.CloneError('Enter preview text to synthesize.');
             if (provider === 'elevenlabs') {
                 const audio = await (0, voice_clone_1.elevenPreview)(String(req.body?.id || ''), text);
                 res.setHeader('Content-Type', 'audio/mpeg');
@@ -1758,17 +1867,20 @@ function createApp(viciBridge) {
     app.post('/api/speech-service/activate', asyncRoute(async (req, res) => {
         try {
             const secretUpdates = {};
+            let candidateUrl;
+            let candidateKey;
             if (typeof req.body?.url === 'string' && req.body.url.trim()) {
-                // Save the address the console can actually use (see normalizeSpeechServiceUrl).
-                secretUpdates.SPEECH_SERVICE_URL = (0, speech_service_client_1.normalizeSpeechServiceUrl)(req.body.url, speechSelfHosts(req));
+                // Normalize the address the console can actually use (see normalizeSpeechServiceUrl).
+                candidateUrl = (0, speech_service_client_1.normalizeSpeechServiceUrl)(req.body.url, speechSelfHosts(req));
+                secretUpdates.SPEECH_SERVICE_URL = candidateUrl;
             }
             if (typeof req.body?.apiKey === 'string') {
-                secretUpdates.SPEECH_SERVICE_API_KEY = req.body.apiKey;
+                candidateKey = req.body.apiKey;
+                secretUpdates.SPEECH_SERVICE_API_KEY = candidateKey;
             }
-            if (Object.keys(secretUpdates).length > 0) {
-                (0, env_store_1.updateSecrets)(secretUpdates);
-            }
-            const diagnostic = await (0, speech_service_client_1.verifySpeechServiceConnection)();
+            // Verify connectivity and authentication BEFORE persisting .env secrets so
+            // a bad URL, unreachable host, or wrong API key never overwrites working config.
+            const diagnostic = await (0, speech_service_client_1.verifySpeechServiceConnection)(candidateUrl, candidateKey);
             if (!diagnostic.ok) {
                 res.status(400).json({
                     ok: false,
@@ -1777,6 +1889,9 @@ function createApp(viciBridge) {
                     secrets: (0, env_store_1.getSecretsStatus)(),
                 });
                 return;
+            }
+            if (Object.keys(secretUpdates).length > 0) {
+                (0, env_store_1.updateSecrets)(secretUpdates);
             }
             const state = (0, db_1.getConsoleState)();
             const localStt = state.providers.find((p) => p.kind === 'stt' && p.type === 'speech_service');

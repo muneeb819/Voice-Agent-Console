@@ -463,7 +463,7 @@ export function validateAgent(state: ConsoleState, agent: Agent): ValidationItem
   if (tp?.type === 'speech_service') {
     push(
       /^https:\/\/[^\s/]+/i.test(String(tp.endpoint || '').trim()),
-      'Self-hosted voice on calls: set the speech provider endpoint to your speech server\'s public HTTPS address (for example https://54-79-152-235.sslip.io), so Deepgram can reach it',
+      'Self-hosted voice on calls: set the speech provider endpoint to your speech server\'s public HTTPS address (for example https://speech.example.com), so Deepgram can reach it',
       true
     );
   }
@@ -544,6 +544,43 @@ export function validateAgent(state: ConsoleState, agent: Agent): ValidationItem
   return items;
 }
 
+export function isValidCallingWindow(start: unknown, end: unknown, tz?: unknown): boolean {
+  const parseHhMm = (raw: unknown): number | null => {
+    if (typeof raw !== 'string') return null;
+    const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(raw.trim());
+    if (!m) return null;
+    return Number(m[1]) * 60 + Number(m[2]);
+  };
+  const s = parseHhMm(start);
+  const e = parseHhMm(end);
+  if (s === null || e === null || s >= e) return false;
+  if (tz !== undefined) {
+    const zone = String(tz || '').trim();
+    if (!zone) return false;
+    try {
+      Intl.DateTimeFormat(undefined, { timeZone: zone });
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function isValidTransferTarget(xferType: unknown, target: unknown): boolean {
+  const t = String(target ?? '').trim();
+  if (!t || t.length > 32) return false;
+  if (/[;<>&|`$\\\r\n]/.test(t)) return false;
+  const kind = String(xferType || '').trim();
+  if (kind === 'ingroup') return /^[A-Za-z0-9_-]{1,32}$/.test(t);
+  if (kind === 'extension') return /^[A-Za-z0-9_*#-]{1,32}$/.test(t);
+  if (kind === 'number') {
+    if (!/^\+?[0-9][0-9\s().-]{2,24}$/.test(t)) return false;
+    const digits = t.replace(/\D/g, '');
+    return digits.length >= 3 && digits.length <= 15;
+  }
+  return false;
+}
+
 export function validateCampaign(state: ConsoleState, campaign: Campaign): ValidationItem[] {
   const items: ValidationItem[] = [];
   const push = (ok: boolean, message: string, warnOnly = false) => {
@@ -562,10 +599,10 @@ export function validateCampaign(state: ConsoleState, campaign: Campaign): Valid
   const assignedAgents = campaignAgentIds(campaign).map((id) => state.agents.find((a) => a.id === id)).filter((a): a is Agent => Boolean(a));
 
   push(Boolean(viciCampaign), 'VICIdial campaign ID is set');
-  push(Boolean(xferTarget), 'Live-agent transfer target (ingroup/extension/number) is set');
+  push(isValidTransferTarget(campaign.xferType, xferTarget), 'Live-agent transfer target (ingroup/extension/number) is set');
   push(Boolean(campaign.dnc), 'DNC scrub is enabled');
   push(Boolean(String(campaign.disclosure || '').trim()), 'Call recording disclosure line is present', true);
-  push(campaign.start < campaign.end, `Calling window valid (${campaign.start} – ${campaign.end})`);
+  push(isValidCallingWindow(campaign.start, campaign.end, campaign.tz), `Calling window valid (${campaign.start} – ${campaign.end})`);
   push(assignedAgents.length > 0 && assignedAgents.length === campaignAgentIds(campaign).length, 'Explicitly assigned to at least one existing bot agent');
   push(allowedDispositions.length > 0, 'At least one allowed VICIdial disposition code is configured');
   const transferFunction = state.functions.find((fn) => fn.name === 'transfer_to_live_agent');
@@ -740,6 +777,9 @@ export function generateViciConfig(state: ConsoleState): string {
     `port=${v.sipPort}`,
     `dtmfmode=rfc2833`,
     `context=trunkinbound`,
+    `nat=force_rport,comedia`,
+    `canreinvite=no`,
+    `directmedia=no`,
     `qualify=yes`,
     `insecure=port,invite`,
     ``,
@@ -786,9 +826,9 @@ export function generateViciConfig(state: ConsoleState): string {
     `; === VICIdial Admin Setup Checklist (Co-Located on ViciBox ${v.bridgeHost}) ===`,
     `; SIP connection model: ${v.sipConnectionMode || 'static_peer'}; registrar ${v.sipRegistrarHost || '(unset)'}:${v.sipRegistrarPort || 5060}; user ${v.sipUsername || '(unset)'}`,
     `; 1. Users -> API User "${v.apiUser}": User Level=8, Modify Leads=1, Modify Lists=1, Agent API Access=1`,
-    `; 2. Remote Agents -> Create Remote Agent User ${v.remoteAgentUser} (Lines=${state.campaigns[0]?.maxCalls || 10}, External Exten=${state.campaigns[0] ? campaignExtension(v.aiExten, state.campaigns[0], 0) : `${v.aiExten}1`}, On-Hook=N, Status=ACTIVE)`,
+    `; 2. Remote Agents -> Create Remote Agent User ${v.remoteAgentUser} (Lines=${state.campaigns[0]?.maxCalls || 10}, External Exten=${state.campaigns[0] ? campaignExtension(v.aiExten, state.campaigns[0], 0) : `${v.aiExten}1`}, On-Hook=N, Status=ACTIVE, Inbound Groups="${v.inIngroup}")`,
     `; 3. Inbound Groups -> Create Closer In-Group "${state.campaigns[0]?.xferTarget || 'FE_CLOSERS'}" & enable in Campaign "Allowed Transfer Groups"`,
-    `; 4. Inbound Routing -> Point "${v.inIngroup}" Drop/No-Agent Action -> EXTENSION ${state.campaigns[0] ? campaignExtension(v.aiExten, state.campaigns[0], 0) : `${v.aiExten}1`}`,
+    `; 4. Fronter -> Verifier -> Closer Route: Fronter bots transfer into In-Group "${v.inIngroup}" (routed to Remote Agent ${v.remoteAgentUser} / exten ${state.campaigns[0] ? campaignExtension(v.aiExten, state.campaigns[0], 0) : `${v.aiExten}1`}, preserving Y/V caller_code + lead_id); Verifier bot hydrates lead, verifies eligibility, writes closer screen-pop notes via update_lead, and transfers verified calls to "${state.campaigns[0]?.xferTarget || 'FE_CLOSERS'}" via ra_call_control`,
     ``,
     dialplanBlock,
     ``,

@@ -345,6 +345,13 @@ function apiAuthMiddleware(req, res, next) {
     // Co-located Asterisk dialplan CURL() pre-call registration whitelist
     if (p === '/vici/register-call' || p === '/vici/precall') {
         const peerIp = req.socket?.remoteAddress || req.ip;
+        // If an explicit read-only viewer session is presented, enforce RBAC
+        // rather than letting a viewer mutate bridge state via the PBX loopback exemption.
+        const viewerUser = getAuthenticatedUser(req);
+        if (viewerUser && viewerUser.role === 'viewer' && req.method !== 'GET' && req.method !== 'HEAD') {
+            res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'This account has read-only access.' });
+            return;
+        }
         // Proxy requests must authenticate; a public reverse proxy may itself
         // connect from loopback and must not inherit the local PBX exemption.
         if (!hasForwardingHeaders(req) && isBridgePeerIpAllowed(peerIp) &&
@@ -369,10 +376,21 @@ function apiAuthMiddleware(req, res, next) {
             (p.startsWith('/screening/') && req.method !== 'GET' && req.method !== 'HEAD') ||
             p === '/speech-service/test' ||
             p === '/vici/verify' ||
+            p === '/vici/api-user' ||
             (p === '/bot-sleep' && req.method !== 'GET' && req.method !== 'HEAD') ||
             p === '/deepgram/verify' ||
             (p === '/speech-service/status' && (req.query.url !== undefined || req.query.apiKey !== undefined)) ||
-            /^\/vici\/calls\/[^/]+\/(?:hangup|transfer)$/.test(p);
+            /^\/vici\/calls\/[^/]+\/(?:hangup|transfer)$/.test(p) ||
+            (p === '/simulator/logs' && req.method === 'DELETE') ||
+            (/^\/simulator\/recordings\/[^/]+$/.test(p) && (req.method === 'DELETE' || req.method === 'PUT')) ||
+            (p === '/vici/logs' && req.method === 'DELETE') ||
+            ((p === '/voice-clone' ||
+                p === '/voice-clone/expressive' ||
+                p === '/voice-clone/preview' ||
+                p === '/voice-clone/use' ||
+                /^\/voice-clone\/[^/]+\/[^/]+$/.test(p)) &&
+                req.method !== 'GET' &&
+                req.method !== 'HEAD');
         const readOnly = req.method === 'GET' || req.method === 'HEAD';
         if (adminOnly && role !== 'owner' && role !== 'admin') {
             res.status(403).json({ ok: false, code: 'FORBIDDEN', error: 'Administrator permission required.' });

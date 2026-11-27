@@ -2563,11 +2563,35 @@
       .split(/[,\t\r\n]+/)
       .map((code) => code.trim().toUpperCase())
       .filter(Boolean);
+    const parseHhMm = (raw) => {
+      if (typeof raw !== 'string') return null;
+      const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(raw.trim());
+      return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+    };
+    const isValidTz = (tz) => {
+      const z = String(tz || '').trim();
+      if (!z) return false;
+      try { Intl.DateTimeFormat(undefined, { timeZone: z }); return true; } catch { return false; }
+    };
+    const isValidXfer = (kind, raw) => {
+      const t = String(raw || '').trim();
+      if (!t || t.length > 32 || /[;<>&|`$\\\r\n]/.test(t)) return false;
+      if (kind === 'ingroup') return /^[A-Za-z0-9_-]{1,32}$/.test(t);
+      if (kind === 'extension') return /^[A-Za-z0-9_*#-]{1,32}$/.test(t);
+      if (kind === 'number') {
+        if (!/^\+?[0-9][0-9\s().-]{2,24}$/.test(t)) return false;
+        const d = t.replace(/\D/g, '');
+        return d.length >= 3 && d.length <= 15;
+      }
+      return false;
+    };
+    const sMin = parseHhMm(c.start);
+    const eMin = parseHhMm(c.end);
     push(Boolean((c.viciCampaign || '').trim()), 'VICIdial campaign ID set');
-    push(Boolean((c.xferTarget || '').trim()), 'Live-agent transfer target set');
+    push(isValidXfer(c.xferType || 'ingroup', c.xferTarget), 'Live-agent transfer target set');
     push(Boolean(c.dnc), 'DNC scrub enabled');
     push(Boolean((c.disclosure || '').trim()), 'Recording disclosure line present', true);
-    push(c.start < c.end, `Calling window valid (${c.start} – ${c.end})`);
+    push(sMin !== null && eMin !== null && sMin < eMin && isValidTz(c.tz), `Calling window valid (${c.start} – ${c.end})`);
     const assignedAgents = campaignAgentIds(c)
       .map((id) => S.agents.find((agent) => agent.id === id))
       .filter(Boolean);
@@ -6059,11 +6083,23 @@
      <div class="cmd-actions-cluster">
       ${(() => {
         const asleep = viciMon.status?.botSleep?.sleeping === true;
-        return `<button type="button" class="${asleep ? 'b' : 'g'} cmd-mini-btn" id="btn-bot-sleep" title="${asleep ? 'Bots are asleep: new calls are turned away and no speech or AI usage is spent. Click to wake them.' : 'Put the bots to sleep: new calls are turned away and no speech or AI usage is spent. Calls in progress finish normally.'}">${asleep ? 'Wake bots' : 'Sleep bots'}</button>`;
+        const dis = serverlessCloudMode ? ' disabled' : '';
+        const tip = serverlessCloudMode
+          ? 'Sleep mode requires a running console server and is unavailable on this static site.'
+          : asleep
+            ? 'Bots are asleep: new calls are turned away and no speech or AI usage is spent. Click to wake them.'
+            : 'Put the bots to sleep: new calls are turned away and no speech or AI usage is spent. Calls in progress finish normally.';
+        return `<button type="button" class="${asleep ? 'b' : 'g'} cmd-mini-btn" id="btn-bot-sleep"${dis} title="${tip}">${asleep ? 'Wake bots' : 'Sleep bots'}</button>`;
       })()}
       ${(() => {
         const off = viciMon.campaignDialing?.off === true;
-        return `<button type="button" class="${off ? 'b' : 'g'} cmd-mini-btn" id="btn-campaign-dialing" title="${off ? 'Campaigns are off in VICIdial: it is not dialing. Click to turn them back on.' : 'Turn the campaigns off in VICIdial so it stops dialing. Calls in progress finish normally.'}">${off ? 'Campaigns on' : 'Campaigns off'}</button>`;
+        const dis = serverlessCloudMode ? ' disabled' : '';
+        const tip = serverlessCloudMode
+          ? 'Campaign dialing control requires a running console server and is unavailable on this static site.'
+          : off
+            ? 'Campaigns are off in VICIdial: it is not dialing. Click to turn them back on.'
+            : 'Turn the campaigns off in VICIdial so it stops dialing. Calls in progress finish normally.';
+        return `<button type="button" class="${off ? 'b' : 'g'} cmd-mini-btn" id="btn-campaign-dialing"${dis} title="${tip}">${off ? 'Campaigns on' : 'Campaigns off'}</button>`;
       })()}
       <button type="button" class="g cmd-mini-btn" id="btn-cmd-refresh" title="Refresh live server, simulator &amp; VICIdial telemetry">
        ${DECK_ICONS.refresh} ${cmdDeckState.syncing ? 'Syncing…' : 'Sync'}
@@ -8786,6 +8822,7 @@
       return;
     }
     if (b.id === 'btn-campaign-dialing') {
+      if (serverlessCloudMode) return;
       const off = viciMon.campaignDialing?.off === true;
       if (!off && !window.confirm('Turn the campaigns off in VICIdial? It stops dialing new calls. Calls already in progress finish normally.')) return;
       b.disabled = true;
@@ -8805,6 +8842,7 @@
       return;
     }
     if (b.id === 'btn-bot-sleep') {
+      if (serverlessCloudMode) return;
       const asleep = viciMon.status?.botSleep?.sleeping === true;
       if (!asleep && !window.confirm('Put the bots to sleep? New calls will be turned away until you wake them. Calls already in progress finish normally.')) return;
       b.disabled = true;

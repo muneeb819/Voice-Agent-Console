@@ -65,6 +65,7 @@ class SipRegistrationClient {
     nonce = '';
     realm = '';
     opaque = '';
+    qop = '';
     status = 'stopped';
     expiresAt = null;
     lastError = null;
@@ -174,12 +175,15 @@ class SipRegistrationClient {
         const password = (0, env_store_1.getSecret)('VICI_SIP_PASSWORD');
         const ha1 = md5(`${username}:${this.realm}:${password}`);
         const ha2 = md5(`${method}:${uri}`);
-        const qop = 'auth';
-        const nc = (++this.nonceCount).toString(16).padStart(8, '0');
-        const cnonce = crypto_1.default.randomBytes(12).toString('hex');
-        const response = md5(`${ha1}:${this.nonce}:${nc}:${cnonce}:${qop}:${ha2}`);
         const q = quoteDigestValue;
-        return `Digest username="${q(username)}", realm="${q(this.realm)}", nonce="${q(this.nonce)}", uri="${q(uri)}", response="${response}", algorithm=MD5, qop=auth, nc=${nc}, cnonce="${cnonce}"${this.opaque ? `, opaque="${q(this.opaque)}"` : ''}`;
+        if (this.qop === 'auth') {
+            const nc = (++this.nonceCount).toString(16).padStart(8, '0');
+            const cnonce = crypto_1.default.randomBytes(12).toString('hex');
+            const response = md5(`${ha1}:${this.nonce}:${nc}:${cnonce}:auth:${ha2}`);
+            return `Digest username="${q(username)}", realm="${q(this.realm)}", nonce="${q(this.nonce)}", uri="${q(uri)}", response="${response}", algorithm=MD5, qop=auth, nc=${nc}, cnonce="${cnonce}"${this.opaque ? `, opaque="${q(this.opaque)}"` : ''}`;
+        }
+        const response = md5(`${ha1}:${this.nonce}:${ha2}`);
+        return `Digest username="${q(username)}", realm="${q(this.realm)}", nonce="${q(this.nonce)}", uri="${q(uri)}", response="${response}", algorithm=MD5${this.opaque ? `, opaque="${q(this.opaque)}"` : ''}`;
     }
     sendRegister(expires = 3600) {
         if (!this.socket || this.stopped)
@@ -190,10 +194,11 @@ class SipRegistrationClient {
         const uri = `sip:${domain}`;
         const user = this.cfg.sipUsername;
         const branch = `z9hG4bK${crypto_1.default.randomBytes(8).toString('hex')}`;
+        const localPort = this.socket.address().port;
         const contact = `<sip:${user}@${this.cfg.bridgeHost}:${this.cfg.sipPort};transport=udp>`;
         const request = [
             `REGISTER ${uri} SIP/2.0`,
-            `Via: SIP/2.0/UDP ${this.cfg.bridgeHost}:${this.cfg.sipPort};branch=${branch};rport`,
+            `Via: SIP/2.0/UDP ${this.cfg.bridgeHost}:${localPort};branch=${branch};rport`,
             'Max-Forwards: 70',
             `From: <sip:${user}@${domain}>;tag=${this.fromTag}`,
             `To: <sip:${user}@${domain}>`,
@@ -230,9 +235,15 @@ class SipRegistrationClient {
                 this.fail('Registrar rejected the SIP credentials repeatedly (401/407).');
                 return;
             }
-            const challenge = challengeParams(headers[status === 407 ? 'proxy-authenticate' : 'www-authenticate'] || '');
+            const rawAuth = headers[status === 407 ? 'proxy-authenticate' : 'www-authenticate'] || '';
+            if (!/^Digest\s+/i.test(rawAuth.trim())) {
+                this.fail('Registrar returned an unsupported SIP digest challenge.');
+                return;
+            }
+            const challenge = challengeParams(rawAuth);
             const qops = String(challenge.qop || '').split(',').map((item) => item.trim().toLowerCase()).filter(Boolean);
-            if (!challenge.realm || !challenge.nonce || !qops.includes('auth') || (challenge.algorithm && challenge.algorithm.toUpperCase() !== 'MD5')) {
+            const hasValidQop = qops.length === 0 || qops.includes('auth');
+            if (!challenge.realm || !challenge.nonce || !hasValidQop || (challenge.algorithm && challenge.algorithm.toUpperCase() !== 'MD5')) {
                 this.fail('Registrar returned an unsupported SIP digest challenge.');
                 return;
             }
@@ -240,6 +251,7 @@ class SipRegistrationClient {
             this.realm = String(challenge.realm).slice(0, 200);
             this.nonce = String(challenge.nonce).slice(0, 512);
             this.opaque = String(challenge.opaque || '').slice(0, 512);
+            this.qop = qops.includes('auth') ? 'auth' : '';
             this.nonceCount = 0;
             this.sendRegister();
             return;
@@ -248,8 +260,18 @@ class SipRegistrationClient {
             if (this.timeoutTimer)
                 clearTimeout(this.timeoutTimer);
             this.timeoutTimer = null;
-            const expiresHeader = Number(headers.expires || 3600);
-            const expires = Number.isFinite(expiresHeader) ? Math.max(60, Math.min(expiresHeader, 86400)) : 3600;
+            // RFC 3261 §10.2.4: Contact header `;expires=N` takes precedence over Expires header.
+            const contactExpMatch = /;\s*expires\s*=\s*(\d+)/i.exec(headers.contact || '');
+            const rawExpires = contactExpMatch
+                ? Number(contactExpMatch[1])
+                : headers.expires !== undefined
+                    ? Number(headers.expires)
+                    : 3600;
+            if (!Number.isFinite(rawExpires) || rawExpires <= 0) {
+                this.fail('Registrar returned Expires: 0 (binding not registered).');
+                return;
+            }
+            const expires = Math.max(60, Math.min(rawExpires, 86400));
             this.status = 'registered';
             this.lastError = null;
             this.authAttempts = 0;

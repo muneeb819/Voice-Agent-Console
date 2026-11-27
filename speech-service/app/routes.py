@@ -175,7 +175,7 @@ async def readyz(request: Request):
 
 
 @router.get("/metrics", include_in_schema=False)
-async def metrics_endpoint():
+async def metrics_endpoint(_: Principal = Depends(require_auth)):
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
@@ -258,11 +258,12 @@ async def create_job(
     try:
         await save_upload(file, r.jobs.upload_path(jid), s.max_upload_mb << 20)
     except BaseException:
-        await asyncio.to_thread(r.jobs.store.delete, jid)
+        r.jobs.upload_path(jid).unlink(missing_ok=True)
+        await asyncio.to_thread(r.jobs.store.abort_queued, jid)
         raise
     if not r.jobs.submit(jid):
         r.jobs.upload_path(jid).unlink(missing_ok=True)
-        await asyncio.to_thread(r.jobs.store.delete, jid)
+        await asyncio.to_thread(r.jobs.store.abort_queued, jid)
         raise HTTPException(503, "Job queue full", headers={"Retry-After": "30"})
     return {"id": jid, "status": "queued"}
 
