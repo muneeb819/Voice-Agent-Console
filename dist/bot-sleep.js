@@ -6,11 +6,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getBotSleep = getBotSleep;
 exports.isBotSleeping = isBotSleeping;
 exports.setBotSleep = setBotSleep;
+exports.setDialerOutcome = setDialerOutcome;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const data_paths_1 = require("./data-paths");
 const FILE_NAME = 'bot-sleep.json';
-const DEFAULT_STATUS = { sleeping: false, since: null, by: '' };
+const DEFAULT_STATUS = { sleeping: false, since: null, by: '', pausedCampaigns: [], dialerErrors: [] };
 let cached = null;
 let cachedFor = '';
 function filePath() {
@@ -27,6 +28,10 @@ function load() {
             sleeping: parsed?.sleeping === true,
             since: typeof parsed?.since === 'string' ? parsed.since : null,
             by: typeof parsed?.by === 'string' ? parsed.by.slice(0, 80) : '',
+            pausedCampaigns: Array.isArray(parsed?.pausedCampaigns) ? parsed.pausedCampaigns.map(String).slice(0, 100) : [],
+            dialerErrors: Array.isArray(parsed?.dialerErrors)
+                ? parsed.dialerErrors.slice(0, 100).map((e) => ({ campaign: String(e?.campaign || ''), error: String(e?.error || '').slice(0, 200) }))
+                : [],
         };
     }
     catch {
@@ -37,18 +42,28 @@ function load() {
     return status;
 }
 function getBotSleep() {
-    return { ...load() };
+    const s = load();
+    return { ...s, pausedCampaigns: [...s.pausedCampaigns], dialerErrors: s.dialerErrors.map((e) => ({ ...e })) };
 }
 function isBotSleeping() {
     return load().sleeping;
 }
 function setBotSleep(sleeping, by = 'console') {
-    const next = { sleeping, since: new Date().toISOString(), by: String(by || 'console').slice(0, 80) };
+    const prev = load();
+    // Keep the list of campaigns we turned off so a later wake can turn exactly those back on.
+    return persist({ sleeping, since: new Date().toISOString(), by: String(by || 'console').slice(0, 80), pausedCampaigns: prev.pausedCampaigns, dialerErrors: [] });
+}
+/** Records what the dialer pause/resume did, without changing the sleep state itself. */
+function setDialerOutcome(pausedCampaigns, dialerErrors) {
+    const prev = load();
+    return persist({ ...prev, pausedCampaigns: [...new Set(pausedCampaigns)], dialerErrors });
+}
+function persist(next) {
     fs_1.default.mkdirSync(data_paths_1.DATA_DIR, { recursive: true });
     const tmp = `${filePath()}.tmp`;
     fs_1.default.writeFileSync(tmp, JSON.stringify(next), { mode: 0o600 });
     fs_1.default.renameSync(tmp, filePath());
     cached = next;
     cachedFor = filePath();
-    return { ...next };
+    return getBotSleep();
 }

@@ -239,6 +239,21 @@ export class VicidialApiClient {
     return this.callEndpoint('non_agent_api', fnName, this.nonAgentUrl, params, 8000);
   }
 
+  /**
+   * Turns a campaign on or off in VICIdial (update_campaign, active=Y/N). Off stops the
+   * dialer from placing or hopping new calls for that campaign. Needs an API user that
+   * is allowed to modify campaigns; otherwise VICIdial answers ERROR and we return it.
+   */
+  async setCampaignActive(campaignId: string, active: boolean): Promise<{ ok: boolean; text: string }> {
+    const id = String(campaignId || '').trim();
+    if (!/^[A-Za-z0-9_-]{1,20}$/.test(id)) return { ok: false, text: 'ERROR: invalid campaign id' };
+    const res = await this.callEndpoint('non_agent_api', 'update_campaign', this.nonAgentUrl, {
+      campaign_id: id,
+      active: active ? 'Y' : 'N',
+    });
+    return { ok: res.ok && /^SUCCESS/i.test(res.text), text: res.text.slice(0, 200) };
+  }
+
   async checkVersion(): Promise<{ ok: boolean; versionText: string }> {
     const res = await this.callEndpoint('non_agent_api', 'version', this.nonAgentUrl, {}, 4000);
     return {
