@@ -443,7 +443,7 @@ class VicidialBridgeService {
         return n;
     }
     isCampaignOverCapacity(campaign) {
-        if (!campaign || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
+        if (!campaign || campaign.maxCallsEnabled === false || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
             return false;
         }
         let activeOnCampaign = 0;

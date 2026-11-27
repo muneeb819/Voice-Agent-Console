@@ -613,7 +613,7 @@ function createApp(viciBridge) {
                 agentsBargeInInstant: state.agents.filter((a) => a.behavior?.bargeIn === 'instant').length,
                 agentsExpressive: state.agents.filter((a) => a.behavior?.vocalGestures).length,
                 campaignsTotal: state.campaigns.length,
-                totalMaxCallsCapacity: state.campaigns.reduce((s, c) => s + Number(c.maxCalls || 0), 0),
+                totalMaxCallsCapacity: state.campaigns.reduce((s, c) => s + (c.maxCallsEnabled === false ? 0 : Number(c.maxCalls || 0)), 0),
                 functionsTotal: state.functions.length,
                 providersTotal: state.providers.length,
                 qaTotal: allQaTests.length,

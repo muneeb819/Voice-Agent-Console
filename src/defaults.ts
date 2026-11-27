@@ -1163,6 +1163,7 @@ export function normalizeState(raw: any): ConsoleState {
           end: textOr(c.end, '20:00'),
           tz: textOr(c.tz, 'America/New_York'),
           maxCalls: Math.round(num(c.maxCalls, 10, 1, 1000)),
+          maxCallsEnabled: c.maxCallsEnabled !== undefined ? Boolean(c.maxCallsEnabled) : true,
           maxCallSec: normalizeMaxCallSec(c.maxCallSec),
           xferType: (['ingroup', 'extension', 'number'].includes(c.xferType) ? c.xferType : 'ingroup') as
             | 'ingroup'

@@ -105,6 +105,7 @@ export interface Campaign {
   end: string;
   tz: string;
   maxCalls: number;
+  maxCallsEnabled?: boolean; // The campaign-wide call limit only applies when ticked. Missing = ticked (older data).
   maxCallSec: number; // Hard per-call time limit in seconds (0 = no limit).
   xferType: 'ingroup' | 'extension' | 'number';
   xferTarget: string;

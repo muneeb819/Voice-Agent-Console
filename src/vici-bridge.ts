@@ -497,7 +497,7 @@ export class VicidialBridgeService {
   }
 
   private isCampaignOverCapacity(campaign?: Campaign): boolean {
-    if (!campaign || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
+    if (!campaign || campaign.maxCallsEnabled === false || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
       return false;
     }
     let activeOnCampaign = 0;

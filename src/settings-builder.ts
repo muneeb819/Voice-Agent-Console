@@ -711,7 +711,7 @@ export function generateViciConfig(state: ConsoleState): string {
           : `Agent API ra_call_control (stage=EXTENSIONTRANSFER, consultative=NO, exten=${c.xferTarget})`;
       return [
         `; [Campaign slot ${slot}: ${c.name}]`,
-        `;   VICIdial Campaign ID : ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCalls}`,
+        `;   VICIdial Campaign ID : ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCallsEnabled === false ? 'no campaign limit' : c.maxCalls}`,
         `;   Assigned Bot Pool    : ${pool || '(missing)'}`,
         `;   Phone Bots (in turn) : ${phoneBotPool(state, c).map((a) => a.name).join(', ') || '(missing)'}`,
         `;   Remote Agent Exten   : ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + slot - 1})`,

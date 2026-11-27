@@ -2705,7 +2705,7 @@
             : `Agent API ra_call_control (stage=EXTENSIONTRANSFER, consultative=NO, exten=${c.xferTarget})`;
         return [
           `; [Campaign slot ${slot}: ${c.name}]`,
-          `;  VICIdial Campaign ID: ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCalls}`,
+          `;  VICIdial Campaign ID: ${c.viciCampaign || '(unset)'} | Lists: ${c.lists || '(none)'} | Max Concurrent: ${c.maxCallsEnabled === false ? 'no campaign limit' : c.maxCalls}`,
           `;  Assigned Bot Pool: ${pool || '(missing)'}`,
           `;  Telephone Persona: ${ag ? ag.name : '(missing)'} (${ag?.mode || 'outbound'}); browser tests may select any assigned bot`,
           `;  Remote Agent Exten: ${ext} (Remote Agent User: ${Number(v.remoteAgentUser || 9001) + slot - 1})`,
@@ -2875,7 +2875,8 @@
     "c.start": "The hours this campaign is meant to call. For reference only: set the real call times in VICIdial.",
     "c.end": "The end of the hours this campaign is meant to call. For reference only.",
     "c.tz": "The lead's timezone. Used so greetings say the right time of day.",
-    "c.maxCalls": "The most AI calls this campaign may hold at the same time. Calls over the limit are turned away and raise an alert.",
+    "c.maxCalls": "The most AI calls this campaign may hold at the same time. Calls over the limit are turned away and raise an alert. Only used when the limit box above is ticked.",
+    "c.maxCallsEnabled": "Tick to use one call limit for the whole campaign. Untick and the campaign has no limit of its own; each bot still follows its own lines.",
     "c.maxCallSec": "Hard time limit per call in seconds. Near the end the bot is told to transfer or wrap up. 0 means no limit.",
     "c.xferType": "Where qualified callers go: a VICIdial closer in-group (keeps the screen-pop), an Asterisk extension, or an outside number.",
     "c.xferTarget": "The in-group ID, extension or phone number that matches the transfer type above.",
@@ -6766,7 +6767,8 @@
      </div>
      ${F('Lead Timezone', 'c.tz')}
      <div class="row">
-      ${F('Max concurrent AI calls', 'c.maxCalls', 'number', [], 'min="1" step="1"')}
+      ${F('Use a campaign-wide call limit (optional; tick it, set the number, and save)', 'c.maxCallsEnabled', 'chk')}
+      ${F('Max concurrent AI calls for the whole campaign', 'c.maxCalls', 'number', [], `min="1" step="1"${C().maxCallsEnabled === false ? ' disabled' : ''}`)}
      </div>
      <div class="row">
       ${F('Max call length (seconds, 0 = no limit)', 'c.maxCallSec', 'number', [], 'min="0" max="900" step="5"')}
@@ -7569,7 +7571,7 @@
      </div>
      <div class="ck">
       <span class="ok">✓</span>
-      <span>Campaign <code>maxCalls</code> Capacity Guard Active (SIP <code>486 Busy Here</code>)</span>
+      <span>Per-bot lines and the optional campaign call limit are enforced (calls over the limit are turned away)</span>
      </div>
      <div class="ck">
       <span class="ok">✓</span>
@@ -9802,6 +9804,7 @@
           end: '20:00',
           tz: 'America/New_York',
           maxCalls: 10,
+          maxCallsEnabled: false,
           maxCallSec: 70,
           xferType: 'ingroup',
           xferTarget: '',
@@ -10126,6 +10129,11 @@
         nextVal = t.value;
       }
       setPath(t.dataset.p, nextVal);
+
+      if (t.dataset.p === 'c.maxCallsEnabled') {
+        const lim = document.querySelector('[data-p="c.maxCalls"]');
+        if (lim) lim.disabled = !t.checked;
+      }
 
       if (t.dataset.p === 'a.name') {
         const opt = document.querySelector(`#sel-a option[value="${CSS.escape(A().id)}"]`);
