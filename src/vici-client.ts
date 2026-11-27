@@ -657,6 +657,8 @@ export class VicidialApiClient {
     maxLines?: number;
     phone?: string;
     campaignId?: string;
+    excludeCallIds?: Iterable<string>;
+    excludeAgentUsers?: Iterable<string>;
   }): Promise<ResolvedLiveViciCall> {
     const empty: ResolvedLiveViciCall = {
       ok: false,
@@ -667,6 +669,17 @@ export class VicidialApiClient {
       campaignId: '',
       status: '',
     };
+
+    const excludedCalls = new Set<string>();
+    for (const cid of opts.excludeCallIds || []) {
+      const c = String(cid || '').trim();
+      if (c) excludedCalls.add(c);
+    }
+    const excludedUsers = new Set<string>();
+    for (const u of opts.excludeAgentUsers || []) {
+      const clean = String(u || '').trim();
+      if (clean) excludedUsers.add(clean);
+    }
 
     const seen = new Set<string>();
     const users: string[] = [];
@@ -690,8 +703,15 @@ export class VicidialApiClient {
     const targetCampaign = String(opts.campaignId || '').trim().toLowerCase();
 
     const results = await Promise.all(users.map((u) => this.getAgentStatus(u)));
-    const withCall = results.filter((r) => r.ok && Boolean(r.callId));
-    if (!withCall.length) return empty;
+    const allWithCall = results.filter((r) => r.ok && Boolean(r.callId));
+    if (!allWithCall.length) return empty;
+
+    // Prefer lines/call_ids not already claimed by another active bridge call
+    // (critical for multi-line on-hook remote agents like 9003..9010).
+    const unclaimed = allWithCall.filter(
+      (r) => !excludedCalls.has(r.callId) && !excludedUsers.has(r.agentUser),
+    );
+    const withCall = unclaimed.length > 0 ? unclaimed : allWithCall;
 
     const score = (r: AgentStatusRecord): number => {
       let s = 0;

@@ -52,7 +52,7 @@ export function usableAgentUser(user: string | undefined): string {
 }
 
 export function lookupCallAgentUser(client: Pick<VicidialApiClient, 'lookupCallIdInfo'>, callerCode: string): Promise<string> {
-  if (!callerCode) return Promise.resolve('');
+  if (!callerCode || /^RINGAGENT/i.test(callerCode.trim())) return Promise.resolve('');
   return client.lookupCallIdInfo(callerCode)
     .then((r) => (r.ok ? usableAgentUser(r.agentUser) : ''))
     .catch(() => '');
@@ -1596,14 +1596,27 @@ export class VicidialBridgeService {
       // 2) On-hook remote agents (RINGAGENT...) or calls without a live Y/V
       //    call_id yet: query agent_status CSV (header=YES) across the remote
       //    agent's line range to resolve live Y.../V... call_id, lead_id, and
-      //    the exact line user (e.g. 9003..9010).
+      //    the exact line user (e.g. 9003..9010). Exclude call_ids and line
+      //    users already owned by other active calls so concurrent lines never
+      //    collide or transfer another caller.
       if ((!hasLiveViciCallId || forceAgentStatus) && (parsedCaller.isRingAgent || !hasLiveViciCallId || forceAgentStatus)) {
+        const excludeCallIds: string[] = [];
+        const excludeAgentUsers: string[] = [];
+        for (const [otherId, other] of this.activeCalls.entries()) {
+          if (otherId === callId) continue;
+          if (other.callerCode && /^[YVM]\d+/i.test(other.callerCode)) {
+            excludeCallIds.push(other.callerCode);
+            if (other.remoteAgentUser) excludeAgentUsers.push(other.remoteAgentUser);
+          }
+        }
         const live = await viciClient.resolveLiveViciCall({
           baseRemoteAgentUser: resolved.remoteAgentUser,
           candidateUsers: [remoteAgentUser],
           maxLines: Math.max(Number(campaign?.maxCalls || 10), 10),
           phone: summary.phone,
           campaignId: campaign?.viciCampaign,
+          excludeCallIds,
+          excludeAgentUsers,
         });
         if (live.ok && live.callerCode) {
           liveCallerCode = live.callerCode;
