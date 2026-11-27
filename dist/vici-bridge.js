@@ -132,6 +132,13 @@ function rtpInactivityTimeoutMs(env = process.env) {
     const sec = raw === undefined || raw === '' ? 60 : Number(raw);
     return Number.isFinite(sec) && sec > 0 ? Math.round(sec * 1000) : 0;
 }
+/** An inactive bot, or one using all of its lines, is skipped when the next call picks a bot. */
+function botTakesPhoneCalls(agent, callsOnBot) {
+    if (agent.active === false)
+        return false;
+    const lines = Number(agent.lines || 0);
+    return !(callsOnBot && lines > 0 && callsOnBot(agent.id) >= lines);
+}
 function resolveCampaignAndAgent(state, dialedExten, opts = {}) {
     const cleanExten = String(dialedExten || '').trim();
     const prefix = String(state.vici.aiExten || '8800').trim();
@@ -161,7 +168,7 @@ function resolveCampaignAndAgent(state, dialedExten, opts = {}) {
     else if (opts.rotate) {
         // Every ready bot assigned to the campaign takes phone calls in turn; a bot
         // that is not ready is left out so it never blocks the others.
-        const ready = (0, campaign_assignment_1.pickPhoneBot)(state, campaign, (candidate) => (0, settings_builder_1.getCampaignCallReadinessBlockers)(state, campaign, candidate).length === 0);
+        const ready = (0, campaign_assignment_1.pickPhoneBot)(state, campaign, (candidate) => botTakesPhoneCalls(candidate, opts.callsOnBot) && (0, settings_builder_1.getCampaignCallReadinessBlockers)(state, campaign, candidate).length === 0);
         if (ready)
             agent = ready;
     }
@@ -172,6 +179,13 @@ function resolveCampaignAndAgent(state, dialedExten, opts = {}) {
             campaignIndex: idx,
             error: `Campaign “${campaign.name}” is not assigned to an existing bot agent.`,
         };
+    }
+    if (opts.rotate && agent.active === false) {
+        return { campaign, agent, remoteAgentUser, campaignIndex: idx, error: `Bot “${agent.name}” is inactive, so it takes no phone calls. Make it active to use it.` };
+    }
+    const lines = Number(agent.lines || 0);
+    if (opts.rotate && opts.callsOnBot && lines > 0 && opts.callsOnBot(agent.id) >= lines) {
+        return { campaign, agent, remoteAgentUser, campaignIndex: idx, error: `Bot “${agent.name}” is using all of its ${lines} lines.` };
     }
     const blockers = (0, settings_builder_1.getCampaignCallReadinessBlockers)(state, campaign, agent);
     if (blockers.length) {
@@ -417,6 +431,17 @@ class VicidialBridgeService {
             key: `call_rejected:${campaign?.id}`,
         });
     }
+    /** Calls a bot has right now: answered calls plus calls registered for it and not yet answered. */
+    callsOnBot(agentId) {
+        let n = 0;
+        for (const c of this.activeCalls.values())
+            if (c.agentId === agentId)
+                n += 1;
+        for (const rec of this.preCallRegistry.values())
+            if (rec.agent?.id === agentId)
+                n += 1;
+        return n;
+    }
     isCampaignOverCapacity(campaign) {
         if (!campaign || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
             return false;
@@ -452,7 +477,7 @@ class VicidialBridgeService {
             throw new Error('Bots are asleep: new calls are not being answered.');
         }
         const exten = String(input.exten || '').trim();
-        const resolved = resolveCampaignAndAgent(state, exten, { rotate: true });
+        const resolved = resolveCampaignAndAgent(state, exten, { rotate: true, callsOnBot: (id) => this.callsOnBot(id) });
         if (resolved.error || !resolved.campaign || !resolved.agent) {
             throw new Error(resolved.error || 'Campaign assignment is required before call registration.');
         }
@@ -1206,7 +1231,7 @@ class VicidialBridgeService {
             ? { ...state.vici, viciBaseUrl: this.viciApiBaseOverride }
             : state.vici;
         const exten = String(opts.preCall?.exten || '').trim();
-        const resolved = resolveCampaignAndAgent(state, exten, opts.preCall ? { agentId: opts.preCall.agent.id } : { rotate: true });
+        const resolved = resolveCampaignAndAgent(state, exten, opts.preCall ? { agentId: opts.preCall.agent.id } : { rotate: true, callsOnBot: (id) => this.callsOnBot(id) });
         if (resolved.error || !resolved.campaign || !resolved.agent) {
             this.stats.lastError = resolved.error || 'Campaign assignment is required before the bridge can start a call.';
             opts.hooks.hangupTransport();

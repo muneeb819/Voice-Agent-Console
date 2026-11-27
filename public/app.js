@@ -1188,6 +1188,8 @@
         ag.greeting = migratedOpening;
         mutated = true;
       }
+      if (typeof ag.active !== 'boolean') ag.active = true;
+      ag.lines = Number.isFinite(Number(ag.lines)) ? Math.min(1000, Math.max(0, Math.round(Number(ag.lines)))) : 0;
       if (typeof ag.injectCampaignDisclosure !== 'boolean') {
         ag.injectCampaignDisclosure = false;
         mutated = true;
@@ -2829,6 +2831,8 @@
     "a.prompt": "The bot's main instructions: who it is, what to ask, when to transfer and what never to say. Campaign rules are added on top and win if they conflict.",
     "a.greeting": "The opening line used when random greetings are off or none of them fits the call.",
     "a.randomGreetingEnabled": "Picks one saved greeting line at random for each call so the opening does not sound the same every time.",
+    "a.active": "An inactive bot takes no phone calls and costs nothing. Switch it on to let it answer calls for its campaign. Browser tests still work while it is off.",
+    "a.lines": "How many phone calls this bot may handle at the same moment, such as 5, 10, 20 or 50. At the limit new calls go to another active bot. 0 means no limit for this bot.",
     "a.injectCampaignDisclosure": "Adds the campaign's recording notice to the start of the greeting when this bot is linked to a campaign.",
     "a.behavior.speakingStyle": "Personality, tone and goal in your own words. This is the only tone guidance the bot gets; the tone menu is used only when this is empty.",
     "a.behavior.expressionStyle": "A ready-made tone, used only when the personality box is empty.",
@@ -6610,6 +6614,8 @@
        ['both', 'Both Outbound & Inbound'],
      ])}
      ${F('Bridge VICIdial call-connect & automatic lead hydration (recommended — replaces hallucinated LLM accept tool)', 'a.acceptViciCalls', 'chk')}
+     ${F('Active: this bot takes phone calls (turn off to keep it asleep; browser tests still work)', 'a.active', 'chk')}
+     ${F('Lines: how many calls this bot takes at once (0 = no limit for this bot)', 'a.lines', 'number', [], 'min="0" max="1000" step="1"')}
      ${F('Include the linked campaign recording notice (optional)', 'a.injectCampaignDisclosure', 'chk')}
      <div class="note wn">Spoken campaign notice only — does not turn off recording.</div>
      <h2>Call start &amp; greeting</h2>

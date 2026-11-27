@@ -1108,6 +1108,8 @@ export function normalizeState(raw: any): ConsoleState {
           acceptViciCalls: isNovaAgent ? true : a.acceptViciCalls !== undefined ? Boolean(a.acceptViciCalls) : hadLegacyAccept,
           injectCampaignDisclosure:
             a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : false,
+          active: a.active !== false,
+          lines: Math.round(num(a.lines, 0, 0, 1000)),
           behavior,
           flow: normalizeFlow(a.flow, agentId !== 'a_qa'),
           stt: {
