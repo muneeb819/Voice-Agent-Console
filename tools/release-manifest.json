@@ -266,6 +266,7 @@
   "tests/barge-in-verify.ts",
   "tests/bot-sleep-verify.ts",
   "tests/bot-lines-verify.ts",
+  "tests/bot-status-verify.ts",
   "tests/campaign-limit-verify.ts",
   "tests/campaign-dialing-verify.ts",
   "tests/dashboard-e2e-verify.ts",

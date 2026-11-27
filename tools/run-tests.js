@@ -6,7 +6,7 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const tsxCli = path.join(root, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-const allSteps = ['step1', 'step2', 'performance', 'remote-agent-user', 'phone-bot-rotation', 'bot-lines', 'campaign-limit', 'speech-url', 'webhook-ssrf', 'process-guards', 'dialplan-pattern', 'bot-sleep', 'campaign-dialing', 'dashboard-e2e', 'usage-ledger', 'alerts', 'voice-pick', 'diagnostics', 'console-cleanup', 'help-popups', 'dialer-reports', 'own-agent', 'default-skills', 'mock-audio', 'live-bot', 'simulator-recording', 'greetings', 'opening', 'bridge-opening', 'persona', 'qa-bot', 'step3', 'step4', 'security', 'backend-audit', 'sip-registration', 'sip-refer', 'account-lifecycle', 'hardening', 'bot-functions', 'barge-in', 'smoke-test', 'voice-clone', 'call-start', 'live-listen', 'voice-delivery', 'screening', 'installer-port80', 'health', 'static-site', 'static-console'];
+const allSteps = ['step1', 'step2', 'performance', 'remote-agent-user', 'phone-bot-rotation', 'bot-lines', 'bot-status', 'campaign-limit', 'speech-url', 'webhook-ssrf', 'process-guards', 'dialplan-pattern', 'bot-sleep', 'campaign-dialing', 'dashboard-e2e', 'usage-ledger', 'alerts', 'voice-pick', 'diagnostics', 'console-cleanup', 'help-popups', 'dialer-reports', 'own-agent', 'default-skills', 'mock-audio', 'live-bot', 'simulator-recording', 'greetings', 'opening', 'bridge-opening', 'persona', 'qa-bot', 'step3', 'step4', 'security', 'backend-audit', 'sip-registration', 'sip-refer', 'account-lifecycle', 'hardening', 'bot-functions', 'barge-in', 'smoke-test', 'voice-clone', 'call-start', 'live-listen', 'voice-delivery', 'screening', 'installer-port80', 'health', 'static-site', 'static-console'];
 const requestedSteps = process.argv.slice(2);
 const steps = requestedSteps.length ? requestedSteps : allSteps;
 
@@ -102,7 +102,7 @@ async function main() {
       console.log(`\n=== Running ${step} verification ===`);
       // These suites create their own server and need a fresh account store.
       const stepEnv = { ...env };
-      if (step === 'security' || step === 'backend-audit' || step === 'account-lifecycle' || step === 'hardening' || step === 'bot-functions' || step === 'barge-in' || step === 'live-bot' || step === 'greetings' || step === 'opening' || step === 'bridge-opening' || step === 'mock-audio' || step === 'call-start' || step === 'live-listen' || step === 'screening' || step === 'phone-bot-rotation' || step === 'bot-lines' || step === 'campaign-limit' || step === 'bot-sleep' || step === 'campaign-dialing' || step === 'dashboard-e2e' || step === 'usage-ledger' || step === 'alerts') {
+      if (step === 'security' || step === 'backend-audit' || step === 'account-lifecycle' || step === 'hardening' || step === 'bot-functions' || step === 'barge-in' || step === 'live-bot' || step === 'greetings' || step === 'opening' || step === 'bridge-opening' || step === 'mock-audio' || step === 'call-start' || step === 'live-listen' || step === 'screening' || step === 'phone-bot-rotation' || step === 'bot-lines' || step === 'bot-status' || step === 'campaign-limit' || step === 'bot-sleep' || step === 'campaign-dialing' || step === 'dashboard-e2e' || step === 'usage-ledger' || step === 'alerts') {
         stepEnv.VAC_DATA_DIR = path.join(testDataDir, step);
         fs.mkdirSync(stepEnv.VAC_DATA_DIR, { recursive: true });
         stepEnv.VAC_ENV_FILE = path.join(stepEnv.VAC_DATA_DIR, '.env');

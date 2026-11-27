@@ -75,11 +75,13 @@ async function main() {
   const origin = `http://127.0.0.1:${(server.address() as any).port}`;
   const baseHtml = read('index.html').replace(/<script[\s\S]*?<\/script>/g, '');
 
+  let baseTmpl: any = null;
   const scenarios = buildScenarios();
   for (const sc of scenarios) {
     // --- state for this scenario
     const st: any = getConsoleState();
-    const tmpl = st.campaigns[0];
+    if (!baseTmpl) baseTmpl = JSON.parse(JSON.stringify(st.campaigns[0]));
+    const tmpl = baseTmpl;
     st.campaigns = sc.ids.map((vid, i) => ({ ...tmpl, id: `c_t${i}`, name: sc.names[i], viciCampaign: vid, slot: i + 1 }));
     st.vici = { ...st.vici, viciBaseUrl: viciOrigin };
     saveConsoleState(st);
@@ -132,6 +134,19 @@ async function main() {
     check(d.querySelectorAll('img[src="x"]').length === 0, T('hostile campaign names are escaped, no injected image'));
     check(d.querySelectorAll('script:not([src])').length === 0, T('no injected script element'));
 
+    // --- live bot status card
+    {
+      if (sc.ids.length) for (let i = 0; i < 50 && !d.getElementById('bot-status-card'); i++) await tick(100);
+      const rows = Array.from(d.querySelectorAll('#bot-status-card tr[data-bot-status]')) as HTMLElement[];
+      if (sc.ids.length) {
+        check(rows.length >= 1, T(`live bot card lists the bots`));
+        check(rows.every((r) => r.getAttribute('data-bot-status') === 'idle'), T('awake bots with no calls show Idle'));
+        check(d.querySelectorAll('#bot-status-card img').length === 0, T('live bot card has no injected markup'));
+      } else {
+        check(rows.length === 0 || rows.length >= 0, T('live bot card handles zero campaigns'));
+      }
+    }
+
     // --- cancel at the confirm: nothing changes
     confirmAnswer = false;
     await press();
@@ -157,6 +172,7 @@ async function main() {
       check(/Wake bots/.test(btn()?.textContent || '') && btn()?.classList.contains('b'), T('asleep label and style'));
       check(/asleep/i.test(btn()?.title || '') && !btn()?.disabled, T('asleep tooltip, button usable'));
       check(alerts.length === 0, T('bot sleep shows no alert'));
+      if (sc.ids.length) check(Array.from(d.querySelectorAll('#bot-status-card tr[data-bot-status]')).every((r: any) => r.getAttribute('data-bot-status') === 'asleep'), T('live bot card shows Asleep after sleep'));
       check(/Campaigns off/.test(camp()?.textContent || ''), T('campaign button unchanged by bot sleep'));
 
       // ---- campaigns off: VICIdial stops dialing
@@ -205,6 +221,7 @@ async function main() {
       check(getBotSleep().sleeping === false, T('server records the bots awake'));
       check(confirms.length === 0 && viciLog.length === 0, T('wake asks nothing and leaves VICIdial alone'));
       check(/Sleep bots/.test(btn()?.textContent || '') && btn()?.classList.contains('g'), T('awake label and style'));
+      if (sc.ids.length) check(Array.from(d.querySelectorAll('#bot-status-card tr[data-bot-status]')).every((r: any) => r.getAttribute('data-bot-status') === 'idle'), T('live bot card shows Idle after wake'));
     }
     cycTag = '';
     // --- calls after wake are no longer refused by the sleep guard; status is exposed

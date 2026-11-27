@@ -6110,6 +6110,17 @@
        ${diagState.error ? `<div class="note" style="color:var(--er)">${esc(diagState.error)}</div>` : ''}${rows}</div>`;
     })()}
 
+    ${(() => {
+      const rows = Array.isArray(viciMon.status?.botStatuses) ? viciMon.status.botStatuses : [];
+      if (!rows.length) return '';
+      const label = { idle: 'Idle', waiting: 'Waiting for caller', in_call: 'In call', transferring: 'Transferring', asleep: 'Asleep', inactive: 'Inactive' };
+      const cls = { idle: 'ok', waiting: 'ok', in_call: 'wn', transferring: 'wn', asleep: 'b', inactive: 'b' };
+      return `<div class="card" id="bot-status-card" style="margin-bottom:10px"><h3 style="margin:0 0 6px">Bots live</h3>
+       <table class="tbl"><thead><tr><th>Bot</th><th>Status</th><th>Calls</th><th>Campaign</th></tr></thead><tbody>${rows
+         .map((r) => `<tr data-bot-status="${esc(r.status)}"><td>${esc(r.name)}</td><td><span class="pill ${cls[r.status] || 'ok'}">${esc(label[r.status] || r.status)}</span></td><td>${Number(r.calls) || 0}${Number(r.lines) > 0 ? ' / ' + Number(r.lines) : ''}</td><td>${esc((r.campaigns || []).join(', '))}</td></tr>`)
+         .join('')}</tbody></table></div>`;
+    })()}
+
     <div class="cmd-score-card ready-stage ${healthClass}" data-ready-stage aria-label="System readiness, ${T.score} out of 100">
      <div class="ready-stage-top">
       <span class="cmd-score-kicker">${DECK_ICONS.pulse} System readiness <em>live</em></span>

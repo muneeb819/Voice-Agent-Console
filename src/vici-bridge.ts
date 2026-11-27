@@ -446,6 +446,7 @@ export class VicidialBridgeService {
       audioSocketPort: this.audioSocketPort,
       sipPort: this.sipPort,
       botSleep: getBotSleep(),
+      botStatuses: this.botStatuses(),
       activeCallsCount: this.activeCalls.size,
       activeCalls: Array.from(this.activeCalls.values()),
       sipRegistration: this.sipRegistrationClient?.snapshot() || { status: 'stopped', registrar: '', expiresAt: null, lastError: null },
@@ -486,6 +487,37 @@ export class VicidialBridgeService {
       detail: this.stats.lastError,
       key: `call_rejected:${campaign?.id}`,
     });
+  }
+
+  /**
+   * Live status of every bot, in the words a dialer's real-time screen uses:
+   * asleep, inactive, idle (ready, no call), waiting (a call is registered for it and the caller is not
+   * connected yet), in call, transferring. One row per bot that belongs to a campaign.
+   */
+  private botStatuses() {
+    const state = getConsoleState();
+    const sleeping = isBotSleeping();
+    const seen = new Set<string>();
+    const rows: Array<{ agentId: string; name: string; status: string; calls: number; lines: number; campaigns: string[] }> = [];
+    for (const campaign of state.campaigns) {
+      for (const agent of phoneBotPool(state, campaign)) {
+        const existing = rows.find((r) => r.agentId === agent.id);
+        if (existing) { existing.campaigns.push(campaign.name); continue; }
+        if (seen.has(agent.id)) continue;
+        seen.add(agent.id);
+        const mine = [...this.activeCalls.values()].filter((c) => c.agentId === agent.id);
+        const pending = [...this.preCallRegistry.values()].filter((r) => r.agent?.id === agent.id).length;
+        let status = 'idle';
+        // A call in progress is shown as it is, even while asleep or inactive: it finishes first.
+        if (mine.some((c) => c.state === 'transferring')) status = 'transferring';
+        else if (mine.length) status = 'in_call';
+        else if (sleeping) status = 'asleep';
+        else if (agent.active === false) status = 'inactive';
+        else if (pending) status = 'waiting';
+        rows.push({ agentId: agent.id, name: agent.name, status, calls: mine.length, lines: Number(agent.lines || 0), campaigns: [campaign.name] });
+      }
+    }
+    return rows;
   }
 
   /** Calls a bot has right now: answered calls plus calls registered for it and not yet answered. */
@@ -1525,6 +1557,7 @@ export class VicidialBridgeService {
     const executeTransferAction = async (args: { reason: string; confirmed_age?: string }) => {
       if (transferExecuted || closed) return;
       transferExecuted = true;
+      updateState('transferring');
       transferCompletion = new Promise<void>((resolve) => { resolveTransferCompletion = resolve; });
 
       const xferType = campaign?.xferType || 'ingroup';
