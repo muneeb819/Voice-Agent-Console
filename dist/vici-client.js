@@ -556,6 +556,18 @@ class VicidialApiClient {
             campaignId: '',
             status: '',
         };
+        const excludedCalls = new Set();
+        for (const cid of opts.excludeCallIds || []) {
+            const c = String(cid || '').trim();
+            if (c)
+                excludedCalls.add(c);
+        }
+        const excludedUsers = new Set();
+        for (const u of opts.excludeAgentUsers || []) {
+            const clean = String(u || '').trim();
+            if (clean)
+                excludedUsers.add(clean);
+        }
         const seen = new Set();
         const users = [];
         const addUser = (u) => {
@@ -579,9 +591,13 @@ class VicidialApiClient {
         const targetDigits = String(opts.phone || '').replace(/\D/g, '').slice(-10);
         const targetCampaign = String(opts.campaignId || '').trim().toLowerCase();
         const results = await Promise.all(users.map((u) => this.getAgentStatus(u)));
-        const withCall = results.filter((r) => r.ok && Boolean(r.callId));
-        if (!withCall.length)
+        const allWithCall = results.filter((r) => r.ok && Boolean(r.callId));
+        if (!allWithCall.length)
             return empty;
+        // Prefer lines/call_ids not already claimed by another active bridge call
+        // (critical for multi-line on-hook remote agents like 9003..9010).
+        const unclaimed = allWithCall.filter((r) => !excludedCalls.has(r.callId) && !excludedUsers.has(r.agentUser));
+        const withCall = unclaimed.length > 0 ? unclaimed : allWithCall;
         const score = (r) => {
             let s = 0;
             const rDigits = r.phone.replace(/\D/g, '').slice(-10);
