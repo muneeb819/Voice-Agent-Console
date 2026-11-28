@@ -1,6 +1,7 @@
 // Screening tables: the on/off switch, one result row per call (also the
 // idempotency key for dispositions), and saved verification runs.
 import { getDb } from '../db';
+import { enqueueRdsScreeningSync } from '../rds-mssql';
 import { ScreeningDecision, ScreeningOutcome } from './types';
 
 let ready = false;
@@ -103,7 +104,12 @@ export function recordScreeningResult(r: ResultInput): boolean {
     Math.round(r.decision.decidedAtMs), JSON.stringify(r.decision.evidence).slice(0, 4000), r.disposition,
     r.disposition ? 'pending' : 'none', now, now,
   ) as { changes?: number };
-  return Number(res?.changes || 0) === 1;
+  const inserted = Number(res?.changes || 0) === 1;
+  if (inserted) {
+    const saved = getScreeningResult(r.callId);
+    if (saved) enqueueRdsScreeningSync(saved);
+  }
+  return inserted;
 }
 
 /** Atomically claims the right to send the disposition. Only one caller ever gets true. */
@@ -117,10 +123,16 @@ export function updateDispositionState(callId: string, state: 'sent' | 'failed' 
   db().prepare(`UPDATE screening_results SET disposition_state = ?, disposition_detail = ?, verified_lead_status = COALESCE(?, verified_lead_status),
     verified_call_status = COALESCE(?, verified_call_status), updated_at = ? WHERE call_id = ?`)
     .run(state, detail.slice(0, 500), verified?.lead ?? null, verified?.call ?? null, new Date().toISOString(), callId);
+  const updated = getScreeningResult(callId);
+  if (updated) enqueueRdsScreeningSync(updated);
 }
 
 export function getScreeningResult(callId: string): any {
   return db().prepare('SELECT * FROM screening_results WHERE call_id = ?').get(callId) || null;
+}
+
+export function listScreeningResultsForBackfill(limit = 5000): any[] {
+  return db().prepare('SELECT * FROM screening_results ORDER BY created_at DESC LIMIT ?').all(Math.max(1, Math.min(50000, limit)));
 }
 
 export function recentScreeningResults(limit = 50): any[] {

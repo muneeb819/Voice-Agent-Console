@@ -37,7 +37,7 @@ exports.MAX_REPORT_LISTS = 30;
 exports.MAX_REPORT_IN_GROUPS = 10;
 const UNREACHABLE_TITLE = 'The dialer cannot be reached';
 /** Says plainly when the kept calls do not reach back as far as the report asks. */
-function coverageOf(logs, windowStartMs, retention = db_1.BRIDGE_LOG_RETENTION) {
+function coverageOf(logs, windowStartMs, retention = (0, db_1.getBridgeLogRetention)()) {
     const times = logs.map((l) => Date.parse(l.startedAt)).filter((t) => Number.isFinite(t));
     const oldest = times.length ? Math.min(...times) : null;
     const limited = logs.length >= retention && oldest !== null && oldest > windowStartMs;

@@ -62,10 +62,12 @@ import {
   deleteSimulatorRecording,
   exportBridgeLogsCsv,
   getBridgeAnalyticsSummary,
+  getBridgeLogRetention,
+  MIN_BRIDGE_LOG_RETENTION,
+  MAX_BRIDGE_LOG_RETENTION,
   getConsoleState,
   closeDb,
   getSimulatorCallLog,
-  BRIDGE_LOG_RETENTION,
   listBridgeCallLogs,
   listGreetingLibrary,
   listRevisions,
@@ -75,6 +77,14 @@ import {
   recordVoiceCloneConsent,
   listVoiceCloneConsents,
 } from './db';
+import {
+  backfillToRds,
+  getRdsStatus,
+  queryRdsCalls,
+  resetRdsPool,
+  testRdsConnection,
+} from './rds-mssql';
+import { listScreeningResultsForBackfill } from './screening/store';
 import { createDefaultState, normalizeState } from './defaults';
 import { credentialRoutingChanges } from './state-guard';
 import { DATA_DIR } from './data-paths';
@@ -662,7 +672,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
       .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0);
     // Average the retained per-session means, rather than assigning equal
     // weight to channels with different numbers of sessions.
-    const bridgeTtfbValues = listBridgeCallLogs(200)
+    const bridgeTtfbValues = listBridgeCallLogs(getBridgeLogRetention())
       .map((call) => call.avgTtfbMs)
       .filter((n): n is number => typeof n === 'number' && Number.isFinite(n) && n > 0);
     const retainedTtfbValues = [...bridgeTtfbValues, ...simTtfbValues];
@@ -1271,7 +1281,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   app.get('/api/reports/campaigns', asyncRoute(async (req: Request, res: Response) => {
     const src = pickSource(req, res);
     if (!src) return;
-    res.json({ ok: true, report: await buildCampaignReport(src, getConsoleState(), listBridgeCallLogs(BRIDGE_LOG_RETENTION), reportDate(req.query.date)) });
+    res.json({ ok: true, report: await buildCampaignReport(src, getConsoleState(), listBridgeCallLogs(getBridgeLogRetention()), reportDate(req.query.date)) });
   }));
 
   app.get('/api/reports/lists', asyncRoute(async (req: Request, res: Response) => {
@@ -1282,11 +1292,11 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   app.get('/api/reports/bots', (req: Request, res: Response) => {
     const hours = Math.min(24 * 30, Math.max(1, Number(req.query.hours) || 24));
-    res.json({ ok: true, report: buildBotReport(listBridgeCallLogs(BRIDGE_LOG_RETENTION), hours) });
+    res.json({ ok: true, report: buildBotReport(listBridgeCallLogs(getBridgeLogRetention()), hours) });
   });
 
   app.get('/api/reports/problems', (_req: Request, res: Response) => {
-    res.json({ ok: true, problems: buildProblems(listBridgeCallLogs(BRIDGE_LOG_RETENTION), listAlerts().alerts) });
+    res.json({ ok: true, problems: buildProblems(listBridgeCallLogs(getBridgeLogRetention()), listAlerts().alerts) });
   });
 
   // VICIdial User Activities & Stats API (read-only via non_agent_api.php using saved VICI API user & .env VICI_API_PASS).
@@ -1393,6 +1403,164 @@ export function createApp(viciBridge?: VicidialBridgeService) {
     });
   }));
 
+  // ==================== AWS RDS SQL SERVER ARCHIVE & RETENTION API ====================
+
+  app.get('/api/rds/status', (_req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({
+      ok: true,
+      bridgeLogRetention: getBridgeLogRetention(),
+      rds: getRdsStatus(),
+    });
+  });
+
+  app.post('/api/rds/config', asyncRoute(async (req: Request, res: Response) => {
+    const body = req.body || {};
+    const envUpdates: Partial<Record<SecretKeyName, string>> = {};
+
+    if (body.bridgeLogRetention !== undefined) {
+      const n = Number(body.bridgeLogRetention);
+      if (!Number.isInteger(n) || n < MIN_BRIDGE_LOG_RETENTION || n > MAX_BRIDGE_LOG_RETENTION) {
+        res.status(400).json({
+          ok: false,
+          error: `bridgeLogRetention must be an integer between ${MIN_BRIDGE_LOG_RETENTION} and ${MAX_BRIDGE_LOG_RETENTION}.`,
+        });
+        return;
+      }
+      envUpdates.BRIDGE_LOG_RETENTION = String(n);
+    }
+
+    if (body.host !== undefined) {
+      const host = String(body.host || '').trim();
+      if (host && !/^[A-Za-z0-9._:-]{1,253}$/.test(host)) {
+        res.status(400).json({ ok: false, error: 'Invalid RDS SQL Server hostname or IP.' });
+        return;
+      }
+      envUpdates.RDS_MSSQL_HOST = host;
+    }
+    if (body.port !== undefined) {
+      const port = Number(body.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        res.status(400).json({ ok: false, error: 'port must be an integer between 1 and 65535.' });
+        return;
+      }
+      envUpdates.RDS_MSSQL_PORT = String(port);
+    }
+    if (body.database !== undefined) {
+      const dbName = String(body.database || '').trim();
+      if (dbName && !/^[A-Za-z0-9_.-]{1,128}$/.test(dbName)) {
+        res.status(400).json({ ok: false, error: 'Invalid SQL Server database name.' });
+        return;
+      }
+      envUpdates.RDS_MSSQL_DATABASE = dbName;
+    }
+    if (body.user !== undefined) {
+      const user = String(body.user || '').trim();
+      if (user && !/^[A-Za-z0-9_.@\\-]{1,128}$/.test(user)) {
+        res.status(400).json({ ok: false, error: 'Invalid SQL Server username.' });
+        return;
+      }
+      envUpdates.RDS_MSSQL_USER = user;
+    }
+    if (body.password !== undefined) {
+      const pwd = String(body.password || '');
+      if (/[\r\n\0]/.test(pwd)) {
+        res.status(400).json({ ok: false, error: 'Password contains invalid control characters.' });
+        return;
+      }
+      envUpdates.RDS_MSSQL_PASSWORD = pwd;
+    }
+    if (body.enabled !== undefined) {
+      envUpdates.RDS_MSSQL_ENABLED = body.enabled ? '1' : '0';
+    }
+    if (body.encrypt !== undefined) {
+      envUpdates.RDS_MSSQL_ENCRYPT = body.encrypt ? 'true' : 'false';
+    }
+    if (body.trustServerCertificate !== undefined) {
+      envUpdates.RDS_MSSQL_TRUST_SERVER_CERT = body.trustServerCertificate ? 'true' : 'false';
+    }
+    if (body.tablePrefix !== undefined) {
+      const pref = String(body.tablePrefix || '').trim();
+      if (pref && !/^[A-Za-z_][A-Za-z0-9_]{0,20}$/.test(pref)) {
+        res.status(400).json({ ok: false, error: 'tablePrefix must start with a letter or underscore and be <= 21 alphanumeric/underscore chars.' });
+        return;
+      }
+      envUpdates.RDS_MSSQL_TABLE_PREFIX = pref || 'vac_';
+    }
+
+    if (Object.keys(envUpdates).length > 0) {
+      try {
+        updateSecrets(envUpdates);
+      } catch (err: any) {
+        res.status(400).json({ ok: false, error: err?.message || 'Failed to update .env settings.' });
+        return;
+      }
+      await resetRdsPool();
+    }
+
+    let verification: Awaited<ReturnType<typeof testRdsConnection>> | null = null;
+    if (body.verify === true) {
+      verification = await testRdsConnection();
+      if (!verification.ok) {
+        res.status(502).json({
+          ok: false,
+          error: verification.error || 'AWS RDS SQL Server connection verification failed.',
+          bridgeLogRetention: getBridgeLogRetention(),
+          rds: getRdsStatus(),
+          verification,
+        });
+        return;
+      }
+    }
+
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({
+      ok: true,
+      bridgeLogRetention: getBridgeLogRetention(),
+      rds: getRdsStatus(),
+      verification,
+    });
+  }));
+
+  app.post('/api/rds/test', asyncRoute(async (_req: Request, res: Response) => {
+    const result = await testRdsConnection();
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.status(result.ok ? 200 : 502).json({
+      ok: result.ok,
+      result,
+      rds: getRdsStatus(),
+    });
+  }));
+
+  app.post('/api/rds/backfill', asyncRoute(async (req: Request, res: Response) => {
+    const retention = getBridgeLogRetention();
+    const limit = Math.max(1, Math.min(retention, Number(req.body?.limit) || retention));
+    const calls = listBridgeCallLogs(limit);
+    const screening = listScreeningResultsForBackfill(limit);
+    const result = await backfillToRds(calls, screening);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.status(result.ok ? 200 : 502).json({
+      ...result,
+      rds: getRdsStatus(),
+    });
+  }));
+
+  app.get('/api/rds/calls', asyncRoute(async (req: Request, res: Response) => {
+    try {
+      const data = await queryRdsCalls({
+        limit: typeof req.query.limit === 'string' ? Number(req.query.limit) : 50,
+        campaign: typeof req.query.campaign === 'string' ? req.query.campaign : undefined,
+        disposition: typeof req.query.disposition === 'string' ? req.query.disposition : undefined,
+        start: typeof req.query.start === 'string' ? req.query.start : undefined,
+        end: typeof req.query.end === 'string' ? req.query.end : undefined,
+      });
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.json({ ok: true, ...data });
+    } catch (err: any) {
+      res.status(502).json({ ok: false, error: err?.message || 'Failed to query AWS RDS SQL Server.' });
+    }
+  }));
+
   // One-button health scan: every check says what it found and what to do about it.
   app.get('/api/diagnostics', asyncRoute(async (_req: Request, res: Response) => {
     const st = getConsoleState();
@@ -1435,12 +1603,13 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   }));
 
   app.get('/api/vici/logs', (req: Request, res: Response) => {
+    const retention = getBridgeLogRetention();
     const requested = typeof req.query.limit === 'string' ? Number(req.query.limit) : 25;
-    const limit = Number.isFinite(requested) && requested > 0 ? Math.max(1, Math.min(200, Math.floor(requested))) : 25;
+    const limit = Number.isFinite(requested) && requested > 0 ? Math.max(1, Math.min(retention, Math.floor(requested))) : 25;
     const campaignId = typeof req.query.campaignId === 'string' ? req.query.campaignId : undefined;
     const logs = listBridgeCallLogs(limit).filter((row) => !campaignId || row.campaignId === campaignId);
     res.setHeader('Cache-Control', 'private, no-store');
-    res.json({ ok: true, count: logs.length, logs });
+    res.json({ ok: true, count: logs.length, retentionLimit: retention, logs });
   });
 
   app.delete('/api/vici/logs', (_req: Request, res: Response) => {
@@ -1553,7 +1722,7 @@ export function createApp(viciBridge?: VicidialBridgeService) {
   });
 
   app.get('/api/vici/logs.csv', (_req: Request, res: Response) => {
-    const csv = exportBridgeLogsCsv(200);
+    const csv = exportBridgeLogsCsv(getBridgeLogRetention());
     const stamp = new Date().toISOString().slice(0, 10);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="vici-bridge-cdrs-${stamp}.csv"`);

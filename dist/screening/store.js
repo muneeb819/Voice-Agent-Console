@@ -9,6 +9,7 @@ exports.recordScreeningResult = recordScreeningResult;
 exports.claimDisposition = claimDisposition;
 exports.updateDispositionState = updateDispositionState;
 exports.getScreeningResult = getScreeningResult;
+exports.listScreeningResultsForBackfill = listScreeningResultsForBackfill;
 exports.recentScreeningResults = recentScreeningResults;
 exports.screeningCounts = screeningCounts;
 exports.dispositionStateCounts = dispositionStateCounts;
@@ -17,6 +18,7 @@ exports.lastTestRun = lastTestRun;
 // Screening tables: the on/off switch, one result row per call (also the
 // idempotency key for dispositions), and saved verification runs.
 const db_1 = require("../db");
+const rds_mssql_1 = require("../rds-mssql");
 let ready = false;
 function db() {
     const d = (0, db_1.getDb)();
@@ -99,7 +101,13 @@ function recordScreeningResult(r) {
     const res = db().prepare(`INSERT OR IGNORE INTO screening_results
     (call_id, campaign_id, lead_id, caller_code, phone_tail, outcome, reason, native_amd, decided_ms, evidence, disposition, disposition_state, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(r.callId, r.campaignId, String(r.leadId || '').replace(/\D/g, '').slice(0, 20), String(r.callerCode || '').slice(0, 40), String(r.phone || '').replace(/\D/g, '').slice(-4), r.decision.outcome, r.decision.reason.slice(0, 300), r.nativeAmd, Math.round(r.decision.decidedAtMs), JSON.stringify(r.decision.evidence).slice(0, 4000), r.disposition, r.disposition ? 'pending' : 'none', now, now);
-    return Number(res?.changes || 0) === 1;
+    const inserted = Number(res?.changes || 0) === 1;
+    if (inserted) {
+        const saved = getScreeningResult(r.callId);
+        if (saved)
+            (0, rds_mssql_1.enqueueRdsScreeningSync)(saved);
+    }
+    return inserted;
 }
 /** Atomically claims the right to send the disposition. Only one caller ever gets true. */
 function claimDisposition(callId) {
@@ -111,9 +119,15 @@ function updateDispositionState(callId, state, detail, verified) {
     db().prepare(`UPDATE screening_results SET disposition_state = ?, disposition_detail = ?, verified_lead_status = COALESCE(?, verified_lead_status),
     verified_call_status = COALESCE(?, verified_call_status), updated_at = ? WHERE call_id = ?`)
         .run(state, detail.slice(0, 500), verified?.lead ?? null, verified?.call ?? null, new Date().toISOString(), callId);
+    const updated = getScreeningResult(callId);
+    if (updated)
+        (0, rds_mssql_1.enqueueRdsScreeningSync)(updated);
 }
 function getScreeningResult(callId) {
     return db().prepare('SELECT * FROM screening_results WHERE call_id = ?').get(callId) || null;
+}
+function listScreeningResultsForBackfill(limit = 5000) {
+    return db().prepare('SELECT * FROM screening_results ORDER BY created_at DESC LIMIT ?').all(Math.max(1, Math.min(50000, limit)));
 }
 function recentScreeningResults(limit = 50) {
     return db().prepare('SELECT call_id, campaign_id, lead_id, phone_tail, outcome, reason, native_amd, decided_ms, disposition, disposition_state, verified_lead_status, verified_call_status, created_at FROM screening_results ORDER BY created_at DESC LIMIT ?').all(Math.max(1, Math.min(500, limit)));

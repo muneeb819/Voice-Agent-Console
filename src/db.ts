@@ -9,6 +9,7 @@ import { DATA_DIR } from './data-paths';
 import { GreetingRecord, loadBundledGreetings } from './greetings';
 import { composeOpening, greetingLineList } from './opening';
 import { reconcileCampaignSlots } from './campaign-assignment';
+import { enqueueRdsBridgeCallSync } from './rds-mssql';
 
 interface SqliteStatementLike {
   get: (...params: any[]) => any;
@@ -124,8 +125,24 @@ export interface SimulatorCallLogRecord {
   }>;
 }
 
+export const DEFAULT_BRIDGE_LOG_RETENTION = 5000;
+export const MIN_BRIDGE_LOG_RETENTION = 50;
+export const MAX_BRIDGE_LOG_RETENTION = 50000;
+
+/**
+ * Configurable via BRIDGE_LOG_RETENTION in .env (default 5,000, clamped 50–50,000).
+ * Controls how many newest local bridge calls + recordings are retained in SQLite.
+ */
+export function getBridgeLogRetention(): number {
+  const raw = String(process.env.BRIDGE_LOG_RETENTION || '').trim();
+  if (!raw) return DEFAULT_BRIDGE_LOG_RETENTION;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return DEFAULT_BRIDGE_LOG_RETENTION;
+  return Math.max(MIN_BRIDGE_LOG_RETENTION, Math.min(MAX_BRIDGE_LOG_RETENTION, Math.floor(parsed)));
+}
+
 /** How many of the newest calls are kept (and their recordings). Reports can only cover this many. */
-export const BRIDGE_LOG_RETENTION = 200;
+export const BRIDGE_LOG_RETENTION = getBridgeLogRetention();
 
 export interface BridgeCallLogRecord {
   id: string;
@@ -734,13 +751,15 @@ export function saveBridgeCallLog(record: BridgeCallLogRecord): void {
       JSON.stringify(record.viciApiAudit)
     );
 
-  const stale = conn.prepare(`SELECT recording_file FROM bridge_calls WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ${BRIDGE_LOG_RETENTION})`).all() as Array<{ recording_file: string | null }>;
+  const retention = getBridgeLogRetention();
+  const stale = conn.prepare(`SELECT recording_file FROM bridge_calls WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ?)`).all(retention) as Array<{ recording_file: string | null }>;
   for (const row of stale) removeBridgeRecording(row.recording_file);
   conn.prepare(`
     DELETE FROM bridge_calls
-    WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ${BRIDGE_LOG_RETENTION})
-  `).run();
+    WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ?)
+  `).run(retention);
   })();
+  enqueueRdsBridgeCallSync(record);
 }
 
 export function listBridgeCallLogs(limit = 25): BridgeCallLogRecord[] {
@@ -787,7 +806,8 @@ export function clearBridgeCallLogs(): void {
 }
 
 export function getBridgeAnalyticsSummary() {
-  const logs = listBridgeCallLogs(200);
+  const retention = getBridgeLogRetention();
+  const logs = listBridgeCallLogs(retention);
   const simLogs = listSimulatorCallLogs(undefined, 100);
 
   const totalCalls = logs.length;
@@ -839,7 +859,7 @@ export function getBridgeAnalyticsSummary() {
 
   return {
     // Counts and rates cover retained logs only, not lifetime call volume.
-    retentionLimits: { bridgeCalls: 200, simulatorCalls: 100 },
+    retentionLimits: { bridgeCalls: retention, simulatorCalls: 100 },
     totalBridgeCalls: totalCalls,
     totalSimulatorCalls: simLogs.length,
     transfersCount: xferCount,
@@ -865,7 +885,7 @@ function csvCell(val: unknown): string {
   return s;
 }
 
-export function exportBridgeLogsCsv(limit = 200): string {
+export function exportBridgeLogsCsv(limit = getBridgeLogRetention()): string {
   const logs = listBridgeCallLogs(limit);
   const headers = [
     'call_id',

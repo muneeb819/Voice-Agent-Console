@@ -377,6 +377,9 @@ function apiAuthMiddleware(req, res, next) {
             p === '/speech-service/test' ||
             p === '/vici/verify' ||
             p === '/vici/api-user' ||
+            p === '/rds/config' ||
+            p === '/rds/test' ||
+            p === '/rds/backfill' ||
             (p === '/bot-sleep' && req.method !== 'GET' && req.method !== 'HEAD') ||
             p === '/deepgram/verify' ||
             (p === '/speech-service/status' && (req.query.url !== undefined || req.query.apiKey !== undefined)) ||

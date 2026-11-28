@@ -7525,9 +7525,9 @@
         ${stuck.length ? `<p class="note" style="color:var(--er,#c0392b)">Open for 15 minutes or more right now: ${stuck.map((c) => `${esc(c.source === 'simulator' ? 'simulator' : 'phone call')} ${esc(c.ref)} (${c.minutes} min)`).join(', ')}</p>` : ''}
        </div>`;
      })()}
-     <p class="note">Analytics use retained logs only: up to 200 bridge calls and 100 simulator calls, not lifetime totals.</p>
+     <p class="note">Analytics use retained local logs: up to ${(ana.retentionLimits?.bridgeCalls ?? 5000).toLocaleString()} bridge calls (configurable via <code>BRIDGE_LOG_RETENTION</code>) and ${ana.retentionLimits?.simulatorCalls ?? 100} simulator calls.</p>
      <div class="sim-kpis">
-      <div class="kpi"><div class="kpi-lbl">Retained Bridge Calls (max 200)</div><div class="kpi-val">${ana.totalBridgeCalls ?? 0}</div></div>
+      <div class="kpi"><div class="kpi-lbl">Retained Bridge Calls (max ${(ana.retentionLimits?.bridgeCalls ?? 5000).toLocaleString()})</div><div class="kpi-val">${ana.totalBridgeCalls ?? 0}</div></div>
       <div class="kpi"><div class="kpi-lbl">Closer Transfer Rate</div><div class="kpi-val ok">${ana.transferRatePct ?? 0}% (${ana.transfersCount ?? 0})</div></div>
       <div class="kpi"><div class="kpi-lbl">Avg / P95 Session-Mean TTFB</div><div class="kpi-val">${ana.avgTtfbMs ? `${ana.avgTtfbMs}ms / ${ana.p95TtfbMs || ana.avgTtfbMs}ms` : '—'}</div></div>
       <div class="kpi"><div class="kpi-lbl">Stereo.wav Recordings</div><div class="kpi-val ok">${ana.recordedCount ?? 0}</div></div>

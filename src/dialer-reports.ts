@@ -1,5 +1,5 @@
 import type { AlertRecord } from './alerts';
-import { BRIDGE_LOG_RETENTION, type BridgeCallLogRecord } from './db';
+import { getBridgeLogRetention, type BridgeCallLogRecord } from './db';
 import type { Campaign, ConsoleState } from './types';
 
 /**
@@ -65,7 +65,7 @@ export interface Coverage {
 }
 
 /** Says plainly when the kept calls do not reach back as far as the report asks. */
-export function coverageOf(logs: BridgeCallLogRecord[], windowStartMs: number, retention = BRIDGE_LOG_RETENTION): Coverage {
+export function coverageOf(logs: BridgeCallLogRecord[], windowStartMs: number, retention = getBridgeLogRetention()): Coverage {
   const times = logs.map((l) => Date.parse(l.startedAt)).filter((t) => Number.isFinite(t));
   const oldest = times.length ? Math.min(...times) : null;
   const limited = logs.length >= retention && oldest !== null && oldest > windowStartMs;

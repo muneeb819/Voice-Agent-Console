@@ -41,6 +41,16 @@ exports.MANAGED_SECRET_KEYS = [
     'CUSTOM_WEBHOOK_SECRET',
     'ADMIN_PASSWORD',
     'BRIDGE_ALLOWED_IPS',
+    'BRIDGE_LOG_RETENTION',
+    'RDS_MSSQL_ENABLED',
+    'RDS_MSSQL_HOST',
+    'RDS_MSSQL_PORT',
+    'RDS_MSSQL_DATABASE',
+    'RDS_MSSQL_USER',
+    'RDS_MSSQL_PASSWORD',
+    'RDS_MSSQL_ENCRYPT',
+    'RDS_MSSQL_TRUST_SERVER_CERT',
+    'RDS_MSSQL_TABLE_PREFIX',
 ];
 function sanitizeSecretValue(raw) {
     let clean = String(raw ?? '').trim();
