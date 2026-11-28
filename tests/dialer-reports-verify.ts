@@ -144,13 +144,17 @@ const log = (over: Record<string, any>): any => ({
   assert.strictEqual((await buildRealtime(ok, groups12, { activeCalls: 0, capacity: null })).omittedInGroups, 2, 'in-groups beyond the cap are counted, not hidden');
   assert.deepStrictEqual(await mapLimit([1, 2, 3], 2, async (n) => n * 2), [2, 4, 6]);
 
-  // The console keeps only 200 calls: say so when a window reaches further back
+  // Retention is configurable via BRIDGE_LOG_RETENTION (default 5000); say so when a window reaches further back
+  const prevRet = process.env.BRIDGE_LOG_RETENTION;
+  process.env.BRIDGE_LOG_RETENTION = '200';
   const recent = Array.from({ length: 200 }, (_, i) => log({ startedAt: new Date(Date.now() - i * 60000).toISOString() }));
   const week = coverageOf(recent, Date.now() - 7 * 86400_000);
   assert(week.limited && /newest 200 calls/.test(week.note), 'a 7-day window over a full log is flagged');
   assert(!coverageOf(recent, Date.now() - 60_000).limited, 'a window the log fully covers is not flagged');
   assert(!coverageOf(recent.slice(0, 50), Date.now() - 7 * 86400_000).limited, 'a log below the limit is complete');
   assert(buildBotReport(recent, 168).coverage.limited);
+  if (prevRet === undefined) delete process.env.BRIDGE_LOG_RETENTION;
+  else process.env.BRIDGE_LOG_RETENTION = prevRet;
 
   // A dialer is a source: this is where a second dialer would be added
   const srcs = buildSources(state, () => async () => ({ ok: true, status: 200, text: '' }));

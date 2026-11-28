@@ -3,7 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.BRIDGE_LOG_RETENTION = void 0;
+exports.BRIDGE_LOG_RETENTION = exports.MAX_BRIDGE_LOG_RETENTION = exports.MIN_BRIDGE_LOG_RETENTION = exports.DEFAULT_BRIDGE_LOG_RETENTION = void 0;
+exports.getBridgeLogRetention = getBridgeLogRetention;
 exports.closeDb = closeDb;
 exports.getDb = getDb;
 exports.listGreetingLibrary = listGreetingLibrary;
@@ -37,6 +38,7 @@ const data_paths_1 = require("./data-paths");
 const greetings_1 = require("./greetings");
 const opening_1 = require("./opening");
 const campaign_assignment_1 = require("./campaign-assignment");
+const rds_mssql_1 = require("./rds-mssql");
 function openSqliteEngine(dbPath) {
     const normArgs = (args) => args.map((v) => (v === undefined ? null : v));
     // 1) Primary engine: better-sqlite3 (fast C++ native binding with prebuilds for Node 20..25)
@@ -102,8 +104,24 @@ function openSqliteEngine(dbPath) {
 }
 const DB_PATH = path_1.default.join(data_paths_1.DATA_DIR, 'console.sqlite');
 const JSON_MIRROR_PATH = path_1.default.join(data_paths_1.DATA_DIR, 'console-state.json');
+exports.DEFAULT_BRIDGE_LOG_RETENTION = 5000;
+exports.MIN_BRIDGE_LOG_RETENTION = 50;
+exports.MAX_BRIDGE_LOG_RETENTION = 50000;
+/**
+ * Configurable via BRIDGE_LOG_RETENTION in .env (default 5,000, clamped 50–50,000).
+ * Controls how many newest local bridge calls + recordings are retained in SQLite.
+ */
+function getBridgeLogRetention() {
+    const raw = String(process.env.BRIDGE_LOG_RETENTION || '').trim();
+    if (!raw)
+        return exports.DEFAULT_BRIDGE_LOG_RETENTION;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed))
+        return exports.DEFAULT_BRIDGE_LOG_RETENTION;
+    return Math.max(exports.MIN_BRIDGE_LOG_RETENTION, Math.min(exports.MAX_BRIDGE_LOG_RETENTION, Math.floor(parsed)));
+}
 /** How many of the newest calls are kept (and their recordings). Reports can only cover this many. */
-exports.BRIDGE_LOG_RETENTION = 200;
+exports.BRIDGE_LOG_RETENTION = getBridgeLogRetention();
 let db = null;
 function closeDb() {
     if (db) {
@@ -608,14 +626,16 @@ function saveBridgeCallLog(record) {
         transcript_json, functions_json, vici_api_audit_json
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run(record.id, record.transport, record.exten, record.callerCode, record.leadId, record.phone, record.campaignId, record.viciCampaign, record.agentId, record.agentName, record.greetingId || null, record.remoteAgentUser, record.startedAt, record.endedAt, record.durationMs, record.turns, record.avgTtfbMs, record.disposition, record.transferredTo, record.dncAdded ? 1 : 0, record.recordingFile || null, record.recordingBytes || 0, JSON.stringify(record.transcript), JSON.stringify(record.functionCalls), JSON.stringify(record.viciApiAudit));
-        const stale = conn.prepare(`SELECT recording_file FROM bridge_calls WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ${exports.BRIDGE_LOG_RETENTION})`).all();
+        const retention = getBridgeLogRetention();
+        const stale = conn.prepare(`SELECT recording_file FROM bridge_calls WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ?)`).all(retention);
         for (const row of stale)
             (0, call_recorder_1.removeBridgeRecording)(row.recording_file);
         conn.prepare(`
     DELETE FROM bridge_calls
-    WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ${exports.BRIDGE_LOG_RETENTION})
-  `).run();
+    WHERE id NOT IN (SELECT id FROM bridge_calls ORDER BY started_at DESC LIMIT ?)
+  `).run(retention);
     })();
+    (0, rds_mssql_1.enqueueRdsBridgeCallSync)(record);
 }
 function listBridgeCallLogs(limit = 25) {
     const conn = getDb();
@@ -658,7 +678,8 @@ function clearBridgeCallLogs() {
     })();
 }
 function getBridgeAnalyticsSummary() {
-    const logs = listBridgeCallLogs(200);
+    const retention = getBridgeLogRetention();
+    const logs = listBridgeCallLogs(retention);
     const simLogs = listSimulatorCallLogs(undefined, 100);
     const totalCalls = logs.length;
     const xferCount = logs.filter((l) => Boolean(l.transferredTo)).length;
@@ -700,7 +721,7 @@ function getBridgeAnalyticsSummary() {
     }
     return {
         // Counts and rates cover retained logs only, not lifetime call volume.
-        retentionLimits: { bridgeCalls: 200, simulatorCalls: 100 },
+        retentionLimits: { bridgeCalls: retention, simulatorCalls: 100 },
         totalBridgeCalls: totalCalls,
         totalSimulatorCalls: simLogs.length,
         transfersCount: xferCount,
@@ -725,7 +746,7 @@ function csvCell(val) {
     }
     return s;
 }
-function exportBridgeLogsCsv(limit = 200) {
+function exportBridgeLogsCsv(limit = getBridgeLogRetention()) {
     const logs = listBridgeCallLogs(limit);
     const headers = [
         'call_id',

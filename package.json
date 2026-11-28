@@ -24,6 +24,7 @@
     "compression": "^1.8.2",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "mssql": "^12.8.3",
     "ws": "^8.18.0"
   },
   "optionalDependencies": {
@@ -33,6 +34,7 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/compression": "^1.8.1",
     "@types/express": "^5.0.0",
+    "@types/mssql": "^12.3.2",
     "@types/node": "^20.17.16",
     "@types/ws": "^8.5.14",
     "jsdom": "^26.1.0",
