@@ -17,6 +17,7 @@ const campaign_assignment_1 = require("./campaign-assignment");
 const barge_in_1 = require("./barge-in");
 const sentinel_qa_1 = require("./sentinel-qa");
 const voice_pick_1 = require("./voice-pick");
+const line_personas_1 = require("./line-personas");
 function normalizeFlow(raw, skillsDefault = true) {
     const f = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
     const text = (v, fallback, max) => (typeof v === 'string' ? v : fallback).slice(0, max);
@@ -1014,6 +1015,7 @@ function normalizeState(raw) {
                 injectCampaignDisclosure: a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : false,
                 active: a.active !== false,
                 lines: Math.round(num(a.lines, 0, 0, 1000)),
+                linePersonas: (0, line_personas_1.normalizeLinePersonas)(a.linePersonas),
                 behavior,
                 flow: normalizeFlow(a.flow, agentId !== 'a_qa'),
                 stt: {

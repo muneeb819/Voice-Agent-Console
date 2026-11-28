@@ -32,6 +32,7 @@ import { classifyProviderError, raiseAlert } from './alerts';
 import { buildReferRequest, ReferTracker, sanitizeReferTarget, type ReferResult } from './sip-refer';
 import { isScreeningEnabled, NativeAmdResult, recordScreeningDecision, ScreeningDecision, sendScreeningDisposition, startCallScreening } from './screening';
 import type { ScreeningSession } from './screening/session';
+import { resolveAgentForLine } from './line-personas';
 import {
   HydratedViciLead,
   ParsedViciCallerCode,
@@ -529,6 +530,7 @@ export class VicidialBridgeService {
   }
 
   private pendingSipInvites = new Map<string, number>();
+  private linePersonaRotation = new Map<string, number>();
 
   private isCampaignOverCapacity(campaign?: Campaign): boolean {
     if (!campaign || campaign.maxCallsEnabled === false || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
@@ -2159,17 +2161,42 @@ export class VicidialBridgeService {
         return;
       }
 
-      const picked = chooseOpeningLine(agent);
+      // Resolve 1-to-many Line Persona under the parent agent (e.g. 10 sub-bots
+      // under Jessica sharing Jessica's master Medicare System Prompt, each with
+      // its own name, voice & persona style).
+      const baseRaNum = Number(resolved.remoteAgentUser);
+      const liveRaNum = Number(remoteAgentUser);
+      const hasExplicitOffset =
+        Number.isInteger(baseRaNum) &&
+        Number.isInteger(liveRaNum) &&
+        liveRaNum >= baseRaNum &&
+        liveRaNum - baseRaNum < 100;
+      const rotIdx = this.linePersonaRotation.get(agent.id) || 0;
+      this.linePersonaRotation.set(agent.id, (rotIdx + 1) % 100000);
+      const resolvedLine = resolveAgentForLine(agent, {
+        lineOffset: hasExplicitOffset && (liveRaNum > baseRaNum || agentUserResolvedFromVici) ? liveRaNum - baseRaNum : undefined,
+        rotationIndex: rotIdx,
+      });
+      const callAgent = resolvedLine.agent;
+      if (resolvedLine.persona) {
+        summary.agentName = `${agent.name} · ${resolvedLine.persona.name}`;
+        addTranscript(
+          'system',
+          `Line Persona #${resolvedLine.persona.lineNumber}: ${resolvedLine.persona.name} (voice: ${resolvedLine.persona.voice || callAgent.tts.voice || 'global'})`,
+        );
+      }
+
+      const picked = chooseOpeningLine(callAgent);
       selectedGreeting = picked ? (picked.row || { greeting_id: 'bot-list', persona: 'Bot greeting list', context: '', greeting_text: picked.line, tone: '' }) : null;
       if (picked?.line) {
         addTranscript('system', `Greeting picked from the bot's list: "${picked.line}"`);
       } else if (selectedGreeting) {
         addTranscript('system', `Selected greeting #${selectedGreeting.greeting_id} (${selectedGreeting.persona}; ${selectedGreeting.context}; ${selectedGreeting.tone}).`);
-      } else if (agent.randomGreetingEnabled !== false) {
+      } else if (callAgent.randomGreetingEnabled !== false) {
         addTranscript('system', 'Greeting library unavailable; using the configured opening.');
       }
 
-      const rawSettings = buildDeepgramSettings(state, agent, campaign, {
+      const rawSettings = buildDeepgramSettings(state, callAgent, campaign, {
         forceClientSideWebhooks: true,
         openingLine: picked?.line || '',
         greetingText: picked?.row?.greeting_text,
@@ -2179,7 +2206,7 @@ export class VicidialBridgeService {
         input: { encoding: 'linear16', sample_rate: 8000 },
         output: { encoding: 'linear16', sample_rate: 8000, container: 'none' },
       };
-      hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
+      hydrateRealLeadIntoSettings(rawSettings, callAgent, campaign, hydratedLead);
       let wireSettings: any;
       let openingText = '';
       try {

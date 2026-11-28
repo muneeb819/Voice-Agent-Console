@@ -52,6 +52,17 @@ export interface AgentFlow {
   voiceDelivery: string;      // intonation, pace, tone, phrasing, duration, in plain words
 }
 
+export interface AgentLinePersona {
+  id: string;
+  lineNumber: number; // 1-based line slot under this parent agent (e.g. 1..10)
+  name: string;       // Persona name spoken on this line (e.g. "Emma", "Chloe")
+  voice: string;      // TTS voice ID for this line (e.g. "aura-asteria-en")
+  personaStyle?: string; // Optional tone/style hint layered onto parent's System Prompt
+  greeting?: string;  // Optional custom opening override for this line
+  introLine?: string; // Optional custom intro override for this line
+  active: boolean;    // Enable/disable this individual line persona
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -64,6 +75,7 @@ export interface Agent {
   injectCampaignDisclosure: boolean; // Prepends campaign disclosure to greeting when linked
   active?: boolean; // Phone switch: an inactive bot takes no phone calls (browser tests still work). Missing = active.
   lines?: number; // Calls this bot may take at once on the phone; 0 or missing = no per-bot limit.
+  linePersonas?: AgentLinePersona[]; // 1-to-many sub-personas sharing this agent's master System Prompt
   behavior: AgentBehavior;
   flow?: AgentFlow; // always present after loading (normalizeState fills defaults)
   stt: {
