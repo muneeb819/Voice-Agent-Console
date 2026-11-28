@@ -73,6 +73,7 @@ const usage_ledger_1 = require("./usage-ledger");
 const alerts_1 = require("./alerts");
 const sip_refer_1 = require("./sip-refer");
 const screening_1 = require("./screening");
+const line_personas_1 = require("./line-personas");
 const vici_client_1 = require("./vici-client");
 /**
  * A remote agent with several lines uses one VICIdial user per line (User ID
@@ -483,6 +484,7 @@ class VicidialBridgeService {
         return n;
     }
     pendingSipInvites = new Map();
+    linePersonaRotation = new Map();
     isCampaignOverCapacity(campaign) {
         if (!campaign || campaign.maxCallsEnabled === false || !Number.isFinite(campaign.maxCalls) || campaign.maxCalls <= 0) {
             return false;
@@ -2035,7 +2037,27 @@ class VicidialBridgeService {
                 await finalizeSession('missing_deepgram_key');
                 return;
             }
-            const picked = (0, db_1.chooseOpeningLine)(agent);
+            // Resolve 1-to-many Line Persona under the parent agent (e.g. 10 sub-bots
+            // under Jessica sharing Jessica's master Medicare System Prompt, each with
+            // its own name, voice & persona style).
+            const baseRaNum = Number(resolved.remoteAgentUser);
+            const liveRaNum = Number(remoteAgentUser);
+            const hasExplicitOffset = Number.isInteger(baseRaNum) &&
+                Number.isInteger(liveRaNum) &&
+                liveRaNum >= baseRaNum &&
+                liveRaNum - baseRaNum < 100;
+            const rotIdx = this.linePersonaRotation.get(agent.id) || 0;
+            this.linePersonaRotation.set(agent.id, (rotIdx + 1) % 100000);
+            const resolvedLine = (0, line_personas_1.resolveAgentForLine)(agent, {
+                lineOffset: hasExplicitOffset && (liveRaNum > baseRaNum || agentUserResolvedFromVici) ? liveRaNum - baseRaNum : undefined,
+                rotationIndex: rotIdx,
+            });
+            const callAgent = resolvedLine.agent;
+            if (resolvedLine.persona) {
+                summary.agentName = `${agent.name} · ${resolvedLine.persona.name}`;
+                addTranscript('system', `Line Persona #${resolvedLine.persona.lineNumber}: ${resolvedLine.persona.name} (voice: ${resolvedLine.persona.voice || callAgent.tts.voice || 'global'})`);
+            }
+            const picked = (0, db_1.chooseOpeningLine)(callAgent);
             selectedGreeting = picked ? (picked.row || { greeting_id: 'bot-list', persona: 'Bot greeting list', context: '', greeting_text: picked.line, tone: '' }) : null;
             if (picked?.line) {
                 addTranscript('system', `Greeting picked from the bot's list: "${picked.line}"`);
@@ -2043,10 +2065,10 @@ class VicidialBridgeService {
             else if (selectedGreeting) {
                 addTranscript('system', `Selected greeting #${selectedGreeting.greeting_id} (${selectedGreeting.persona}; ${selectedGreeting.context}; ${selectedGreeting.tone}).`);
             }
-            else if (agent.randomGreetingEnabled !== false) {
+            else if (callAgent.randomGreetingEnabled !== false) {
                 addTranscript('system', 'Greeting library unavailable; using the configured opening.');
             }
-            const rawSettings = (0, settings_builder_1.buildDeepgramSettings)(state, agent, campaign, {
+            const rawSettings = (0, settings_builder_1.buildDeepgramSettings)(state, callAgent, campaign, {
                 forceClientSideWebhooks: true,
                 openingLine: picked?.line || '',
                 greetingText: picked?.row?.greeting_text,
@@ -2056,7 +2078,7 @@ class VicidialBridgeService {
                 input: { encoding: 'linear16', sample_rate: 8000 },
                 output: { encoding: 'linear16', sample_rate: 8000, container: 'none' },
             };
-            hydrateRealLeadIntoSettings(rawSettings, agent, campaign, hydratedLead);
+            hydrateRealLeadIntoSettings(rawSettings, callAgent, campaign, hydratedLead);
             let wireSettings;
             let openingText = '';
             try {

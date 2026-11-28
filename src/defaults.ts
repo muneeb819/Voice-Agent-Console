@@ -10,6 +10,7 @@ import { assignCampaignSlots, normalizeCampaignAgents } from './campaign-assignm
 import { normalizeBargeInPct, presetForPct } from './barge-in';
 import { SENTINEL_QA_AGENT, SENTINEL_QA_TESTS } from './sentinel-qa';
 import { isValidVoiceId } from './voice-pick';
+import { normalizeLinePersonas } from './line-personas';
 
 
 function normalizeFlow(raw: any, skillsDefault = true): import('./types').AgentFlow {
@@ -1121,6 +1122,7 @@ export function normalizeState(raw: any): ConsoleState {
             a.injectCampaignDisclosure !== undefined ? Boolean(a.injectCampaignDisclosure) : false,
           active: a.active !== false,
           lines: Math.round(num(a.lines, 0, 0, 1000)),
+          linePersonas: normalizeLinePersonas(a.linePersonas),
           behavior,
           flow: normalizeFlow(a.flow, agentId !== 'a_qa'),
           stt: {

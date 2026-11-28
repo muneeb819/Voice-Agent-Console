@@ -539,3 +539,159 @@ export async function synthesizeTtsPreview(
     { statusCode: 400, code: 'UNSUPPORTED_PREVIEW_PROVIDER' }
   );
 }
+
+export interface DeepgramCreditBalance {
+  ok: boolean;
+  available: boolean;
+  totalAmount: number | null;
+  units: string;
+  projectId: string;
+  projectName: string;
+  balances: Array<{ balance_id: string; amount: number; units: string }>;
+  fetchedAt: string;
+  note: string;
+}
+
+let cachedCredit: { at: number; keyHash: string; data: DeepgramCreditBalance } | null = null;
+const CREDIT_CACHE_TTL_MS = 60_000;
+
+export async function fetchDeepgramCreditBalance(forceRefresh = false): Promise<DeepgramCreditBalance> {
+  const apiKey = getSecret('DEEPGRAM_API_KEY');
+  const nowIso = new Date().toISOString();
+  if (!apiKey) {
+    return {
+      ok: false,
+      available: false,
+      totalAmount: null,
+      units: 'usd',
+      projectId: '',
+      projectName: '',
+      balances: [],
+      fetchedAt: nowIso,
+      note: 'DEEPGRAM_API_KEY is not configured.',
+    };
+  }
+  const keyTag = `${apiKey.length}:${apiKey.slice(0, 3)}:${apiKey.slice(-3)}`;
+  if (!forceRefresh && cachedCredit && cachedCredit.keyHash === keyTag && Date.now() - cachedCredit.at < CREDIT_CACHE_TTL_MS) {
+    return cachedCredit.data;
+  }
+
+  const headers = { Authorization: `Token ${apiKey}`, Accept: 'application/json' };
+  const store = (data: DeepgramCreditBalance) => {
+    cachedCredit = { at: Date.now(), keyHash: keyTag, data };
+    return data;
+  };
+
+  try {
+    const projRes = await fetch('https://api.deepgram.com/v1/projects', {
+      headers,
+      signal: AbortSignal.timeout(6000),
+    });
+    if (projRes.status === 401 || projRes.status === 403) {
+      return store({
+        ok: false,
+        available: false,
+        totalAmount: null,
+        units: 'usd',
+        projectId: '',
+        projectName: '',
+        balances: [],
+        fetchedAt: nowIso,
+        note: 'Deepgram API key needs billing:read / projects:read permission to display credit balance.',
+      });
+    }
+    if (!projRes.ok) {
+      return store({
+        ok: false,
+        available: false,
+        totalAmount: null,
+        units: 'usd',
+        projectId: '',
+        projectName: '',
+        balances: [],
+        fetchedAt: nowIso,
+        note: `Deepgram projects API returned HTTP ${projRes.status}.`,
+      });
+    }
+    const projJson: any = JSON.parse(await readResponseText(projRes, 1024 * 1024));
+    const project = Array.isArray(projJson?.projects) ? projJson.projects[0] : null;
+    if (!project?.project_id) {
+      return store({
+        ok: false,
+        available: false,
+        totalAmount: null,
+        units: 'usd',
+        projectId: '',
+        projectName: '',
+        balances: [],
+        fetchedAt: nowIso,
+        note: 'No Deepgram project found for this API key.',
+      });
+    }
+
+    const balRes = await fetch(`https://api.deepgram.com/v1/projects/${encodeURIComponent(project.project_id)}/balances`, {
+      headers,
+      signal: AbortSignal.timeout(6000),
+    });
+    if (balRes.status === 401 || balRes.status === 403) {
+      return store({
+        ok: false,
+        available: false,
+        totalAmount: null,
+        units: 'usd',
+        projectId: String(project.project_id),
+        projectName: String(project.name || ''),
+        balances: [],
+        fetchedAt: nowIso,
+        note: 'Deepgram API key lacks billing:read permission to read credit balance.',
+      });
+    }
+    if (!balRes.ok) {
+      return store({
+        ok: false,
+        available: false,
+        totalAmount: null,
+        units: 'usd',
+        projectId: String(project.project_id),
+        projectName: String(project.name || ''),
+        balances: [],
+        fetchedAt: nowIso,
+        note: `Deepgram balances API returned HTTP ${balRes.status}.`,
+      });
+    }
+    const balJson: any = JSON.parse(await readResponseText(balRes, 1024 * 1024));
+    const rawBalances = Array.isArray(balJson?.balances) ? balJson.balances : [];
+    const balances = rawBalances
+      .map((b: any) => ({
+        balance_id: String(b?.balance_id || ''),
+        amount: Number(b?.amount || 0),
+        units: String(b?.units || 'usd').toLowerCase(),
+      }))
+      .filter((b: any) => Number.isFinite(b.amount));
+    const totalAmount = Number(balances.reduce((acc: number, b: any) => acc + b.amount, 0).toFixed(2));
+    const units = balances[0]?.units || 'usd';
+    return store({
+      ok: true,
+      available: true,
+      totalAmount,
+      units,
+      projectId: String(project.project_id),
+      projectName: String(project.name || ''),
+      balances,
+      fetchedAt: nowIso,
+      note: '',
+    });
+  } catch (err: any) {
+    return store({
+      ok: false,
+      available: false,
+      totalAmount: null,
+      units: 'usd',
+      projectId: '',
+      projectName: '',
+      balances: [],
+      fetchedAt: nowIso,
+      note: `Could not fetch Deepgram credit balance: ${String(err?.message || err).slice(0, 140)}`,
+    });
+  }
+}

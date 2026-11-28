@@ -5889,13 +5889,27 @@
     const status = viciMon.status;
     const activeCalls = (status?.activeCalls || []).filter((call) => call.campaignId === selected.id);
     const liveKnown = !serverlessCloudMode && Boolean(status && Array.isArray(status.activeCalls) && !status.cloudModeNotice);
-    const activityLabel = activeCalls.length ? 'Active' : liveKnown ? 'Inactive' : 'Status unavailable';
-    const activityClass = activeCalls.length ? 'ok' : liveKnown ? '' : 'wn';
+    const botsSleeping = liveKnown && status?.botSleep?.sleeping === true;
+    const dialingOff = liveKnown && viciMon.campaignDialing?.off === true;
+    const activityLabel = activeCalls.length
+      ? `Active (${activeCalls.length} live)`
+      : !liveKnown
+        ? 'Status unavailable'
+        : botsSleeping
+          ? 'Asleep'
+          : dialingOff
+            ? 'Campaign Off'
+            : 'Inactive';
+    const activityClass = activeCalls.length ? 'ok' : !liveKnown || botsSleeping || dialingOff ? 'wn' : '';
     const activityNote = activeCalls.length
       ? `${activeCalls.length} live bridge call${activeCalls.length === 1 ? '' : 's'} right now.`
-      : liveKnown
-        ? 'The connected bridge reports no live call for this campaign. This is call activity, not an on/off switch.'
-        : 'No live bridge feed is connected. Static demos cannot verify production campaign activity.';
+      : !liveKnown
+        ? 'No live bridge feed is connected. Static demos cannot verify production campaign activity.'
+        : botsSleeping
+          ? 'Bots are currently ASLEEP: new calls are turned away until you click Wake bots.'
+          : dialingOff
+            ? 'Campaign dialing is OFF in VICIdial: no new calls are being dialed until you turn Campaigns on.'
+            : 'Bots are awake and ready, with 0 live calls on the line right now (call activity only, not an on/off switch).';
     const blockers = campaignCallBlockersLocal(selected);
     const assigned = campaignAgentIds(selected)
       .map((id) => S.agents.find((agent) => agent.id === id))
@@ -5908,9 +5922,10 @@
     const bridgeSummary = summarizeCallRecords(bridgeLogs);
     const simulatorSummary = summarizeCallRecords(simulatorLogs);
     const loading = cmdDeckState.fleetStatsLoading;
+    const bridgeRetCap = viciMon.analytics?.retentionLimits?.bridgeCalls ?? 5000;
     const historyNote = serverlessCloudMode
       ? 'This static demo has no server call history. Zeros below mean “no retained server records available”, not proof that no calls occurred.'
-      : 'Analytics cover retained records only: up to 200 bridge calls and 100 browser tests across the console, filtered to this campaign. They are not lifetime totals.';
+      : `Analytics cover retained records only: up to ${bridgeRetCap.toLocaleString()} bridge calls and 100 browser tests across the console, filtered to this campaign. They are not lifetime totals.`;
     const dispositionEntries = Object.entries(summary.dispositions).sort((a, b) => b[1] - a[1]);
     const maxDisposition = Math.max(1, ...dispositionEntries.map(([, count]) => count));
 
@@ -5922,13 +5937,26 @@
           (call) => call.agentId === agent.id || (!call.agentId && call.agentName === agent.name),
         ).length;
         const agentErrors = validateAgentLocal(agent).filter((item) => item[0] === 'er').length;
+        const lpCount = Array.isArray(agent.linePersonas) ? agent.linePersonas.filter((p) => p && p.active !== false).length : 0;
+        const liveOp = !liveKnown
+          ? { cls: '', label: 'Unknown' }
+          : liveCount > 0
+            ? { cls: 'ok', label: `In Call (${liveCount})` }
+            : botsSleeping
+              ? { cls: 'wn', label: 'Asleep' }
+              : agent.active === false
+                ? { cls: 'wn', label: 'Bot Off' }
+                : dialingOff
+                  ? { cls: 'wn', label: 'Dialing Off' }
+                  : { cls: 'ok', label: 'Awake / Ready' };
         return `<tr>
-    <td><a class="fleet-bot-link" href="${esc(sectionHref('agents', { agentId: agent.id }))}" data-fleet-agent="${esc(agent.id)}">${esc(agent.name)}</a>${agent.id === selected.agentId ? ' <span class="pill">Primary</span>' : ''}</td>
+    <td><a class="fleet-bot-link" href="${esc(sectionHref('agents', { agentId: agent.id }))}" data-fleet-agent="${esc(agent.id)}">${esc(agent.name)}</a>${agent.id === selected.agentId ? ' <span class="pill">Primary</span>' : ''}${lpCount ? ` <span class="pill ok">${lpCount} line persona${lpCount === 1 ? '' : 's'}</span>` : ''}</td>
     <td>${liveCount}</td>
     <td>${botSummary.total}</td>
     <td>${botSummary.total ? `${botSummary.avgDurationSec}s` : '—'}</td>
     <td>${botSummary.avgTtfbMs === null ? '—' : `${botSummary.avgTtfbMs} ms`}</td>
     <td>${botSummary.transfers}</td>
+    <td><span class="pill ${liveOp.cls}">${liveOp.label}</span></td>
     <td><span class="pill ${agentErrors ? 'er' : 'ok'}">${agentErrors ? `${agentErrors} setup error${agentErrors === 1 ? '' : 's'}` : 'Ready'}</span></td>
    </tr>`;
       })
@@ -5941,6 +5969,7 @@
      <h2>${esc(selected.name || 'Untitled Campaign')}</h2>
      <div class="fleet-badge-row">
       <span class="pill ${activityClass}" id="fleet-activity-badge">${activityLabel}</span>
+      ${liveKnown ? `<span class="pill ${botsSleeping ? 'wn' : 'ok'}">${botsSleeping ? 'Bots Asleep' : 'Bots Awake'}</span><span class="pill ${dialingOff ? 'wn' : 'ok'}">${dialingOff ? 'Campaign Off' : 'Campaign On'}</span>` : ''}
       <span class="pill ${blockers.length ? 'wn' : 'ok'}">${blockers.length ? 'Needs setup' : 'Configuration ready'}</span>
       <span class="note">${assigned.length} assigned bot${assigned.length === 1 ? '' : 's'}</span>
      </div>
@@ -5972,8 +6001,8 @@
     </div>
     <div class="fleet-panel">
      <h3>Assigned bots</h3>
-     ${assigned.length ? `<div class="fleet-table-wrap"><table class="fleet-bot-table"><thead><tr><th>Bot</th><th>Live</th><th>Calls</th><th>Avg time</th><th>Avg TTFB</th><th>Xfers</th><th>Setup</th></tr></thead><tbody>${botRows}</tbody></table></div>` : '<div class="note">No bots are assigned. Open campaign setup and assign at least one bot.</div>'}
-     <div class="note">Per-bot figures use the same retained campaign records. “Ready” means local configuration checks passed, not that a provider or telephone call was verified.</div>
+     ${assigned.length ? `<div class="fleet-table-wrap"><table class="fleet-bot-table"><thead><tr><th>Bot</th><th>Live</th><th>Calls</th><th>Avg time</th><th>Avg TTFB</th><th>Xfers</th><th>Live Status</th><th>Setup</th></tr></thead><tbody>${botRows}</tbody></table></div>` : '<div class="note">No bots are assigned. Open campaign setup and assign at least one bot.</div>'}
+     <div class="note">Live Status updates with Sleep/Awake, Campaign On/Off, and active calls. Setup “Ready” means local configuration checks passed.</div>
     </div>
    </div>
   </section>`;
@@ -6747,6 +6776,33 @@
       ${F('Voice for this bot', 'a.tts.voice', 'sel', botVoiceOptions(a))}
      </div>
 
+     ${(() => {
+       const lps = Array.isArray(a.linePersonas) ? a.linePersonas : [];
+       const activeLps = lps.filter((p) => p && p.active !== false).length;
+       const vOpts = botVoiceOptions(a);
+       const lpRows = lps.map((lp, idx) => {
+         const selOpts = vOpts.map(([val, lbl]) => `<option value="${esc(val)}"${(lp.voice || '') === val ? ' selected' : ''}>${esc(lbl)}</option>`).join('');
+         const hasVal = vOpts.some(([val]) => val === (lp.voice || ''));
+         const extraOpt = !hasVal && lp.voice ? `<option value="${esc(lp.voice)}" selected>${esc(lp.voice)}</option>` : '';
+         return `<tr>
+           <td style="width:46px;text-align:center"><input type="checkbox" data-lp-idx="${idx}" data-lp-field="active"${lp.active !== false ? ' checked' : ''} aria-label="Line ${lp.lineNumber || idx + 1} active"></td>
+           <td style="width:58px"><input type="number" min="1" max="500" value="${Number(lp.lineNumber || idx + 1)}" data-lp-idx="${idx}" data-lp-field="lineNumber" style="width:54px"></td>
+           <td><input type="text" value="${esc(lp.name || '')}" placeholder="e.g. Emma" data-lp-idx="${idx}" data-lp-field="name"></td>
+           <td><select data-lp-idx="${idx}" data-lp-field="voice">${extraOpt}${selOpts}</select></td>
+           <td><input type="text" value="${esc(lp.personaStyle || '')}" placeholder="Tone / persona style" data-lp-idx="${idx}" data-lp-field="personaStyle"></td>
+           <td style="width:42px"><button type="button" class="g" data-lp-del="${idx}" title="Remove line persona">✕</button></td>
+         </tr>`;
+       }).join('');
+       return `<h2>Line Personas — 1-to-Many Sub-Bots (${activeLps} active)</h2>
+       <div class="note">Keep <b>${esc(a.name)}</b> as <b>1 Agent</b> sharing this same System Prompt, while giving each phone line (e.g. lines 1–10) its own <b>Name</b>, <b>Voice</b>, and <b>Persona Style</b>. Live calls automatically map by remote-agent line or rotate across active personas.</div>
+       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 10px">
+        <button type="button" class="b" id="btn-lp-gen10">Generate 10 Line Personas</button>
+        <button type="button" class="g" id="btn-lp-add">+ Add Line Persona</button>
+        ${lps.length ? '<button type="button" class="g" id="btn-lp-clear">Clear All Lines</button>' : ''}
+       </div>
+       ${lps.length ? `<div class="fleet-table-wrap"><table class="tbl"><thead><tr><th>On</th><th>Line</th><th>Persona Name</th><th>Voice</th><th>Persona Style</th><th></th></tr></thead><tbody>${lpRows}</tbody></table></div>` : '<div class="note">No line personas configured yet — all lines use this bot’s single name and voice. Click <b>Generate 10 Line Personas</b> to create 10 distinct personas sharing this System Prompt.</div>'}`;
+     })()}
+
      <h2>Telephony Audio Stream</h2>
      <div class="row">
       ${F('Input encoding', 'a.audio.inEnc', 'sel', ['linear16', 'mulaw', 'alaw'])}
@@ -7519,8 +7575,15 @@
        const fmtDay = (d) => esc(d.day);
        const rows = (u.days || []).map((d) => `<tr><td>${fmtDay(d)}</td><td>${d.connections}</td><td><b>${d.hours} h</b>${d.openHours ? ` <small>(${d.openHours} h still open)</small>` : ''}</td><td>${d.phoneHours} h</td><td>${d.simulatorHours} h</td><td>${d.longestMinutes} min</td></tr>`).join('');
        const stuck = (u.openNow || []).filter((c) => c.minutes >= 15);
+       const cr = u.credit;
+       const creditBadge = cr && cr.available && typeof cr.totalAmount === 'number'
+         ? `<span class="pill ok" style="margin-left:8px" title="Live Deepgram project credit balance${cr.projectName ? ` (${esc(cr.projectName)})` : ''}">Credit: $${cr.totalAmount.toFixed(2)} ${esc((cr.units || 'usd').toUpperCase())}</span>`
+         : cr && cr.note
+           ? `<span class="pill wn" style="margin-left:8px" title="${esc(cr.note)}">Credit: unavailable</span>`
+           : '';
        return `<div class="card" style="margin:10px 0">
-        <h3 style="margin:0 0 4px">Deepgram agent usage <span class="pill" title="Deepgram bills agent time for as long as a connection stays open, even when nobody is talking. This counts every connection this console opens, from open to close, in UTC days.">?</span></h3>
+        <h3 style="margin:0 0 4px">Deepgram agent usage <span class="pill" title="Deepgram bills agent time for as long as a connection stays open, even when nobody is talking. This counts every connection this console opens, from open to close, in UTC days.">?</span>${creditBadge}</h3>
+        ${cr && !cr.available && cr.note ? `<p class="note" style="margin:2px 0 6px">${esc(cr.note)}</p>` : ''}
         ${u.empty ? '<p class="note">Counting started with this version, so there is nothing to show yet.</p>' : `<table class="tbl"><thead><tr><th>Day (UTC)</th><th>Connections</th><th>Total</th><th>Phone calls</th><th>Simulator</th><th>Longest</th></tr></thead><tbody>${rows}</tbody></table>`}
         ${stuck.length ? `<p class="note" style="color:var(--er,#c0392b)">Open for 15 minutes or more right now: ${stuck.map((c) => `${esc(c.source === 'simulator' ? 'simulator' : 'phone call')} ${esc(c.ref)} (${c.minutes} min)`).join(', ')}</p>` : ''}
        </div>`;
@@ -8908,6 +8971,61 @@
       return;
     }
 
+    if (b.id === 'btn-lp-gen10' || b.id === 'btn-lp-add' || b.id === 'btn-lp-clear' || d.lpDel !== undefined) {
+      const ag = S.agents.find((x) => x.id === cur.a);
+      if (!ag) return;
+      if (!Array.isArray(ag.linePersonas)) ag.linePersonas = [];
+      const presets = [
+        { name: 'Jessica', voice: 'aura-stella-en', personaStyle: 'Warm, gentle Oakland California local; patient and caring granddaughter tone.' },
+        { name: 'Emma', voice: 'aura-asteria-en', personaStyle: 'Bright, friendly, reassuring; clear and steady cadence for older callers.' },
+        { name: 'Chloe', voice: 'aura-luna-en', personaStyle: 'Soft, calm, empathetic; unhurried and respectful listener.' },
+        { name: 'Sophia', voice: 'aura-athena-en', personaStyle: 'Confident, polite, warm; crisp pronunciation for benefits and zip codes.' },
+        { name: 'Hannah', voice: 'aura-hera-en', personaStyle: 'Kind, approachable, conversational; relaxed everyday warmth.' },
+        { name: 'Maya', voice: 'aura-2-thalia-en', personaStyle: 'Upbeat, natural, welcoming; keeps transitions smooth and concise.' },
+        { name: 'Rachel', voice: 'aura-2-andromeda-en', personaStyle: 'Gentle, attentive, trustworthy; soft reassuring phrasing.' },
+        { name: 'Lauren', voice: 'aura-2-helena-en', personaStyle: 'Polite, grounded, clear; respectful tone with natural warmth.' },
+        { name: 'Sarah', voice: 'aura-2-cora-en', personaStyle: 'Friendly, easygoing, empathetic; natural everyday contractions.' },
+        { name: 'Claire', voice: 'aura-2-aurora-en', personaStyle: 'Warm, cheerful, patient; crisp clarity on numbers and eligibility.' },
+      ];
+      if (b.id === 'btn-lp-gen10') {
+        const firstTok = String(ag.name || '').split(/[-—–(|]/)[0].trim().split(/\s+/)[0].replace(/[^A-Za-z']/g, '');
+        ag.linePersonas = presets.map((p, idx) => ({
+          id: `lp_${idx + 1}`,
+          lineNumber: idx + 1,
+          name: idx === 0 && firstTok.length >= 2 ? firstTok : p.name,
+          voice: idx === 0 && ag.tts?.voice ? ag.tts.voice : p.voice,
+          personaStyle: p.personaStyle,
+          greeting: '',
+          introLine: '',
+          active: true,
+        }));
+      } else if (b.id === 'btn-lp-add') {
+        const nextNum = ag.linePersonas.length + 1;
+        const p = presets[(nextNum - 1) % presets.length];
+        ag.linePersonas.push({
+          id: `lp_${nextNum}_${Date.now().toString(36)}`,
+          lineNumber: nextNum,
+          name: p.name,
+          voice: p.voice,
+          personaStyle: p.personaStyle,
+          greeting: '',
+          introLine: '',
+          active: true,
+        });
+      } else if (b.id === 'btn-lp-clear') {
+        ag.linePersonas = [];
+      } else if (d.lpDel !== undefined) {
+        const delIdx = Number(d.lpDel);
+        if (Number.isInteger(delIdx) && delIdx >= 0 && delIdx < ag.linePersonas.length) {
+          ag.linePersonas.splice(delIdx, 1);
+        }
+      }
+      render();
+      updateHeaderStatus();
+      updateLivePreview();
+      return;
+    }
+
     if (b.hasAttribute('data-dismiss-save-report')) {
       document.getElementById('vr').innerHTML = '';
       return;
@@ -9899,6 +10017,25 @@
       }
     }
   });
+
+  // Line Personas inline field binding (1-to-many sub-bots under current agent)
+  const onLinePersonaField = (e) => {
+    const el = e.target;
+    if (!el || !el.dataset || el.dataset.lpIdx === undefined || !el.dataset.lpField) return;
+    const ag = S.agents.find((x) => x.id === cur.a);
+    if (!ag || !Array.isArray(ag.linePersonas)) return;
+    const idx = Number(el.dataset.lpIdx);
+    const lp = ag.linePersonas[idx];
+    if (!lp) return;
+    const field = el.dataset.lpField;
+    if (field === 'active') lp.active = Boolean(el.checked);
+    else if (field === 'lineNumber') lp.lineNumber = Math.max(1, Math.min(500, Math.floor(Number(el.value) || idx + 1)));
+    else lp[field] = String(el.value || '');
+    updateHeaderStatus();
+    updateLivePreview();
+  };
+  document.addEventListener('input', onLinePersonaField);
+  document.addEventListener('change', onLinePersonaField);
 
   // Backdrop click closes Theme Studio or API Keys modal smoothly
   document.addEventListener('mousedown', (e) => {

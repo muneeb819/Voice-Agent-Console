@@ -101,6 +101,7 @@ import {
 } from './dialer-reports';
 import {
   fetchAllowedSampleAudio,
+  fetchDeepgramCreditBalance,
   fetchDeepgramLlmModels,
   fetchDeepgramVoiceCatalog,
   synthesizeTtsPreview,
@@ -1192,11 +1193,20 @@ export function createApp(viciBridge?: VicidialBridgeService) {
 
   reconcileOpenConnections();
 
-  app.get('/api/usage/report', (req: Request, res: Response) => {
+  app.get('/api/usage/report', asyncRoute(async (req: Request, res: Response) => {
     const requested = typeof req.query.days === 'string' ? Number(req.query.days) : 7;
     const days = Number.isFinite(requested) ? Math.max(1, Math.min(60, Math.floor(requested))) : 7;
-    res.json({ ok: true, ...buildUsageReport(readLedger(), undefined, days) });
-  });
+    const forceCredit = req.query.refresh === '1' || req.query.refresh === 'true';
+    const credit = await fetchDeepgramCreditBalance(forceCredit);
+    res.json({ ok: true, ...buildUsageReport(readLedger(), undefined, days), credit });
+  }));
+
+  app.get('/api/deepgram/balance', asyncRoute(async (req: Request, res: Response) => {
+    const force = req.query.refresh === '1' || req.query.refresh === 'true';
+    const credit = await fetchDeepgramCreditBalance(force);
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.json({ ok: credit.ok, credit });
+  }));
 
   app.get('/api/alerts', (_req: Request, res: Response) => {
     res.json({ ok: true, ...listAlerts() });

@@ -1022,11 +1022,19 @@ function createApp(viciBridge) {
     app.get('/api/vici/precall', handleRegisterCall);
     app.post('/api/vici/precall', handleRegisterCall);
     (0, usage_ledger_1.reconcileOpenConnections)();
-    app.get('/api/usage/report', (req, res) => {
+    app.get('/api/usage/report', asyncRoute(async (req, res) => {
         const requested = typeof req.query.days === 'string' ? Number(req.query.days) : 7;
         const days = Number.isFinite(requested) ? Math.max(1, Math.min(60, Math.floor(requested))) : 7;
-        res.json({ ok: true, ...(0, usage_ledger_1.buildUsageReport)((0, usage_ledger_1.readLedger)(), undefined, days) });
-    });
+        const forceCredit = req.query.refresh === '1' || req.query.refresh === 'true';
+        const credit = await (0, deepgram_catalog_1.fetchDeepgramCreditBalance)(forceCredit);
+        res.json({ ok: true, ...(0, usage_ledger_1.buildUsageReport)((0, usage_ledger_1.readLedger)(), undefined, days), credit });
+    }));
+    app.get('/api/deepgram/balance', asyncRoute(async (req, res) => {
+        const force = req.query.refresh === '1' || req.query.refresh === 'true';
+        const credit = await (0, deepgram_catalog_1.fetchDeepgramCreditBalance)(force);
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.json({ ok: credit.ok, credit });
+    }));
     app.get('/api/alerts', (_req, res) => {
         res.json({ ok: true, ...(0, alerts_1.listAlerts)() });
     });
